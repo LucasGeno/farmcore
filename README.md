@@ -1,6 +1,33 @@
-# FarmCore
+<p align="center">
+  <img src="docs/assets/logo.svg" width="72" height="72" alt="">
+</p>
 
-**Open, farmer-controlled farm data.** FarmCore is a small modular core with installable apps:
+<h1 align="center">FarmCore</h1>
+
+<p align="center">
+  <b>Know when to spray. Record it once.</b><br>
+  Open, farmer-controlled farm data.
+</p>
+
+<p align="center">
+  <a href="https://farmcore.lucasreed.me"><b>Website</b></a> ·
+  <a href="https://agri.lucasreed.me/">Live demo</a> ·
+  <a href="docs/self-hosting.md">Self-hosting</a> ·
+  <a href="docs/architecture.md">Architecture</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/LucasGeno/farmcore/actions/workflows/ci.yml"><img src="https://github.com/LucasGeno/farmcore/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-Apache--2.0-2f6b4a" alt="Licence: Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/python-3.12-2f6b4a" alt="Python 3.12">
+</p>
+
+<p align="center">
+  <img src="docs/assets/map.webp" width="860" alt="The FarmCore map: ten Saint-Émilion vine parcels on an aerial photo, coloured by today's spray advice">
+  <br><sub>The demo estate on 10 April 2024: eight parcels to spray, two still protected. Aerial imagery © IGN.</sub>
+</p>
+
+FarmCore is a small modular core with installable apps:
 it brings a farm's parcels, weather, operations and machine files into one place the farmer
 controls, explains every piece of advice it gives, and shares data with third parties only under
 scoped, revocable, logged consent.
