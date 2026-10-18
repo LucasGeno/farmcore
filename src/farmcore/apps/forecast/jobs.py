@@ -141,11 +141,14 @@ def fetch_live(ctx: JobContext) -> None:
                     "precipitation_unit": "mm",
                 }
             )
-            response = httpx.get(url, timeout=10.0)
-            response.raise_for_status()
-            if len(response.content) > 256_000:
-                raise ValueError("response too large")
-            doc = response.json()
+            with httpx.stream("GET", url, timeout=10.0) as response:
+                response.raise_for_status()
+                body = bytearray()
+                for chunk in response.iter_bytes(chunk_size=65_536):
+                    if len(body) + len(chunk) > 256_000:
+                        raise ValueError("response too large")
+                    body.extend(chunk)
+            doc = json.loads(body)
             received = datetime.now(UTC)
             values = _validated_values(doc, received)
             coverage = {
@@ -209,7 +212,7 @@ def fetch_live(ctx: JobContext) -> None:
                     ],
                 )
             health = {"last_attempt": attempted.isoformat(), "last_success": received.isoformat()}
-        except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, OverflowError) as exc:
             health = {**health, "last_attempt": attempted.isoformat(), "error": type(exc).__name__}
         farm.props = {**farm.props, "forecast_health": health}
     ctx.session.flush()

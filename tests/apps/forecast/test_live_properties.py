@@ -13,6 +13,7 @@ from farmcore.core import clock
 from farmcore.core.access import repo_for_job
 from farmcore.core.jobs import run_now
 from farmcore.core.models.canonical import Farm
+from tests.apps.forecast.conftest import provider_stream
 
 JOB = "forecast.fetch_live"
 # Exact binary fractions keep the oracle independent of float rounding/storage details.
@@ -72,9 +73,11 @@ def test_generated_weather_nulls_remain_unknown_in_stored_receipts(
         with monkeypatch.context() as external:
             external.setattr(
                 httpx,
-                "get",
-                lambda url, **kw: httpx.Response(
-                    200, request=httpx.Request("GET", url), json=payload
+                "stream",
+                provider_stream(
+                    lambda url, **kw: httpx.Response(
+                        200, request=httpx.Request("GET", url), json=payload
+                    )
                 ),
             )
             result = run_now(session_factory, [MANIFEST], JOB, settings)
