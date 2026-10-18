@@ -24,6 +24,7 @@ Local identities, farm memberships and role enforcement. Touchpoints: core ident
 - [ ] Owner/advisor memberships, opaque hashed sessions, expiry/logout/revocation, rate limits and CSRF enforced.
 - [ ] Farm selectors/switcher/listing and read/write routes enforce membership; advisor cannot write operations or change installation settings.
 - [ ] Owner can assign/revoke farm memberships; revoked memberships and disabled users lose access on the next request. Never infer user ownership from legacy grant names.
+- [ ] Before ordinary-user capture is enabled, remove shared WEB_CHAT_ID/default-farm routing from web writes and bind draft/confirmation to authenticated principal plus farm; otherwise affected paths stay installation-admin-only and this limitation is explicitly recorded.
 - [ ] Role checks hold across browser and programmatic routes; installation admin break-glass remains documented.
 
 ## Execution discipline
