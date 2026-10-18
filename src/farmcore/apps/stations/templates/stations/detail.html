@@ -1,0 +1,95 @@
+{% extends "core/base.html" %}
+{% block title %}{{ station.name }} · farmcore{% endblock %}
+{% block head %}
+<script src="/static/core/vendor/chart-4.4.1.umd.min.js"></script>
+{% endblock %}
+{% block content %}
+<p class="text-sm"><a href="{{ farm_url('/stations/') }}" class="text-emerald-800 underline">← Stations</a></p>
+<h1 class="mt-1 text-xl font-semibold">{{ station.name }}</h1>
+{% include "stations/_spray.html" %}
+<p class="mt-4 text-sm text-stone-600">
+  Charts: every hour from 3 days before now ({{ now|local }}) to 3 days after.
+  {% if replay %}
+  <span class="rounded bg-amber-100 px-1 text-amber-900">Shaded: observed future (replay)</span> —
+  in replay the weather after now is what the station really measured, used as the forecast.
+  {% endif %}
+  Gaps are hours with no reading.
+</p>
+
+<section class="mt-4 rounded border border-stone-200 bg-white p-4">
+  <h2 class="text-sm font-semibold">Import health</h2>
+  <div class="mt-2">{% include "stations/_health.html" %}</div>
+</section>
+
+<section class="mt-4 rounded border border-stone-200 bg-white p-4">
+  <h2 class="text-sm font-semibold">Rain (mm per hour) and temperature (°C)</h2>
+  <div class="relative mt-2 h-64 sm:h-80"><canvas id="chart-rain-temp" aria-label="Hourly rain and temperature"></canvas></div>
+</section>
+<section class="mt-4 rounded border border-stone-200 bg-white p-4">
+  <h2 class="text-sm font-semibold">Humidity (%) and wind (km/h)</h2>
+  <div class="relative mt-2 h-64 sm:h-80"><canvas id="chart-rh-wind" aria-label="Hourly humidity and wind"></canvas></div>
+</section>
+
+<script id="station-data" type="application/json">{{ chart|tojson }}</script>
+<script>
+(() => {
+  if (typeof Chart === "undefined") return;
+  const data = JSON.parse(document.getElementById("station-data").textContent);
+  // "now" line, with the hours after now shaded in replay (observed future).
+  const nowMarker = {
+    id: "nowMarker",
+    beforeDatasetsDraw(chart) {
+      const { ctx, chartArea: a, scales: { x } } = chart;
+      if (data.now_index === null) return;
+      const px = x.getPixelForValue(data.now_index);
+      ctx.save();
+      if (data.replay) {
+        ctx.fillStyle = "rgba(245, 158, 11, 0.12)";
+        ctx.fillRect(px, a.top, a.right - px, a.bottom - a.top);
+      }
+      ctx.strokeStyle = "#b91c1c";
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#b91c1c";
+      ctx.font = "12px system-ui, sans-serif";
+      ctx.fillText("now", px + 4, a.top + 12);
+      if (data.replay) ctx.fillText("observed future (replay)", px + 4, a.top + 26);
+      ctx.restore();
+    },
+  };
+  const x = { ticks: { maxTicksLimit: 7, maxRotation: 0, autoSkip: true } };
+  const common = {
+    responsive: true, maintainAspectRatio: false, spanGaps: false,
+    interaction: { mode: "index", intersect: false },
+    elements: { point: { radius: 0 } },
+  };
+  const line = (label, values, color, axis) => ({
+    type: "line", label, data: values, borderColor: color, backgroundColor: color,
+    borderWidth: 1.5, yAxisID: axis,
+  });
+  new Chart(document.getElementById("chart-rain-temp"), {
+    data: { labels: data.labels, datasets: [
+      { type: "bar", label: "Rain (mm)", data: data.rr1_mm, backgroundColor: "#2563eb", yAxisID: "rain" },
+      line("Temperature (°C)", data.t_c, "#dc2626", "temp"),
+    ] },
+    options: { ...common, scales: { x,
+      rain: { position: "left", beginAtZero: true, title: { display: true, text: "mm" } },
+      temp: { position: "right", title: { display: true, text: "°C" }, grid: { drawOnChartArea: false } },
+    } },
+    plugins: [nowMarker],
+  });
+  new Chart(document.getElementById("chart-rh-wind"), {
+    data: { labels: data.labels, datasets: [
+      line("Humidity (%)", data.rh_pct, "#0d9488", "rh"),
+      line("Wind (km/h)", data.ff_kmh, "#7c3aed", "wind"),
+    ] },
+    options: { ...common, scales: { x,
+      rh: { position: "left", min: 0, max: 100, title: { display: true, text: "%" } },
+      wind: { position: "right", beginAtZero: true, title: { display: true, text: "km/h" }, grid: { drawOnChartArea: false } },
+    } },
+    plugins: [nowMarker],
+  });
+})();
+</script>
+{% endblock %}

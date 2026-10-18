@@ -1,0 +1,96 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% from "core/_icons.html" import icon %}
+{% block title %}Apps · farmcore{% endblock %}
+{% block content %}
+{# Odoo-style app grid. `groups` = [{category, apps: [tile]}]; a tile carries title, summary,
+   icon, needs (farmer words), status (always | on | off | restart), href and switch. Free, not a
+   store: no prices, no badges beyond the status. #}
+{% set STATUS = {
+  "always": ("Always on", "check", "bg-stone-100 text-stone-700"),
+  "on": ("On", "check", "bg-protected-soft text-protected"),
+  "off": ("Off", "none", "bg-stone-100 text-stone-600"),
+  "restart": ("On after the next restart", "clock", "bg-wait-soft text-wait"),
+} %}
+{{ page_header("Apps", "Switch on what your farm needs. Everything is free and open source.") }}
+
+{% if not is_admin %}
+<p class="-mt-3 mb-5 flex items-center gap-2 text-[14px] text-muted">{{ icon("info", "h-4 w-4") }}Only the farm admin can switch apps.</p>
+{% endif %}
+{% if error %}
+<p role="alert" class="mb-5 flex items-start gap-2 rounded-xl border border-spray/30 bg-spray-soft px-4 py-3 text-[15px] text-spray">{{ icon("info", "mt-0.5 h-4 w-4") }}<span>{{ error }}</span></p>
+{% endif %}
+
+<div class="flex flex-col gap-8">
+{% for group in groups %}
+<section data-category="{{ group.category }}" aria-labelledby="cat-{{ loop.index }}">
+  <h2 id="cat-{{ loop.index }}" class="mb-3 text-xs font-semibold uppercase tracking-widest text-muted">{{ group.category }}</h2>
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 [&>*]:min-w-0">
+    {% for a in group.apps %}
+    {% set word, ic, tone = STATUS[a.status] %}
+    <article data-app="{{ a.name }}" class="flex flex-col gap-3 rounded-xl border border-line bg-surface p-4">
+      <div class="relative flex items-start gap-3">
+        <span class="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">{{ icon(a.icon, "h-6 w-6") }}</span>
+        <div class="min-w-0">
+          <h3 class="text-[16px] font-semibold leading-snug text-ink">{% if a.href %}<a href="{{ farm_url(a.href) }}" class="inline-block min-h-6 after:absolute after:inset-0 after:rounded-lg hover:underline">{{ a.title }}</a>{% else %}{{ a.title }}{% endif %}</h3>
+          {% if a.summary %}<p class="mt-0.5 text-[14px] text-muted">{{ a.summary }}</p>{% endif %}
+          {% if a.needs %}<p class="mt-1 text-[13px] text-muted">Needs {{ a.needs }}</p>{% endif %}
+        </div>
+      </div>
+      {% if a.links %}
+      <nav aria-label="{{ a.title }} pages" class="flex flex-wrap gap-2">
+        {% for item in a.links %}
+        <a href="{{ farm_url(item.path) }}" class="inline-flex min-h-[44px] items-center rounded-lg border border-line px-3 font-semibold text-brand-700 hover:bg-ground">{{ item.label }}</a>
+        {% endfor %}
+      </nav>
+      {% endif %}
+      <div class="mt-auto flex min-h-[44px] items-center justify-between gap-3">
+        <span class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[13px] font-semibold {{ tone }}" data-status="{{ a.status }}">{{ icon(ic, "h-4 w-4") }}{{ word }}</span>
+        {% if is_admin and a.switch %}
+        <form method="post" action="{{ farm_url('/apps/' ~ a.name ~ '/' ~ a.switch) }}">
+          {% if a.switch == "install" %}
+          <button class="inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 text-[15px] font-semibold text-white hover:bg-brand-700 active:translate-y-px" aria-label="Switch on {{ a.title }}">Switch on</button>
+          {% else %}
+          <button class="inline-flex min-h-[44px] items-center rounded-lg border border-line bg-surface px-4 text-[15px] font-semibold text-ink hover:bg-stone-50 active:translate-y-px" aria-label="Switch off {{ a.title }}">Switch off</button>
+          {% endif %}
+        </form>
+        {% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+</div>
+
+{% if expert %}
+{% set badge = {
+  "alpha": "bg-wait-soft text-wait",
+  "beta": "bg-brand-50 text-brand-900",
+  "stable": "bg-protected-soft text-protected",
+} %}
+<details class="mt-8 rounded-xl border border-line bg-surface">
+  <summary class="flex min-h-[44px] cursor-pointer items-center px-4 text-[15px] font-semibold">Technical details</summary>
+  <div class="overflow-x-auto border-t border-line">
+    <table class="w-full text-left text-[14px]">
+      <thead class="text-muted">
+        <tr><th class="px-4 py-2 font-semibold">#</th><th class="pr-4 font-semibold">App</th><th class="pr-4 font-semibold">Version</th>
+          <th class="pr-4 font-semibold">Depends on</th><th class="pr-4 font-semibold">Maturity</th><th class="pr-4 font-semibold">State</th></tr>
+      </thead>
+      <tbody>
+      {% for a in apps %}
+        <tr class="border-t border-line align-top">
+          <td class="px-4 py-2 text-muted tabular-nums">{{ loop.index }}</td>
+          <td class="pr-4 font-mono text-[13px]">{{ a.name }}</td>
+          <td class="pr-4 font-mono text-[13px]">{{ a.version }}</td>
+          <td class="pr-4 font-mono text-[13px]">{{ a.depends | join(", ") or "—" }}</td>
+          <td class="pr-4"><span data-maturity="{{ a.maturity }}" class="rounded-full px-2 py-0.5 text-xs font-semibold {{ badge[a.maturity] }}">{{ a.maturity }}</span></td>
+          <td class="pr-4">{{ a.state }}{% if a.state == "installed" and not a.loaded %} · loads at next start{% elif a.state == "uninstalled" and a.loaded %} · routes unload at next start{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+{% endif %}
+{% endblock %}

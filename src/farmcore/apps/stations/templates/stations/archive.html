@@ -1,0 +1,6 @@
+{% extends "core/base.html" %}
+{% block title %}{{ station.name }} · farmcore{% endblock %}
+{% block content %}
+<h1 class="mb-4 break-words text-xl font-semibold">{{ station.name }}</h1>
+{% include "stations/_archive_summary.html" %}
+{% endblock %}

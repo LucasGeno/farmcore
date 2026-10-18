@@ -1,0 +1,13 @@
+{# Debug-mode slot. Loads itself once from GET /debug/drawer with the page path plus its query
+   (minus `debug`, so the drawer sees the page's `?farm=` and keeps the other parameters on its
+   links) and the page's ?debug= value; the response is empty for non-admins (the slot
+   disappears), a small "Debug" link for admins with debug off, else the drawer. Like the /clock
+   and /farms/switcher slots it needs no middleware. Reads the request scope defensively: unit
+   tests render base.html from a bare scope without a query string. #}
+{%- set scope = request.scope if request is defined and request else {} -%}
+{%- set has_query = scope.get('query_string') is not none -%}
+{%- set q = request.query_params.get('debug') if has_query else none -%}
+{%- set kept = request.query_params.multi_items()|rejectattr('0', 'eq', 'debug')|list if has_query else [] -%}
+{%- set page = scope.get('path', '/') ~ ('?' ~ (kept|urlencode) if kept else '') -%}
+<div id="debug-slot" hx-get="/debug/drawer?path={{ page|urlencode }}{% if q is not none %}&amp;debug={{ q|urlencode }}{% endif %}"
+     hx-trigger="load" hx-swap="outerHTML"></div>

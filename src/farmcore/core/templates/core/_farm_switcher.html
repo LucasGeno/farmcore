@@ -1,0 +1,26 @@
+{# Navbar farm switcher. Included by base.html without context it is a slot that loads itself
+   once from GET /farms/switcher (like the replay control); GET /farms/switcher renders it with
+   `switcher_view` set. The form works without JavaScript (submit button); with it, choosing a
+   farm submits at once. `slot`: "header" (dark top bar, md and up) or "more" (the phone More
+   sheet); each slot has its own ids. #}
+{% set slot = slot if slot is defined else "header" %}
+{% set sid = "farm-switcher" if slot == "header" else "farm-switcher-" ~ slot %}
+{% if switcher_view is defined and farms|length < 2 %}
+{# One farm: a plain label, nothing to switch. #}
+<span id="{{ sid }}" class="truncate">{{ farms[0].name if farms else "" }}</span>
+{% elif switcher_view is defined %}
+<form id="{{ sid }}" action="/farms/select" method="get" class="flex items-center gap-2 text-sm">
+  <label for="{{ sid }}-select" class="{{ 'sr-only' if slot == 'header' else 'text-muted' }}">Farm</label>
+  <select id="{{ sid }}-select" name="farm" onchange="this.form.submit()"
+          class="min-h-[44px] rounded-lg px-2 {{ 'border border-white/20 bg-white/10 text-white [&>option]:text-ink' if slot == 'header' else 'flex-1 border border-line bg-surface text-ink' }}">
+    {% for f in farms %}
+    <option value="{{ f.id }}"{% if f.id == selected_id %} selected{% endif %}>{{ f.name }}</option>
+    {% endfor %}
+  </select>
+  <input type="hidden" name="next" value="{{ next_path }}">
+  <noscript><button type="submit" class="rounded border border-stone-300 px-2 py-0.5">Switch</button></noscript>
+</form>
+{% else %}
+<div id="{{ sid }}" hx-get="{{ farm_url('/farms/switcher' ~ ('?slot=more' if slot == 'more' else '')) }}" hx-trigger="load" hx-swap="outerHTML"
+     class="text-sm {{ 'text-white/70' if slot == 'header' else 'text-muted' }}"><a href="{{ farm_url('/farms/switcher') }}" class="underline">Farm</a></div>
+{% endif %}

@@ -1,0 +1,48 @@
+<form method="get" action="{{ filter_action }}" aria-label="Filter activity" class="mt-4 grid grid-cols-2 gap-3 rounded-xl border border-line bg-surface p-3 sm:grid-cols-4">
+  <input type="hidden" name="farm" value="{{ farm_id }}">
+  {% if parent %}<input type="hidden" name="view" value="activity">{% elif fixed_parcel %}<input type="hidden" name="parcel_id" value="{{ filter_values.parcel_id }}">{% endif %}
+  {% if origin %}<input type="hidden" name="return_to" value="{{ origin }}">{% endif %}
+  {% if not fixed_parcel %}<label class="grid min-w-0 gap-1 text-sm font-semibold">Parcel
+    <select name="parcel_id" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-2 font-normal">
+      <option value="">All parcels</option>
+      {% if unavailable_parcel %}<option value="{{ filter_values.parcel_id }}" selected disabled>Not on this farm</option>{% endif %}
+      {% for p in parcels %}<option value="{{ p.id }}"{% if p.id == filter_values.parcel_id %} selected{% endif %}>{{ p.alias }} · {{ p.name }}</option>{% endfor %}
+    </select>
+  </label>{% endif %}
+  <label class="grid min-w-0 gap-1 text-sm font-semibold">Type
+    <select name="type" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-2 font-normal">
+      {% for key, label in type_options %}<option value="{{ key }}"{% if key == filter_values.kind %} selected{% endif %}>{{ label }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="grid min-w-0 gap-1 text-sm font-semibold">From
+    <input type="date" name="from" value="{{ filter_values.start }}" max="{{ today }}" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-2 font-normal">
+  </label>
+  <label class="grid min-w-0 gap-1 text-sm font-semibold">Through
+    <input type="date" name="to" value="{{ filter_values.end }}" max="{{ today }}" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-2 font-normal">
+  </label>
+  <div class="col-span-2 flex flex-wrap items-center gap-3 sm:col-span-4">
+    <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white">Apply filters</button>
+    {% if filtered %}<a href="{{ clear_url }}" class="inline-flex min-h-[44px] items-center text-sm text-brand-700 underline">Clear filters</a>{% endif %}
+    <p class="text-[13px] text-muted">Dates follow {{ timezone }} and the clock above.</p>
+  </div>
+</form>
+{% set shown = columns | map(attribute="key") | list %}
+<details class="mt-3 max-w-prose rounded-lg border border-line bg-surface px-3 py-2 text-sm">
+  <summary class="min-h-[44px] cursor-pointer py-2 font-semibold">Columns</summary>
+  {# A plain GET form: it only sets a cookie in this browser, for this farm. #}
+  <form method="get" action="{{ farm_url('/activity/columns') }}" class="grid gap-2 pb-2">
+    <input type="hidden" name="farm" value="{{ farm_id }}">
+    <input type="hidden" name="next" value="{{ farm_url(current_url) }}">
+    <fieldset class="grid gap-1 sm:grid-cols-2">
+      <legend class="sr-only">Columns to show</legend>
+      {% for c in all_columns %}
+      <label class="flex min-h-[44px] items-center gap-2">
+        <input type="checkbox" name="show" value="{{ c.key }}"{% if c.key in shown %} checked{% endif %}{% if c.key == always %} disabled{% endif %}>
+        <span>{{ c.label }}{% if c.key == always %} (always){% endif %}</span>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <p class="text-[13px] text-muted">Saved in this browser for this farm only.</p>
+    <button type="submit" class="min-h-[44px] justify-self-start rounded border border-stone-300 px-3 py-1.5 hover:bg-stone-100">Show these columns</button>
+  </form>
+</details>

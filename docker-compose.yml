@@ -1,0 +1,139 @@
+# Self-hosted FarmCore: web app, optional Telegram bot, PostgreSQL + PostGIS and a daily backup.
+#
+#   cp .env.example .env      # set POSTGRES_PASSWORD and ADMIN_TOKEN (see docs/self-hosting.md)
+#   docker compose up -d --build
+#   docker compose exec app farmcore seed --scene B    # optional: the open-data demo farm
+#   docker compose --profile telegram up -d            # also start the bot
+#
+# The app listens on 127.0.0.1:8000 by default; put a TLS-terminating reverse proxy in front.
+# Never paste `docker compose config` output anywhere: it inlines .env values.
+name: farmcore
+
+x-farmcore: &farmcore
+  build: .
+  image: farmcore:local
+  restart: unless-stopped
+  depends_on:
+    db:
+      condition: service_healthy
+  environment: &farmcore-env
+    DATABASE_URL: postgresql+psycopg://farmcore:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/farmcore
+    ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env (openssl rand -hex 24)}
+    # Refuse to start without a strong ADMIN_TOKEN; turn off the interactive API docs.
+    FARMCORE_PUBLIC: "1"
+    PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+    DISPLAY_TZ: ${DISPLAY_TZ:-Europe/Paris}
+    CLOCK_MODE: ${CLOCK_MODE:-replay}
+    REPLAY_START: ${REPLAY_START:-}
+    DEFAULT_FARM_KEY: ${DEFAULT_FARM_KEY:-}
+    FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    EXTRACTOR: ${EXTRACTOR:-regex}
+    VERTEX_PROJECT: ${VERTEX_PROJECT:-}
+    VERTEX_LOCATION: ${VERTEX_LOCATION:-europe-west4}
+    VERTEX_AUTH: ${VERTEX_AUTH:-adc}
+    VERTEX_MODEL: ${VERTEX_MODEL:-}
+    VERTEX_HOST: ${VERTEX_HOST:-}
+    WHISPER_MODEL: ${WHISPER_MODEL:-}
+    TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+    TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
+    TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+  volumes:
+    # Shared Whisper model cache (voice notes): downloads once, about 460 MB.
+    - whisper-cache:/home/farmcore/.cache/huggingface
+  logging: &logging
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  db:
+    image: ${POSTGIS_IMAGE:-postgis/postgis:17-3.5}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: farmcore
+      POSTGRES_USER: farmcore
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # No published port: only the app, bot and backup reach the database.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U farmcore -d farmcore"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    logging: *logging
+
+  # No `command`: the image CMD runs `farmcore migrate`, then uvicorn on :8000.
+  app:
+    <<: *farmcore
+    ports:
+      - "${FARMCORE_BIND:-127.0.0.1}:${FARMCORE_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+
+  # Telegram long polling: one poller per bot token. Starts only with `--profile telegram`.
+  bot:
+    <<: *farmcore
+    profiles: ["telegram"]
+    command: ["farmcore", "bot"]
+    # Wait for `app`: it runs the migrations, so the bot never sees a half-migrated schema.
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_healthy
+
+  # Daily pg_dump (custom format, checked with pg_restore --list), seven-day retention.
+  # One-off backup: docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup
+  backup:
+    image: ${POSTGIS_IMAGE:-postgis/postgis:17-3.5}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: farmcore
+      PGDATABASE: farmcore
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+    stop_grace_period: 2m
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -u
+        umask 077
+        tmp=""
+        cleanup() { [ -z "$$tmp" ] || rm -f "$$tmp"; }
+        trap 'cleanup; exit 0' INT TERM
+        backup_once() {
+          dump="/backups/farmcore-$$(date -u +%Y%m%dT%H%M%SZ).dump"
+          tmp="$$dump.tmp"
+          find /backups -maxdepth 1 -name 'farmcore-*.tmp' -mmin +60 -delete
+          pg_dump -Fc -f "$$tmp" || return 1
+          pg_restore --list "$$tmp" > /dev/null || return 1
+          mv "$$tmp" "$$dump" || return 1
+          tmp=""
+          find /backups -maxdepth 1 -name 'farmcore-*.dump' -mtime +6 -delete
+          echo "backup: wrote $$dump"
+        }
+        if [ -n "$${BACKUP_ONCE:-}" ]; then
+          if backup_once; then exit 0; fi
+          cleanup; exit 1
+        fi
+        while true; do
+          if backup_once; then delay=86400; else cleanup; echo 'backup: FAILED' >&2; delay=3600; fi
+          sleep "$$delay" & wait $$!
+        done
+    logging: *logging
+
+volumes:
+  pgdata:
+  whisper-cache:

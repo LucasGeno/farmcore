@@ -1,0 +1,25 @@
+{% extends "core/base.html" %}
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{% block title %}Parcels · farmcore{% endblock %}
+{% block content %}
+<header class="mb-6"><h1 id="parcels-heading" data-return-heading tabindex="-1" class="scroll-mt-20 text-2xl font-semibold tracking-tight focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700 lg:text-[28px]">Parcels</h1><p class="mt-1 text-muted">Current parcel records and crop details.</p></header>
+{% with view="list" %}{% include "fields/_modes.html" %}{% endwith %}
+<form action="/fields/" method="get" aria-label="Parcel search" class="mb-4 flex flex-wrap items-end gap-3">
+<input type="hidden" name="view" value="list"><input type="hidden" name="farm" value="{{ request.state.selected_farm_id }}">
+<label class="min-w-0 flex-1">Search parcels<input type="search" name="q" maxlength="80" value="{{ q }}" class="block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3"></label>
+<button class="min-h-[44px] rounded-lg bg-brand-700 px-4 font-semibold text-white">Search</button>
+{% if q or search_error %}<a href="{{ resolved_farm_url('/fields/?view=list') }}" class="inline-flex min-h-[44px] items-center text-brand-700">Reset search</a>{% endif %}
+</form>
+{% if search_error %}<p role="alert" class="mb-4 text-wait">Search must be at most 80 characters. Shorten your search.</p>
+{% elif not total %}<p class="text-muted">No parcels recorded on this farm.</p>
+{% elif not parcels %}<p role="status" class="text-muted">No parcels match your search.</p>{% endif %}
+<ul class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+{% for p in parcels %}
+<li class="min-w-0 scroll-mt-20 rounded-xl border border-line bg-surface p-4 focus:outline focus:outline-2 focus:outline-brand-700" id="parcel-{{ p.id }}" tabindex="-1">
+<a href="{{ parcel_urls[p.id] }}" class="flex min-h-[44px] items-center gap-3 font-semibold">{{ parcel_shape(p.id) }}<span class="min-w-0 break-words">{{ p.alias }} · {{ p.name }}</span></a>
+<p class="break-words text-sm text-muted">{{ (p.props or {}).get('variety') or 'Not recorded' }} · {{ '%.2f'|format(p.area_ha) }} ha</p>
+<a href="{{ resolved_farm_url('/fields/?parcel=' ~ p.id) }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700">Show on map</a>
+</li>
+{% endfor %}
+</ul>
+{% endblock %}

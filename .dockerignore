@@ -1,0 +1,20 @@
+# Raw data and secrets never enter the build context.
+data/
+backups/
+secrets/
+.env
+.env.*
+!.env.example
+.venv/
+.git/
+.github/
+.claude/
+**/__pycache__/
+**/*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+*.sqlite
+*.db
+docs/
+tests/

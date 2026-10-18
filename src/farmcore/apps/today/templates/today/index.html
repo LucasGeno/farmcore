@@ -1,0 +1,43 @@
+{% extends "core/base.html" %}
+{% from "core/_icons.html" import icon %}
+{% from "core/_fragment.html" import fragment_slot %}
+{% block title %}{{ "Home" if expert else "Daily brief" }} · farmcore{% endblock %}
+{% block content %}
+<h1 id="home-heading" data-return-heading tabindex="-1" class="{{ 'sr-only focus:not-sr-only focus:text-2xl focus:font-semibold' if expert else 'mb-4 text-2xl font-semibold' }} scroll-mt-20 focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700">{{ "Home" if expert else "Daily brief" }}</h1>
+<div class="mx-auto max-w-3xl lg:max-w-none">
+  {% if not fragments %}
+  <p class="rounded-xl border border-dashed border-line p-6 text-muted">Install an app to fill Home.</p>
+  {% endif %}
+  {# Full widgets span both columns on desktop; half widgets pair up. Phone: one column. #}
+  <div class="grid grid-cols-1 gap-3 lg:grid-cols-2 lg:gap-5 [&>*]:min-w-0">
+    {% for w in fragments %}
+    {#- The slot wrapper carries the span; only its inner body is swapped (innerHTML), so the
+        named error and Retry survive a failure (E1). -#}
+    {% set secondary = not expert and w.url in ('/fields/today?desktop=1', '/forecast/today') %}
+    {% if secondary %}
+    <details data-home-secondary class="rounded-xl border border-line bg-surface p-4 lg:col-span-2">
+      <summary class="min-h-[44px] cursor-pointer font-semibold">{{ 'Farm map' if w.url == '/fields/today?desktop=1' else 'Spray windows' }}</summary>
+    {% elif w.url == '/data-sources/today' %}
+    <details class="rounded-xl border border-line bg-surface p-4 lg:col-span-2">
+      <summary class="min-h-[44px] cursor-pointer font-semibold">Data sources</summary>
+    {% endif %}
+    {{ fragment_slot("today-" ~ loop.index, w.label, farm_url(w.url),
+                     wrapper_class=("lg:col-span-2 " if w.span == "full" else "") ~ "[&:has([data-home-empty])]:hidden",
+                     data={"span": w.span}) }}
+    {% if secondary or w.url == '/data-sources/today' %}</details>{% endif %}
+    {% endfor %}
+  </div>
+</div>
+{% if manifests|selectattr("name", "equalto", "advisor")|list %}<p class="mt-3">{% include "advisor/_about_link.html" %}</p>{% endif %}
+
+{% if bot_url %}
+{# Sticky main action on the phone, above the bottom nav; inline on desktop (the hero has it). #}
+<div data-log-bar class="fixed inset-x-0 bottom-[calc(64px+env(safe-area-inset-bottom))] z-[1000] border-t border-line bg-ground/95 px-4 pb-2 pt-3 backdrop-blur lg:hidden">
+  <a href="{{ bot_url }}" class="mx-auto flex min-h-[52px] max-w-xl items-center justify-center gap-2 rounded-xl bg-brand-900 text-[16px] font-semibold text-white active:translate-y-px">
+    {{ icon("mic") }} Log a spray {{ icon("chevron-right", "h-4 w-4") }}
+  </a>
+  <p class="mt-1 text-center text-[12px] text-muted">Speak in Telegram. Confirm. Done.</p>
+</div>
+<div class="h-24 lg:hidden" aria-hidden="true"></div>
+{% endif %}
+{% endblock %}

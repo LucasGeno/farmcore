@@ -1,0 +1,56 @@
+{% extends "core/base.html" %}
+{% block title %}Viewing as {{ grant.grantee }} · farmcore{% endblock %}
+{% block content %}
+<section class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+  <p>
+    You are viewing as <strong>{{ grant.grantee }}</strong> — grant #{{ grant.id }}:
+    {% for s in grant.scopes %}{{ s.words }}{% if not loop.last %}, {% endif %}{% endfor %}{% if grant.until %}, until {{ grant.until }}{% endif %}.
+  </p>
+  <p class="mt-1 text-sky-800">
+    Purpose: {{ grant.purpose }}. The farmer chose this third party (Data Act Art. 5) and can revoke
+    the access at any time. Every read on this page is in the farmer's access log.
+  </p>
+</section>
+
+<section class="mt-6">
+  <h1 class="text-lg font-semibold">Spray register</h1>
+  <p class="mt-1 text-sm text-stone-600">
+    Confirmed sprays up to {{ now|local }} (Reg. 2023/564), one row per spray, parcel and product.
+    Paris time.
+  </p>
+  {% if not register_shared %}
+  <p data-probe="register" class="mt-2 rounded-lg border border-stone-300 bg-stone-100 px-4 py-3 text-sm text-stone-700">{{ register_denied }}</p>
+  {% else %}
+  <div class="mt-2 overflow-x-auto rounded-lg border border-stone-200 bg-white">
+    <table data-register class="fc-shared-register min-w-full border-collapse text-xs sm:text-sm">
+      <thead>
+        <tr class="border-b border-stone-300 bg-stone-50 text-left">
+          {% for _name, label in columns %}<th class="whitespace-nowrap px-2 py-2 font-medium">{{ label }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="border-b border-stone-100">
+          {% for cell in row %}<td data-label="{{ columns[loop.index0][1] }}" class="whitespace-nowrap px-2 py-1.5 tabular-nums">{{ cell if cell is not none else "" }}</td>{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not rows %}
+    <p class="p-4 text-sm text-stone-500">No confirmed sprays yet.</p>
+    {% endif %}
+  </div>
+  {% endif %}
+</section>
+
+{% if probes %}
+<section class="mt-6 grid gap-3 sm:grid-cols-2">
+  {% for probe in probes %}
+  <div data-probe="{{ probe.key }}" class="rounded-lg border px-4 py-3 text-sm {{ 'border-stone-300 bg-stone-100 text-stone-700' if not probe.shared else 'border-emerald-200 bg-emerald-50 text-emerald-900' }}">
+    <h2 class="font-semibold">{{ probe.title }}</h2>
+    <p class="mt-1">{{ probe.message }}</p>
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+{% endblock %}

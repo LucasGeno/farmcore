@@ -1,0 +1,19 @@
+{% from "core/_icons.html" import icon %}
+<section id="today-weather" aria-label="Observed weather" class="rounded-xl border border-line bg-surface px-3 py-2">
+  {% if card and station %}
+  <a data-now-row href="{{ farm_url('/stations/' ~ station.id) }}" class="block min-h-[44px] min-w-0" aria-label="Open weather">
+    <p class="flex items-baseline justify-between gap-2 text-[12px] text-muted"><span class="min-w-0 truncate"><span class="font-semibold">Weather now</span> · {{ station.name }}</span><span class="shrink-0">Observed · {% if card.stale %}Last reading {{ card.stale }}{% else %}{{ card.at }}{% endif %}</span></p>
+    <p class="mt-0.5 flex flex-wrap items-center gap-x-3 text-sm">
+      {% if card.t_c is not none %}<span class="text-xl font-semibold leading-tight">{{ card.t_c }} °C</span>{% endif %}
+      <span class="inline-flex items-center gap-1">{{ icon(card.condition_icon, "h-4 w-4") }}{{ card.condition }}</span>
+      {% if card.wind_kmh is not none %}<span class="inline-flex items-center gap-1">{{ icon("wind", "h-4 w-4") }}<span class="sr-only">Wind </span>{{ card.wind_kmh }} km/h</span>{% endif %}
+      {% if card.rh_pct is not none %}<span class="inline-flex items-center gap-1">{{ icon("humidity", "h-4 w-4") }}<span class="sr-only">Humidity </span>{{ card.rh_pct }} %</span>{% endif %}
+    </p>
+  </a>
+  {% else %}
+  <h2 class="text-sm font-semibold">Weather now{% if station %} · {{ station.name }}{% endif %}</h2>
+  {% if station %}<p class="mt-1 text-sm text-muted">No readings from {{ station.name }} yet.</p>
+  <a href="{{ farm_url('/stations/' ~ station.id) }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700 underline">Open weather</a>
+  {% else %}<p class="mt-1 text-sm text-muted">No weather station connected yet.</p>{% endif %}
+  {% endif %}
+</section>

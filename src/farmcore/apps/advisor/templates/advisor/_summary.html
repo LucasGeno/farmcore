@@ -1,0 +1,54 @@
+{# The farm-advice summary: one `FarmAdvice` from advisor/presenter.py, shared by the Today
+   hero (`el_id="today-hero"`) and the `/advisor/` home. Products belong to a group, never to
+   the farm; unevaluated parcels are always named. Colour always comes with an icon and a word. #}
+{% from "core/_icons.html" import icon %}
+
+{% macro farm_summary(hero, bot_url=None, el_id="today-hero", link=None, compact=False) -%}
+{%- set tone = {
+  "spray": "bg-spray text-white",
+  "wait": "bg-wait-soft text-wait ring-1 ring-inset ring-wait/30",
+  "protected": "bg-protected text-white",
+  "none": "bg-surface text-ink ring-1 ring-inset ring-line",
+}[hero.decision] -%}
+{%- set solid = hero.decision in ("spray", "protected") -%}
+{%- set rule = "border-white/30" if solid else ("border-wait/20" if hero.decision == "wait" else "border-line") -%}
+{%- set before, count, after = hero.headline -%}
+<div id="{{ el_id }}" data-decision="{{ hero.decision }}" class="fc-rise rounded-2xl p-5 lg:flex lg:items-end lg:justify-between lg:gap-8 {{ '' if compact else 'lg:p-7' }} {{ tone }}">
+  <div class="min-w-0">
+    <span class="inline-flex items-center gap-1.5 rounded-full {{ 'bg-black/15' if solid else 'bg-white/70' }} px-2.5 py-1 text-[13px] font-semibold">
+      {{ icon(hero.decision, "h-4 w-4") }}{{ hero.label }}
+    </span>
+    <h2 class="mt-3 text-[30px] font-semibold leading-[1.1] tracking-tight {{ '' if compact else 'lg:text-[40px]' }}">
+      {%- if hero.bounded %}<a href="{{ link if link and link.startswith('#') else farm_url(link or hero.link) }}" class="underline decoration-2 underline-offset-4 hover:opacity-90">{% endif -%}
+      {{ before }}
+      {%- if count is not none and hero.decision == "spray" and not hero.bounded and not compact %}<span class="fc-count text-[60px] leading-none tracking-tighter lg:text-[72px]">{{ count }}</span>
+      {%- elif count is not none %}<span class="fc-count">{{ count }}</span>{% endif -%}
+      {{ after }}
+      {%- if hero.bounded %}</a>{% endif -%}
+    </h2>
+    {% if hero.decision in ("spray", "wait") and hero.shown|length == 1 %}
+      {% set g = hero.shown[0] %}
+      {% if g.products and hero.decision == "spray" %}<p class="mt-1 text-[17px]">with {{ g.products|join(" + ") }}</p>{% endif %}
+      {% if g.when %}<p class="mt-4 flex items-center gap-2 border-t {{ rule }} pt-3 font-semibold">{{ icon("clock", "h-5 w-5") }}{{ g.when }}</p>{% endif %}
+    {% elif hero.decision in ("spray", "wait") and hero.shown %}
+    {# A few different actions: one line each, products never merged across groups. #}
+    <ul class="mt-4 flex flex-col gap-2 border-t {{ rule }} pt-3" data-groups="{{ hero.shown|length }}">
+      {% for g in hero.shown %}
+      <li data-group class="text-[15px]">
+        <span class="font-semibold">{{ g.aliases|join(", ") }}</span>{% if g.products and hero.decision == "spray" %} · {{ g.products|join(" + ") }}{% endif %}
+        {% if g.when %}<span class="flex items-center gap-1.5 text-[14px] opacity-90">{{ icon("clock", "h-4 w-4") }}{{ g.when }}</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% elif hero.decision == "protected" and hero.protected_until %}
+    <p class="mt-4 flex items-center gap-2 border-t {{ rule }} pt-3 font-semibold">{{ icon("clock", "h-5 w-5") }}first cover ends {{ hero.protected_until }}</p>
+    {% endif %}
+    {% if hero.reason and not hero.bounded %}<p class="mt-1 text-[13px] opacity-90">{{ hero.reason }}</p>{% endif %}
+    {% if hero.awaiting %}<p class="mt-2 flex items-center gap-1.5 text-[13px] font-semibold opacity-90">{{ icon("none", "h-3.5 w-3.5") }}{{ hero.awaiting }}</p>{% endif %}
+    {% if hero.replay %}<p class="mt-2 flex items-center gap-1.5 text-[12px] opacity-80">{{ icon("info", "h-3.5 w-3.5") }}Replay: the observed weather stands in for the forecast</p>{% endif %}
+  </div>
+  {% if bot_url and hero.decision in ("spray", "wait") %}
+  <a href="{{ bot_url }}" class="mt-5 hidden min-h-[52px] shrink-0 items-center gap-2 rounded-xl bg-white px-5 font-semibold text-brand-900 shadow-sm hover:bg-white/90 lg:inline-flex">{{ icon("mic") }}Log a spray</a>
+  {% endif %}
+</div>
+{%- endmacro %}

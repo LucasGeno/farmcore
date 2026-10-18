@@ -1,0 +1,13 @@
+{# Spray conditions: one colour + glyph + word per state. Never vermilion: that is the
+   advisor's "Spray" decision; "no" is a neutral dark stone with ✕. #}
+{% set SPRAY_CLASS = {
+  "good": "bg-protected text-white",
+  "marginal": "bg-wait-soft text-wait ring-1 ring-inset ring-wait/50",
+  "no": "bg-stone-700 text-white",
+  "unknown": "border border-dashed border-line bg-surface text-muted",
+} %}
+{% set SPRAY_GLYPH = {"good": "✓", "marginal": "~", "no": "✕", "unknown": "?", "none": "?"} %}
+
+{% macro spray_badge(state, cls="h-6 w-6 text-[13px]") -%}
+<span class="inline-flex shrink-0 items-center justify-center rounded-md font-bold leading-none {{ cls }} {{ SPRAY_CLASS.get(state, SPRAY_CLASS.unknown) }}" aria-hidden="true">{{ SPRAY_GLYPH.get(state, "?") }}</span>
+{%- endmacro %}

@@ -1,0 +1,26 @@
+# Local development database: PostgreSQL 17 + PostGIS on localhost:55442.
+# The app runs on the host (`uv run uvicorn ...`, see README.md); tests create and drop their own
+# throwaway databases on this server. postgis/postgis is amd64-only: on arm64 (Apple silicon) set
+# POSTGIS_IMAGE=imresamu/postgis:17-3.5, a multi-arch build of the same image.
+name: farmcore-local
+
+services:
+  db:
+    image: ${POSTGIS_IMAGE:-postgis/postgis:17-3.5}
+    environment:
+      POSTGRES_DB: farmcore
+      POSTGRES_USER: farmcore
+      POSTGRES_PASSWORD: farmcore
+    ports:
+      - "127.0.0.1:55442:5432"
+    volumes:
+      - farmcore-dev-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U farmcore -d farmcore"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+
+volumes:
+  farmcore-dev-pgdata:

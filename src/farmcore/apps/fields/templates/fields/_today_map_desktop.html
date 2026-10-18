@@ -1,0 +1,10 @@
+{# Home preview: the same map at phone and desktop widths, with independent Retry.
+   Keep the desktop=1 URL for existing widget declarations and saved fragment links. #}
+{% from "core/_fragment.html" import fragment_slot %}
+<section id="home-map" tabindex="-1" class="scroll-mt-20 focus:outline focus:outline-2 focus:outline-brand-700" aria-label="Farm map preview">
+  <a href="{{ resolved_farm_url('/fields/') }}" class="mb-2 flex min-h-[44px] items-center justify-between font-semibold text-brand-700">
+    <span>Your parcels</span><span class="underline">Open map</span>
+  </a>
+  {{ fragment_slot("today-map", "Map", resolved_farm_url("/fields/today?compact=1"),
+                   skeleton_class="fc-skeleton h-[260px] rounded-xl bg-surface/70") }}
+</section>

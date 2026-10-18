@@ -1,0 +1,73 @@
+{% extends "core/base.html" %}
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{% from "core/_ui.html" import page_header, card, pill %}
+{% block title %}Operations · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Operations", "Sprays and other field work recorded up to " ~ now|local ~ ".") %}{% endcall %}
+
+{% call card() %}
+  <h2 class="font-semibold">Spray register</h2>
+  <p class="mt-1 text-sm text-muted">
+    Confirmed sprays in the EU format (Reg. 2023/564): product, authorisation number, date and time,
+    dose, parcel, area, crop and growth stage.
+    Authorisation numbers marked placeholder are not real yet.
+  </p>
+  {#- bbch_source is bbch.SOURCE: while it is an assumption the page says so in plain words and
+      badges it; once it names a real source, that source is shown instead. #}
+  <p class="mt-1 text-xs text-muted">
+    Growth stage (BBCH): when a record gives none, the register uses typical Bordeaux dates for
+    each stage, in line with the advisor's season
+    {%- if bbch_source.startswith("assumption") %}
+    ({{ pill("assumed: awaiting agronomist", "warn") }}).
+    {%- else %}
+    (source: {{ bbch_source }}).
+    {%- endif %}
+  </p>
+  <div class="mt-3 flex flex-wrap gap-2">
+    <a href="{{ farm_url('/operations/register') }}" class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-brand-900 px-4 text-[15px] font-semibold text-white transition-colors hover:bg-brand-700">Open register</a>
+    <a href="{{ farm_url('/operations/register.csv') }}" download="spray-register.csv" class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-brand-900 px-4 text-[15px] font-semibold text-white transition-colors hover:bg-brand-700">Download CSV</a>
+    <a href="{{ farm_url('/operations/register.json') }}" download="spray-register.json" class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg border border-line bg-surface px-4 text-[15px] font-semibold text-ink transition-colors hover:bg-ground">Download JSON</a>
+  </div>
+{% endcall %}
+
+{% if not is_admin %}
+<details data-isoxml-panel class="mt-4 rounded-xl border border-line bg-surface p-4">
+  <summary class="cursor-pointer font-semibold">Machine records (ISOXML)</summary>
+  <p class="mt-2 text-sm text-muted">
+    The sprayer's own record of a pass merges into the matching voice note: one record with both
+    sources, its time and dose from the machine. Uploads are limited to the administrator.
+  </p>
+  {% include "operations/_isoxml_result.html" %}
+</details>
+{% else %}
+{% call card("mt-4") %}
+  <h2 class="font-semibold">Machine records (ISOXML)</h2>
+  <p class="mt-1 text-sm text-muted">
+    Upload the sprayer's TaskData file (<code>TASKDATA.XML</code> or its zip). A pass that matches a
+    voice log becomes one record with both sources; its time and dose come from the machine.
+  </p>
+  <form action="{{ farm_url('/operations/isoxml') }}" method="post" enctype="multipart/form-data"
+        hx-post="{{ farm_url('/operations/isoxml') }}" hx-encoding="multipart/form-data" hx-target="#isoxml-result" hx-swap="outerHTML"
+        hx-on::before-swap="if (event.detail.xhr.status === 400) { event.detail.shouldSwap = true; event.detail.isError = false; }"
+        hx-on::response-error="const s = event.detail.xhr.status; const r = document.getElementById('isoxml-result'); const p = document.createElement('p'); p.className = 'rounded-xl border border-line bg-spray-soft p-3 text-sm text-spray'; p.dataset.isoxml = 'error'; let msg = s === 403 ? 'Import refused: admin token required' : 'Import failed (HTTP ' + s + ')'; if (s === 400) { const e = new DOMParser().parseFromString(event.detail.xhr.responseText, 'text/html').querySelector('[data-isoxml=error]'); const t = e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; if (t) msg = t; } p.textContent = msg; r.replaceChildren(p)"
+        class="mt-3 flex flex-wrap items-center gap-2">
+    <input type="file" name="file" accept=".xml,.zip" required class="text-sm file:mr-3 file:min-h-[44px] file:cursor-pointer file:rounded-lg file:border file:border-line file:bg-surface file:px-4 file:py-2 file:font-semibold file:text-ink">
+    <button type="submit" class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-brand-900 px-4 text-[15px] font-semibold text-white transition-colors hover:bg-brand-700">Import</button>
+  </form>
+  {% include "operations/_isoxml_result.html" %}
+{% endcall %}
+{% endif %}
+
+{% include "operations/_recent_records.html" %}
+
+<section class="mt-6">
+  <h2 class="text-lg font-semibold">Parcel timelines</h2>
+  <ul class="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+    {% for p in parcels %}
+    <li><a href="{{ farm_url('/operations/parcels/' ~ p.id) }}" class="flex min-h-[44px] items-center gap-2 rounded-xl border border-line bg-surface px-3 py-2 hover:bg-ground">{{ parcel_shape(p.id) }}<span class="min-w-0 break-words"><span class="font-medium">{{ p.alias }}</span> {{ p.name }}</span></a></li>
+    {% else %}
+    <li class="text-sm text-muted">No parcels yet.</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endblock %}

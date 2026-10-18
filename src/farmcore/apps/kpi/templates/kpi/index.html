@@ -1,0 +1,256 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, pill, empty_state %}
+{% from "core/_icons.html" import icon %}
+{% block title %}Season &amp; impact · farmcore{% endblock %}
+{# Fixed notation, thousands separated, at most `d` decimals, trailing zeros trimmed (never 1e+06):
+   the same rounding as `kpi.service.fmt`, so a tile and its formula show the same number. #}
+{% macro num(v, d=2) %}{% set s = ("{:,.%df}" % d).format(v) %}{{ s.rstrip("0").rstrip(".") if d else s }}{% endmacro %}
+{% macro pct(p) %}{{ "%+.0f"|format(p)|replace("-", "−") }} %{% endmacro %}
+{% macro cap(text) %}{{ text[:1]|upper }}{{ text[1:] }}{% endmacro %}
+{% macro assumed_pill(flag) %}{% if flag %}{{ pill("assumed", "warn") }}{% endif %}{% endmacro %}
+{# One headline tile: fixed height, big number, unit, one plain line. #}
+{% macro tile(key, label, value, digits, unit, flag) -%}
+<article data-tile="{{ key }}" class="flex min-h-[9.5rem] flex-col rounded-xl border border-line bg-surface p-4 sm:h-40 sm:p-5">
+  <div class="flex items-start justify-between gap-2">
+    <p class="text-[13px] font-semibold text-muted">{{ label }}</p>
+    {{ assumed_pill(flag) }}
+  </div>
+  <p class="mt-2 tabular-nums">
+    <span class="text-[32px] font-bold leading-none tracking-tight {{ 'text-spray' if value < 0 else 'text-ink' }}">{{ num(value, digits) }}</span>
+    <span class="ml-1 text-[15px] font-semibold text-muted">{{ unit }}</span>
+  </p>
+  <p class="mt-auto pt-2 text-[13px] leading-snug text-muted">{{ caller() }}</p>
+</article>
+{%- endmacro %}
+
+{% block content %}
+{% call page_header("Season & impact", "What the spray advisor saved over each replayed season" ~ (" at station " ~ station if station else "") ~ ", against a fixed spray calendar and the regional average.", eyebrow=banner) %}{% endcall %}
+
+{% if message %}
+{{ empty_state(message) }}
+{% else %}
+
+{% if lead %}
+{% set first = lead.calendars[0] %}
+{% set ly = years|selectattr("year", "equalto", lead.year)|first %}
+{% set lk = {} %}{% for k in ly.kpis %}{% set _ = lk.update({k.key: k}) %}{% endfor %}
+<section data-lead aria-label="Headline figures, {{ lead.year }}" class="mb-6">
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    {% set p = lk.passes_avoided %}
+    {% call tile("passes", "Sprayer passes saved, " ~ lead.year, p.value, p.digits, "passes", p.assumed) -%}
+      model {{ ly.model.passes }} vs {{ rapid_calendar_name }} {{ ly.calendar.passes }} passes
+    {%- endcall %}
+    {% call tile("copper", "Copper avoided, " ~ lead.year, first.kg_cu_ha, 2, "kg Cu/ha", first.assumed) -%}
+      {% if first.at_least %}At least {% endif %}{{ first.avoided }} fewer copper treatment{{ "s" if first.avoided != 1 }}{% if first.pct is not none %} ({{ pct(first.pct) }}){% endif %} vs a {{ first.name }}
+    {%- endcall %}
+    {% set c = lk.co2_kg_ha %}{% set d = lk.diesel_l_ha %}
+    {% call tile("co2", "CO₂e avoided, " ~ lead.year, c.value, c.digits, "kg CO₂e/ha", c.assumed) -%}
+      {{ num(d.value, d.digits) }} L/ha less diesel vs the {{ rapid_calendar_name }}
+    {%- endcall %}
+  </div>
+
+  <div class="mt-3 rounded-xl border border-line bg-surface p-4 sm:p-5">
+    <h2 class="text-[15px] font-semibold text-ink">Copper depends on the calendar it is compared with</h2>
+    <p class="mt-1 text-[13px] text-muted">{{ copper_treatments_label }}, {{ lead.year }}. Each figure names its calendar.</p>
+    <ul class="mt-3 divide-y divide-line text-[14px]">
+      {% for c in lead.calendars %}
+      <li data-calendar="{{ c.key }}" class="py-2.5 first:pt-0 last:pb-0">
+        <div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+          <span class="font-semibold">{{ cap(c.name) }}</span>
+          <span class="tabular-nums">{% if c.at_least %}at least {% endif %}{{ c.avoided }} avoided{% if c.pct is not none %} ({{ pct(c.pct) }}){% endif %} · <span class="font-semibold">{{ num(c.kg_cu_ha) }} kg Cu/ha</span> {{ assumed_pill(c.assumed) }}</span>
+        </div>
+        <p class="mt-0.5 text-[13px] text-muted">model {{ c.model_copper }} vs {{ c.name }} {{ c.calendar_copper }} {{ copper_treatments_label|lower }}</p>
+        <p class="mt-0.5 text-[12px] text-muted tabular-nums">{{ c.formula }}</p>
+      </li>
+      {% endfor %}
+    </ul>
+    <p data-copper-cap class="mt-3 border-t border-line pt-3 text-[12px] text-muted">{{ copper_label_cap.note }} (<a class="underline" href="{{ copper_label_cap.source }}">E-Phy</a>).</p>
+  </div>
+</section>
+{% endif %}
+
+{% if tested %}
+<section data-tested-seasons aria-labelledby="tested-title" class="mb-6 min-w-0 rounded-xl border border-line bg-surface p-4 sm:p-5">
+  <h2 id="tested-title" class="text-lg font-semibold">Tested on {{ tested.count }} seasons</h2>
+  <p class="mt-1 text-[13px] text-muted">Advisor passes against the calendar programme, replayed on station {{ station }} (France). Each season is checked against the regional bulletin, not scored.</p>
+  <div class="mt-3 overflow-x-auto">
+  <table class="w-full table-fixed border-collapse text-[13px] tabular-nums">
+    <thead>
+      <tr class="border-b border-line text-left text-[12px] text-muted">
+        <th scope="col" class="w-[17%] py-2 pr-2 font-semibold">Season</th>
+        <th scope="col" class="w-[27%] py-2 pr-2 font-semibold">Advisor vs calendar</th>
+        <th scope="col" class="w-[19%] py-2 pr-2 font-semibold">Passes saved</th>
+        <th scope="col" class="py-2 font-semibold">Regional bulletin</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in tested.rows %}
+      <tr data-tested-year="{{ r.year }}" class="border-b border-line/60">
+        <th scope="row" class="py-2 pr-2 text-left font-semibold">{{ r.year }}</th>
+        <td class="py-2 pr-2">{{ r.advisor_passes }} vs {{ r.calendar_passes }}</td>
+        <td class="py-2 pr-2">{{ ("%d"|format(r.saved))|replace("-", "−") }}</td>
+        <td data-check="{{ r.check|replace(' ', '-') }}" class="py-2 font-semibold {{ 'text-protected-ink' if r.check == 'consistent' else ('text-wait' if r.check == 'data gap' else 'text-ink') }}">{{ r.check|capitalize }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <ul class="mt-3 space-y-1 text-[12px] leading-snug text-muted" data-tested-notes>
+    {% for n in tested.footnotes %}<li>{{ n }}</li>{% endfor %}
+    {% for n in tested.season_notes %}<li>{{ n }}</li>{% endfor %}
+  </ul>
+  {# Dates only, no verdict: 2024 in Simple view; every comparable season in Expert. #}
+  {% set shown = tested.rows|selectattr("dates")|list if expert else tested.rows|selectattr("dates")|selectattr("year", "equalto", 2024)|list %}
+  {% if shown %}
+  <ul class="mt-2 space-y-1 text-[12px] leading-snug text-muted" data-tested-dates>
+    {% for r in shown %}<li data-dates-year="{{ r.year }}"><span class="font-semibold">{{ r.year }}:</span> {{ r.dates }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+</section>
+{% endif %}
+
+<div class="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+  <h2 class="text-lg font-semibold text-ink">Model vs calendar, per season</h2>
+  <p class="text-[13px] text-muted tabular-nums">Farm area: {{ num(area_ha) }} ha</p>
+</div>
+<div class="space-y-4">
+{% for y in years %}
+<section data-year="{{ y.year }}" class="rounded-xl border border-line bg-surface p-4 sm:p-5">
+  <div class="flex flex-wrap items-baseline justify-between gap-2">
+    <h3 class="text-[17px] font-semibold">{{ y.year }} season</h3>
+    <span class="text-[13px] text-muted tabular-nums">{{ y.start }} – {{ y.end }}</span>
+  </div>
+  <div class="-mx-4 mt-3 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+  <table class="min-w-full border-collapse text-[14px] tabular-nums">
+    <thead>
+      <tr class="border-b border-line text-left text-[13px] text-muted">
+        <th class="py-2 pr-3 font-semibold"></th>
+        <th class="py-2 pr-3 text-right font-semibold">Model (advisor)</th>
+        <th class="py-2 pr-3 text-right font-semibold">Rapid-growth calendar (estimate)</th>
+        <th class="py-2 text-right font-semibold">Agreste average</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr class="border-b border-line/60">
+        <td class="py-2 pr-3">Passes</td>
+        <td class="py-2 pr-3 text-right">{{ y.model.passes }}</td>
+        <td class="py-2 pr-3 text-right">{{ y.calendar.passes }}</td>
+        <td class="py-2 text-right text-muted">—</td>
+      </tr>
+      <tr class="border-b border-line/60">
+        <td class="py-2 pr-3">Treatments (tank-mixed pass = 2)</td>
+        <td class="py-2 pr-3 text-right">{{ y.model.treatments }}</td>
+        <td class="py-2 pr-3 text-right">{{ y.calendar.treatments }}</td>
+        <td class="py-2 text-right">{{ num(y.agreste_treatments, 1) }}</td>
+      </tr>
+      <tr class="border-b border-line/60">
+        <td class="py-2 pr-3">{{ copper_treatments_label }}</td>
+        <td class="py-2 pr-3 text-right">{{ y.model.copper }}</td>
+        <td class="py-2 pr-3 text-right">{{ y.calendar.copper }}</td>
+        <td class="py-2 text-right text-muted">—</td>
+      </tr>
+      <tr class="border-b border-line/60">
+        <td class="py-2 pr-3">Sulphur treatments</td>
+        <td class="py-2 pr-3 text-right">{{ y.model.sulphur }}</td>
+        <td class="py-2 pr-3 text-right">{{ y.calendar.sulphur }}</td>
+        <td class="py-2 text-right text-muted">—</td>
+      </tr>
+      <tr>
+        <td class="py-2 pr-3">Voice operations logged</td>
+        <td class="py-2 pr-3 text-right">{{ y.voice_ops }}</td>
+        <td></td><td></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+    {% for k in y.kpis %}
+    <article data-kpi="{{ k.key }}" class="flex flex-col rounded-lg border border-line p-3">
+      <div class="flex items-start justify-between gap-2">
+        <p class="text-[13px] text-muted">{{ k.label }}</p>
+        {{ assumed_pill(k.assumed) }}
+      </div>
+      <p class="mt-1 tabular-nums"><span class="text-2xl font-semibold {{ 'text-spray' if k.value < 0 else 'text-ink' }}">{{ num(k.value, k.digits) }}</span> <span class="text-[13px] text-muted">{{ k.unit }}</span></p>
+      <p class="mt-1 text-[12px] leading-snug text-muted tabular-nums">{{ k.formula }}</p>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endfor %}
+</div>
+{% endif %}
+
+{% if expert and backtest %}
+<section data-backtest aria-labelledby="backtest-title" class="mt-6 rounded-xl border border-dashed border-line bg-surface p-4 sm:p-5">
+  <h2 id="backtest-title" class="text-lg font-semibold">Backtest 2020–2023 · {{ backtest.label }}</h2>
+  <p class="mt-1 text-sm text-muted">France only · {{ backtest.source_line }}. Replayed on the same engine and the same calendar programme as above; the season dates are the default ones (assumed).</p>
+  <p class="mt-2 text-sm" data-backtest-note>{{ backtest.disclaimer }}</p>
+  <p class="mt-1 text-sm font-semibold" data-bsv-provenance>{{ backtest.bsv_provenance }}</p>
+  <p class="mt-2 text-sm font-semibold">{{ backtest.consistency_label }}</p>
+  <p class="mt-1 text-sm text-muted">{{ backtest.assumption_note }}</p>
+  <div class="mt-4 grid gap-3 lg:grid-cols-2">
+    {% for y in backtest.years %}
+    <article data-backtest-year="{{ y.year }}" class="min-w-0 rounded-lg border border-line p-3">
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h3 class="font-semibold">{{ y.year }}</h3>
+        {{ pill(y.verdict, "neutral") }}
+      </div>
+      <dl class="mt-2 space-y-1 text-sm">
+        <div><dt class="inline text-muted">Advisor </dt><dd class="inline">{{ y.model_passes }} passes · {{ y.model_treatments }} treatments</dd></div>
+        <div><dt class="inline text-muted">Calendar programme </dt><dd class="inline">{{ y.calendar_passes }} passes · {{ y.calendar_treatments }} treatments</dd></div>
+        <div><dt class="inline text-muted">First downy alert </dt><dd class="inline">{{ y.first_alert or "none in the season" }}{% if y.predicted_symptoms %} · predicted first symptoms {{ y.predicted_symptoms }}{% endif %}</dd></div>
+        <div><dt class="text-muted">BSV first symptoms{% if y.bsv.precision %} · {{ y.bsv.precision }}{% endif %}</dt><dd class="break-words">{{ y.bsv_quote }}</dd></div>
+        <div class="break-words"><dt class="inline text-muted">Source </dt><dd class="inline"><a class="underline" href="{{ y.bsv_url }}">{{ y.bsv_source }}</a></dd></div>
+        {% for note in y.gap_notes %}<div class="text-wait" data-gap-note><dt class="inline">Data gap </dt><dd class="inline">{{ note }}</dd></div>{% endfor %}
+      </dl>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<details class="group mt-6 rounded-xl border border-line bg-surface"{% if assumptions_edited %} open{% endif %}>
+  <summary class="flex min-h-[52px] cursor-pointer list-none items-center justify-between gap-3 px-4 font-semibold sm:px-5">
+    <span>Assumptions <span class="font-normal text-muted">· edit to see the figures change</span></span>
+    {{ icon("chevron-down", "h-5 w-5 shrink-0 text-muted transition-transform group-open:rotate-180") }}
+  </summary>
+  <div class="border-t border-line p-4 sm:p-5">
+<form method="get" action="/kpi/">
+  {% if farm_query is not none %}<input type="hidden" name="farm" value="{{ farm_query }}">{% endif %}
+  <p class="text-[13px] text-muted">A value you edit applies to this page only; nothing is saved.</p>
+  <div class="mt-3 grid gap-4 sm:grid-cols-2">
+    {% for name, f in assumptions.items() %}
+    <label class="block text-[14px]" data-assumption="{{ name }}">
+      <span class="font-semibold">{{ f.label }}</span>
+      <span class="text-muted">({{ f.unit }})</span>
+      {% if f.edited %}<span class="ml-1 rounded-full bg-wait-soft px-2 py-0.5 text-xs font-semibold text-wait">edited (default {{ "%g"|format(f.default) }})</span>{% endif %}
+      <input type="number" step="any" min="{{ '%g'|format(f.min) }}" max="{{ '%g'|format(f.max) }}"
+             name="{{ name }}" value="{{ '%g'|format(f.value) }}"
+             class="mt-1 block min-h-[44px] w-40 rounded-lg border border-line bg-white px-3 tabular-nums">
+      <span class="mt-1 block text-[12px] {{ 'font-semibold text-wait' if f.assumed else 'text-muted' }}">{{ f.source }}</span>
+    </label>
+    {% endfor %}
+  </div>
+  <div class="mt-4 flex flex-wrap items-center gap-3">
+    <button type="submit" class="inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 text-[15px] font-semibold text-white hover:bg-brand-700">Update</button>
+    <a href="{{ farm_url('/kpi/') }}" class="inline-flex min-h-[44px] items-center px-2 text-[15px] text-muted underline">Reset to defaults</a>
+  </div>
+</form>
+  </div>
+</details>
+
+<section data-sources class="mt-6 rounded-xl border border-line bg-surface p-4 text-[12px] text-muted sm:p-5">
+  <h2 class="text-[13px] font-semibold text-ink">Sources</h2>
+  <ul class="mt-2 list-disc space-y-1 pl-4">
+    <li>{{ retrospective_label }}</li>
+    <li>Rapid-growth calendar, {{ calendar_label }}</li>
+    {% if lead %}<li>{{ cap(lead.calendars[0].label) }}</li>{% endif %}
+    <li>Agreste: {{ agreste_source }}</li>
+    <li>Copper label cap: <a class="break-all underline" href="{{ copper_label_cap.source }}">{{ copper_label_cap.source }}</a></li>
+    <li>{{ cu_s_label }}</li>
+    <li>{{ cap(voice_label) }}</li>
+    <li>Diesel and CO₂e factors are sourced (see Assumptions); the other inputs are marked “{{ pending_label }}”.</li>
+    <li>Negative values mean the advisor did worse than the baseline; they are shown as they are.</li>
+  </ul>
+</section>
+{% endblock %}

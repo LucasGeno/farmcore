@@ -1,0 +1,7 @@
+{% extends "core/base.html" %}
+{% from "core/_fragment.html" import fragment_slot %}
+{% block title %}Data sources · farmcore{% endblock %}
+{% block content %}
+<h1 class="mb-4 text-2xl font-semibold">Data sources</h1>
+{{ fragment_slot("sources-page", "Data sources", farm_url("/data-sources/today")) }}
+{% endblock %}

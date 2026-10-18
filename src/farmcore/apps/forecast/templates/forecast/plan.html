@@ -1,0 +1,12 @@
+{% extends "core/base.html" %}
+{% block title %}Plan · farmcore{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/forecast/calendar.css">
+<script src="/static/forecast/calendar.js" defer></script>
+{% endblock %}
+{% block content %}
+<div class="fc-plan">
+  <header class="fc-plan-header"><h1 id="plan-heading" data-return-heading tabindex="-1" class="scroll-mt-20 focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700">Plan your next spray</h1><p>Spraying weather, treatment windows and your availability.</p></header>
+  {% include "forecast/_plan_days.html" %}
+</div>
+{% endblock %}

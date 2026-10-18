@@ -1,0 +1,8 @@
+{% extends "core/base.html" %}
+{% block title %}Crop protection unavailable · farmcore{% endblock %}
+{% block content %}
+{% if return_destination %}<p class="mb-2 text-sm"><a href="{{ return_destination.url }}" class="inline-flex min-h-[44px] items-center text-muted hover:text-ink">← {{ return_destination.label }}</a></p>{% endif %}
+{% if models is defined %}{% include "advisor/_model_tabs.html" %}{% endif %}{% include "advisor/_unavailable.html" %}
+{% if history is defined %}<section aria-labelledby="history-heading" class="mt-6 rounded-xl border border-line bg-surface p-4 sm:p-5"><h2 id="history-heading" class="text-lg font-semibold">Season history</h2>{% include "advisor/_history.html" %}</section>{% endif %}
+<p class="mt-2">{% include "advisor/_about_link.html" %}</p>
+{% endblock %}

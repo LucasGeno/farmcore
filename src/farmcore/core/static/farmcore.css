@@ -1,0 +1,245 @@
+/* farmcore shared styles. Tailwind does most of the work; tokens are mirrored in
+   tailwind.config.js. */
+:root {
+  /* Tokens as r g b triplets: Tailwind reads them with opacity (tailwind.config.js) and Sunlight
+     mode swaps them below. The plain names are for this file's own rules. */
+  --brand-900-rgb: 31 58 43; --brand-700-rgb: 46 109 79; --brand-50-rgb: 230 239 232;
+  --ground-rgb: 238 241 234; --surface-rgb: 253 253 249; --ink-rgb: 28 36 32;
+  --muted-rgb: 87 94 87; --line-rgb: 211 217 204;
+  --spray-rgb: 185 28 28; --spray-soft-rgb: 254 226 226;
+  --protected-rgb: 21 128 61; --protected-soft-rgb: 220 252 231; --protected-ink-rgb: 19 112 54;
+  --wait-rgb: 164 90 0; --wait-soft-rgb: 254 243 199;
+  --brand-900: rgb(var(--brand-900-rgb)); --brand-700: rgb(var(--brand-700-rgb));
+  --brand-50: rgb(var(--brand-50-rgb)); --ground: rgb(var(--ground-rgb));
+  --surface: rgb(var(--surface-rgb)); --ink: rgb(var(--ink-rgb));
+  --muted: rgb(var(--muted-rgb)); --line: rgb(var(--line-rgb));
+  --spray: rgb(var(--spray-rgb)); --spray-soft: rgb(var(--spray-soft-rgb));
+  --protected: rgb(var(--protected-rgb)); --protected-soft: rgb(var(--protected-soft-rgb));
+  --protected-ink: rgb(var(--protected-ink-rgb)); /* protected text on the page ground */
+  --wait: rgb(var(--wait-rgb)); --wait-soft: rgb(var(--wait-soft-rgb));
+  --priority-bar-width: .25rem; --priority-bar-gap: .125rem;
+  --priority-bar-low: .375rem; --priority-bar-mid: .6875rem; --priority-bar-high: 1rem;
+  --priority-gap: .375rem; --priority-radius: .0625rem;
+  --ease: cubic-bezier(.2, 0, 0, 1);
+}
+
+/* Sunlight mode (N6, cookie `sunlight`): pure backgrounds, black ink and borders, stronger status
+   colours (>= 7:1), larger text. Same layout; only tokens, size and border weight change. */
+html[data-contrast="high"] {
+  font-size: 112.5%;
+  --brand-900-rgb: 15 42 28; --brand-700-rgb: 20 83 45; --brand-50-rgb: 232 245 236;
+  --ground-rgb: 255 255 255; --surface-rgb: 255 255 255; --ink-rgb: 0 0 0;
+  --muted-rgb: 51 51 51; --line-rgb: 0 0 0;
+  --spray-rgb: 143 0 0; --spray-soft-rgb: 255 227 227;
+  --protected-rgb: 6 74 31; --protected-soft-rgb: 215 245 226; --protected-ink-rgb: 6 74 31;
+  --wait-rgb: 107 58 0; --wait-soft-rgb: 255 239 184;
+}
+[data-contrast="high"] .border { border-width: 2px; }
+[data-contrast="high"] .border-t { border-top-width: 2px; }
+[data-contrast="high"] .border-b { border-bottom-width: 2px; }
+[data-contrast="high"] .text-\[11px\], [data-contrast="high"] .text-\[12px\],
+[data-contrast="high"] .text-\[13px\] { font-size: 0.9375rem; }
+[data-contrast="high"] .text-\[14px\] { font-size: 1rem; }
+[data-contrast="high"] .text-xs { font-size: 0.9375rem; }
+[data-contrast="high"] :focus-visible { outline-width: 4px; }
+/* A closed bell panel is out of layout: its contents (fixed, but sized by the 44 px summary)
+   otherwise stretch the page sideways once the text is larger. */
+#notifications-feed:not([open]) > section { display: none; }
+/* Larger text must not break the 5-day strip into pieces or push a select off the sheet. */
+[data-contrast="high"] [data-weather-strip] li { min-width: 5.25rem; white-space: nowrap; }
+[data-contrast="high"] select { max-width: 100%; min-width: 0; }
+/* A file picker sizes itself to its label; never wider than the page (any text size). */
+input[type="file"] { max-width: 100%; min-width: 0; }
+
+body { font-variant-numeric: tabular-nums; }
+/* Priority answers which parcel needs attention first; colour belongs to spray suitability. */
+.fc-priority { display: inline-flex; flex-shrink: 0; align-items: center;
+  gap: var(--priority-gap); color: var(--ink); font-size: .8125rem; font-weight: 600;
+  line-height: 1.25rem; white-space: nowrap; }
+.fc-priority-bars { display: inline-flex; flex-shrink: 0; align-items: flex-end;
+  gap: var(--priority-bar-gap); height: var(--priority-bar-high); }
+.fc-priority-bars > span { width: var(--priority-bar-width); border-radius: var(--priority-radius);
+  background: var(--line); }
+.fc-priority-bars > span:nth-child(1) { height: var(--priority-bar-low); }
+.fc-priority-bars > span:nth-child(2) { height: var(--priority-bar-mid); }
+.fc-priority-bars > span:nth-child(3) { height: var(--priority-bar-high); }
+.fc-priority-bars > [data-filled="true"] { background: currentColor; }
+/* In sunlight mode --line is also black: keep empty bars distinct from the filled ones. */
+[data-contrast="high"] .fc-priority-bars > [data-filled="false"] { background: transparent;
+  outline: 1px solid var(--line); outline-offset: -1px; }
+:focus-visible { outline: 3px solid var(--brand-700); outline-offset: 2px; }
+summary::-webkit-details-marker { display: none; }
+
+/* Phone "More" sheet: a bottom sheet built on <dialog>. */
+dialog.fc-sheet { max-height: 85vh; inset: auto 0 0 0; }
+
+/* Today slots while they load. */
+.fc-skeleton { background: linear-gradient(90deg, var(--surface) 0%, var(--ground) 50%, var(--surface) 100%) 0 0 / 200% 100%; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .fc-skeleton { animation: fc-shimmer 1.2s linear infinite; }
+  .htmx-added { animation: fc-fade 180ms var(--ease); }
+  dialog.fc-sheet[open] { animation: fc-sheet-up 220ms var(--ease); }
+  .fc-rise { animation: fc-rise 320ms var(--ease) both; }
+  .fc-rise:nth-child(2) { animation-delay: 40ms; }
+  .fc-rise:nth-child(3) { animation-delay: 80ms; }
+  .fc-rise:nth-child(4) { animation-delay: 120ms; }
+  @view-transition { navigation: auto; }
+  ::view-transition-old(root), ::view-transition-new(root) { animation-duration: 160ms; }
+}
+@keyframes fc-shimmer { to { background-position: -200% 0; } }
+@keyframes fc-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fc-sheet-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes fc-rise { from { transform: translateY(6px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* Advice card Details table: phones stack each rule as a small card instead of a 900 px
+   table. */
+.fc-why td, .fc-why th { padding: .5rem .75rem .5rem 0; vertical-align: top; text-align: left; }
+.fc-why tr { border-bottom: 1px solid var(--line); }
+.fc-why ul { list-style: disc; margin: 0; padding-left: 1rem; }
+.fc-why li + li { margin-top: .125rem; }
+@media (max-width: 767px) {
+  .fc-why table, .fc-why tbody, .fc-why tr, .fc-why td { display: block; width: 100%; }
+  .fc-why thead { display: none; }
+  .fc-why tr { padding: .75rem 0; }
+  .fc-why td { padding: .25rem 0; }
+  .fc-why td[data-label]::before { content: attr(data-label); display: block; font-size: .75rem; font-weight: 600; color: var(--muted); }
+}
+
+/* Debug drawer (admin only): a fixed footer bar above the phone bottom nav. */
+.fc-debug-bar { position: fixed; left: 0; right: 0; z-index: 900;
+  bottom: var(--fc-bottom-nav-h, env(safe-area-inset-bottom, 0px)); }
+/* Desktop: beside the sidebar (base.html's 232 px column), so its foot stays visible. */
+@media (min-width: 1024px) { .fc-debug-bar { left: 232px; } }
+.fc-debug-bar > details > summary { min-height: 44px; }
+.fc-debug-body { max-height: min(60vh, 32rem); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.fc-debug-body section, .fc-debug-body section > div { min-width: 0; }
+.fc-debug-body p, .fc-debug-body dd, .fc-debug-body li { overflow-wrap: anywhere; }
+.fc-debug-spacer { height: 44px; }
+.fc-debug-link { min-height: 44px; }
+/* The off-state "Debug" link renders after <main>: on phones it clears the fixed bottom nav
+   (about 4.5rem plus the safe area), else a long page leaves it under the nav. */
+.fc-debug-off { padding-bottom: calc(var(--fc-bottom-nav-h, calc(4.5rem + env(safe-area-inset-bottom, 0px))) + 1rem); }
+@media (min-width: 1024px) { .fc-debug-off { padding-bottom: 1rem; } }
+@media (prefers-reduced-motion: no-preference) {
+  .fc-debug-bar > details[open] .fc-debug-body { animation: fc-fade 150ms var(--ease); }
+}
+
+/* Map layer chips: one row above the map that scrolls sideways on a phone and never wraps
+   over the map. "Colour by" chips are exclusive, point layers toggle on their own; each is a
+   44 px <button aria-pressed>. */
+.fc-map-chips { display: flex; flex-wrap: nowrap; overflow-x: auto; align-items: center; gap: .5rem;
+  margin-bottom: .5rem; padding-bottom: 2px; scrollbar-width: none; }
+.fc-map-chips::-webkit-scrollbar { display: none; }
+.fc-map-chips[hidden] { display: none; }
+.fc-map-chips-label { flex: none; font-size: 12px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .05em; color: var(--muted); }
+.fc-map-chips-sep { flex: none; width: 1px; height: 1.5rem; background: var(--line); }
+.fc-map-chip { flex: none; display: inline-flex; align-items: center; gap: .375rem; min-height: 44px;
+  padding: 0 .75rem; border-radius: 9999px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--ink); font-size: 14px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.fc-map-chip[aria-pressed="true"] { background: var(--brand-900); border-color: var(--brand-900); color: #fff; }
+.fc-map-chip[data-state="error"] { border-color: var(--spray); }
+.fc-map-chip-note { font-weight: 400; font-size: 12px; }
+.fc-map-chip[data-state="error"] .fc-map-chip-note { color: var(--spray); }
+.fc-map-chip[aria-pressed="true"][data-state="error"] .fc-map-chip-note { color: #fff; }
+/* The station point on the map: a pill with the temperature, muted when the reading is stale. */
+.fc-map-point { display: inline-flex; align-items: center; gap: .25rem; min-height: 32px;
+  padding: 0 .5rem; border-radius: 9999px; border: 2px solid var(--surface); background: var(--brand-900);
+  color: #fff; font: 700 13px/1 "DM Sans", system-ui, sans-serif; box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
+  cursor: pointer; }
+.fc-map-point[data-stale="true"] { background: var(--muted); }
+/* A 44px tap target around the 32px pill, without a bigger pill over the parcels. MapLibre
+   positions the marker absolutely, so the pseudo-element centres on it. */
+.fc-map-point::before { content: ""; position: absolute; left: 50%; top: 50%;
+  width: calc(100% + 12px); height: calc(100% + 12px); min-width: 44px; min-height: 44px;
+  transform: translate(-50%, -50%); border-radius: 9999px; }
+@media (prefers-reduced-motion: no-preference) {
+  .fc-map-chip { transition: background-color 150ms var(--ease), color 150ms var(--ease); }
+}
+
+/* Keep each shared register value beside its label on phones. */
+@media (max-width: 639px) {
+  .fc-shared-register, .fc-shared-register tbody, .fc-shared-register tr,
+  .fc-shared-register td { display: block; width: 100%; }
+  .fc-shared-register thead { display: none; }
+  .fc-shared-register tr { padding: .75rem; }
+  .fc-shared-register td { white-space: normal; overflow-wrap: anywhere; padding: .25rem 0; }
+  .fc-shared-register td::before { content: attr(data-label); display: block;
+    font-weight: 600; color: var(--muted); }
+}
+
+/* Native focus scrolling must clear the fixed map sheet and bottom navigation. */
+@media (max-width: 1023px) {
+  html:has([data-map-panel]) {
+    scroll-padding-top: 5rem;
+    scroll-padding-bottom: calc(40svh + 64px + env(safe-area-inset-bottom, 0px) + 8px);
+  }
+}
+
+/* Optional shell controls: empty hand-off slots occupy no header or viewport space. */
+[data-shell-slot]:empty { display: none; }
+[data-shell-slot="notifications"] { flex: 0 0 auto; }
+[data-shell-slot="assistant"] { position: fixed; right: 1rem;
+  bottom: calc(64px + .75rem + env(safe-area-inset-bottom)); z-index: 1050;
+  max-width: calc(100vw - 2rem); }
+@media (max-width: 1023px) {
+  body:has([data-log-bar]) [data-shell-slot="assistant"] {
+    bottom: calc(64px + 108px + .75rem + env(safe-area-inset-bottom));
+  }
+  body:has([data-map-panel]) [data-shell-slot="assistant"] {
+    bottom: calc(64px + 40svh + 1rem + env(safe-area-inset-bottom));
+  }
+  body:has([data-map-panel][data-collapsed]) [data-shell-slot="assistant"] {
+    bottom: calc(136px + env(safe-area-inset-bottom));
+  }
+}
+@media (min-width: 1024px) { [data-shell-slot="assistant"] { bottom: 1rem; } }
+
+/* Parcel identity sizes. Decorative outlines yield space to names and actions on narrow phones.
+   SVG viewBox fits each parcel independently: icon dimensions never compare hectares. */
+:root { --parcel-outline-inline: 2.5rem; --parcel-outline-large: 9rem; }
+.fc-parcel-outline { display: inline-block; flex: none; vertical-align: middle;
+  width: var(--parcel-outline-inline); height: var(--parcel-outline-inline); object-fit: contain; }
+.fc-parcel-outline[data-size="large"] { width: var(--parcel-outline-large);
+  height: var(--parcel-outline-large); max-width: 30vw; }
+@media (max-width: 359px) {
+  .fc-parcel-outline[data-size="inline"] { display: none; }
+}
+
+/* The optional photo is a single, non-interactive SVG frame, not another map instance. */
+:root { --parcel-aerial-radius: .75rem; --parcel-aerial-width: 48rem; }
+.fc-aerial { margin: 0; max-width: var(--parcel-aerial-width); }
+.fc-aerial svg { display: block; width: 100%; height: auto; overflow: hidden;
+  border: 1px solid var(--line); border-radius: var(--parcel-aerial-radius); background: var(--ground); }
+.fc-aerial [hidden] { display: none !important; }
+.fc-aerial path { vector-effect: non-scaling-stroke; }
+.fc-aerial-ground { fill: var(--brand-50); stroke: var(--brand-700); stroke-width: 2; }
+.fc-aerial-halo { fill: none; stroke: var(--surface); stroke-width: 5; }
+.fc-aerial-line { fill: none; stroke: var(--brand-900); stroke-width: 2; }
+.fc-aerial-north { fill: var(--ink); font-size: 14px; }
+
+/* Density and contrast are independent viewer preferences; selected state is also text/ARIA. */
+:root { --control-target: 2.75rem; --control-radius: .5rem; --control-gap: .5rem;
+  --preference-space: .75rem; --control-border: 1px; }
+.fc-view-preference { padding-block: var(--preference-space); }
+.fc-view-options { display: flex; gap: var(--control-gap); margin-top: var(--control-gap); }
+.fc-view-options button { flex: 1; min-height: var(--control-target); border: var(--control-border) solid var(--line);
+  border-radius: var(--control-radius); color: var(--ink); background: var(--surface); }
+.fc-view-options button[aria-pressed="true"] { color: var(--brand-900); background: var(--brand-50);
+  border-color: var(--brand-700); font-weight: 600; }
+.fc-view-options button:hover { background: var(--ground); }
+.fc-view-options button:active, .fc-sunlight-preference button:active { transform: translateY(var(--control-press-shift)); }
+.fc-sunlight-preference { border-top: var(--control-border) solid var(--line); padding-block: var(--control-gap); }
+.fc-sunlight-preference button:hover { color: var(--ink); }
+
+/* Sunlight enlarges text: compact the time before allowing the header to wrap. Never clip the bell. */
+:root { --header-compact-gap: .25rem; --header-compact-pad: .5rem; --header-compact-line: 1.15;
+  --control-press-shift: 1px; }
+.fc-header-row { flex-wrap: wrap; }
+.fc-header-clock { min-width: 0; max-width: 100%; }
+[data-shell-slot="notifications"] { flex-shrink: 0; }
+@media (max-width: 400px) {
+  .fc-clock-summary { gap: var(--header-compact-gap); padding-inline: var(--header-compact-pad); }
+  .fc-clock-time { display: flex; flex-direction: column; align-items: center; line-height: var(--header-compact-line); }
+}

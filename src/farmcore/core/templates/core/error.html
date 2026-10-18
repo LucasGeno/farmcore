@@ -1,0 +1,9 @@
+{% extends "core/base.html" %}
+{% block title %}{{ status_code }} · farmcore{% endblock %}
+{% block content %}
+<section role="alert" class="rounded border border-stone-200 bg-white px-4 py-6">
+  <p class="text-sm font-semibold text-stone-500">{{ status_code }}</p>
+  <p class="mt-1 text-lg">{{ message }}</p>
+  <p class="mt-4 text-sm"><a href="{{ farm_url('/') }}" class="text-stone-600 underline hover:text-stone-900">Back to farmcore</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{% from "advisor/_summary.html" import farm_summary %}
+{% from "core/_ui.html" import decision_chip, priority_badge, priority_why %}
+{% set actionable = not unavailable and hero.decision in ('spray', 'wait') %}
+{% set empty = not actionable if view == 'attention' else actionable %}
+<section id="{{ 'today' if view == 'attention' else 'today-calm' }}" data-poll-feed
+         {% if empty %}data-home-empty hidden{% endif %}
+         hx-get="{{ resolved_farm_url('/advisor/today?view=' ~ view) }}" hx-trigger="every 12s [!document.hidden]"
+         hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" aria-label="{{ 'Needs attention' if view == 'attention' else 'Crop protection status' }}">
+  {% if not empty %}
+    {% if unavailable %}
+    <div class="rounded-xl border border-line bg-surface p-4">
+      <h2 class="font-semibold">Crop protection unavailable</h2>
+      <p class="mt-1 text-sm text-muted">{{ unavailable }}</p>
+      <a href="{{ farm_url('/stations/') }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700 underline">Inspect the station archive</a>
+    </div>
+    {% elif view == 'attention' %}
+    {{ farm_summary(hero, bot_url, compact=not expert) }}
+    {% if not expert %}
+    <a data-brief-action href="{{ workspace_links[act[0].id] if act|length == 1 else farm_url('/advisor/') }}" class="mt-3 inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 font-semibold text-white">{{ 'Review parcel' if act|length == 1 else 'Review affected parcels' }}</a>
+    {% endif %}
+    {% if protected %}<p class="mt-2 text-sm text-protected-ink">{{ protected|length }} parcel{{ 's' if protected|length != 1 }} protected</p>{% endif %}
+    <ul data-brief-parcels class="mt-2 divide-y divide-line">
+      {% for r in (act|sort(attribute="priority", reverse=True))[:3] %}
+      <li id="home-parcel-{{ r.id }}" tabindex="-1" class="scroll-mt-20 focus:outline focus:outline-2 focus:outline-brand-700"><a href="{{ workspace_links[r.id] }}" class="flex min-h-[44px] items-center gap-3 py-2">
+        {{ parcel_shape(r.id) }}<span class="min-w-0 flex-1 break-words"><strong>{{ r.alias }}</strong> · {{ r.name }}
+          {% if expert %}{{ priority_why(r.priority_why, false, "mt-0.5 block text-[12px] leading-snug text-muted") }}{% endif %}</span>
+        {{ priority_badge(r.priority_label, r.priority) }}
+        {{ decision_chip(r.decision, size="sm") }}
+      </a></li>
+      {% endfor %}
+    </ul>
+    {% if advice_checked %}<p class="mt-2 text-sm text-muted">Advice checked {{ advice_checked|local }}{% if expert %} · oldest current parcel evaluation{% endif %}</p>{% endif %}
+    {% if act|selectattr("priority_assumption")|list %}<p data-priority-assumption class="mt-1 text-[12px] font-semibold text-wait">Priority: assumption, agronomist to confirm.</p>{% endif %}
+    {% if expert %}<a href="{{ farm_url('/advisor/') }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700 underline">View crop protection{% if act|length > 3 %} · {{ act|length }} parcels need attention{% endif %}</a>{% endif %}
+    {% else %}
+    <div class="rounded-xl border border-line bg-surface px-4 py-3">
+      <h2 class="font-semibold">{% if hero.coverage[1] > 0 and hero.coverage[0] == hero.coverage[1] %}Nothing to spray today{% else %}{{ hero.title }}{% endif %}</h2>
+      {% if hero.decision == 'protected' %}<p class="mt-1 text-sm text-protected-ink">{{ protected|length }} parcel{{ 's' if protected|length != 1 }} protected{% if hero.protected_until %} · first cover ends {{ hero.protected_until }}{% endif %}</p>{% endif %}
+      {% if hero.reason %}<p class="mt-1 text-sm text-muted">{{ hero.reason }}</p>{% endif %}
+      {% if advice_checked %}<p class="mt-2 text-sm text-muted">Advice checked {{ advice_checked|local }}{% if expert %} · oldest current parcel evaluation{% endif %}</p>{% endif %}
+      {% if hero.awaiting %}<p class="mt-1 text-sm text-muted">{{ hero.awaiting }}</p>{% endif %}
+      <a href="{{ farm_url('/advisor/') }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700 underline">View crop protection</a>
+    </div>
+    {% endif %}
+    {% for flag, text in brief_warnings %}<p data-brief-warning="{{ flag }}" class="mt-2 text-sm text-wait">{{ text }}.</p>{% endfor %}
+  {% endif %}
+</section>

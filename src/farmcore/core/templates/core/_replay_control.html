@@ -1,0 +1,61 @@
+{# Navbar replay control. Included by base.html without context it is a slot that loads
+   itself once from GET /clock; GET /clock renders it with `clock_view` set.
+   A closed "Demo clock: <time>" disclosure (below sm only the time shows and the label stays
+   for screen readers, so it fits beside the farm switcher at 375 px); only admins
+   (`is_admin`) get the Step form and presets inside it, anonymous visitors only the time. #}
+{% if clock_view is defined %}
+{# Form and presets sync on #replay-control (a second step while one runs is dropped), and an
+   error response (htmx swaps no 4xx/5xx, e.g. 403 once admin_token is set) is shown here. #}
+<div id="replay-control" class="text-sm"
+     {% if is_admin %}hx-on::response-error="const e = this.querySelector('#replay-error'); e.textContent = event.detail.xhr.status === 403 ? 'Step refused: admin token required' : 'Step failed (HTTP ' + event.detail.xhr.status + ')'; e.hidden = false; this.querySelector('details').open = true"{% endif %}>
+  <details class="relative">
+    <summary class="fc-clock-summary flex min-h-[44px] cursor-pointer select-none list-none items-center gap-2 whitespace-nowrap rounded-full bg-white/10 px-3 text-[13px] text-white hover:bg-white/20">
+      <span class="sr-only">Demo clock:</span>
+      <span class="hidden font-semibold lg:inline">{{ (now|local)[7:11] }} season</span>
+      <span class="hidden text-white/50 lg:inline" aria-hidden="true">·</span>
+      <span class="fc-clock-time tabular-nums" title="{{ now|local }} ({{ tz }})"><span data-clock-date>{{ (now|local)[:6] }}<span class="hidden sm:inline"> {{ (now|local)[7:11] }}</span></span> <span data-clock-hour>{{ (now|local)[12:] }}</span></span>
+      {% if mode == 'replay' %}<span class="rounded-full bg-amber-300 px-1.5 py-0.5 text-[11px] font-semibold uppercase leading-none text-amber-950">Replay</span>{% endif %}
+      <svg class="h-4 w-4 text-white/70" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </summary>
+    <div class="absolute right-0 z-[1200] mt-2 w-max max-w-[calc(100vw-2rem)] space-y-3 rounded-xl border border-line bg-surface p-4 text-ink shadow-xl">
+      <p class="flex flex-wrap items-center gap-2">
+        <span class="rounded px-2 py-0.5 text-xs font-semibold uppercase {{ 'bg-amber-100 text-amber-800' if mode == 'replay' else 'bg-emerald-100 text-emerald-800' }}">{{ mode }}</span>
+        <span class="text-stone-600">{{ 'Replaying a past season' if mode == 'replay' else 'Live time' }} ({{ tz }})</span>
+      </p>
+      {% if is_admin %}
+      <form hx-post="/clock/step" hx-target="#replay-control" hx-swap="outerHTML"
+            hx-sync="#replay-control:drop" hx-disabled-elt="find button"
+            class="flex flex-wrap items-center gap-1">
+        <input type="datetime-local" name="to" value="{{ input_value }}" required
+               class="min-h-[44px] rounded-lg border border-line px-2">
+        <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white">Step</button>
+      </form>
+      <div class="flex flex-wrap gap-1">
+        {% for label, value in presets %}
+        <button type="button" hx-post="/clock/step" hx-vals='{"to": "{{ value }}"}'
+                hx-target="#replay-control" hx-swap="outerHTML"
+                hx-sync="#replay-control:drop" hx-disabled-elt="this"
+                class="min-h-[44px] rounded-lg border border-line px-3 hover:bg-ground">{{ label }}</button>
+        {% endfor %}
+      </div>
+      <span id="replay-error" role="alert" class="block text-xs font-semibold text-red-700" hidden></span>
+      {% if last_step_to %}
+      <details class="text-xs text-stone-600">
+        <summary class="min-h-6 cursor-pointer py-1">Last step {{ last_step_to|local }}: {{ last_runs|length }} job(s)
+          {%- set failed = last_runs|rejectattr('ok')|list %}{% if failed %}, {{ failed|length }} failed{% endif %}</summary>
+        <ul>
+          {% for run in last_runs %}
+          <li>{{ run.name }} {{ 'ok' if run.ok else 'failed' }} ({{ run.ms }} ms){% if run.error %}: {{ run.error }}{% endif %}</li>
+          {% endfor %}
+        </ul>
+      </details>
+      {% endif %}
+      {% endif %}
+      <p class="max-w-xs text-[13px] text-muted">We replay a past season so you can see the advice as it happened. {% if is_admin %}<a href="/demo/" class="underline">The administrator steps this clock to replay the season</a>{% else %}The administrator steps this clock to replay the season{% endif %}.</p>
+    </div>
+  </details>
+</div>
+{% else %}
+<div id="replay-control" hx-get="/clock" hx-trigger="load" hx-swap="outerHTML"
+     class="flex min-h-[44px] items-center whitespace-nowrap text-[13px] text-white/70">Demo clock</div>
+{% endif %}

@@ -1,0 +1,13 @@
+<section data-station-archive class="min-w-0 rounded-xl border border-line bg-surface p-4">
+  <h2 class="text-lg font-semibold">InfoRiego VA07 · Station archive</h2>
+  <p class="mt-2 text-[15px]">{{ archive.notice }}</p>
+  <dl class="mt-3 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
+    <div><dt class="text-muted">Source time labels (timezone unverified)</dt><dd class="break-words">{{ archive.first }} — {{ archive.last }}</dd></div>
+    <div><dt class="text-muted">Half-hour archive coverage</dt><dd>{{ archive.rows }} rows · {{ archive.coverage_pct }}% · {{ archive.missing_slots }} missing slots</dd></div>
+  </dl>
+  <ul class="mt-3 space-y-2 text-sm">
+    {% for gap in archive.gaps %}<li class="break-words">{{ gap.missing }} missing half-hours between {{ gap.after }} and {{ gap.before }}.</li>{% endfor %}
+  </ul>
+  <p class="mt-3 text-[13px] text-muted">No interpolation or UTC conversion. These source records do not establish current spraying conditions.</p>
+  {% if archive_url %}<a class="mt-2 inline-flex min-h-[44px] items-center text-brand-700 underline" href="{{ farm_url(archive_url) }}">Browse source readings and attribution</a>{% endif %}
+</section>

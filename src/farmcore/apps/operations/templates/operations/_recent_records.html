@@ -1,0 +1,32 @@
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{% from "operations/_records.html" import product_line %}
+<section id="recent-records" class="mt-6"{% if recent_records_oob %} hx-swap-oob="outerHTML"{% endif %}>
+  <h2 class="text-lg font-semibold">Recent records</h2>
+  <ul class="mt-2 space-y-2">
+    {% for log in logs %}
+    {#- A default log name is "<type> <YYYY-MM-DD>" (core.logs, the date in whatever zone the
+        writer gave ts_start): say the type in words instead; the local date and time are already
+        shown. Matched on its shape, not a recomputed date. A custom name is kept. #}
+    {%- set prefix = log.type ~ " " %}
+    {%- set rest = log.name[prefix|length:] if log.name.startswith(prefix) else "" %}
+    {%- set default_name = rest|length == 10 and rest[4] == "-" and rest[7] == "-"
+                           and rest.replace("-", "").isdigit() %}
+    {%- set title = log.type if default_name else log.name %}
+    <li class="rounded-xl border border-line bg-surface p-3" data-record="{{ log.id }}">
+      <div class="flex flex-wrap items-center gap-2">
+        <time class="text-sm tabular-nums text-muted">{{ log.ts_start|local }}</time>
+        <span class="font-medium">{{ title[:1]|upper }}{{ title[1:] }}</span>
+        {% with badges = log.badges %}{% include "operations/_badges.html" %}{% endwith %}
+      </div>
+      {%- if log.products %}
+      <p data-products class="mt-1 min-w-0 break-words text-sm font-semibold">{% for p in log.products %}<span class="block">{{ product_line(p) }}</span>{% endfor %}</p>
+      {%- endif %}
+      <p class="mt-1 min-w-0 break-words text-sm">
+        {% for p in log.parcels %}<a href="{{ farm_url('/operations/parcels/' ~ p.id) }}" class="mr-2 inline-flex min-h-[44px] max-w-full items-center gap-1 py-1 underline decoration-line hover:decoration-ink">{{ parcel_shape(p.id) }}<span class="min-w-0 break-words">{{ p.alias }} {{ p.name }}</span></a>{% endfor %}
+      </p>
+    </li>
+    {% else %}
+    <li class="rounded-xl border border-dashed border-line p-4 text-sm text-muted">No records yet. Send a voice note to the bot{% if is_admin %}, or run <code>farmcore seed --scene B</code>{% endif %}.</li>
+    {% endfor %}
+  </ul>
+</section>

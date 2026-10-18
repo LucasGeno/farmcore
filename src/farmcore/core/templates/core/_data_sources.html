@@ -1,0 +1,13 @@
+<section class="min-w-0 rounded-xl border border-line bg-surface p-4" aria-label="Data sources">
+  <h3 class="text-[13px] font-semibold uppercase tracking-wider text-muted">Data sources</h3>
+  <ul class="mt-3 space-y-3">
+    {% for s in sources %}
+    <li data-source-summary="{{ s.key }}" class="min-w-0 border-t border-line pt-2 first:border-0 first:pt-0">
+      <p class="font-semibold">{{ s.label }}</p>
+      <p class="text-sm">{{ s.unit|capitalize }}: <span data-source-count>{{ s.count if s.count else '—' }}</span></p>
+      <p class="text-[13px] text-muted">Last available record: <span data-source-time>{{ s.last_at|local if s.last_at else '—' }}</span></p>
+      {% if s.note %}<p class="text-[13px] text-muted">{{ s.note }}</p>{% endif %}
+    </li>
+    {% else %}<li class="text-sm text-muted">No source apps are enabled.</li>{% endfor %}
+  </ul>
+</section>

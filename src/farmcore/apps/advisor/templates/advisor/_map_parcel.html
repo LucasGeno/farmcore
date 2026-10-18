@@ -1,0 +1,33 @@
+{# Map panel, one parcel (advisor): the decision, cover, rain since the spray and weather
+   gaps from the latest stored advice up to the clock. No advice: "Awaiting advice", never an
+   evaluated "No spray needed". Unknown rain is never 0 mm. A fragment: no page chrome. #}
+{% from "core/_icons.html" import icon %}
+{% from "core/_ui.html" import decision_chip, priority_badge, priority_why %}
+<section data-poll-feed hx-get="{{ poll_url }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" class="flex flex-col gap-2" data-map-section="advisor-parcel" data-parcel-id="{{ row.id }}" aria-labelledby="map-advisor-parcel-h-{{ row.id }}">
+  <h3 id="map-advisor-parcel-h-{{ row.id }}" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("advisor", "h-4 w-4") }}Spray advice</h3>
+  <p data-fact="decision" data-advised="{{ 'yes' if row.has_advice else 'no' }}">{{ decision_chip(row.decision, chip_label) }}</p>
+  {% if row.has_advice %}
+  <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[15px]">
+    {% if row.decision in ("spray", "wait") and when %}
+    <dt class="text-muted">Window</dt><dd data-fact="window">{{ when }}</dd>
+    {% endif %}
+    {% if row.decision == "spray" and row.products %}
+    <dt class="text-muted">Products</dt><dd data-fact="products">{{ row.products|join(", ") }}</dd>
+    {% endif %}
+    {% if row.washed_off %}
+    <dt class="text-muted">Cover</dt><dd data-fact="cover" class="flex items-center gap-1 font-semibold text-spray">{{ icon("rain", "h-4 w-4") }}Washed off by rain</dd>
+    {% elif row.protected_until %}
+    <dt class="text-muted">Cover</dt><dd data-fact="cover" class="flex items-center gap-1">{{ icon("protected", "h-4 w-4 text-protected") }}Covered until {{ row.protected_until_text }}</dd>
+    {% endif %}
+    {% if row.priority %}<dt class="text-muted">Priority</dt><dd data-fact="priority" class="flex flex-col items-start gap-1">{{ priority_badge(row.priority_label, row.priority) }}{{ priority_why(row.priority_why, row.priority_assumption, "text-[13px] leading-snug text-muted") }}</dd>{% endif %}
+    <dt class="text-muted">Rain since spray</dt><dd data-fact="rain">{{ rain }}</dd>
+  </dl>
+  {% if weather_gap %}
+  <p class="flex items-start gap-2 text-[13px] text-wait" data-fact="weather-gap">{{ icon("alert", "mt-0.5 h-4 w-4") }}<span>Weather gap: some station hours are missing, so this advice may miss rain.</span></p>
+  {% endif %}
+  {% else %}
+  <p class="text-[15px] text-muted">Not evaluated yet.</p>
+  {% endif %}
+  <a href="{{ detail_url }}" class="inline-flex min-h-[44px] items-center gap-1 text-[15px] font-semibold text-brand-900 underline-offset-2 hover:underline">Open the advice card{{ icon("chevron-right", "h-4 w-4") }}</a>
+  {% include "advisor/_about_link.html" %}
+</section>

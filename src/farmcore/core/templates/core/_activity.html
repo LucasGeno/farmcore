@@ -1,0 +1,33 @@
+{# Today "Recent activity" (core): the farm's latest events, one row per thing that happened.
+   Each row: an icon by area, a plain sentence, when, and a link. A decision always carries its
+   icon and word (decision_chip). #}
+{% from "core/_icons.html" import icon %}
+{% from "core/_ui.html" import decision_chip %}
+<section data-poll-feed hx-get="{{ farm_url('/activity/today') }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" id="today-activity" aria-labelledby="today-activity-title" class="h-full min-w-0 rounded-xl border border-line bg-surface px-4 pt-3">
+  <div class="flex items-baseline justify-between gap-3">
+    <h3 id="today-activity-title" class="text-[13px] font-semibold uppercase tracking-wider text-muted">Recent activity</h3>
+    {% if see_all %}<a href="{{ farm_url(see_all) }}" class="inline-flex min-h-[44px] items-center gap-1 px-1 text-[13px] font-semibold text-brand-700">See all{{ icon("chevron-right", "h-3.5 w-3.5") }}</a>{% endif %}
+  </div>
+  {% if rows %}
+  <ul class="pb-1">
+    {% for r in rows %}
+    <li data-activity="{{ r.kind }}" class="border-t border-line first:border-t-0">
+      {% if r.link %}<a href="{{ farm_url(r.link) }}" class="group -mx-2 flex min-h-[52px] items-start gap-3 rounded-lg px-2 py-3 hover:bg-ground">{% else %}<div class="flex min-h-[52px] items-start gap-3 py-3">{% endif %}
+        <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700">{{ icon(r.icon, "h-4 w-4") }}</span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-semibold">{{ r.text }}{% if r.decision %} {{ decision_chip(r.decision, size="sm") }}{% endif %}</span>
+          {% if r.detail %}<span class="block text-[14px] text-ink">{{ r.detail }}</span>{% endif %}
+          <span class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
+            <span>{{ r.when }}</span>
+            {% for s in r.sources %}<span class="inline-flex items-center gap-1">{{ icon(s.icon, "h-3.5 w-3.5") }}{{ s.label }}</span>{% endfor %}
+          </span>
+        </span>
+        {% if r.link %}<span class="mt-2.5 text-muted group-hover:text-ink">{{ icon("chevron-right", "h-4 w-4") }}</span>{% endif %}
+      {% if r.link %}</a>{% else %}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="pb-4 pt-1 text-[13px] text-muted">Nothing yet. Sprays you log by voice, advice changes and shares show up here.</p>
+  {% endif %}
+</section>

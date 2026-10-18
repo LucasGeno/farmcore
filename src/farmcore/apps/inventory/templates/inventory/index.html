@@ -1,0 +1,63 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, pill, empty_state %}
+{% block title %}Inventory · farmcore{% endblock %}
+{% macro unit(u) %}{{ "L" if u == "l" else u }}{% endmacro %}
+{% macro day(d) %}{{ d.day }} {{ d.strftime("%b %Y") }}{% endmacro %}
+
+{% block content %}
+{% call page_header("Inventory", "What is left in the store: stock bought for the " ~ season ~ " season, minus what your logged sprays used up to " ~ (now|local) ~ ".") %}{% endcall %}
+
+{% if not catalogue %}
+{{ empty_state("No stock list for this farm: it has no verified product catalogue yet, so there is nothing to count against.") }}
+{% elif not rows %}
+{{ empty_state("No stock recorded for the " ~ season ~ " season yet.") }}
+{% else %}
+<div class="grid grid-cols-1 gap-3 lg:grid-cols-3">
+  {% for r in rows %}
+  <article data-stock="{{ r.product.id }}" class="flex flex-col rounded-xl border border-line bg-surface p-4 sm:p-5">
+    <div class="flex flex-wrap items-start justify-between gap-2">
+      <h2 class="min-w-0 break-words text-[15px] font-semibold text-ink">{{ r.product.name }}</h2>
+      <div class="flex flex-wrap gap-1.5">
+        {% if r.low %}{{ pill("Low stock", "bad") }}{% endif %}
+        {% if r.demo %}{{ pill("Demo data") }}{% endif %}
+      </div>
+    </div>
+    <p class="mt-0.5 text-[13px] text-muted">{{ r.product.active_substance|capitalize }} · AMM {{ r.product.authorisation_no }}</p>
+
+    <p class="mt-3 tabular-nums">
+      {% if r.on_hand is none %}
+      <span class="text-xl font-bold leading-none text-ink">Not computable</span>
+      {% else %}
+      <span class="text-[32px] font-bold leading-none tracking-tight {{ 'text-spray' if r.low else 'text-ink' }}">{{ num(r.on_hand) }}</span>
+      <span class="ml-1 text-[15px] font-semibold text-muted">{{ unit(r.stock.unit) }}</span>
+      {% endif %}
+      <span class="block pt-1 text-[13px] text-muted">on hand</span>
+    </p>
+    {% if r.not_computable %}
+    <p class="mt-2 text-[13px] leading-snug text-wait">{{ r.not_computable }} logged spray{{ "s" if r.not_computable != 1 }} of this product {{ "use" if r.not_computable != 1 else "uses" }} a dose unit that does not convert to {{ unit(r.stock.unit) }}; on hand is not guessed.</p>
+    {% endif %}
+
+    {% set sp = r.stock.props.get("season_purchases") if r.stock.props else None %}
+    {% if sp and sp.packs_added %}<p data-season-purchases class="mt-1 text-[13px] text-muted">{{ sp.label }}: {{ sp.base_purchased|float|round(3)|string|replace(".0", "") }} kg + {{ sp.packs_added }} × {{ sp.pack|float|round(3)|string|replace(".0", "") }} kg packs, sized to this season's logged sprays.</p>{% elif sp %}<p data-season-purchases class="mt-1 text-[13px] text-muted">{{ sp.label }}: the stock bought already covers this season's logged sprays.</p>{% endif %}
+    <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 border-t border-line pt-3 text-[14px]">
+      <div><dt class="text-[13px] text-muted">Bought this season</dt><dd class="tabular-nums">{{ num(r.purchased) }} {{ unit(r.stock.unit) }}</dd></div>
+      <div><dt class="text-[13px] text-muted">Used (from {{ r.sprays }} logged spray{{ "s" if r.sprays != 1 }})</dt><dd class="tabular-nums">{% if r.used is none %}Not computable{% else %}{{ num(r.used) }} {{ unit(r.stock.unit) }}{% endif %}</dd></div>
+      <div><dt class="text-[13px] text-muted">Lot</dt><dd class="break-words">{{ r.stock.lot or "Not recorded" }}</dd></div>
+      <div><dt class="text-[13px] text-muted">Last purchase</dt><dd>{{ day(r.stock.last_purchase_on) if r.stock.last_purchase_on else "Not recorded" }}</dd></div>
+      <div class="col-span-2"><dt class="text-[13px] text-muted">Your low-stock number</dt><dd class="tabular-nums">{% if r.stock.low_stock is none %}Not set{% else %}{{ num(r.stock.low_stock) }} {{ unit(r.stock.unit) }}{% endif %}</dd></div>
+    </dl>
+
+    {% if is_admin %}
+    <form method="post" action="{{ farm_url('/inventory/' ~ r.stock.id ~ '/low-stock') }}" class="mt-3 flex items-end gap-2">
+      <label class="min-w-0 flex-1 text-[13px] text-muted">Change it ({{ unit(r.stock.unit) }})
+        <input name="low_stock" inputmode="decimal" value="{{ num(r.stock.low_stock) }}" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-[15px] text-ink">
+      </label>
+      <button type="submit" class="min-h-[44px] rounded-lg border border-line bg-surface px-4 text-[15px] font-semibold text-ink hover:bg-stone-50">Save</button>
+    </form>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+<p class="mt-4 max-w-[70ch] text-[13px] text-muted">Used is computed from the sprays in your diary (done, this season, up to now): a dose per hectare times the sprayed parcels' area. It is never typed in twice. The low-stock number is yours to set; it is not advice.</p>
+{% endif %}
+{% endblock %}

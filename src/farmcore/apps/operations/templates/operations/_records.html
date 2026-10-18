@@ -1,0 +1,6 @@
+{#- One product as the register cards say it: "NAME · 2 kg/ha", the name alone when the record
+    gives no dose. `p` carries the register's `product_name`, `dose` and `dose_unit` cells
+    (`quantity.unit` is never null). The dose keeps its unit on one line on a phone. #}
+{%- macro product_line(p) -%}
+{{ p.product_name }}{% if p.dose %} · <span class="whitespace-nowrap">{{ p.dose }} {{ p.dose_unit }}</span>{% endif %}
+{%- endmacro -%}

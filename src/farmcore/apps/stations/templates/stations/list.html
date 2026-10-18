@@ -1,0 +1,20 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% block title %}Stations · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Weather stations",
+  "Weather observations and saved source archives for this farm.") %}{% endcall %}
+{% if not stations %}
+<p class="mt-4 text-sm text-muted">No weather station connected yet.{% if is_admin %} Run <code>farmcore seed</code>.{% endif %}</p>
+{% endif %}
+<ul class="mt-4 space-y-3">
+  {% for item in stations %}
+  <li class="rounded-xl border border-line bg-surface p-4">
+    <a href="{{ farm_url('/stations/' ~ item.station.id) }}" class="font-medium text-brand-700 underline">{{ item.station.name }}</a>
+    <p class="mt-1 text-sm text-muted">{{ item.station.props.provider or 'Météo-France open data · Licence Ouverte' }}</p>
+    {% if item.station.props.alti_m is defined %}<span class="ml-2 text-xs text-muted">{{ item.station.props.alti_m }} m</span>{% endif %}
+    <div class="mt-2">{% with health = item.health %}{% include "stations/_health.html" %}{% endwith %}</div>
+  </li>
+  {% endfor %}
+</ul>
+{% endblock %}

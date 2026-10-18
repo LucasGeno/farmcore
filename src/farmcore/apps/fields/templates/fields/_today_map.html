@@ -1,0 +1,139 @@
+{#- The parcel map block: the map with its legend inside it (icon + word per decision), the basemap
+    toggle and a status line. Rendered alone by `GET /fields/today` (the Today fragment, with its
+    own assets) and included by `fields/map.html` (assets in the page head).
+
+    Context: styles (decision -> (label, colour)), not_advised_label, layers (the visible apps'
+    map layers, `routes.map_layers`), colouring (the parcels layer the map opens with, or None),
+    advice_on (Crop protection's layer is visible: the decision legend and popup chips).
+    Optional: map_id (default "today-parcel-map"), map_class (height), with_assets (default true).
+
+    Layer chips: `parcels` layers are "Colour by" chips, exactly one pressed; `points`
+    layers are independent toggles. One horizontal scroll row above the map (farmcore.css
+    `.fc-map-chips`), hidden until map.js mounts, so a failed map library leaves no dead buttons.
+    The satellite / plan switch stays its own control inside the map.
+
+    Styling follows the shell tokens (farmcore.css),
+    DM Sans, the core icons and `decision_chip` (cloned into the popup by map.js from the
+    <template data-chip> elements below). Map labels show the alias only; the tapped parcel gets
+    its name and status in the popup.
+
+    Tile hosts, pinned and named: IGN Géoplateforme WMTS (orthophoto, Licence Ouverte, no key)
+    and OpenStreetMap (plan). No other external fetch. -#}
+{%- from "core/_ui.html" import decision_chip -%}
+{%- from "core/_icons.html" import icon -%}
+{%- set map_id = map_id | default("today-parcel-map") -%}
+{%- set with_assets = with_assets | default(true) -%}
+{%- set basemaps = {
+  "satellite": {
+    "label": "Satellite",
+    "tiles": ["https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg"],
+    "maxzoom": 19,
+    "attribution": "© IGN",
+  },
+  "plan": {
+    "label": "Plan",
+    "tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+    "maxzoom": 19,
+    "attribution": "&copy; <a href=\"https://www.openstreetmap.org/copyright\">OpenStreetMap</a> contributors",
+  },
+} -%}
+{%- if with_assets %}
+<link rel="stylesheet" href="/static/core/vendor/maplibre-gl-4.7.1.css">
+<script src="/static/core/vendor/maplibre-gl-4.7.1.js" data-maplibre
+        onload="this.dataset.maplibre='loaded'" onerror="this.dataset.maplibre='failed'"></script>
+{%- endif %}
+<style>
+  /* Colours are the shell tokens from farmcore.css (fallbacks for a bare host page). */
+  .fc-map .parcel-label { display: inline-flex; align-items: center; gap: var(--priority-gap);
+    pointer-events: none; font: 700 13px/1 "DM Sans", system-ui, sans-serif;
+    color: var(--ink, #1c2420); white-space: nowrap; padding: 3px 6px; border-radius: 9999px;
+    background: var(--surface); border: 1px solid var(--line); }
+  .fc-map .parcel-label.is-selected { background: var(--surface, #fdfdf9); text-shadow: none;
+    box-shadow: 0 0 0 2px var(--ink, #1c2420); }
+  .fc-map .fc-swatch { display: inline-flex; align-items: center; justify-content: center;
+    width: 1.25rem; height: 1.25rem; border-radius: 0.375rem; color: #fff; }
+  .fc-map .fc-swatch-spray { background-image: repeating-linear-gradient(135deg,
+    rgba(255,255,255,.4) 0 2px, transparent 2px 5px); }
+  .fc-map .fc-map-wrap { position: relative; }
+  /* map.js hides chips, legends and notes with `hidden`; a utility `display` must not win. */
+  .fc-map [hidden] { display: none !important; }
+  .fc-map [data-parcel-map] { min-height: 280px; width: 100%; }
+  .fc-map .fc-toggle { position: absolute; left: 0.5rem; top: 0.5rem; z-index: 10;
+    min-height: 44px; min-width: 44px; cursor: pointer; }
+  /* The legend sits inside the map, bottom left, clear of the attribution button. */
+  .fc-map .fc-legend { position: absolute; left: 0.5rem; bottom: 0.5rem; z-index: 10;
+    max-width: calc(100% - 3.5rem); }
+  /* MapLibre's zoom buttons default to 29px: lift them to the 44px phone touch target. */
+  .fc-map .maplibregl-ctrl-group button { width: 44px; height: 44px; }
+  .fc-map .maplibregl-popup-content { border-radius: 12px; padding: 12px 14px;
+    font-family: "DM Sans", system-ui, sans-serif; color: var(--ink, #1c2420); }
+  .fc-map .maplibregl-popup-close-button { width: 32px; height: 32px; font-size: 18px; }
+  /* Phone first screen: capped at 60 % (Map) or 45 % (Today) of the small viewport, so the map
+     and the line under it fit at 375x812 with no empty band. */
+  .fc-map .fc-map-fields { height: 60vh; height: 60svh; max-height: 60vh; }
+  .fc-map .fc-map-today { height: 45vh; height: 45svh; max-height: 45vh; }
+</style>
+<section class="fc-map" aria-label="Parcel map">
+  {%- if layers %}
+  <div class="fc-map-chips" data-map-chips role="group" aria-label="Map layers" hidden>
+    {%- for layer in layers if layer.kind == "parcels" %}
+    {%- if loop.first %}
+    <span class="fc-map-chips-label">Colour by</span>
+    {%- endif %}
+    <button type="button" class="fc-map-chip" data-layer-chip="{{ layer.key }}" data-layer-kind="parcels"
+            aria-pressed="{{ 'true' if layer.key == colouring else 'false' }}">{{ icon(layer.icon or "map", "h-4 w-4") }}<span>{{ layer.label }}</span><span data-chip-note class="fc-map-chip-note" hidden></span></button>
+    {%- endfor %}
+    {%- if layers | selectattr("kind", "equalto", "parcels") | list and layers | selectattr("kind", "equalto", "points") | list %}
+    <span class="fc-map-chips-sep" aria-hidden="true"></span>
+    {%- endif %}
+    {%- for layer in layers if layer.kind == "points" %}
+    <button type="button" class="fc-map-chip" data-layer-chip="{{ layer.key }}" data-layer-kind="points"
+            aria-pressed="false">{{ icon(layer.icon or "map", "h-4 w-4") }}<span>{{ layer.label }}</span><span data-chip-note class="fc-map-chip-note" hidden></span></button>
+    {%- endfor %}
+  </div>
+  {%- endif %}
+  <div class="fc-map-wrap">
+    <div id="{{ map_id }}" data-parcel-map{% if map_id == "parcel-map" %} data-fit-padding="40"{% else %} data-fit-padding="24"{% endif %}
+         class="{{ map_class | default('fc-map-today') }} overflow-hidden rounded-xl border border-line bg-line"
+         data-geojson-url="{{ resolved_farm_url('/fields/parcels.geojson') }}"
+         {% if map_id != 'parcel-map' %}data-workspace-origin="{{ resolved_farm_url('/#home-map') }}"{% endif %}
+         data-styles='{{ styles|tojson }}'
+         data-basemaps='{{ basemaps|tojson }}'
+         data-layers='{{ (layers or [])|tojson }}'
+         data-colouring="{{ colouring or '' }}"
+         role="region" aria-label="Map of the farm's parcels"></div>
+    {#- Hidden until map.js mounts: it then marks the stored layer, so no stale state shows and
+        there is no dead button when the map library fails. Its accessible name starts with the
+        visible words (WCAG 2.5.3) and states the layer once (no aria-pressed). -#}
+    <button type="button" data-basemap-toggle hidden
+            class="fc-toggle rounded-lg border border-line bg-surface/95 px-3 text-sm font-semibold text-ink shadow-sm">
+      <span data-basemap-option="satellite" class="decoration-2 underline-offset-4">Satellite</span>
+      <span aria-hidden="true" class="text-muted">/</span>
+      <span data-basemap-option="plan" class="decoration-2 underline-offset-4">Plan</span>
+    </button>
+    {%- if advice_on %}
+    <div data-map-legend data-legend-for="advice"
+         class="fc-legend rounded-lg bg-surface/95 px-2.5 py-1.5 text-[12px] font-semibold text-ink shadow-sm ring-1 ring-black/5">
+      <p class="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted">Spray advice</p>
+      <ul {% if map_id == "parcel-map" %}id="map-legend" {% endif %}class="grid grid-cols-[auto_auto] gap-x-3 gap-y-1 sm:flex sm:flex-wrap" aria-label="Map legend: Spray advice">
+        {%- for decision, (label, colour) in styles.items() %}
+        <li class="flex items-center gap-1.5" data-decision="{{ decision }}">
+          <span data-icon="{{ decision }}" class="fc-swatch{% if decision == 'spray' %} fc-swatch-spray{% endif %}" style="background-color: {{ colour }}">{{ icon(decision, "h-3.5 w-3.5") }}</span>{{ label }}
+        </li>
+        {%- endfor %}
+      </ul>
+      <p data-legend-note class="mt-1 text-[12px] font-semibold text-spray" hidden></p>
+    </div>
+    {%- endif %}
+  </div>
+  <p {% if map_id == "parcel-map" %}id="map-status" {% endif %}data-map-status class="mt-2 text-sm text-muted" role="status" hidden></p>
+  {%- if advice_on %}
+  {%- for decision, (label, _colour) in styles.items() %}
+  <template data-chip="{{ decision }}">{{ decision_chip(decision, label, size="sm") }}</template>
+  {%- endfor %}
+  <template data-chip="not-advised">{{ decision_chip("none", not_advised_label, size="sm") }}</template>
+  {%- endif %}
+</section>
+{%- if with_assets %}
+<script src="/static/fields/map.js"></script>
+{%- endif %}

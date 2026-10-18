@@ -1,0 +1,47 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, decision_chip %}
+{% from "core/_icons.html" import icon %}
+{% block title %}Parcels · farmcore{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/core/vendor/maplibre-gl-4.7.1.css">
+<script src="/static/core/vendor/maplibre-gl-4.7.1.js" data-maplibre
+        onload="this.dataset.maplibre='loaded'" onerror="this.dataset.maplibre='failed'"></script>
+{% endblock %}
+{% block content %}
+{%- if advice_on %}
+{{ page_header("Map", "Your " ~ parcels|length ~ " parcels on the aerial photo, coloured by today's spray advice. Tap a parcel to see its facts.") }}
+{%- else %}
+{{ page_header("Map", "Your " ~ parcels|length ~ " parcels on the aerial photo. Tap a parcel to see its facts.") }}
+{%- endif %}
+
+{% include "fields/_modes.html" %}
+{% if mode_notice %}<p role="note" class="mb-3 text-muted">{{ mode_notice }}</p>{% endif %}
+
+{% if layout_banner %}
+<p id="layout-banner" role="note" class="mb-3 flex items-start gap-2 rounded-xl border border-wait/30 bg-wait-soft px-3 py-2 text-sm text-wait">{{ icon("info", "mt-0.5 h-4 w-4") }}<span>{{ layout_banner }}</span></p>
+{% endif %}
+
+{#- The map with its panel: Farm today, or the selected parcel. Phone: a bottom sheet above
+    the bottom nav with its own scroll (fold it to its header with the chevron); lg and up: a side
+    panel beside the map. Rendered open here, so `?parcel=<id>` works with no script;
+    static/panel.js then swaps the content on a parcel tap, a "Show on map" link or Back. -#}
+<div data-map-region class="scroll-mt-20 lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(300px,360px)] lg:items-start lg:gap-4">
+  <div class="min-w-0">
+  {% with map_id="parcel-map", map_class="fc-map-fields", with_assets=false %}
+  {% include "fields/_today_map.html" %}
+  {% endwith %}
+  </div>
+  <aside id="map-panel" data-map-panel aria-labelledby="map-panel-heading"
+         data-parcel-id="{{ panel.parcel.id if panel.parcel else '' }}"
+         data-panel-farm-url="{{ panel_farm_url }}" data-panel-parcel-url="{{ panel_parcel_url }}"
+         class="group fixed inset-x-0 bottom-[calc(64px+env(safe-area-inset-bottom))] z-[1000] max-h-[40svh] overflow-y-auto overscroll-contain rounded-t-2xl border-t border-line bg-surface shadow-[0_-6px_20px_rgba(0,0,0,0.12)] max-lg:data-[collapsed]:overflow-hidden lg:static lg:z-auto lg:max-h-[calc(60vh+3.5rem)] lg:rounded-xl lg:border lg:shadow-none">
+    {% include "fields/_panel.html" %}
+  </aside>
+</div>
+
+{% include "fields/_parcel_list.html" %}
+{#- Room to scroll the last rows above the phone sheet. -#}
+<div class="h-[40svh] lg:hidden" aria-hidden="true"></div>
+<script src="/static/fields/map.js"></script>
+<script src="/static/fields/panel.js"></script>
+{% endblock %}

@@ -1,0 +1,8 @@
+{% if d.has_data %}
+<dl class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[13px]">
+  <div><dt class="inline text-muted">Rain </dt><dd class="inline">{% if d.rain.value is not none %}{{ '%.1f'|format(d.rain.value) }} mm{% if d.rain.known < d.expected %} · partial{% endif %}{% else %}—{% endif %}</dd></div>
+  <div><dt class="inline text-muted">Wind max </dt><dd class="inline">{% if d.wind.value is not none %}{{ '%.0f'|format(d.wind.value) }} km/h{% if d.wind.known < d.expected %} · partial{% endif %}{% else %}—{% endif %}</dd></div>
+  <div><dt class="inline text-muted">Gust max </dt><dd class="inline">{% if d.gust.value is not none %}{{ '%.0f'|format(d.gust.value) }} km/h{% if d.gust.known < d.expected %} · partial{% endif %}{% else %}—{% endif %}</dd></div>
+  <div><dt class="sr-only">Temperature range </dt><dd class="inline">{% if d.temp.low is not none %}{{ '%.0f'|format(d.temp.low) }}–{{ '%.0f'|format(d.temp.high) }} °C{% if d.temp.known < d.expected %} · partial{% endif %}{% else %}Temperature —{% endif %}</dd></div>
+</dl>
+{% else %}<p class="mt-2 text-sm text-muted">No forecast yet</p>{% endif %}

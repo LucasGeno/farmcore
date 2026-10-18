@@ -1,0 +1,32 @@
+{% if 'assistant' in manifests|map(attribute='name')|list %}
+<link rel="stylesheet" href="/static/assistant/assistant.css">
+<button id="assistant-launcher" type="button" aria-haspopup="dialog" aria-controls="assistant-dialog"
+        aria-label="Ask your farm" title="Ask your farm"
+        class="fc-assistant-launcher inline-flex h-11 w-11 items-center justify-center rounded-full bg-brand-900 text-white shadow-xl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-6 w-6" aria-hidden="true"><path d="M20 11a8 8 0 0 1-8 8H5l-3 3V11a9 9 0 0 1 18 0Z"/><path d="M7 10h8M7 14h5"/></svg></button>
+{# The signed-in farmer can also log a spray here (chat app's draft → ✅ path); others only ask. #}
+{% set assistant_can_log = is_admin and 'chat' in manifests|map(attribute='name')|list %}
+<dialog id="assistant-dialog" aria-labelledby="assistant-heading" data-ask-url="{{ farm_url('/assistant/ask') }}"
+        {% if assistant_can_log %}data-message-url="{{ farm_url('/assistant/message') }}" data-confirm-url="{{ farm_url('/assistant/confirm') }}"{% endif %}
+        class="rounded-2xl border border-line bg-surface p-4 text-ink shadow-xl backdrop:bg-black/40">
+  <div class="flex items-center justify-between gap-3">
+    <h2 id="assistant-heading" class="text-lg font-semibold">Ask your farm</h2>
+    <div class="flex items-center gap-2">
+      <button id="assistant-new" type="button" class="fc-assistant-secondary" aria-label="New conversation"
+              title="New conversation. Context also clears after 30 minutes, a demo reset or leaving this page.">New</button>
+      <form method="dialog"><button class="min-h-[44px] min-w-[44px] rounded-lg border border-line" aria-label="Close assistant">×</button></form>
+    </div>
+  </div>
+  {# AI-assisted only when the assistant app would call Gemini (its own check: usable credentials, admin viewing). #}
+  {% set assistant_ai = assistant_model_ready is defined and assistant_model_ready(request) %}
+  <p id="assistant-mode" class="mt-1 text-sm text-muted">From your farm records · {{ "AI-assisted" if assistant_ai else "Keyword search" }}</p>
+  <div id="assistant-answer" class="mt-3 space-y-3 text-sm" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions"></div>
+  <p id="assistant-status" class="mt-2 text-sm text-muted" role="status">{{ "Ask a question, or tell me what you sprayed." if assistant_can_log else "Try: What was sprayed recently?" }}</p>
+  <form id="assistant-form" class="fc-assistant-row mt-3">
+    <label for="assistant-question" class="sr-only">{{ "Question or spray" if assistant_can_log else "Your question" }}</label>
+    <input id="assistant-question" name="q" required maxlength="500" autocomplete="off" autofocus
+           placeholder="{{ 'Which parcels did I spray?' if assistant_can_log else 'What was sprayed recently?' }}" class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-ink">
+    <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white">Ask</button>
+  </form>
+</dialog>
+<script src="/static/assistant/assistant.js" defer></script>
+{% endif %}

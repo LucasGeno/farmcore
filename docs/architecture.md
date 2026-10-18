@@ -1,0 +1,106 @@
+# Architecture
+
+FarmCore is a modular monolith in Python: one FastAPI process, one PostgreSQL + PostGIS
+database, a small core and installable apps, in the style of Odoo.
+
+```text
+ Connectors (each feed is a job on one clock)                       Telegram
+   Météo-France hourly station ─┐                                     │ voice / text
+   Open-Meteo forecast runs    ─┤  normalise · ext_id · log_source    ▼
+   ISOXML TaskData upload      ─┘──────────────┐          Whisper on the server → transcript
+                                               ▼                      ▼
+   CORE   farm · parcel · asset · log · quantity · product   Extractor: Gemini (optional, EU)
+          observation · advice · event (timeline)            or local regex → draft → farmer ✅
+          data_grant · access_log · app registry · clock
+                     │ ScopedRepository (farm ∩ grant scopes) → access_log per read
+   ┌───────┬─────────┼──────────┬─────────────────┬──────────┬────────┬──────────┐
+ Today  Map &     Records    Crop protection    Weather   Sharing  Season &   Assistant
+        parcels   (register)  (spray advisor)                       impact    (web + Telegram)
+                     │
+   Out: Reg. (EU) 2023/564 register (CSV / JSON) · FIWARE NGSI-LD AgriParcelOperation
+```
+
+## Core
+
+- **App registry.** Each app ships a manifest (`core/manifest.py`): `name`, `depends`, `scopes`,
+  `models`, `jobs`, `routes`, plus what it adds to the UI (`nav`, Today `widgets`, `map_layers`,
+  map panel sections, debug panels, assistant `tools`). Apps load in dependency order. The core
+  and the page shell import no app: they render what the enabled apps declare. Required apps
+  (Today, Map & parcels, Records) are always on; the others switch on and off on `/apps`
+  (administrator only).
+- **Canonical model**, farmOS-shaped: `farm`, `parcel` (PostGIS polygon + validated `props`
+  JSONB), `asset`, `log` + `quantity` + `product`, `observation`, `advice`, `event`.
+  Apps extend it with 1:1 side tables or `props`, never by injecting columns at runtime.
+- **Provenance.** `ext_id(source, key)` makes re-imports idempotent; `log_source` lets one spray
+  carry several sources (voice + machine file). An incoming spray merges with a log of the same
+  farm whose parcels overlap and whose start is within 12 h, keeping the more precise values.
+- **Clock and jobs.** A `Clock` with live and replay modes. The station feed, the advisor and
+  the advice push are jobs declared by manifests; ISOXML files are imported by upload or CLI
+  through the same `ext_id` / `log_source` pipeline. In replay, a step advances the clock and runs
+  due jobs in manifest order; this is how the demo replays the 2024 season.
+- **Access.** Farm data is read through `ScopedRepository(farm, grant)`: it checks the farm and
+  consent scopes (`fields:read`, `logs:read`, `register:read`, …) and writes an `access_log` row
+  for each read. Third-party grants are read-only, cannot read the audit log, and are revocable;
+  the farmer sees reads under each grant on `/share/`. There is one administrator per
+  installation (the `ADMIN_TOKEN` holder) and no per-user accounts: see
+  [SECURITY.md](../SECURITY.md) for what anonymous visitors can see.
+- **Read-only tour.** `/tour` sets a browser cookie that refuses every non-GET request before
+  routing, even with administrator credentials, for sharing a demo safely.
+- **Migrations.** One linear Alembic chain; each revision is prefixed with its app
+  (`<app>_<NNNN>_<slug>`).
+
+## Apps
+
+| App | Does |
+|---|---|
+| Today | Home page assembled from app widgets |
+| Map & parcels | Aerial map (MapLibre) with layers and panel sections contributed by apps |
+| Records | Spray logs, ISOXML import, Reg. (EU) 2023/564 register with record checks |
+| Crop protection | Downy/powdery mildew rules (3-10 rule, Goidanich incubation, Gubler–Thomas, wash-off, intervals): spray / wait / protected, with reasons |
+| Weather | Météo-France station ingest, spray conditions, charts |
+| Forecast | Open-Meteo forecast runs ranked into a five-day spray plan |
+| Sharing | Grants, revoke, access log, NGSI-LD export, grantee view |
+| Season & impact | Model replay vs a spray calendar and the Agreste 2019 reference |
+| Activity, Inventory, Notifications | Farm timeline, product stock, in-app alerts |
+| Assistant | Web panel and Telegram: voice/text → draft spray → ✅; answers questions from read-only app tools |
+| Spanish archive (`demo_es`) | Optional: SIGPAC parcels and an InfoRiego station archive from local files; no advice |
+
+The advisor is a pure calculation over observations and logs. Every threshold lives in
+`apps/advisor/engine/config.py` with its source, or an "assumed" label shown in the UI.
+
+## AI boundary
+
+AI is optional and off by default (`EXTRACTOR=regex`). Audio is always transcribed on the
+server (faster-whisper). With `EXTRACTOR=vertex`, the transcript, parcel aliases, a product
+shortlist and the date go to Vertex AI `gemini-2.5-flash` on a regional EU endpoint
+(`europe-west4` by default). The model returns a draft entry; the rules decide the advice and
+the farmer confirms every entry. A clarification additionally sends the unfinished draft and up
+to six recent turns from the same farm/chat (15-minute expiry). If the call fails, the local
+regex parser takes over. Every call is logged with its exact payload (administrator view of
+`/chat/`; visitors see a sanitised summary).
+
+The web assistant uses the model only for the administrator: it sends the question, the
+available read-only tool declarations and up to three earlier questions; the model picks one
+tool, and the server renders fresh facts through `ScopedRepository`. There is no SQL, shell,
+browsing or new write path. Anonymous and tour visitors get a local keyword router and no model
+call. Spray reports from the web panel use the same slot-filling workflow as Telegram: the
+model extracts fields, code decides what is missing, previews the checks and requires an
+explicit confirm.
+
+## Stack
+
+Python 3.12, FastAPI, SQLAlchemy 2 + GeoAlchemy2, Alembic, Pydantic, Jinja + HTMX + Tailwind,
+MapLibre GL, PostgreSQL 17 + PostGIS, APScheduler (live mode), python-telegram-bot,
+faster-whisper, Docker. Front-end libraries and fonts are bundled
+([inventory](../src/farmcore/core/static/vendor/README.md)); map tiles come from IGN and
+OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+## Deliberately simple, with upgrade paths
+
+- One linear migration chain (per-app branches later).
+- An in-process scheduler (a `job` table with `SKIP LOCKED` workers for real farms).
+- A plain `observation` table (a TimescaleDB hypertable has the same schema).
+- One administrator per installation: grants show the consent model but are not yet
+  authenticated multi-tenant access.
+- Assistant context is one expiring draft plus a few recent turns, kept in process: no vector
+  store, long-term memory or multi-step agent loop.

@@ -1,0 +1,91 @@
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{# Today fragment (advisor). One answer first, then the parcels behind it. Keeps the hooks
+   `data-decision` / `data-parcel`. Colour always comes with an icon and a word. #}
+{% from "core/_icons.html" import icon %}
+{% from "core/_ui.html" import decision_chip, priority_badge %}
+{% from "advisor/_summary.html" import farm_summary %}
+{% macro parcel_row(r, cls="") -%}
+<li id="home-parcel-{{ r.id }}" tabindex="-1" data-parcel="{{ r.alias }}" data-decision="{{ r.decision }}" class="scroll-mt-20 focus:outline focus:outline-2 focus:outline-brand-700 {{ cls }}">
+  <a href="{{ workspace_links[r.id] }}" class="group flex min-h-[60px] items-center gap-3 border-b border-line px-1 py-2.5 transition-colors hover:bg-ground/60">
+    <span class="shrink-0 text-center text-[13px] font-semibold text-muted">{{ parcel_shape(r.id) }}<span class="block">{{ r.alias }}</span></span>
+    <span class="min-w-0 flex-1">
+      <span class="block truncate font-semibold">{{ r.name }}</span>
+      <span class="block text-[13px] leading-snug text-muted">
+        {%- if r.decision == "protected" -%}until {{ r.protected_until_text }}{% if r.mm_since_spray is not none %} · {{ "%.1f"|format(r.mm_since_spray) }} mm rain since spray{% endif %}
+        {%- else -%}{{ r.variety or "Vines" }} · {{ "%.2f"|format(r.area_ha) }} ha{% endif -%}
+      </span>
+      {{ priority_badge(r.priority_label, r.priority) }}
+    </span>
+    {% if r.washed_off %}<span class="rounded-full border border-spray px-2 py-0.5 text-[12px] font-semibold text-spray">Washed off</span>{% endif %}
+    {{ decision_chip(r.decision, size="sm") }}
+    {{ icon("chevron-right", "h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5") }}
+  </a>
+</li>
+{%- endmacro %}
+
+<section data-poll-feed hx-get="{{ resolved_farm_url('/advisor/today') }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" id="today" class="flex flex-col gap-4" aria-label="Today">
+  <p class="flex items-center gap-2 text-[13px] text-muted">
+    <span class="relative flex h-2 w-2"><span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-brand-700 opacity-40 motion-reduce:hidden"></span><span class="relative inline-flex h-2 w-2 rounded-full bg-brand-700"></span></span>
+    {{ now_text }}
+  </p>
+
+  {# News first: a confirmed spray, a washed-off cover. #}
+  {% if protected and hero.decision != "protected" %}
+  <div id="today-protected-news" class="fc-rise flex items-start gap-3 rounded-xl border-l-4 border-protected bg-protected-soft px-4 py-3 text-protected">
+    {{ icon("protected", "mt-0.5 h-5 w-5") }}
+    <div>
+      <p class="font-semibold">{{ protected|length }} parcel{{ "s" if protected|length != 1 }} protected</p>
+      <p class="text-[13px] text-ink/80">{{ protected|map(attribute="name")|join(", ") }} · until {{ hero.protected_until }}</p>
+    </div>
+  </div>
+  {% endif %}
+  {% for r in washed %}
+  <div class="fc-rise flex items-start gap-3 rounded-xl border border-spray/40 bg-surface px-4 py-3">
+    {{ icon("rain", "mt-0.5 h-5 w-5 text-spray") }}
+    <div>
+      <p class="font-semibold text-spray">{{ r.name }}: cover washed off</p>
+      <p class="text-[13px] text-muted">{% if r.mm_since_spray is not none %}{{ "%.0f"|format(r.mm_since_spray) }} mm of rain since the last spray. {% endif %}Spray again to stay protected.</p>
+    </div>
+  </div>
+  {% endfor %}
+
+  {# The answer: the same summary as the /advisor/ home (advisor/_summary.html). #}
+  {{ farm_summary(hero, bot_url) }}
+
+  {# The parcels behind the answer. #}
+  <div class="grid grid-cols-1 gap-5 lg:grid-cols-2 [&>*]:min-w-0">
+    {% if act %}
+    <div class="rounded-xl border border-line bg-surface px-4 pt-3 {{ 'lg:col-span-2' if not protected }}">
+      <h3 class="flex items-baseline justify-between text-[13px] font-semibold uppercase tracking-wider text-muted">
+        <span>Needs a spray</span><span class="tabular-nums">{{ act|length }}</span>
+      </h3>
+      {# Phone: the first 3, the rest behind "Show all" so Weather and Activity stay in reach. #}
+      <ul class="mt-1 {{ 'lg:grid lg:grid-cols-2 lg:gap-x-6' if not protected }}">{% for r in act %}{{ parcel_row(r, "fc-more hidden lg:block" if loop.index > 3 else "") }}{% endfor %}</ul>
+      {% if act|length > 3 %}
+      <button type="button" class="flex min-h-[44px] w-full items-center justify-center gap-1 text-[14px] font-semibold text-brand-700 lg:hidden"
+              onclick="const more = this.previousElementSibling.querySelectorAll('.fc-more'); more.forEach(li => li.classList.remove('hidden')); more[0]?.querySelector('a')?.focus(); this.remove()">
+        Show all {{ act|length }} {{ icon("chevron-down", "h-4 w-4") }}
+      </button>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% if protected %}
+    <details class="group rounded-xl border border-line bg-surface px-4 pt-3" open>
+      <summary class="flex min-h-[44px] cursor-pointer list-none items-baseline justify-between text-[13px] font-semibold uppercase tracking-wider text-muted">
+        <span>Protected</span><span class="flex items-center gap-1 tabular-nums">{{ protected|length }}{{ icon("chevron-down", "h-4 w-4 transition-transform group-open:rotate-180") }}</span>
+      </summary>
+      <ul class="mt-1">{% for r in protected %}{{ parcel_row(r) }}{% endfor %}</ul>
+    </details>
+    {% endif %}
+    {% if calm %}
+    <div class="rounded-xl border border-line bg-surface px-4 py-3 text-[14px] text-muted">
+      Nothing to do on {{ calm|map(attribute="alias")|join(", ") }}: no infection risk right now.
+    </div>
+    {% endif %}
+    {% if unknown %}
+    <div class="rounded-xl border border-dashed border-line px-4 py-3 text-[13px] text-muted">
+      No advice yet for {{ unknown|map(attribute="alias")|join(", ") }}. It comes with the next weather update.
+    </div>
+    {% endif %}
+  </div>
+</section>

@@ -1,0 +1,152 @@
+{# Debug drawer. base.html includes this file just before </body>. Without `debug_view` in the
+   context it renders the self-loading slot (core/_debug_slot.html); GET /debug/drawer renders it
+   with `debug_view` set, for admins only: `debug_on` false gives a small "Debug" link, true the
+   drawer. Colours: the shell's ink token as ground (farmcore.css `.fc-debug-*` holds the layout).
+   The drawer is a fixed footer <details>, collapsed to a bar that sits above the phone
+   bottom nav (its height comes from `--fc-bottom-nav-h`, measured from `[data-bottom-nav]` /
+   `#bottom-nav` when the shell has one), expandable and scrollable. #}
+{% if debug_view is defined %}
+{% from "core/_icons.html" import icon %}
+{% if not debug_on %}
+<div id="debug-slot" class="fc-debug fc-debug-off mx-auto max-w-6xl px-4 text-right">
+  <a href="{{ debug_on_url }}" class="fc-debug-link inline-flex items-center gap-1.5 text-[13px] text-muted underline underline-offset-2 hover:text-ink"
+     title="Open the debug drawer (admins only)">{{ icon("bug", "h-4 w-4") }}Debug</a>
+</div>
+{% else %}
+<div id="debug-slot" class="fc-debug">
+  <div class="fc-debug-spacer" aria-hidden="true"></div>
+  <div id="debug-drawer" class="fc-debug-bar border-t border-white/15 bg-ink text-xs text-white/90">
+    <details>
+      <summary class="mx-auto flex max-w-6xl cursor-pointer select-none items-center gap-3 px-4 py-2">
+        <span class="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-white/15 px-2 py-0.5 font-semibold text-white">
+          {{ icon("bug", "h-3.5 w-3.5") }}Debug</span>
+        <span class="truncate font-mono">{{ path }}{% if parcel_id is not none %} · parcel {{ parcel_id }}{% endif %}</span>
+        <span class="ml-auto whitespace-nowrap font-mono text-white/60">{{ clock.mode }} · {{ clock.now|local }}</span>
+      </summary>
+      <div class="fc-debug-body border-t border-white/15">
+        <div class="mx-auto grid max-w-6xl gap-4 px-4 py-3 md:grid-cols-2">
+          <section>
+            <h2 class="mb-1 font-semibold uppercase tracking-wide text-white/60">Request</h2>
+            <dl class="grid grid-cols-[max-content_1fr] gap-x-3 font-mono">
+              <dt>path</dt><dd class="break-all">{{ path }}</dd>
+              <dt>parcel id</dt><dd data-parcel-id="{{ parcel_id if parcel_id is not none else '' }}">{{ parcel_id if parcel_id is not none else '—' }}</dd>
+            </dl>
+            <p class="mt-2 flex flex-wrap gap-x-3 gap-y-1">
+              <a class="underline" href="{{ debug_off_url }}">Turn debug off</a>
+            </p>
+          </section>
+
+          <section>
+            <h2 class="mb-1 font-semibold uppercase tracking-wide text-white/60">Access</h2>
+            {% if access %}
+            <dl class="grid grid-cols-[max-content_1fr] gap-x-3 font-mono">
+              <dt>farm</dt><dd data-farm-id="{{ access.farm_id }}">{{ access.farm_id }}{% for k in access.farm_keys %} · {{ k }}{% endfor %}</dd>
+              <dt>grant</dt><dd data-grant-id="{{ access.grant_id }}">{{ access.grant_id }} ({{ access.grantee }})</dd>
+              <dt>scopes</dt><dd data-scopes="{{ access.scopes|join(' ') }}">{{ access.scopes|join(', ') }}</dd>
+              <dt>actor</dt><dd>{{ access.actor }}</dd>
+              <dt>purpose</dt><dd>{{ access.purpose }}</dd>
+            </dl>
+            {% else %}
+            <p>No farm seeded yet (<code>farmcore seed</code>).</p>
+            {% endif %}
+          </section>
+
+          <section>
+            <h2 class="mb-1 font-semibold uppercase tracking-wide text-white/60">Clock</h2>
+            <dl class="grid grid-cols-[max-content_1fr] gap-x-3 font-mono">
+              <dt>mode</dt><dd data-clock-mode="{{ clock.mode }}">{{ clock.mode }}</dd>
+              <dt>now UTC</dt><dd>{{ clock.now.strftime('%Y-%m-%d %H:%M') }}</dd>
+              <dt>now local</dt><dd>{{ clock.now|local }} ({{ clock.tz }})</dd>
+              {% if clock.last_step_to %}<dt>last step</dt><dd>{{ clock.last_step_to }}</dd>{% endif %}
+            </dl>
+            {% if clock.last_step_runs %}
+            <h3 class="mt-2 font-semibold">Last step job runs</h3>
+            <ul class="break-all font-mono">
+              {% for run in clock.last_step_runs %}
+              <li>{{ run.name }} · {{ 'ok' if run.ok else 'failed' }} · {{ run.ms }} ms{% if run.error %} · {{ run.error }}{% endif %}</li>
+              {% endfor %}
+            </ul>
+            {% endif %}
+            {% if clock.last_run %}
+            <h3 class="mt-2 font-semibold">Last successful run per job</h3>
+            <ul class="break-all font-mono">
+              {% for name, at in clock.last_run %}<li>{{ name }} · {{ at }}</li>{% endfor %}
+            </ul>
+            {% endif %}
+          </section>
+
+          <section>
+            <h2 class="mb-1 font-semibold uppercase tracking-wide text-white/60">Raw JSON</h2>
+            <ul class="break-all font-mono">
+              {% for label, url in raw_links %}<li><a class="underline" href="{{ url }}">{{ label }}</a> <span class="text-white/60">{{ url }}</span></li>{% endfor %}
+              <li><a class="underline" href="/chat/">LLM payloads</a> <span class="text-white/60">/chat/</span></li>
+            </ul>
+          </section>
+
+          <section class="md:col-span-2">
+            <h2 class="mb-1 font-semibold uppercase tracking-wide text-white/60">Apps ({{ apps|length }})</h2>
+            <div class="overflow-x-auto">
+              <table class="w-full font-mono">
+                <thead class="text-white/60">
+                  <tr class="text-left"><th class="pr-3">app</th><th class="pr-3">version</th><th class="pr-3">maturity</th><th class="pr-3">nav group</th><th class="pr-3">today</th><th class="pr-3">panels</th><th>tools</th></tr>
+                </thead>
+                <tbody>
+                  {% for a in apps %}
+                  <tr data-app="{{ a.name }}"><td class="pr-3">{{ a.name }}</td><td class="pr-3">{{ a.version }}</td><td class="pr-3">{{ a.maturity }}</td><td class="pr-3">{{ a.nav_group or '—' }}</td><td class="pr-3">{{ a.today }}</td><td class="pr-3">{{ a.debug_panels }}</td><td>{{ a.tools }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {% for panel in panels %}
+          <section class="md:col-span-2" data-debug-panel="{{ panel.app }}">
+            <h2 class="mb-1 font-semibold uppercase tracking-wide text-white/60">{{ panel.app }} panel</h2>
+            <div hx-get="{{ panel.url }}" hx-trigger="load" hx-swap="innerHTML">
+              <a class="underline" href="{{ panel.url }}">{{ panel.url }}</a>
+            </div>
+          </section>
+          {% endfor %}
+
+          {% if access %}
+          <section class="md:col-span-2">
+            <h2 class="mb-1 font-semibold uppercase tracking-wide text-white/60">Access log (last {{ access.access_log|length }})</h2>
+            <div class="overflow-x-auto">
+              <table class="w-full font-mono" id="debug-access-log">
+                <thead class="text-white/60">
+                  <tr class="text-left"><th class="pr-3">id</th><th class="pr-3">when</th><th class="pr-3">actor</th><th class="pr-3">grant</th><th class="pr-3">resource</th><th class="pr-3">scope</th><th>purpose</th></tr>
+                </thead>
+                <tbody>
+                  {% for r in access.access_log %}
+                  <tr><td class="pr-3">{{ r.id }}</td><td class="whitespace-nowrap pr-3">{{ r.ts|local }}</td><td class="pr-3">{{ r.actor }}</td><td class="pr-3">{{ r.grant_id }}</td><td class="pr-3">{{ r.resource }}</td><td class="pr-3">{{ r.scope }}</td><td>{{ r.purpose }}</td></tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          </section>
+          {% endif %}
+        </div>
+      </div>
+    </details>
+  </div>
+  <script>
+    (function () {
+      var root = document.documentElement;
+      function place() {
+        var nav = document.querySelector("[data-bottom-nav], #bottom-nav");
+        if (nav && nav.getClientRects().length) {
+          root.style.setProperty("--fc-bottom-nav-h", nav.getBoundingClientRect().height + "px");
+        } else {
+          root.style.removeProperty("--fc-bottom-nav-h");
+        }
+      }
+      place();
+      window.addEventListener("resize", place);
+      document.body.addEventListener("htmx:afterSettle", place);
+    })();
+  </script>
+</div>
+{% endif %}
+{% else %}
+{% include "core/_debug_slot.html" %}
+{% endif %}

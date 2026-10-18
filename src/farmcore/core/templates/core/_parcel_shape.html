@@ -1,0 +1,8 @@
+{# Decorative identity: retain the visible alias/name. Import with context for farm scoping.
+   No maps, script, or imagery; repeated identities share one image URL per parcel. #}
+{% macro parcel_shape(parcel_id, size="inline") -%}
+<img src="{{ farm_url('/fields/parcels/' ~ parcel_id ~ '/outline.svg?farm=' ~ request.state.selected_farm_id) }}"
+     class="fc-parcel-outline" data-size="{{ 'large' if size == 'large' else 'inline' }}"
+     width="{{ 144 if size == 'large' else 40 }}" height="{{ 144 if size == 'large' else 40 }}"
+     alt="" aria-hidden="true" loading="lazy" decoding="async">
+{%- endmacro %}

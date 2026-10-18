@@ -1,0 +1,18 @@
+{# Opt-in only: tiles are absent until the native disclosure opens and loads its fragment.
+   Import with context. Owners may supply a farm-resolved URL; canonical callers keep their
+   existing farm_url behavior. Prefix distinguishes fragments on the same parcel page. #}
+{% from "core/_fragment.html" import fragment_slot %}
+{% from "core/_icons.html" import icon %}
+{% macro parcel_aerial(parcel_id, prefix="parcel", url=none) -%}
+{% set url = url if url is not none else farm_url('/fields/parcels/' ~ parcel_id ~ '/aerial') %}
+<details data-aerial-disclosure class="mt-4 rounded-xl border border-line bg-surface p-4">
+  <summary class="flex min-h-[44px] cursor-pointer items-center justify-between gap-3 font-semibold">
+    Aerial view {{ icon("chevron-down", "h-4 w-4") }}
+  </summary>
+  <div class="mt-3">
+    {{ fragment_slot(prefix ~ '-aerial-' ~ parcel_id, "Aerial view", url, trigger="toggle[event.target.open] from:closest details once", initially_busy=false) }}
+    <a href="{{ url }}" class="mt-2 inline-flex min-h-[44px] items-center text-sm text-brand-700 underline">Open aerial view full page</a>
+  </div>
+</details>
+<script src="/static/fields/aerial.js" defer></script>
+{%- endmacro %}

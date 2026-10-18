@@ -1,0 +1,31 @@
+{% extends "core/base.html" %}
+{% block title %}VA07 source archive · farmcore{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-5xl">
+  <p class="text-sm"><a class="inline-flex min-h-[44px] items-center underline" href="{{ farm_url('/stations/') }}">← Weather stations</a></p>
+  <h1 class="mb-4 text-2xl font-semibold">Valbuena de Duero · VA07 source archive</h1>
+  {% include "stations/_archive_summary.html" %}
+  <form method="get" action="{{ farm_url(request.url.path) }}" class="mt-4 flex flex-wrap items-end gap-3">
+    <div><label for="archive-day" class="block text-sm font-semibold">Source archive day</label>
+    <input id="archive-day" name="day" type="date" value="{{ day }}" class="mt-1 min-h-[44px] rounded-lg border border-line bg-surface px-3"></div>
+    {% if farm_query is not none %}<input type="hidden" name="farm" value="{{ farm_query }}">{% endif %}
+    <button type="submit" class="min-h-[44px] rounded-lg border border-line bg-surface px-4 font-semibold">Show readings</button>
+  </form>
+  <p class="mt-3 text-sm text-muted">Source-native half-hour labels, independent of the replay clock. 2400 means the end of the source day; timezone and UTC alignment are unverified.</p>
+  {% if readings %}
+  <div class="mt-4 overflow-x-auto rounded-xl border border-line" role="region" aria-label="Source readings; scroll horizontally for all variables" tabindex="0">
+    <table class="min-w-full border-collapse text-sm">
+      <caption class="p-3 text-left font-semibold">{{ readings|length }} source readings · {{ day }}</caption>
+      <thead><tr class="text-left"><th scope="col" class="p-3">Source HHMM</th>{% for key, label, unit in variables %}<th scope="col" class="whitespace-nowrap p-3">{{ label }} ({{ unit }})</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in readings %}<tr class="border-t border-line" data-source-time="{{ row['Hora (HHMM)'] }}"><th scope="row" class="p-3 text-left tabular-nums">{{ row['Hora (HHMM)'] }}</th>{% for key, label, unit in variables %}<td class="p-3 tabular-nums">{{ row[key] }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  {% else %}<p class="mt-4 rounded-xl border border-line bg-surface p-4">No source readings for this day. Missing records are not zero rainfall.</p>{% endif %}
+  <section class="mt-6 rounded-xl border border-line bg-surface p-4" aria-label="Provenance and limitations">
+    <h2 class="font-semibold">Open data, with provenance</h2>
+    <p class="mt-2 text-sm">Weather: <a class="underline" href="https://ftp.itacyl.es/Meteorologia/Datos_observacion_Red_InfoRiego/">InfoRiego · ITACyL</a>, station VA07. Licence not verified; shown for a non-commercial demo with attribution to ITACyL, pending confirmation.</p>
+    <p class="mt-2 text-sm">Parcels: <a class="underline" href="https://ftp.itacyl.es/cartografia/05_SIGPAC/2024_ETRS89/">SIGPAC 2024 · FEGA/MAPA and Junta de Castilla y León (ITACyL)</a>. Licence: CC BY 4.0 (FEGA, national) / IGCYL-NC (Junta de Castilla y León regional catalogue, non-commercial). Used for a non-commercial demo with attribution.</p>
+    <p class="mt-2 text-sm">Demo data: ten real vineyard recintos grouped for this demo, without claiming common ownership. No verified Spanish product catalogue or forecast is loaded. Season assumptions require agronomist confirmation; no treatment advice is issued.</p>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,168 @@
+<!doctype html>
+{% from "core/_icons.html" import icon %}
+{% set nav = nav if nav is defined else {"farmer": [], "apps": [], "more": [], "admin": []} %}
+{% set current = nav_current if nav_current is defined else None %}
+{% macro side_link(item, small=False) -%}
+<a href="{{ farm_url(item.path) }}"{% if current == item.path %} aria-current="page"{% endif %}
+   class="relative flex min-h-[44px] items-center gap-3 rounded-lg px-3 {{ 'text-[14px]' if small else 'text-[15px]' }} transition-colors {{ 'bg-brand-50 font-semibold text-brand-900 before:absolute before:inset-y-2 before:left-0 before:w-[3px] before:rounded-full before:bg-brand-700' if current == item.path else 'text-ink/80 hover:bg-ground hover:text-ink' }}">
+  {{ icon(item.icon, "h-5 w-5" if not small else "h-[18px] w-[18px] text-muted") }}<span>{{ item.label }}</span>
+</a>
+{%- endmacro %}
+
+{% macro viewer_preferences() -%}
+<form method="get" action="/prefs/expert" class="fc-view-preference">
+  <input type="hidden" name="next" value="{{ nav_request_path or '/' }}">
+  <fieldset>
+    <legend class="font-semibold text-ink">View</legend>
+    <p class="text-xs">Field keeps actions first. Expert adds evidence and tools.</p>
+    <div class="fc-view-options">
+      <button type="submit" name="on" value="0" aria-pressed="{{ 'false' if expert else 'true' }}">Field</button>
+      <button type="submit" name="on" value="1" aria-pressed="{{ 'true' if expert else 'false' }}">Expert</button>
+    </div>
+  </fieldset>
+</form>
+<form method="get" action="/prefs/sunlight" class="fc-sunlight-preference">
+  <input type="hidden" name="next" value="{{ nav_request_path or '/' }}">
+  <button type="submit" name="on" value="{{ 0 if sunlight else 1 }}" aria-pressed="{{ 'true' if sunlight else 'false' }}"
+          class="flex min-h-[44px] w-full items-center justify-between gap-2 text-left">
+    <span>Sunlight mode<span class="block text-xs">Higher contrast and larger text in either view</span></span>
+    <span class="shrink-0 font-semibold">{{ 'On' if sunlight else 'Off' }}</span>
+  </button>
+</form>
+{%- endmacro %}
+<html lang="en"{% if sunlight %} data-contrast="high"{% endif %} data-view="{{ 'expert' if expert else 'field' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f3a2b">
+  <title>{% block title %}farmcore{% endblock %}</title>
+  <link rel="stylesheet" href="/static/core/vendor/dm-sans.css">
+  <link rel="stylesheet" href="/static/core/vendor/tailwind-3.4.17.min.css">
+  <script src="/static/core/vendor/htmx-2.0.4.min.js"></script>
+  <script src="/static/core/fragments.js" defer></script>
+  <script src="/static/core/navigation.js" defer></script>
+  <link rel="stylesheet" href="/static/core/farmcore.css">
+  {% block head %}{% endblock %}
+</head>
+<body class="min-h-screen bg-ground font-sans text-[15px] text-ink antialiased">
+  <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-2 focus:z-[2000] focus:rounded focus:bg-surface focus:px-3 focus:py-2">Skip to content</a>
+
+  {# Top bar: brand · farm · season/replay pill · optional notifications. Dark green; compact date/time and wrapping preserve every control on narrow screens. #}
+  <header class="sticky top-0 z-[1100] bg-brand-900 text-white">
+    <div class="fc-header-row flex min-h-14 items-center gap-2 px-3 sm:gap-3 sm:px-4 lg:min-h-16 lg:px-6">
+      <a href="{{ farm_url('/') }}" aria-label="farmcore Home" class="flex min-h-[44px] items-center gap-2 font-semibold tracking-tight">
+        {{ icon("leaf", "h-6 w-6") }}<span class="hidden sm:inline">farmcore</span>
+      </a>
+      <div class="hidden min-w-0 text-sm text-white/80 md:block">
+        {% block farm_switcher %}{% include "core/_farm_switcher.html" %}{% endblock %}
+      </div>
+      <div class="fc-header-clock ml-auto">{% include "core/_replay_control.html" %}</div>
+      <div data-shell-slot="notifications">{% include "core/_notifications_slot.html" ignore missing %}</div>
+    </div>
+  </header>
+
+  <div class="lg:grid lg:grid-cols-[232px_minmax(0,1fr)]">
+    {# Desktop sidebar: Your farm, Apps, then Records (collapsed unless open), then Admin. #}
+    <aside class="hidden border-r border-line bg-surface lg:block">
+      <div class="sticky top-16 flex h-[calc(100vh-4rem)] flex-col overflow-y-auto px-3 py-6">
+        <nav id="navbar" aria-label="Main" class="flex flex-col gap-6">
+          <div>
+            <p class="mb-2 px-3 text-xs font-semibold uppercase tracking-widest text-muted">Your farm</p>
+            {% for item in nav.farmer %}{{ side_link(item) }}{% endfor %}
+          </div>
+          {% if nav.apps %}
+          <div id="nav-apps">
+            <p class="mb-2 px-3 text-xs font-semibold uppercase tracking-widest text-muted">Apps</p>
+            {% for item in nav.apps %}{{ side_link(item) }}{% endfor %}
+          </div>
+          {% endif %}
+          {% if nav.more %}
+          {% set more_open = expert or (current in nav.more|map(attribute="path")|list) %}
+          <details id="nav-records" class="group" {% if more_open %}open{% endif %}>
+            <summary class="mb-2 flex min-h-[44px] cursor-pointer list-none items-center justify-between rounded-lg px-3 text-xs font-semibold uppercase tracking-widest text-muted hover:bg-ground">
+              Records {{ icon("chevron-down", "h-4 w-4 transition-transform group-open:rotate-180") }}
+            </summary>
+            {% for item in nav.more %}{{ side_link(item, small=True) }}{% endfor %}
+          </details>
+          {% endif %}
+          {% if nav.admin %}
+          <div>
+            <p class="mb-2 px-3 text-xs font-semibold uppercase tracking-widest text-muted">Admin</p>
+            {% for item in nav.admin %}{{ side_link(item, small=True) }}{% endfor %}
+          </div>
+          {% endif %}
+        </nav>
+        <div class="mt-auto border-t border-line px-3 pt-4 text-[13px] text-muted">
+          {{ viewer_preferences() }}
+        </div>
+      </div>
+    </aside>
+
+    <main id="main" class="fc-main mx-auto w-full min-w-0 max-w-6xl px-4 pb-56 pt-5 sm:pt-6 lg:px-8 lg:pb-12 lg:pt-8">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+
+  {# Phone bottom nav: the farmer group, then More (opens the sheet below). #}
+  <nav id="bottom-nav" aria-label="Main" class="fixed inset-x-0 bottom-0 z-[1100] border-t border-line bg-surface pb-[env(safe-area-inset-bottom)] lg:hidden">
+    <div class="mx-auto flex max-w-xl px-2 py-1">
+      {% for item in nav.farmer %}
+      <a href="{{ farm_url(item.path) }}"{% if current == item.path %} aria-current="page"{% endif %}
+         class="flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 rounded-lg text-[12px] {{ 'bg-brand-50 font-semibold text-brand-900' if current == item.path else 'text-muted' }}">
+        {{ icon(item.icon) }}<span>{{ item.label }}</span>
+      </a>
+      {% endfor %}
+      <button type="button" aria-haspopup="dialog" aria-controls="more-menu" onclick="document.getElementById('more-menu').showModal()"
+              class="flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 rounded-lg text-[12px] {{ 'bg-brand-50 font-semibold text-brand-900' if current and current not in nav.farmer|map(attribute='path')|list else 'text-muted' }}">
+        {{ icon("more") }}<span>More</span>
+      </button>
+    </div>
+  </nav>
+
+  <dialog id="more-menu" aria-label="More" class="fc-sheet m-0 mt-auto w-full max-w-none rounded-t-2xl bg-surface p-0 text-ink backdrop:bg-black/40 lg:hidden"
+          onclick="if (event.target === this) this.close()">
+    <div class="mx-auto max-w-xl px-4 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2">
+      <div class="mx-auto mb-3 h-1 w-10 rounded-full bg-line"></div>
+      <div class="mb-2 flex items-center justify-between">
+        <p class="text-lg font-semibold">More</p>
+        <form method="dialog"><button class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted" aria-label="Close">{{ icon("x") }}</button></form>
+      </div>
+      <div class="mb-3 rounded-xl border border-line px-3 text-[13px] text-muted">{{ viewer_preferences() }}</div>
+      <div class="md:hidden">{% with slot = "more" %}{% include "core/_farm_switcher.html" %}{% endwith %}</div>
+      {% if nav.apps %}
+      <p class="mb-1 mt-3 text-xs font-semibold uppercase tracking-widest text-muted">Apps</p>
+      <div class="grid grid-cols-2 gap-2">
+        {% for item in nav.apps %}
+        <a href="{{ farm_url(item.path) }}"{% if current == item.path %} aria-current="page"{% endif %}
+           class="flex min-h-[52px] items-center gap-2 rounded-xl border border-line px-3 text-[15px] font-medium {{ 'bg-brand-50 font-semibold text-brand-900' if current == item.path else '' }}">{{ icon(item.icon, "h-5 w-5 text-brand-700") }}{{ item.label }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if nav.more %}
+      <details id="more-records" class="mt-4 rounded-xl border border-line">
+        <summary class="flex min-h-[44px] cursor-pointer items-center justify-between px-3 font-semibold">
+          Records {{ icon("chevron-down", "h-4 w-4") }}
+        </summary>
+        <div class="grid grid-cols-1 gap-1 px-2 pb-2">
+          {% for item in nav.more %}{{ side_link(item) }}{% endfor %}
+        </div>
+      </details>
+      {% endif %}
+      {% if nav.admin %}
+      <p class="mb-1 mt-4 text-xs font-semibold uppercase tracking-widest text-muted">Admin</p>
+      <div class="grid grid-cols-2 gap-2">
+        {% for item in nav.admin %}
+        <a href="{{ farm_url(item.path) }}" class="flex min-h-[52px] items-center gap-2 rounded-xl border border-line px-3">{{ icon(item.icon, "h-5 w-5 text-muted") }}{{ item.label }}</a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </dialog>
+
+  <div data-shell-slot="assistant">{% include "core/_assistant_slot.html" ignore missing %}</div>
+
+  {# The debug drawer; renders nothing until it exists. #}
+  {% include "core/_debug_drawer.html" ignore missing %}
+</body>
+</html>
+

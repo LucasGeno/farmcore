@@ -1,0 +1,22 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+node_modules/
+.coverage*
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg-info/
+# Local raw datasets, database dumps and credentials: never committed
+data/
+backups/
+secrets/
+*.sqlite
+*.db

@@ -1,0 +1,56 @@
+{% extends "core/base.html" %}
+{% block title %}Demo controls · farmcore{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl">
+  <h1 class="text-3xl font-semibold tracking-tight">Demo controls</h1>
+  <p class="mt-3 text-muted">Stage {{ farm.name }}. All staged records are demo data.</p>
+  {% if notice %}<p role="status" class="mt-4 rounded-lg border border-line bg-surface p-4 text-sm">{{ notice }}</p>{% endif %}
+  <section class="mt-6 rounded-xl border border-line bg-surface p-4">
+    <h2 class="font-semibold">Current state</h2>
+    <p class="mt-2">{{ mode|capitalize }} · {{ now|local }} (Europe/Paris)</p>
+    <dl class="mt-3 flex flex-wrap gap-4 text-sm">
+      {% for status, count in counts.items() %}<div><dt class="text-muted">{{ status|capitalize }}</dt><dd class="font-semibold">{{ count }}</dd></div>{% endfor %}
+    </dl>
+    <p class="mt-3 text-sm">Bot linked: {{ 'yes' if bot_linked else 'no' }}. Last push job run: {{ last_push_attempt|local if last_push_attempt else 'not recorded' }}. Delivery is not verified here.</p>
+    {% if runs %}<ul class="mt-3 text-sm">{% for run in runs %}<li>{{ run.name }}: {{ 'OK' if run.ok else 'FAILED (' ~ run.error ~ ')' }}</li>{% endfor %}</ul>{% endif %}
+  </section>
+  <section class="mt-6 rounded-xl border border-line bg-surface p-4">
+    <h2 class="font-semibold">Reset demo</h2>
+    <p class="mt-2 text-sm text-muted">Removes this demo farm's operations, advice and their timeline entries, plus read audit since the initial seed. Keeps parcels, weather, grants and the Telegram binding. Other farms are preserved. Due jobs run after the reset commits.</p>
+    <form method="post" action="/demo/preview" class="mt-4 grid gap-3">
+      <input type="hidden" name="action" value="reset">
+      <input type="hidden" name="farm_id" value="{{ farm.id }}">
+      <input type="hidden" name="generation" value="{{ generation }}">
+      <label class="grid gap-1 text-sm font-semibold">Preset
+        <select name="preset" class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+          {% for preset in presets %}<option value="{{ preset.key }}"{% if preset.key == selected_preset %} selected{% endif %}>{{ preset.label }}</option>{% endfor %}
+        </select>
+      </label>
+      <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white">Preview reset</button>
+    </form>
+  </section>
+  {% for preset in presets %}<p class="mt-3 text-sm text-muted"><strong>{{ preset.label }}</strong> — {{ preset.description }}</p>{% endfor %}
+  <section class="mt-6 rounded-xl border border-line bg-surface p-4">
+    <h2 class="font-semibold">Step clock</h2>
+    <form method="post" action="/demo/preview" class="mt-4 grid gap-3">
+      <input type="hidden" name="action" value="step">
+      <input type="hidden" name="preset" value="{{ selected_preset }}">
+      <input type="hidden" name="farm_id" value="{{ farm.id }}">
+      <input type="hidden" name="generation" value="{{ generation }}">
+      <label class="grid gap-1 text-sm font-semibold">Local time (Europe/Paris)<input name="to" type="datetime-local" value="{{ input_time }}" required class="min-h-[44px] w-full rounded-lg border border-line px-3"></label>
+      <button class="min-h-[44px] rounded-lg border border-line px-4 font-semibold">Preview step</button>
+    </form>
+  </section>
+  <section class="mt-6 rounded-xl border border-line bg-surface p-4">
+    <h2 class="font-semibold">Present day / live clock</h2>
+    <ul class="mt-3 space-y-2 text-sm text-muted">{% for reason in live_reasons %}<li>{{ reason }}</li>{% endfor %}</ul>
+    <form method="post" action="/demo/preview" class="mt-4 grid gap-3">
+      <input type="hidden" name="preset" value="{{ selected_preset }}">
+      <input type="hidden" name="farm_id" value="{{ farm.id }}">
+      <input type="hidden" name="generation" value="{{ generation }}">
+      <button name="action" value="live" class="min-h-[44px] rounded-lg border border-line px-4 font-semibold">Check live readiness</button>
+      <button name="action" value="replay" class="min-h-[44px] rounded-lg border border-line px-4 font-semibold">Restore replay preset</button>
+    </form>
+  </section>
+</div>
+{% endblock %}

@@ -1,0 +1,48 @@
+{% extends "core/base.html" %}
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{% from "fields/_parcel_aerial.html" import parcel_aerial with context %}
+{% from "core/_fragment.html" import fragment_slot %}
+{% block title %}{{ parcel.alias }} · Parcels · farmcore{% endblock %}
+{% block head %}<noscript><style>.fc-script-only { display: none; }</style></noscript>{% endblock %}
+{% block content %}
+<a href="{{ destination.url }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700">{{ destination.label }}</a>
+<div class="mt-3 flex items-center gap-3">
+  {{ parcel_shape(parcel.id, "large") }}
+  <div class="min-w-0">
+<h1 id="parcel-heading" data-return-heading tabindex="-1" class="mt-3 scroll-mt-20 focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700 break-words text-2xl font-semibold">{{ parcel.alias }} · {{ parcel.name }}</h1>
+<p class="break-words text-muted">{{ '%.2f'|format(parcel.area_ha) }} ha · {{ (parcel.props or {}).get('variety') or 'Not recorded' }}</p>
+  </div>
+</div>
+<nav aria-label="Parcel views" class="mt-6 flex flex-wrap gap-2">
+{% for item in views %}<a href="{{ item.url }}" class="inline-flex min-h-[44px] items-center rounded-lg border border-line px-4 font-semibold {{ 'bg-brand-50 text-brand-900' if item.key == selected_view else 'bg-surface text-muted hover:bg-ground' }}"{% if item.key == selected_view %} aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
+</nav>
+{% if notice %}<p role="note" class="mt-4 text-wait">{{ notice }}</p>{% endif %}
+{% if selected_view == 'overview' %}
+<h2 class="mt-6 text-lg font-semibold">Overview</h2>
+
+<div class="mt-4 flex flex-col gap-4">
+{% for s in sections %}
+<div class="fc-script-only">{{ fragment_slot(s.slot_id, s.label, s.url) }}</div>
+<noscript>{% if s.fallback_url %}<a href="{{ s.fallback_url }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700">Open {{ s.label }}</a>{% else %}<p class="break-words text-muted">{{ s.label }} requires JavaScript; its inline provenance is unavailable here.</p>{% endif %}</noscript>
+{% else %}<p class="break-words text-muted">No app adds facts here yet.</p>{% endfor %}
+</div>
+{% else %}
+<section aria-label="{{ section.label }}" class="mt-6">
+<div class="fc-script-only">{{ fragment_slot(section.slot_id, section.label, section.url) }}</div>
+<a href="{{ section.fallback_url }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700">Open {{ section.label }} full page</a>
+</section>
+{% endif %}
+<details data-parcel-metadata class="mt-4 rounded-xl border border-line bg-surface p-4"{% if expert %} open{% endif %}>
+<summary class="min-h-[44px] cursor-pointer font-semibold">Crop details and aerial</summary>
+<section aria-labelledby="crop-heading" class="mt-4 rounded-xl border border-line bg-surface p-4">
+<h3 id="crop-heading" class="font-semibold">Crop details</h3>
+<p class="mt-1 text-sm text-muted">Current stored metadata</p>
+<dl class="mt-3 grid gap-3 sm:grid-cols-2">
+{% for label, value in [('Crop', (parcel.props or {}).get('crop_label')), ('Variety', (parcel.props or {}).get('variety')), ('Planted year', (parcel.props or {}).get('planted_year')), ('IACS identifier', parcel.iacs_id)] %}
+<div class="min-w-0"><dt class="text-sm text-muted">{{ label }}</dt><dd class="break-words">{{ value if value is not none and value != '' else 'Not recorded' }}</dd></div>
+{% endfor %}
+</dl>
+</section>
+{{ parcel_aerial(parcel.id, "workspace", url=resolved_farm_url('/fields/parcels/' ~ parcel.id ~ '/aerial')) }}
+</details>
+{% endblock %}

@@ -1,0 +1,123 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, pill %}
+{% from "core/_icons.html" import icon %}
+{% from "operations/_records.html" import product_line %}
+{# Register checks: every status has an icon and a word; warnings sit in the amber wait tone. #}
+{% set CHECK_TONES = {
+  "ok": ("OK", "text-protected", ""),
+  "warn": ("Warning", "text-wait", "rounded-lg bg-wait-soft px-2 py-1.5 text-wait"),
+  "info": ("Note", "text-muted", ""),
+} %}
+{% macro check_icon(status) -%}
+{%- if status == "warn" -%}
+<svg class="mt-0.5 h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+{%- else -%}
+{{ icon("check" if status == "ok" else "info", "mt-0.5 h-4 w-4") }}
+{%- endif -%}
+{%- endmacro %}
+{% block title %}Spray register · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Spray register", "Every confirmed spray, ready for an inspection (EU Reg. 2023/564). It fills itself from your voice notes.") %}
+<a href="{{ farm_url('/operations/register.csv') }}" download="spray-register.csv" class="inline-flex min-h-[44px] items-center gap-2 rounded-lg bg-brand-900 px-4 font-semibold text-white hover:bg-brand-700">Download CSV</a>
+<a href="{{ farm_url('/operations/register.json') }}" target="_blank" rel="noopener noreferrer" class="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-line bg-surface px-4 font-semibold hover:bg-ground">Open JSON</a>
+{% endcall %}
+
+{% if placeholders %}
+<p class="mb-4 flex items-start gap-2 rounded-xl border border-wait/30 bg-wait-soft px-4 py-3 text-[14px] text-wait">
+  {{ icon("info", "mt-0.5 h-4 w-4") }}
+  <span>{{ placeholders }} row{{ "s" if placeholders != 1 }} carry a placeholder authorisation number, not a real one yet.</span>
+</p>
+{% endif %}
+
+{# Plain view: one card per spray, newest first. Same rows as the EU table below. #}
+{% if sprays %}
+<p class="mb-2 text-[13px] text-muted">{{ sprays|length }} spray{{ "s" if sprays|length != 1 }} up to {{ now|local }} · Paris time</p>
+<ul id="register-cards" class="mb-6 grid gap-3 md:grid-cols-2">
+  {% for items in sprays %}
+  {% set first = items[0] %}
+  <li class="rounded-xl border border-line bg-surface p-4" data-spray="{{ first.log_id }}">
+    <div class="flex items-start justify-between gap-3">
+      <div class="min-w-0">
+        <p class="text-[13px] text-muted">{{ first.date }}{% if first.start_time %} · {{ first.start_time }}{% endif %}</p>
+        <p class="mt-0.5 text-[17px] font-semibold">{{ items|map(attribute="parcel_alias")|unique|join(", ") }}</p>
+      </div>
+      {{ pill("Confirmed", "ok") }}
+    </div>
+    <dl class="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[14px]">
+      {% for p in items|unique(attribute="product_name") %}
+      <dt class="text-muted">Product</dt><dd class="min-w-0 break-words font-semibold">{{ product_line(p) }}</dd>
+      <dt class="text-muted">Authorisation</dt><dd>{{ p.authorisation_no or "—" }}{% if p.authorisation_placeholder %} <span class="text-wait">(placeholder)</span>{% endif %}</dd>
+      {% endfor %}
+      <dt class="text-muted">Crop</dt><dd>{{ first.crop_name or "—" }}{% if first.bbch %} · BBCH {{ first.bbch }}{% endif %}</dd>
+      <dt class="text-muted">Area</dt><dd>{% for a in items|unique(attribute="parcel_alias") %}{{ a.parcel_alias }} {{ a.area_treated_ha }} ha{{ ", " if not loop.last }}{% endfor %}</dd>
+      {# Saved station weather: each source's own snapshot, read from the record, never refetched. #}
+      {% set lines = weather.get(first.log_id, []) %}
+      <dt class="text-muted">Weather</dt><dd data-saved-weather class="min-w-0 break-words">{% for line in lines %}<span class="block">{{ line }}</span>{% else %}<span class="text-muted">No saved weather</span>{% endfor %}</dd>
+    </dl>
+    {% if first.checks %}
+    <ul class="mt-3 grid gap-1.5 border-t border-line pt-3 text-[14px]" aria-label="Checks">
+      {% for c in first.checks %}
+      {% set word, tone, box = CHECK_TONES.get(c.status, CHECK_TONES["info"]) %}
+      <li data-check="{{ c.key }}" data-status="{{ c.status }}" class="flex items-start gap-2 {{ box }}"{% if c.status != "warn" %} title="{{ c.detail }}"{% endif %}>
+        <span class="{{ tone }}">{{ check_icon(c.status) }}</span>
+        <span class="min-w-0"><span class="font-semibold {{ tone }}">{{ word }}</span> {{ c.label }}{% if c.status == "warn" %}<span class="mt-0.5 block text-[13px]">{{ c.detail }}</span>{% endif %}</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="mb-6 rounded-xl border border-dashed border-line p-6">
+  <p class="text-[17px] font-semibold">No sprays yet this season</p>
+  <p class="mt-1 text-muted">Say what you sprayed in Telegram and tap ✅. It lands here, in the EU format.</p>
+</div>
+{% endif %}
+
+{# The EU table: the same rows and columns as the CSV. Open by default on desktop. #}
+<details class="group rounded-xl border border-line bg-surface">
+  <summary class="flex min-h-[52px] cursor-pointer list-none items-center justify-between px-4 font-semibold">
+    <span>EU register table <span class="font-normal text-muted">· same columns as the CSV</span></span>
+    {{ icon("chevron-down", "h-5 w-5 text-muted transition-transform group-open:rotate-180") }}
+  </summary>
+  <div class="overflow-x-auto border-t border-line">
+    <table data-register class="min-w-full border-collapse text-[13px]">
+      <thead>
+        <tr class="border-b border-line text-left text-muted">
+          {% for name in header %}<th class="whitespace-nowrap px-3 py-2.5 font-semibold">{{ name }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="border-b border-line/60 hover:bg-ground/60{% if row.placeholder %} bg-wait-soft/60{% endif %}"{% if row.placeholder %} data-placeholder="yes"{% endif %}>
+          {% for cell in row.cells %}<td class="{{ 'min-w-[22rem] whitespace-normal' if header[loop.index0] in ('checks', 'saved_weather') else 'whitespace-nowrap' }} px-3 py-2 tabular-nums">{{ cell }}</td>{% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not rows %}
+    <p class="p-4 text-[14px] text-muted">No confirmed sprays yet. Send a voice note to the bot and tap ✅.</p>
+    {% endif %}
+  </div>
+</details>
+
+{# The rules behind the checks, in plain words with their sources. #}
+<details data-rules class="group mt-4 rounded-xl border border-line bg-surface">
+  <summary class="flex min-h-[52px] cursor-pointer list-none items-center justify-between px-4 font-semibold">
+    <span>What we check</span>
+    {{ icon("chevron-down", "h-5 w-5 text-muted transition-transform group-open:rotate-180") }}
+  </summary>
+  <div class="border-t border-line px-4 py-3 text-[14px]">
+    <p class="text-muted">Each confirmed spray is checked against everything confirmed before it on the same parcel. Unconfirmed drafts never count.</p>
+    <ul class="mt-2 grid gap-2">
+      <li><span class="font-semibold">Copper this year.</span> The copper metal from every copper spray on the parcel this calendar year, in kg Cu/ha (the product dose times its copper content; Bouillie bordelaise RSR Disperss NC is 20 % copper). Up to {{ cu_yearly }} kg Cu/ha is OK; above it is a warning, not a ban: <a class="inline-block min-h-6 py-1 underline" href="{{ cu_regulation_url }}">{{ cu_regulation }}</a> caps copper at {{ cu_seven_years }} kg Cu/ha over 7 years, {{ cu_yearly }} a year on average.</li>
+      <li><span class="font-semibold">Applications this season.</span> How many times this product went on the parcel this year, against the most its label allows.</li>
+      <li><span class="font-semibold">Days between sprays.</span> The days since this product's previous spray on the parcel, when the label sets a minimum (PAJO: 7 days).</li>
+      <li><span class="font-semibold">Dose.</span> The dose against the label's maximum per application.</li>
+      <li><span class="font-semibold">Harvest date.</span> The spray day plus the label's pre-harvest interval: harvest not before that day.</li>
+    </ul>
+    <p class="mt-2 text-muted">Label limits come from each product's vine usage on <a class="inline-block min-h-6 py-1 underline" href="https://ephy.anses.fr/">E-Phy</a>, the French authorisation catalogue (ANSES).</p>
+  </div>
+</details>
+{% endblock %}

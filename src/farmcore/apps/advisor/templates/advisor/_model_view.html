@@ -1,0 +1,20 @@
+<article data-model="{{ view.model.key }}" class="mt-3 min-w-0 text-sm">
+  <h3 class="font-semibold">{{ view.model.label }} · {{ view.status }}</h3>
+  <p class="mt-1"><span class="text-muted">Next action:</span> {{ view.action }}</p>
+  <p class="mt-1"><span class="text-muted">Cover:</span> {{ view.cover }}{% if view.cover_until %} · until {{ view.cover_until|local }}{% endif %}</p>
+  <details class="mt-2">
+    <summary class="min-h-[44px] cursor-pointer font-semibold text-brand-700">Rules and sources</summary>
+    <p class="text-xs text-muted">Stored model evidence. Spray-window and tank-mix details describe the combined pass.</p>
+    {% for rule in view.reasons %}
+    <div class="mt-3 min-w-0 border-t border-line pt-2 [overflow-wrap:anywhere]">
+      <p class="font-semibold">{{ rule.rule }} · {{ rule.verdict }}</p>
+      {% if rule.note %}<p class="mt-1 text-xs text-muted">{{ rule.note }}</p>{% endif %}
+      <dl class="mt-1 text-xs">
+        {% for key, value in rule.inputs.items() %}<div><dt class="inline text-muted">{{ key|replace('_', ' ') }}:</dt> <dd class="inline">{{ value }}</dd></div>{% endfor %}
+        {% for key, value in rule.threshold.items() %}<div><dt class="inline text-muted">Threshold · {{ key|replace('_', ' ') }}:</dt> <dd class="inline">{{ value }}</dd></div>{% endfor %}
+      </dl>
+      <p class="mt-1 text-xs text-muted">Source: {{ rule.source }}</p>
+    </div>
+    {% else %}<p class="text-xs text-muted">No stored model reasons at this replay time.</p>{% endfor %}
+  </details>
+</article>

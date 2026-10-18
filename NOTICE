@@ -1,0 +1,9 @@
+FarmCore
+Copyright 2026 The FarmCore contributors
+
+This product includes software developed by third parties, distributed under their own
+licences: see THIRD_PARTY_NOTICES.md and src/farmcore/core/static/vendor/.
+
+This product includes data from Météo-France (Licence Ouverte / Etalab 2.0), IGN
+(Registre Parcellaire Graphique, Licence Ouverte / Etalab 2.0) and Open-Meteo.com / ECMWF
+(CC BY 4.0). Parcel names, varieties and planting years in the sample data are fictional.

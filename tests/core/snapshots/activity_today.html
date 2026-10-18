@@ -1,0 +1,93 @@
+
+
+
+<section data-poll-feed hx-get="/activity/today" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" id="today-activity" aria-labelledby="today-activity-title" class="h-full min-w-0 rounded-xl border border-line bg-surface px-4 pt-3">
+  <div class="flex items-baseline justify-between gap-3">
+    <h3 id="today-activity-title" class="text-[13px] font-semibold uppercase tracking-wider text-muted">Recent activity</h3>
+    <a href="/activity/" class="inline-flex min-h-[44px] items-center gap-1 px-1 text-[13px] font-semibold text-brand-700">See all<svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></a>
+  </div>
+  
+  <ul class="pb-1">
+    
+    <li data-activity="log.created" class="border-t border-line first:border-t-0">
+      <a href="/operations/" class="group -mx-2 flex min-h-[52px] items-start gap-3 rounded-lg px-2 py-3 hover:bg-ground">
+        <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-semibold">Spray noted on P5, waiting for confirmation</span>
+          <span class="block text-[14px] text-ink">copper 2 kg/ha</span>
+          <span class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
+            <span>Today · 07:10</span>
+            <span class="inline-flex items-center gap-1"><svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Voice note</span>
+          </span>
+        </span>
+        <span class="mt-2.5 text-muted group-hover:text-ink"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></span>
+      </a>
+    </li>
+    
+    <li data-activity="share.granted" class="border-t border-line first:border-t-0">
+      <a href="/share/" class="group -mx-2 flex min-h-[52px] items-start gap-3 rounded-lg px-2 py-3 hover:bg-ground">
+        <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/></svg></span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-semibold">Granted Coop read access: spray records, until 01 Jun 2024</span>
+          
+          <span class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
+            <span>Today · 06:40</span>
+            
+          </span>
+        </span>
+        <span class="mt-2.5 text-muted group-hover:text-ink"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></span>
+      </a>
+    </li>
+    
+    <li data-activity="advice.changed" class="border-t border-line first:border-t-0">
+      <a href="/advisor/parcels/{P4}" class="group -mx-2 flex min-h-[52px] items-start gap-3 rounded-lg px-2 py-3 hover:bg-ground">
+        <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg></span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-semibold">Advice for P4 changed to <span class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full font-semibold bg-wait-soft text-wait px-2 py-0.5 text-xs" data-decision="wait">
+  <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Wait
+</span></span>
+          
+          <span class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
+            <span>Today · 05:40</span>
+            
+          </span>
+        </span>
+        <span class="mt-2.5 text-muted group-hover:text-ink"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></span>
+      </a>
+    </li>
+    
+    <li data-activity="advice.changed" class="border-t border-line first:border-t-0">
+      <a href="/advisor/" class="group -mx-2 flex min-h-[52px] items-start gap-3 rounded-lg px-2 py-3 hover:bg-ground">
+        <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg></span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-semibold">Advice for P1, P2 changed to <span class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full font-semibold bg-spray-soft text-spray px-2 py-0.5 text-xs" data-decision="spray">
+  <svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3s6 6.5 6 11a6 6 0 0 1-12 0c0-4.5 6-11 6-11Z"/></svg>Spray
+</span></span>
+          
+          <span class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
+            <span>Today · 05:40</span>
+            
+          </span>
+        </span>
+        <span class="mt-2.5 text-muted group-hover:text-ink"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></span>
+      </a>
+    </li>
+    
+    <li data-activity="log.created" class="border-t border-line first:border-t-0">
+      <a href="/operations/register" class="group -mx-2 flex min-h-[52px] items-start gap-3 rounded-lg px-2 py-3 hover:bg-ground">
+        <span class="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand-50 text-brand-700"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>
+        <span class="min-w-0 flex-1">
+          <span class="block font-semibold">Spray logged on P1, P2, P10</span>
+          <span class="block text-[14px] text-ink">copper 2 kg/ha</span>
+          <span class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
+            <span>Today · 04:40</span>
+            <span class="inline-flex items-center gap-1"><svg class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>Voice note</span>
+          </span>
+        </span>
+        <span class="mt-2.5 text-muted group-hover:text-ink"><svg class="h-4 w-4 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></span>
+      </a>
+    </li>
+    
+  </ul>
+  
+</section>

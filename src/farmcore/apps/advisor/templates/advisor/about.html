@@ -1,0 +1,64 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, card, pill %}
+{% block title %}About this advice · farmcore{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl">
+{{ page_header("About this advice", "What the advice is built from, and how far it has been checked.") }}
+
+{% call card("mt-4", {"data-about": "region"}) %}
+  <h2 class="text-lg font-semibold">Where</h2>
+  <p class="mt-1 text-[15px]">{{ farm_name }} · {{ region }}{% if varieties %} · {{ varieties|join(", ") }}{% endif %}.</p>
+  <p class="mt-1 text-sm text-muted">{{ parcels.count }} parcel{{ "s" if parcels.count != 1 }}.</p>
+{% endcall %}
+
+{% if unavailable %}
+{% call card("mt-4", {"data-about": "withheld"}) %}
+  <h2 class="text-lg font-semibold">Advice is withheld for this farm</h2>
+  <p class="mt-1 text-[15px]">{{ unavailable }}</p>
+  <p class="mt-1 text-sm text-muted">No spray advice is shown rather than advice built on weather whose timing is not verified.</p>
+{% endcall %}
+{% endif %}
+
+{% call card("mt-4", {"data-about": "data"}) %}
+  <h2 class="text-lg font-semibold">Data</h2>
+  <dl class="mt-2 space-y-3 text-[15px]">
+    <div>
+      <dt class="font-semibold">Weather observations</dt>
+      <dd>{% if station.archive %}{{ station.name or station.network or "Station" }} · archive only: {{ station.archive }}.
+        {% elif station.range %}{{ station.network or "Weather" }} station {{ station.code or "" }}{% if station.name and station.code and station.code not in station.name %} ({{ station.name }}){% endif %}, hourly · {{ station.range }}.
+        {% else %}No station observations stored yet.{% endif %}</dd>
+    </div>
+    <div>
+      <dt class="font-semibold">Forecast</dt>
+      <dd>{% if forecast.runs %}ECMWF forecast as issued, via Open-Meteo · {{ forecast.runs }} forecast run{{ "s" if forecast.runs != 1 }}, {{ forecast.range }}. Weather only; it grades spray days and never moves a treatment.
+        {% else %}No forecast runs stored yet for this farm.{% endif %}</dd>
+    </div>
+    <div>
+      <dt class="font-semibold">Parcels</dt>
+      <dd>{% if parcels.synthetic %}Synthetic layout, not real parcel boundaries.{% elif parcels.label %}{{ parcels.label }} parcel boundaries, {{ parcels.count }} parcels.{% else %}{{ parcels.count }} parcels.{% endif %}</dd>
+    </div>
+  </dl>
+{% endcall %}
+
+{% call card("mt-4", {"data-about": "models"}) %}
+  <h2 class="text-lg font-semibold">Models</h2>
+  {% if unavailable %}<p class="mt-1 text-sm text-muted">Not applied to this farm while advice is withheld.</p>{% endif %}
+  {% for m in models %}
+  <section class="mt-3" data-model="{{ m.key }}">
+    <h3 class="font-semibold">{{ m.label }}</h3>
+    <ul class="mt-1 space-y-3">
+      {% for r in m.rules %}
+      <li class="text-[15px]"><strong>{{ r.name }}</strong>. {{ r.what }}<br><span class="break-words text-sm text-muted">Source: {{ r.source }}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+  {% endfor %}
+  <p class="mt-4 text-[15px]" data-about-assumed>{{ assumed }} of {{ thresholds }} values in the rules are assumptions, pending confirmation by an agronomist. Each advice reason shows its own source and flags the assumed ones.</p>
+{% endcall %}
+
+{% call card("mt-4", {"data-about": "validation"}) %}
+  <h2 class="text-lg font-semibold">How far it has been checked</h2>
+  <p class="mt-1 text-[15px]">{% if unavailable %}This describes the French demo farm; this farm gets no advice. {% endif %}The advice is {{ validation }}.</p>
+{% endcall %}
+</div>
+{% endblock %}

@@ -1,0 +1,69 @@
+{# Season history of one parcel (N7): stored sprays, risk episodes, cover and advice changes up to
+   the clock. A fragment: no page chrome. History year is ordinary reading state, independent of the replay clock. #}
+{% from "core/_icons.html" import icon %}
+{% set h = history %}
+<div class="flex flex-col gap-4" data-history-season="{{ h.season }}">
+  {% if history_notice %}<p role="status" class="rounded-lg border border-line p-3 text-sm text-muted">{{ history_notice }}</p>{% endif %}
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <p class="text-[13px] text-muted">History season {{ h.season }} · As of / Replay {{ now|local }}. Stored records only.</p>
+    {% if h.seasons|length > 1 %}
+    <form method="get" action="{{ history_action }}" class="flex items-center gap-2 text-[13px]">
+      <label for="history-season-{{ parcel.id }}" class="text-muted">History season</label>
+      <select id="history-season-{{ parcel.id }}" name="season" class="min-h-[44px] rounded-lg border border-line bg-surface px-3 text-[15px] text-ink">
+        {% for s in h.seasons %}<option value="{{ s }}"{% if s == h.season %} selected{% endif %}>{{ s }}</option>{% endfor %}
+      </select>
+      {% for name, value in history_controls.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      <button type="submit" class="min-h-[44px] rounded-lg border border-line px-3 font-semibold text-brand-700 hover:bg-ground">Show season</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {% set export_query = "season=" ~ h.season ~ "&parcel=" ~ parcel.id %}
+  {% set has_register = manifests|selectattr("name", "equalto", "operations")|list %}
+  {% set has_share = manifests|selectattr("name", "equalto", "share")|list %}
+  {% if has_register or has_share %}
+  <div class="flex flex-wrap items-center gap-x-4 text-sm" data-history="download">
+    <span class="font-semibold text-muted">Download this season</span>
+    {% if has_register %}<a href="{{ resolved_farm_url('/operations/register.csv?' ~ export_query) }}" download="spray-register-{{ h.season }}-{{ parcel.alias }}.csv" class="flex min-h-[44px] items-center font-semibold text-brand-700 underline underline-offset-4">CSV</a>{% endif %}
+    {% if has_share %}<a href="{{ resolved_farm_url('/share/ngsi-ld.json?' ~ export_query) }}" download="farm-ngsi-ld-{{ h.season }}-{{ parcel.alias }}.json" class="flex min-h-[44px] items-center font-semibold text-brand-700 underline underline-offset-4">NGSI-LD</a>{% endif %}
+  </div>
+  {% endif %}
+
+  <section data-history="sprays" aria-labelledby="history-sprays-{{ parcel.id }}">
+    <h3 id="history-sprays-{{ parcel.id }}" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("spray", "h-4 w-4") }}Sprays</h3>
+    {% if h.sprays %}
+    <ul class="mt-1 divide-y divide-line text-[15px]">
+      {% for s in h.sprays %}<li class="py-2"><span class="font-semibold">{{ when(s.at) }}</span> · {{ s.doses|join(", ") if s.doses else "No product recorded" }}{% if s.note %}<span class="mt-0.5 block text-[13px] text-muted" data-spray-note>{{ s.note }}</span>{% endif %}</li>{% endfor %}
+    </ul>
+    {% else %}<p class="mt-1 text-[15px] text-muted">No sprays logged this season.</p>{% endif %}
+  </section>
+
+  <section data-history="episodes" aria-labelledby="history-episodes-{{ parcel.id }}">
+    <h3 id="history-episodes-{{ parcel.id }}" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("alert", "h-4 w-4") }}Downy infection-risk episodes (3-10 rule)</h3>
+    {% if h.episodes %}
+    <ul class="mt-1 divide-y divide-line text-[15px]">
+      {% for e in h.episodes %}<li class="py-2"><span class="font-semibold">{{ when(e.at) }}</span>{% if e.rain_mm is not none %} · {{ "%.1f"|format(e.rain_mm) }} mm rain{% endif %}{% if e.temp_c is not none %} at {{ "%.1f"|format(e.temp_c) }} °C{% endif %} · {% if e.uncovered %}<span class="font-semibold text-spray">uncovered</span>{% else %}covered{% endif %}</li>{% endfor %}
+    </ul>
+    {% else %}<p class="mt-1 text-[15px] text-muted">No infection-risk episode detected this season.</p>{% endif %}
+  </section>
+
+  <section data-history="protection" aria-labelledby="history-protection-{{ parcel.id }}">
+    <h3 id="history-protection-{{ parcel.id }}" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("protected", "h-4 w-4") }}Downy protection periods</h3>
+    {% if h.covers %}
+    <ul class="mt-1 divide-y divide-line text-[15px]">
+      {% for c in h.covers %}<li class="py-2">From <span class="font-semibold">{{ when(c.spray_at) }}</span>{% if c.until %} until <span class="font-semibold">{{ when(c.until) }}</span>{% endif %}{% if c.products %} · {{ c.products|join(", ") }}{% endif %}</li>{% endfor %}
+    </ul>
+    {% elif h.demo_season %}<p class="mt-1 text-[15px] text-muted" data-not-recorded>Not recorded for this demo season (sprays logged from the advisor's simulated passes)</p>
+    {% else %}<p class="mt-1 text-[15px] text-muted">No protection period this season.</p>{% endif %}
+  </section>
+
+  <section data-history="changes" aria-labelledby="history-changes-{{ parcel.id }}">
+    <h3 id="history-changes-{{ parcel.id }}" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("history", "h-4 w-4") }}Advice changes</h3>
+    {% if h.changes %}
+    <ul class="mt-1 divide-y divide-line text-[15px]">
+      {% for c in h.changes %}<li class="py-2"><span class="font-semibold">{{ when(c.at) }}</span> · {{ c.old }} → {{ c.new }}{% if c.headline %}<span class="block text-[13px] leading-snug text-muted">{{ c.headline }}</span>{% endif %}</li>{% endfor %}
+    </ul>
+    {% elif h.demo_season %}<p class="mt-1 text-[15px] text-muted" data-not-recorded>Not recorded for this demo season (sprays logged from the advisor's simulated passes)</p>
+    {% else %}<p class="mt-1 text-[15px] text-muted">No advice change this season.</p>{% endif %}
+  </section>
+</div>

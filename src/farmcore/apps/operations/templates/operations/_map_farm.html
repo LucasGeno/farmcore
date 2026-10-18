@@ -1,0 +1,18 @@
+{# Map panel, Farm today (operations): the latest confirmed spray up to the clock, as the
+   register lists that one log. A fragment: no page chrome; links keep the farm query. #}
+{% from "core/_icons.html" import icon %}
+<section data-poll-feed hx-get="{{ farm_url('/operations/map/farm') }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" class="flex flex-col gap-2" data-map-section="operations-farm" aria-labelledby="map-ops-farm-h">
+  <h3 id="map-ops-farm-h" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("diary", "h-4 w-4") }}Last confirmed spray</h3>
+  {% if latest %}
+  <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[15px]">
+    <dt class="text-muted">Date</dt><dd data-fact="date">{{ latest.day }}</dd>
+    <dt class="text-muted">Parcels</dt><dd data-fact="parcels">{{ latest.parcels|join(", ") }}</dd>
+    <dt class="text-muted">Products</dt>
+    <dd data-fact="products"><ul>{% for p in latest.products %}<li>{{ p }}</li>{% endfor %}</ul></dd>
+  </dl>
+  {% if latest.others %}<p class="text-[13px] text-muted">{{ latest.others }} more spray{{ "s" if latest.others != 1 }} logged that day</p>{% endif %}
+  {% else %}
+  <p class="text-[15px] text-muted" data-fact="none">No confirmed spray yet</p>
+  {% endif %}
+  <a href="{{ farm_url('/operations/register') }}" class="inline-flex min-h-[44px] items-center gap-1 text-[15px] font-semibold text-brand-900 underline-offset-2 hover:underline">Open the spray register{{ icon("chevron-right", "h-4 w-4") }}</a>
+</section>

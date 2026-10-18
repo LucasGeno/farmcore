@@ -1,0 +1,26 @@
+{# Map panel, one parcel (operations): last confirmed spray, sprays this season, products
+   and dose only from a log of this parcel alone (F1), copper this year as known, a lower bound
+   or unknown. A fragment: no page chrome; links keep the farm query. #}
+{% from "core/_icons.html" import icon %}
+<section data-poll-feed hx-get="{{ poll_url }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" class="flex flex-col gap-2" data-map-section="operations-parcel" data-parcel-id="{{ parcel_id }}" aria-labelledby="map-ops-parcel-h-{{ parcel_id }}">
+  <h3 id="map-ops-parcel-h-{{ parcel_id }}" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("diary", "h-4 w-4") }}Spray records</h3>
+  <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[15px]">
+    <dt class="text-muted">Last spray</dt>
+    <dd data-fact="last-spray">{% if facts.last %}{{ last_day }}{% else %}No confirmed spray yet{% endif %}</dd>
+    {% if facts.last %}
+    <dt class="text-muted">Products</dt>
+    <dd data-fact="products">
+      {%- if facts.attributable -%}
+      <ul>{% for p in facts.last_products %}<li>{{ p.text }}</li>{% endfor %}</ul>
+      {%- else -%}{{ facts.dose_text }}{%- endif -%}
+    </dd>
+    {% endif %}
+    <dt class="text-muted">Sprays this season ({{ year }})</dt>
+    <dd data-fact="season-sprays" class="tabular-nums">{{ facts.season_sprays }}</dd>
+    {% if facts.copper %}
+    <dt class="text-muted">Copper this year</dt>
+    <dd data-fact="copper" data-copper="{{ facts.copper.state }}">{{ facts.copper.text }}</dd>
+    {% endif %}
+  </dl>
+  <a href="{{ detail_url }}" class="inline-flex min-h-[44px] items-center gap-1 text-[15px] font-semibold text-brand-900 underline-offset-2 hover:underline">Open the spray timeline{{ icon("chevron-right", "h-4 w-4") }}</a>
+</section>

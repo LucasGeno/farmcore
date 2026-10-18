@@ -1,0 +1,69 @@
+[project]
+name = "farmcore"
+version = "0.1.0"
+description = "Farmer-controlled connector layer for farm data: a modular kernel with installable apps."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "sqlalchemy>=2",
+    "geoalchemy2",
+    "psycopg[binary]",
+    "alembic",
+    "pydantic>=2",
+    "pydantic-settings",
+    "jinja2",
+    "python-multipart",
+    "httpx",
+    "apscheduler>=3,<4",
+    "python-telegram-bot>=21,<22",
+    "faster-whisper",
+    "typer",
+    "google-auth[requests]>=2.62.0",
+]
+
+[project.urls]
+Source = "https://github.com/LucasGeno/farmcore"
+Issues = "https://github.com/LucasGeno/farmcore/issues"
+
+[project.scripts]
+farmcore = "farmcore.cli:main"
+
+[dependency-groups]
+dev = ["pytest", "ruff"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/farmcore"]
+
+[tool.coverage.run]
+# Measure product code. Optional data-fixture test bodies are not product gaps.
+source = ["farmcore"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Docs hold research sketches, not code (ruff also formats Markdown code blocks).
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["typer.Option", "typer.Argument", "fastapi.Depends"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+pythonpath = ["."]
+markers = [
+    "data: needs the demo datasets (sample-data, or a local data/raw); slow",
+    "spanish_data: needs the optional SIGPAC / InfoRiego files in DATA_DIR (not bundled)",
+    "slow: slow test",
+]

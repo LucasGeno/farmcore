@@ -1,0 +1,46 @@
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{# Parcel cards share the map data and poll without remounting the map or panel. #}
+{% from "core/_ui.html" import decision_chip, empty_state %}
+{% from "core/_icons.html" import icon %}
+{%- macro day(iso) -%}
+{#- `2024-04-10` -> `10 Apr 2024`, the date format used across the app. -#}
+{%- set y, m, d = iso.split("-") -%}
+{{ d | int }} {{ ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][m | int - 1] }} {{ y }}
+{%- endmacro -%}
+{%- macro show_on_map(p) -%}
+{#- The keyboard / no-script path to a parcel on the map: selects it and opens its panel.
+    The main link opens the parcel workspace. -#}
+<a href="{{ resolved_farm_url('/fields/?parcel=' ~ p.id) }}" data-show-on-map data-parcel-id="{{ p.id }}"
+   aria-label="Show on map: {{ p.alias }} {{ p.name }}"
+   class="flex min-h-[44px] items-center gap-1.5 border-t border-line px-3 text-[13px] font-semibold text-brand-700 hover:bg-ground/60">
+  {{ icon("map", "h-4 w-4") }}Show on map
+</a>
+{%- endmacro -%}
+<section id="map-parcel-list" data-poll-feed hx-get="{{ resolved_farm_url('/fields/list') }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop">
+<h2 class="mb-3 mt-8 text-[13px] font-semibold uppercase tracking-wider text-muted">Parcels</h2>
+{% if not parcels %}
+{{ empty_state("No parcels yet. Run farmcore seed to load the demo farm.") }}
+{% else %}
+{#- One explicit shrinking column on the phone (minmax(0, 1fr)) and min-w-0 items, so a long
+    name truncates instead of widening the page (QA F3). -#}
+<ul class="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
+  {% for p in parcels %}
+  {% set label = styles[p.decision][0] if p.advised else not_advised_label %}
+  <li class="min-w-0 rounded-xl border border-line bg-surface" data-parcel="{{ p.alias }}">
+    <a href="{{ map_read_url('/fields/parcels/' ~ p.id, p.id) }}" class="group flex min-h-[60px] items-center gap-3 px-3 py-2.5 transition-colors hover:bg-ground/60"
+       aria-label="Open parcel {{ p.alias }} {{ p.name }}">
+      <span class="shrink-0 text-center text-[13px] font-semibold text-muted">{{ parcel_shape(p.id) }}<span class="block">{{ p.alias }}</span></span>
+      <span class="min-w-0 flex-1">
+        <span class="block truncate font-semibold">{{ p.name }}</span>
+        <span class="block truncate text-[13px] leading-snug text-muted">{{ p.variety or "Unknown variety" }} · {{ "%.2f"|format(p.area_ha) }} ha</span>
+        <span class="block text-[13px] leading-snug text-muted">{{ "Last spray " ~ day(p.last_spray) if p.last_spray else "No spray recorded" }}</span>
+      </span>
+      {% if advice_on %}<span data-icon="{{ p.decision }}">{{ decision_chip(p.decision, label, size="sm") }}</span>{% endif %}
+      {{ icon("chevron-right", "h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5") }}
+    </a>
+    {{ show_on_map(p) }}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+</section>

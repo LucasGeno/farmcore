@@ -1,0 +1,92 @@
+[
+ {
+  "detail": "copper 2 kg/ha",
+  "sources": [
+   {
+    "icon": "mic",
+    "label": "Voice note"
+   }
+  ],
+  "decision": null,
+  "kind": "log.created",
+  "icon": "mic",
+  "text": "Spray noted on P5, waiting for confirmation",
+  "link": "/operations/",
+  "when": "Today · 07:10"
+ },
+ {
+  "detail": "",
+  "sources": [],
+  "decision": null,
+  "kind": "share.granted",
+  "icon": "share",
+  "text": "Granted Coop read access: spray records, until 01 Jun 2024",
+  "link": "/share/",
+  "when": "Today · 06:40"
+ },
+ {
+  "detail": "",
+  "sources": [],
+  "decision": "wait",
+  "kind": "advice.changed",
+  "icon": "advisor",
+  "text": "Advice for P4 changed to",
+  "link": "/advisor/parcels/{P4}",
+  "when": "Today · 05:40"
+ },
+ {
+  "detail": "",
+  "sources": [],
+  "decision": "spray",
+  "kind": "advice.changed",
+  "icon": "advisor",
+  "text": "Advice for P1, P2 changed to",
+  "link": "/advisor/",
+  "when": "Today · 05:40"
+ },
+ {
+  "detail": "copper 2 kg/ha",
+  "sources": [
+   {
+    "icon": "mic",
+    "label": "Voice note"
+   }
+  ],
+  "decision": null,
+  "kind": "log.created",
+  "icon": "mic",
+  "text": "Spray logged on P1, P2, P10",
+  "link": "/operations/register",
+  "when": "Today · 04:40"
+ },
+ {
+  "detail": "copper 2 kg/ha",
+  "sources": [
+   {
+    "icon": "tractor",
+    "label": "Machine file"
+   }
+  ],
+  "decision": null,
+  "kind": "log.merged",
+  "icon": "tractor",
+  "text": "Spray on P3 updated from the machine file",
+  "link": "/operations/register",
+  "when": "Today · 03:40"
+ },
+ {
+  "detail": "copper 2 kg/ha",
+  "sources": [
+   {
+    "icon": "mic",
+    "label": "Voice note"
+   }
+  ],
+  "decision": null,
+  "kind": "log.created",
+  "icon": "mic",
+  "text": "Spray logged on P3",
+  "link": "/operations/register",
+  "when": "Today · 02:40"
+ }
+]

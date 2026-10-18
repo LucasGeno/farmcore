@@ -1,0 +1,8 @@
+{% extends "core/base.html" %}
+{% block title %}{{ parcel.alias }} · Aerial view · farmcore{% endblock %}
+{% block head %}<script src="/static/fields/aerial.js" defer></script>{% endblock %}
+{% block content %}
+<h1 class="text-xl font-semibold">{{ parcel.alias }} · {{ parcel.name }}</h1>
+<p class="mb-4 text-sm text-muted">Aerial view · North up · boundary in green</p>
+{% include "fields/_aerial_view.html" %}
+{% endblock %}

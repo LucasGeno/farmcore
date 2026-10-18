@@ -1,0 +1,22 @@
+# Optional: Gemini on Vertex AI for the chat extractor and the web assistant.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.vertex.yml up -d
+#
+# Needs EXTRACTOR=vertex and VERTEX_PROJECT in .env, and a service-account key file with only
+# `aiplatform.endpoints.predict` (VERTEX_CREDENTIALS_FILE, default ./secrets/vertex.json).
+# The key must be readable by the container user (uid 10001); never put it in an env value.
+x-vertex: &vertex
+  environment:
+    GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/vertex_credentials
+  secrets:
+    - vertex_credentials
+
+services:
+  app:
+    <<: *vertex
+  bot:
+    <<: *vertex
+
+secrets:
+  vertex_credentials:
+    file: ${VERTEX_CREDENTIALS_FILE:-./secrets/vertex.json}

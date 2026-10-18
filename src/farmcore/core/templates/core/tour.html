@@ -1,0 +1,32 @@
+{% extends "core/base.html" %}
+{% block title %}Read-only tour · farmcore{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl">
+  <p class="text-xs font-semibold uppercase tracking-widest text-brand-700">Welcome to the demo</p>
+  <h1 class="mt-2 text-3xl font-semibold tracking-tight">Read-only tour</h1>
+  <p class="mt-3 max-w-prose text-muted">Explore the farmer-controlled connector: from farm data to parcel advice, recorded operations and sharing.</p>
+  <div class="mt-6 rounded-xl border border-line bg-brand-50 p-4">
+    <h2 class="font-semibold text-brand-900">Read-only tour mode is active</h2>
+    <p class="mt-1 text-sm text-brand-900">This browser can explore and download demo data. Changes, uploads and admin actions are blocked, even with an admin token. Your view preferences still work.</p>
+  </div>
+  <ol class="mt-6 space-y-3" aria-label="Read-only tour steps">
+    {% for step in steps %}
+    <li class="rounded-xl border border-line bg-surface p-4 sm:p-5">
+      <div class="flex items-start gap-4">
+        <span class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-ground text-sm font-semibold text-brand-900" aria-hidden="true">{{ loop.index }}</span>
+        <div class="min-w-0">
+          {% if step.path %}
+          <a href="{{ farm_url(step.path) }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-900 underline decoration-line underline-offset-4 hover:decoration-brand-700">{{ step.title }}</a>
+          {% else %}
+          <h2 class="font-semibold">{{ step.title }}</h2>
+          <p class="mt-1 text-sm text-muted">No parcel is available in this farm yet.</p>
+          {% endif %}
+          <p class="mt-1 text-sm text-muted">{{ step.description }}</p>
+        </div>
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  <p class="mt-6 text-sm text-muted">The demo replays a past season; the clock shows the date being explored. Reads appear in the access log.</p>
+</div>
+{% endblock %}

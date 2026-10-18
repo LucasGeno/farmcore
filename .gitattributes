@@ -1,0 +1,2 @@
+# Keep upstream assets/licences byte-for-byte so the vendor README hashes survive checkout.
+/src/farmcore/core/static/vendor/** -text

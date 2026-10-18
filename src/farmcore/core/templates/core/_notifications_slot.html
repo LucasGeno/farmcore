@@ -1,0 +1,5 @@
+{% if 'notifications' in manifests|map(attribute='name')|list %}
+{% from "core/_fragment.html" import fragment_slot %}
+{{ fragment_slot("notifications-slot", "Notifications", farm_url('/notifications'), skeleton_class="h-11 w-11 rounded-full bg-white/10") }}
+<script src="/static/notifications/bell.js" defer></script>
+{% endif %}

@@ -1,0 +1,82 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% block title %}Chat · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Chat",
+  "Voice notes and texts sent to the bot become spray logs after you tap ✅. To read a note, the "
+  ~ "bot sends the AI reader (Gemini) only the words you said, your parcel names, your product "
+  ~ "list and today's date.") %}{% endcall %}
+<p class="max-w-2xl rounded-xl border border-line bg-brand-50 px-3 py-2 text-sm text-brand-900">
+  Raw audio never leaves this server.{% if is_admin %} This is everything the model saw.{% endif %}
+</p>
+
+<h2 class="mt-6 text-lg font-semibold">{{ "Recent model calls" if is_admin else "Messages the AI reader saw" }}</h2>
+<p class="mt-1 max-w-2xl text-sm text-muted">Times on this page are real time, not the replayed farm date.</p>
+{% if not is_admin %}
+<p class="mt-2 max-w-2xl text-sm text-muted">
+  Chat ids are masked and each message is shown by its length and what kind of information was
+  sent, never the values. The full payload is shown to the site admin only.
+</p>
+{% endif %}
+{% if not calls %}
+<p class="mt-2 text-sm text-muted">No model calls yet. When the bot reads a message with the model, the call shows up here.</p>
+{% endif %}
+{% if is_admin %}
+<ol class="mt-3 space-y-4">
+{% for c in calls %}
+  <li class="rounded-xl border border-line bg-surface p-3">
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+      <span class="font-medium">{{ c.ts | local }} <span class="text-xs font-normal text-muted">real time</span></span>
+      <span data-adapter="{{ c.adapter }}" class="rounded-full px-2.5 py-1 text-xs font-semibold leading-none {{ 'bg-protected-soft text-protected' if c.ok else 'bg-wait-soft text-wait' }}">{{ c.adapter }}</span>
+      <span class="font-mono text-xs text-muted">{{ c.model }}</span>
+      <span class="text-xs text-muted">status {{ c.status }}{% if c.latency_ms is not none %} · {{ c.latency_ms }} ms{% endif %}</span>
+      {% if c.ref %}<span class="font-mono text-xs text-muted">{{ c.ref }}</span>{% endif %}
+    </div>
+    {% if c.error %}
+    <p class="mt-1 text-sm text-wait">Model call failed ({{ c.error }}); the bot read the message with its built-in rules instead.</p>
+    {% endif %}
+    <h3 class="mt-3 text-xs font-semibold uppercase tracking-wide text-muted">What the model saw</h3>
+    <pre class="mt-1 overflow-x-auto rounded-lg bg-ink p-3 text-xs text-white/90">{{ c.payload }}</pre>
+    <details class="mt-2 text-sm">
+      <summary class="cursor-pointer text-muted">Full request body (sent to {{ c.endpoint }})</summary>
+      <pre class="mt-1 overflow-x-auto rounded-lg bg-ground p-3 text-xs">{{ c.request_body }}</pre>
+    </details>
+    <details class="mt-1 text-sm">
+      <summary class="cursor-pointer text-muted">Model answer</summary>
+      <pre class="mt-1 overflow-x-auto rounded-lg bg-ground p-3 text-xs">{{ c.response_body }}</pre>
+    </details>
+  </li>
+{% endfor %}
+</ol>
+{% else %}
+{#- Plain words for visitors: who read the message and how fast, what was sent
+    (field names only, never values), and the call time labelled as real time. #}
+{%- set readers = {"vertex": "AI reader (Gemini)", "regex": "Built-in rules", "fake": "Test reader"} %}
+{%- set sent = {"transcript": "your words", "parcels": "parcel names", "products": "product list", "date": "today's date"} %}
+<ol class="mt-3 space-y-3">
+{% for c in calls %}
+  <li class="rounded-xl border border-line bg-surface p-3" data-call="demo">
+    <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm">
+      <span class="font-medium">{{ c.ts | local }} <span class="text-xs font-normal text-muted">real time</span></span>
+      <span data-adapter="{{ c.adapter }}" title="{{ c.model }}" class="rounded-full px-2.5 py-1 text-xs font-semibold leading-none {{ 'bg-protected-soft text-protected' if c.ok else 'bg-wait-soft text-wait' }}">
+        {%- if c.ok %}{{ readers.get(c.adapter, "Reader") }}{% else %}AI reader unavailable: built-in rules used{% endif -%}
+      </span>
+      {% if c.ok and c.latency_ms is not none %}<span class="text-xs text-muted">answered in {{ "%.1f"|format(c.latency_ms / 1000) }} s</span>{% endif %}
+      {% if c.chat %}<span class="font-mono text-xs text-muted">{{ c.chat }}</span>{% endif %}
+    </div>
+    <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+      <dt class="text-muted">Sent to the reader</dt>
+      <dd data-fields="{{ c.fields | join(',') }}">
+        {%- set words = [] %}
+        {%- for f in c.fields %}
+          {%- if f == "transcript" and c.transcript_chars is not none %}{% set _ = words.append("your words (" ~ c.transcript_chars ~ " characters)") %}
+          {%- else %}{% set _ = words.append(sent.get(f, f.replace("_", " "))) %}{% endif %}
+        {%- endfor %}
+        {{- words | join(", ") or "—" -}}
+      </dd>
+    </dl>
+  </li>
+{% endfor %}
+</ol>
+{% endif %}
+{% endblock %}

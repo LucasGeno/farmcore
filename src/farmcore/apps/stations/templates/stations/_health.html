@@ -1,0 +1,26 @@
+{# Connector health of one station: `health` from routes._health (split at clock now). #}
+{% if health.archive %}
+{% with archive=health.archive, archive_url=health.archive_url %}{% include "stations/_archive_summary.html" %}{% endwith %}
+{% else %}
+{% if health.error %}
+<p class="mb-2 rounded-xl border border-line bg-spray-soft px-3 py-2 text-sm text-spray">Import failed: {{ health.error }}</p>
+{% endif %}
+<dl data-health="{{ 'ahead' if health.forecast_until else 'observed' }}" class="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4">
+  <div><dt class="text-xs text-muted">Observed up to</dt>
+    <dd class="tabular-nums">{{ health.observed_until|local or "nothing yet" }}</dd></div>
+  {% if health.forecast_until %}
+  <div><dt class="text-xs text-muted">Replayed forecast</dt>
+    <dd class="tabular-nums">{{ health.forecast_span }}, to {{ health.forecast_until|local }}</dd></div>
+  {% endif %}
+  <div><dt class="text-xs text-muted">Hourly readings stored</dt>
+    <dd class="tabular-nums"><span>{{ health.rows if health.rows is not none else "—" }}</span>{% if health.forecast_until and health.rows is not none %} <span class="text-xs text-muted">incl. the replayed forecast</span>{% endif %}</dd></div>
+  <div><dt class="text-xs text-muted">Blank readings ignored</dt>
+    <dd class="tabular-nums">{{ health.nulls_skipped if health.nulls_skipped is not none else "—" }}</dd></div>
+  <div><dt class="text-xs text-muted">Last update</dt>
+    <dd class="tabular-nums">{{ health.last_run|local or "never" }}</dd></div>
+  {% if is_admin and health.file %}
+  <div class="col-span-2 sm:col-span-4"><dt class="text-xs text-muted">Source file (admin)</dt>
+    <dd class="break-all font-mono text-xs">{{ health.file }}</dd></div>
+  {% endif %}
+</dl>
+{% endif %}

@@ -1,0 +1,56 @@
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{#- The Map panel content: Farm today or one parcel. Rendered alone by `GET /fields/panel`
+    and `GET /fields/panel/parcels/{id}` (static/panel.js swaps it into the panel), and included by
+    `fields/map.html` for the no-script path (`/fields/?parcel=<id>`).
+
+    Context `panel` (routes._panel): kind ("farm" | "parcel"), parcel {id, alias, name, area_ha,
+    variety} or None, farm_name, sections [{slot_id, label, url}] (URLs already farm-qualified),
+    close_url (parcel only), note.
+
+    Fields shows only the parcel's own record (alias, name, area, variety). Every other fact
+    comes from the apps' own section endpoints in the shared fragment slot, so a failed section
+    says which one failed and offers its own Retry while the rest of the panel and the map stay
+    usable. -#}
+{%- from "core/_fragment.html" import fragment_slot -%}
+{%- from "core/_icons.html" import icon -%}
+<div data-panel-content data-panel-kind="{{ panel.kind }}"{% if panel.parcel %} data-parcel-id="{{ panel.parcel.id }}"{% endif %}>
+  <div class="sticky top-0 z-10 flex items-start gap-2 border-b border-line bg-surface px-4 py-3">
+    {% if panel.parcel %}{{ parcel_shape(panel.parcel.id) }}{% endif %}
+    <div class="min-w-0 flex-1">
+      {%- if panel.parcel %}
+      {%- set p = panel.parcel %}
+      <h2 id="map-panel-heading" data-panel-heading tabindex="-1" class="scroll-mt-20 text-[17px] font-semibold leading-snug outline-none focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700">
+        <span class="text-muted">{{ p.alias }}</span> <span class="break-words">{{ p.name }}</span>
+      </h2>
+      <p class="text-[13px] text-muted">{{ "%.2f"|format(p.area_ha) }} ha · {{ p.variety or "Unknown variety" }}</p>
+      {%- else %}
+      <h2 id="map-panel-heading" data-panel-heading tabindex="-1" class="scroll-mt-20 text-[17px] font-semibold leading-snug outline-none focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700">Farm today</h2>
+      {%- if panel.farm_name %}<p class="truncate text-[13px] text-muted">{{ panel.farm_name }}</p>{% endif %}
+      {%- endif %}
+    </div>
+    {#- Phone only: fold the sheet down to this header so the map is free. -#}
+    <button type="button" data-panel-toggle aria-expanded="true" aria-controls="map-panel-body"
+            class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted hover:bg-ground lg:hidden">
+      <span class="sr-only">Show or hide details</span>{{ icon("chevron-down", "h-5 w-5 transition-transform motion-reduce:transition-none") }}
+    </button>
+    {%- if panel.parcel %}
+    <a href="{{ panel.close_url }}" data-panel-close aria-label="Close {{ panel.parcel.alias }} panel"
+       class="flex min-h-[44px] min-w-[44px] items-center justify-center rounded-lg text-muted hover:bg-ground">{{ icon("x") }}</a>
+    {%- endif %}
+  </div>
+  {#- The phone fold (`data-collapsed` on the panel, static/panel.js) hides this only below lg,
+      never with the `hidden` attribute: at lg the facts always show, whatever the phone did. -#}
+  <div id="map-panel-body" data-panel-body class="max-lg:group-data-[collapsed]:hidden">
+  <div class="flex flex-col gap-3 px-4 pb-4 pt-3">
+    {%- if panel.note %}
+    <p role="note" class="rounded-xl border border-wait/30 bg-wait-soft px-3 py-2 text-[13px] text-wait">{{ panel.note }}</p>
+    {%- endif %}
+    {% if panel.parcel %}<a href="{{ map_read_url('/fields/parcels/' ~ panel.parcel.id, panel.parcel.id) }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700">Open parcel</a>{% endif %}
+    {%- for s in panel.sections %}
+    {{ fragment_slot(s.slot_id, s.label, s.url) }}
+    {%- else %}
+    <p class="text-[14px] text-muted">No app adds facts here yet.</p>
+    {%- endfor %}
+  </div>
+  </div>
+</div>

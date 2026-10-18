@@ -1,0 +1,46 @@
+{# Farm production mode (N8): the mode label, the products it offers (organic: only with a source,
+   the others withheld with the reason) and this season's copper per parcel against the EU limit.
+   A fragment: no page chrome. #}
+{% from "core/_icons.html" import icon %}
+{% from "core/_ui.html" import pill %}
+<div class="flex flex-col gap-4" data-production-mode="{{ p.mode }}">
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <p class="flex items-center gap-2 text-[15px]">{{ icon("leaf", "h-5 w-5") }}<span class="font-semibold">{{ "Organic farm" if p.mode == "organic" else "Conventional farm" }}</span></p>
+    {% if is_admin %}
+    <form method="post" action="{{ farm_url('/operations/production') }}" class="flex items-center gap-2 text-[13px]">
+      <label for="production-mode" class="text-muted">Production</label>
+      <select id="production-mode" name="mode" class="min-h-[44px] rounded-lg border border-line bg-surface px-3 text-[15px] text-ink">
+        <option value="conventional"{% if p.mode != "organic" %} selected{% endif %}>Conventional</option>
+        <option value="organic"{% if p.mode == "organic" %} selected{% endif %}>Organic</option>
+      </select>
+      <button type="submit" class="min-h-[44px] rounded-lg border border-line bg-surface px-4 text-[15px] font-semibold text-ink hover:bg-stone-50">Save</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <section data-production="offered" aria-labelledby="production-offered">
+    <h3 id="production-offered" class="text-[13px] font-semibold uppercase tracking-wider text-muted">Products offered{% if p.mode == "organic" %} in organic mode{% endif %}</h3>
+    {% if p.offered %}
+    <ul class="mt-1 divide-y divide-line text-[15px]">
+      {% for o in p.offered %}<li class="py-2"><span class="font-semibold">{{ o.product.name }}</span> · {{ o.product.active_substance|capitalize }}{% if o.source %}<span class="block text-[13px] leading-snug text-muted">Allowed in organic: {% if o.url %}<a href="{{ o.url }}" class="underline" rel="noopener">{{ o.source }}</a>{% else %}{{ o.source }}{% endif %}. The product's own authorisation still applies.</span>{% endif %}</li>{% endfor %}
+    </ul>
+    {% else %}<p class="mt-1 text-[15px] text-muted">No product in this farm's verified shortlist.</p>{% endif %}
+  </section>
+
+  {% if p.withheld %}
+  <section data-production="withheld" aria-labelledby="production-withheld">
+    <h3 id="production-withheld" class="text-[13px] font-semibold uppercase tracking-wider text-muted">Not offered</h3>
+    <ul class="mt-1 divide-y divide-line text-[15px]">
+      {% for o in p.withheld %}<li class="py-2"><span class="font-semibold">{{ o.product.name }}</span> · {{ o.product.active_substance|capitalize }}<span class="block text-[13px] leading-snug text-muted">{{ no_source }}</span></li>{% endfor %}
+    </ul>
+  </section>
+  {% endif %}
+
+  <section data-production="copper" aria-labelledby="production-copper">
+    <h3 id="production-copper" class="text-[13px] font-semibold uppercase tracking-wider text-muted">Copper this season ({{ p.season }})</h3>
+    <p class="mt-1 text-[13px] leading-snug text-muted">EU limit {{ cu_limit }} (<a href="{{ cu_url }}" class="underline" rel="noopener">{{ cu_source }}</a>; <a href="{{ cu_approval_url }}" class="underline" rel="noopener">{{ cu_approval }}</a>). From logged sprays: dose × the product's copper content. Earlier seasons are not in these records.</p>
+    <ul class="mt-1 divide-y divide-line text-[15px]">
+      {% for r in p.copper %}<li class="flex items-baseline justify-between gap-3 py-2"><span class="min-w-0 flex-1 [overflow-wrap:anywhere]"><span class="font-semibold">{{ r.alias }}</span> {{ r.name }}</span><span class="shrink-0 tabular-nums">{{ r.copper.text if r.copper else "no copper claim" }}</span></li>{% endfor %}
+    </ul>
+  </section>
+</div>

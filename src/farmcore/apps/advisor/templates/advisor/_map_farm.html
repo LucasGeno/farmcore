@@ -1,0 +1,27 @@
+{# Map panel, Farm today (advisor): parcels per decision, coverage whenever some parcel has
+   no advice (never an all-clear on partial coverage), the nearest finite spray deadline. Colour
+   always comes with an icon and a word. A fragment: no page chrome; links keep the farm query. #}
+{% from "core/_icons.html" import icon %}
+{% from "core/_ui.html" import decision_chip %}
+<section data-poll-feed hx-get="{{ farm_url('/advisor/map/farm') }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" class="flex flex-col gap-2" data-map-section="advisor-farm" aria-labelledby="map-advisor-farm-h">
+  <h3 id="map-advisor-farm-h" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("advisor", "h-4 w-4") }}Spray advice</h3>
+  {% if not total %}
+  <p class="text-[15px] text-muted" data-fact="no-parcels">No parcels on this farm yet</p>
+  {% else %}
+  {% if evaluated < total %}
+  <p class="text-[15px] font-semibold" data-fact="coverage">{{ evaluated }} of {{ total }} parcels evaluated</p>
+  {% endif %}
+  <ul class="flex flex-col gap-1.5" data-fact="counts">
+    {% for decision, label, parcels in counts %}
+    <li class="flex items-center gap-2" data-count="{{ decision }}">{{ decision_chip(decision, label, size="sm") }}<span class="text-[15px]">{{ parcels }}</span></li>
+    {% endfor %}
+    {% if awaiting %}
+    <li class="flex items-center gap-2" data-count="awaiting">{{ decision_chip("none", awaiting_label, size="sm") }}<span class="text-[15px]">{{ awaiting }}</span></li>
+    {% endif %}
+  </ul>
+  {% if deadline %}
+  <p class="flex items-center gap-2 text-[15px]" data-fact="deadline">{{ icon("clock", "h-4 w-4 text-spray") }}<span>Nearest spray deadline: <strong>{{ deadline[0] }}</strong> ({{ deadline[1] }})</span></p>
+  {% endif %}
+  {% endif %}
+  <a href="{{ farm_url(home) }}" class="inline-flex min-h-[44px] items-center gap-1 text-[15px] font-semibold text-brand-900 underline-offset-2 hover:underline">Open crop protection{{ icon("chevron-right", "h-4 w-4") }}</a>
+</section>

@@ -1,0 +1,6 @@
+<nav aria-label="Parcel presentation" class="mb-4 flex flex-wrap gap-2">
+{% for mode, label in [('map', 'Map'), ('list', 'List')] %}
+<a href="{{ resolved_farm_url('/fields/?view=' ~ mode) }}"{% if (view|default('map')) == mode %} aria-current="page"{% endif %}
+class="inline-flex min-h-[44px] items-center rounded-lg border border-line px-4 font-semibold {{ 'bg-brand-50 text-brand-900' if (view|default('map')) == mode else 'bg-surface text-muted hover:bg-ground' }}">{{ label }}</a>
+{% endfor %}
+</nav>

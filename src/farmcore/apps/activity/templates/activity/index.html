@@ -1,0 +1,22 @@
+{% extends "core/base.html" %}
+{% from "core/_icons.html" import icon %}
+{% from "core/_ui.html" import decision_chip %}
+{% block title %}Activity · farmcore{% endblock %}
+{% block content %}
+{% if destination %}<a href="{{ destination.url }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700">{{ destination.label }}</a>{% endif %}
+<div class="flex flex-wrap items-center justify-between gap-3">
+  <h1 id="activity-heading" data-return-heading tabindex="-1" class="scroll-mt-20 text-xl font-semibold focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700">Activity</h1>
+  {% if can_export %}<a href="{{ farm_url('/operations/register') }}" class="inline-flex min-h-[44px] items-center gap-2 rounded-lg border border-line bg-surface px-3 font-semibold text-brand-700 hover:bg-ground">{{ icon("register") }}Export register</a>{% endif %}
+</div>
+<p class="mt-1 max-w-prose text-sm text-muted">Farm activity, newest first, up to the clock.</p>
+<details data-activity-notes class="mt-1 text-sm text-muted"{% if expert %} open{% endif %}>
+<summary class="min-h-[44px] cursor-pointer font-semibold">About these records</summary>
+<p class="max-w-prose">Current product/dose and machine-file details appear only on each record’s newest entry. Empty cells show “—”.</p>
+{% if replay_behind %}
+<p class="mt-1 max-w-prose text-sm text-stone-600">Sharing changes use real time and appear once the clock reaches them.</p>
+{% endif %}
+</details>
+{% if unavailable_parcel %}<p role="status" class="mt-4 rounded-xl border border-line bg-surface p-3 text-sm">That parcel is not on this farm. Choose another parcel or clear filters.</p>{% endif %}
+{% include "activity/_controls.html" %}
+{% include "activity/_feed.html" %}
+{% endblock %}

@@ -1,0 +1,31 @@
+{% from "core/_icons.html" import icon %}
+{% from "core/_ui.html" import priority_badge, priority_why %}
+<details id="notifications-feed" data-notifications data-poll-feed data-cookie="{{ cookie_name }}" data-unread-count="{{ unread_count }}"
+         hx-get="{{ refresh_url }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" hx-request='{"timeout":15000}'
+         class="relative shrink-0 text-ink">
+  <summary class="relative flex h-11 w-11 cursor-pointer list-none items-center justify-center rounded-full text-white hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+           aria-label="Notifications, {{ unread_count }} unread">
+    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <span data-bell-badge {% if not unread_count %}hidden{% endif %} aria-hidden="true" class="absolute -right-1 -top-1 min-w-[20px] rounded-full bg-spray px-1 text-center text-[11px] font-semibold leading-5 text-white">{{ unread_count if unread_count < 100 else '99+' }}</span>
+  </summary>
+  <section aria-label="Current farm notifications" class="fixed inset-x-4 top-16 z-[1150] max-h-[calc(100dvh-10rem)] overflow-y-auto rounded-2xl border border-line bg-surface p-4 text-ink shadow-xl lg:absolute lg:inset-x-auto lg:right-0 lg:top-14 lg:w-96">
+    <div class="mb-2 flex items-center justify-between gap-2">
+      <h2 class="text-lg font-semibold">Notifications</h2>
+      <button type="button" data-bell-close aria-label="Close notifications" class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-line text-xl">×</button>
+    </div>
+    <p class="mb-3 text-[13px] text-muted">For this farm · Opening marks these as read in this browser.</p>
+    <p data-bell-refresh-error hidden class="mb-3 text-sm text-wait" role="status">Could not refresh notifications. Showing the last loaded state.</p>
+    <ul class="space-y-2">
+    {% for item in items %}
+      <li data-notification-key="{{ item.key }}" data-severity="{{ item.severity }}" data-unread="{{ 'false' if item.key in read else 'true' }}"
+          class="rounded-xl border border-line border-l-4 p-3 {{ 'border-l-spray' if item.severity == 'red' else 'border-l-wait' if item.severity == 'amber' else 'border-l-line' }}">
+        <p class="mb-1 flex items-center gap-1 text-[12px] font-semibold {{ 'text-spray' if item.severity == 'red' else 'text-wait' if item.severity == 'amber' else 'text-muted' }}"><span data-severity-icon="{{ item.severity }}">{{ icon('alert' if item.severity == 'red' else 'wait' if item.severity == 'amber' else 'info', 'h-3.5 w-3.5') }}</span><span>{{ 'Action needed' if item.severity == 'red' else 'Check conditions' if item.severity == 'amber' else 'Information' }}</span><span data-bell-new {% if item.key in read %}hidden{% endif %}> · Unread</span></p>
+        <a href="{{ item.href }}" class="block py-1 font-semibold underline decoration-line underline-offset-4">{{ item.title }}</a>
+        {% if item.priority %}<p class="mt-1 flex flex-wrap items-center gap-2">{{ priority_badge(item.priority_label, item.priority) }}{{ priority_why(item.priority_why, item.priority_assumption, "text-[13px] leading-snug text-muted") }}</p>{% endif %}
+        <p class="mt-1 break-words text-[13px] text-muted">{{ item.detail }}</p>
+        {% if item.observed_at %}<p class="mt-1 text-[12px] text-muted">As of {{ item.observed_at|local }}</p>{% endif %}
+      </li>
+    {% else %}<li class="rounded-xl bg-ground p-3 text-sm">No current notifications.</li>{% endfor %}
+    </ul>
+  </section>
+</details>

@@ -1,0 +1,25 @@
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{% if aerial %}
+<figure class="fc-aerial" data-parcel-aerial data-aerial-state="idle" aria-busy="false" tabindex="-1">
+  <svg viewBox="0 0 600 400" role="img" aria-label="Parcel boundary and aerial view of {{ parcel.alias }} {{ parcel.name }}">
+    <path class="fc-aerial-ground" d="{{ aerial.path }}" fill-rule="evenodd"/>
+    <g data-aerial-photo hidden>
+      {% for tile in aerial.tiles %}<image data-aerial-tile data-src="{{ tile.url }}" x="{{ tile.x }}" y="{{ tile.y }}" width="{{ tile.size }}" height="{{ tile.size }}"/>{% endfor %}
+    </g>
+    <path class="fc-aerial-halo" d="{{ aerial.path }}" fill-rule="evenodd"/>
+    <path class="fc-aerial-line" d="{{ aerial.path }}" fill-rule="evenodd"/>
+    <text x="550" y="30" class="fc-aerial-north">N ↑</text>
+  </svg>
+  <figcaption class="mt-2 text-sm text-muted">
+    <span data-aerial-status role="status" aria-live="polite">North ↑ · Parcel outline.</span>
+    <span class="block">© IGN / Géoplateforme · Aerial photography is not live. Its date may differ from the parcel boundary.</span>
+    <button type="button" data-aerial-retry hidden class="mt-2 min-h-[44px] rounded-lg border border-line bg-surface px-3 font-semibold text-ink">Retry aerial photo</button>
+    <noscript><span class="block">Enable JavaScript to load the aerial photo; the boundary remains visible.</span></noscript>
+  </figcaption>
+</figure>
+{% else %}
+<div class="flex items-center gap-3">
+  {{ parcel_shape(parcel.id, "large") }}
+  <p class="text-sm text-muted">{% if synthetic %}Aerial imagery is unavailable for this synthetic parcel layout. The displayed location is approximate.{% else %}No usable boundary is recorded for an aerial view.{% endif %}</p>
+</div>
+{% endif %}

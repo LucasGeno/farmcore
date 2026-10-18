@@ -1,0 +1,5 @@
+{# Map panel, Farm today (kpi): one honest link, no figures. Keeps the farm query. #}
+{% from "core/_icons.html" import icon %}
+<section class="flex flex-col gap-2" data-map-section="kpi-farm" aria-label="Season &amp; impact">
+  <a href="{{ farm_url(home) }}" class="inline-flex min-h-[44px] items-center gap-2 text-[15px] font-semibold text-brand-900 underline-offset-2 hover:underline">{{ icon("chart", "h-4 w-4") }}Season &amp; impact{{ icon("chevron-right", "h-4 w-4") }}</a>
+</section>

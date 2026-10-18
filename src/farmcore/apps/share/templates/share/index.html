@@ -1,0 +1,191 @@
+{% extends "core/base.html" %}
+{% block title %}Sharing · farmcore{% endblock %}
+{% set badge = {
+  "active": "border-emerald-200 bg-emerald-50 text-emerald-800",
+  "revoked": "border-rose-200 bg-rose-50 text-rose-800",
+  "expired": "border-stone-300 bg-stone-100 text-stone-600",
+  "scheduled": "border-sky-200 bg-sky-50 text-sky-800",
+} %}
+{% block content %}
+<h1 class="text-xl font-semibold">Sharing</h1>
+<p class="mt-1 max-w-prose text-sm text-muted">You choose who may read your farm data, for what, and until when. Machine and station data go to the third party you choose (Data Act Art. 5); revoke at any time. Every read is logged below.</p>
+<div class="grid grid-cols-1 gap-x-6 lg:grid-cols-2">
+<section class="mt-6 min-w-0" aria-labelledby="sharing-what">
+  <h2 id="sharing-what" class="text-lg font-semibold">What</h2>
+  <p class="mt-1 text-sm text-muted">Only read access is available. Nothing here allows someone to change your records.</p>
+  <ul class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+    <li class="min-w-0 rounded-xl border border-dashed border-line p-4"><p class="font-semibold">Parcels</p><p class="mt-1 text-sm text-muted">Unavailable · No sharing preset for parcels.</p></li>
+    <li class="min-w-0 rounded-xl border border-line bg-surface p-4"><p class="font-semibold">Sprays / register</p><p class="mt-1 text-sm text-muted">Share confirmed spray logs and the register, read only.</p>
+      <form method="get" action="{{ farm_url('/share/') }}" class="mt-3 grid grid-cols-2 gap-3" aria-label="Export season and parcel">
+        <input type="hidden" name="farm" value="{{ farm_id }}">
+        <label class="grid min-w-0 gap-1 text-sm"><span id="export-season-label" class="font-medium">Season</span>
+          <select name="season" aria-labelledby="export-season-label" onchange="this.form.submit()" class="min-h-[44px] min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+            {% for s in export_seasons %}<option value="{{ s }}"{% if s == export_season %} selected{% endif %}>{{ s }}</option>{% endfor %}
+            <option value="{{ all_seasons }}"{% if export_season is none %} selected{% endif %}>All seasons</option>
+          </select>
+        </label>
+        <label class="grid min-w-0 gap-1 text-sm"><span id="export-parcel-label" class="font-medium">Parcel</span>
+          <select name="parcel" aria-labelledby="export-parcel-label" onchange="this.form.submit()" class="min-h-[44px] min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+            <option value=""{% if export_parcel is none %} selected{% endif %}>All parcels</option>
+            {% for p in export_parcels %}<option value="{{ p.id }}"{% if p.id == export_parcel %} selected{% endif %}>{{ p.alias }}</option>{% endfor %}
+          </select>
+        </label>
+        <noscript><button type="submit" class="min-h-[44px] rounded-lg border border-line px-3 text-sm font-semibold">Apply</button></noscript>
+      </form>
+      <a href="{{ farm_url('/operations/register.csv' ~ ('?' ~ export_query if export_query else '')) }}" download="{{ export_csv_name }}" class="mt-2 flex min-h-[44px] items-center text-sm font-semibold text-brand-700 underline underline-offset-4">Spray register CSV (Reg. 2023/564)</a>
+      <a href="{{ farm_url('/share/ngsi-ld.json' ~ ('?' ~ export_query if export_query else '')) }}" download="{{ export_ld_name }}" class="flex min-h-[44px] items-center text-sm font-semibold text-brand-700 underline underline-offset-4">Export NGSI-LD</a>
+    </li>
+    <li class="min-w-0 rounded-xl border border-line bg-surface p-4"><p class="font-semibold">Weather</p><p class="mt-1 text-sm text-muted">Share weather station data, read only.</p></li>
+    <li class="min-w-0 rounded-xl border border-dashed border-line p-4"><p class="font-semibold">KPIs</p><p class="mt-1 text-sm text-muted">Unavailable · No sharing preset for KPIs.</p></li>
+  </ul>
+</section>
+<section class="mt-6 min-w-0" aria-labelledby="sharing-with-whom">
+  <h2 id="sharing-with-whom" class="text-lg font-semibold">With whom</h2>
+  <p class="mt-1 text-sm text-muted">People and services with read access. Permissions use real-world validity dates.</p>
+  <form method="get" action="{{ farm_url('/share/') }}" class="mt-4 grid grid-cols-2 gap-3 sm:flex sm:flex-wrap sm:items-end" aria-label="Filter grants">
+    <input type="hidden" name="farm" value="{{ farm_id }}">
+    {% if audit_open %}<input type="hidden" name="who" value="{{ 'grantees' if grantees_only else 'all' }}">{% endif %}
+    <label class="grid min-w-0 gap-1 text-sm"><span id="sharing-scope-label" class="font-medium">Shared data</span>
+      <select name="scope" aria-labelledby="sharing-scope-label" class="min-h-[44px] min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+        {% for value, label in [('all','All shared data'),('sprays','Sprays / register'),('weather','Weather')] %}
+        <option value="{{ value }}"{% if value == scope_filter %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="grid min-w-0 gap-1 text-sm"><span id="sharing-status-label" class="font-medium">Status</span>
+      <select name="status" aria-labelledby="sharing-status-label" class="min-h-[44px] min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+        {% for value in ['all','active','scheduled','expired','revoked'] %}
+        <option value="{{ value }}"{% if value == status_filter %} selected{% endif %}>{{ value|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="col-span-2 min-h-[44px] rounded-lg border border-line bg-surface px-4 py-2 text-sm font-semibold">Filter grants</button>
+  </form>
+{% if is_admin %}
+<details class="mt-4 rounded-xl border border-line bg-surface p-4">
+  <summary class="flex min-h-[44px] cursor-pointer items-center font-semibold">Grant read access</summary>
+  <form method="post" action="{{ farm_url('/share/grants') }}" class="mt-3 grid gap-3 sm:grid-cols-2">
+    <label class="grid min-w-0 gap-1 text-sm">
+      <span class="font-medium">Third party</span>
+      <input name="grantee" value="{{ default_grantee }}" required maxlength="{{ grantee_max_len }}"
+             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+    </label>
+    <label class="grid min-w-0 gap-1 text-sm">
+      <span id="sharing-preset-label" class="font-medium">What they may read</span>
+      <select name="preset" aria-labelledby="sharing-preset-label" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+        {% for key, label in presets %}
+        <option value="{{ key }}"{% if key == default_preset %} selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+        <option value="parcels" disabled>Parcels — no sharing preset available</option>
+        <option value="kpis" disabled>KPIs — no sharing preset available</option>
+      </select>
+    </label>
+    <label class="grid min-w-0 gap-1 text-sm">
+      <span class="font-medium">Purpose</span>
+      <input name="purpose" value="{{ default_purpose }}" required maxlength="{{ purpose_max_len }}"
+             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+    </label>
+    <label class="grid min-w-0 gap-1 text-sm">
+      <span class="font-medium">Valid until (end of day)</span>
+      <input type="date" name="valid_to" value="{{ default_valid_to }}" required
+             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+    </label>
+    <div class="sm:col-span-2">
+      <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 py-2 text-sm font-semibold text-white">Grant</button>
+    </div>
+  </form>
+</details>
+{% endif %}
+  <div class="mt-4 sm:overflow-x-auto sm:rounded-xl sm:border sm:border-line sm:bg-surface">
+    <table data-grants class="block min-w-full border-collapse text-sm sm:table">
+      <thead class="sr-only sm:not-sr-only sm:table-header-group">
+        <tr class="border-b border-stone-300 bg-stone-50 text-left">
+          {# Status and actions sit in the first column so they stay on screen at 375 px. #}
+          <th class="px-2 py-2 font-medium">Third party</th>
+          <th class="px-2 py-2 font-medium">May read</th>
+          <th class="px-2 py-2 font-medium">Purpose</th>
+          <th class="whitespace-nowrap px-2 py-2 font-medium">Valid from</th>
+          <th class="whitespace-nowrap px-2 py-2 font-medium">Valid until</th>
+        </tr>
+      </thead>
+      <tbody class="block space-y-3 sm:table-row-group sm:space-y-0">
+        {% for g in grants %}
+        <tr class="block rounded-xl border border-line bg-surface p-3 align-top sm:table-row sm:rounded-none sm:border-0 sm:border-b sm:p-0" data-grant="{{ g.id }}" data-status="{{ g.status }}">
+          <td class="block min-w-0 break-words py-2 sm:table-cell sm:min-w-[9rem] sm:px-2">
+            <span class="font-medium">#{{ g.id }} {{ g.grantee }}</span>
+            <span class="mt-1 block">
+              <span class="rounded border px-1.5 py-0.5 text-xs {{ badge[g.status] }}">{{ g.status }}</span>
+              {% if g.revoked_at %}<span class="block text-xs text-stone-500">on {{ g.revoked_at|local }}</span>{% endif %}
+            </span>
+            {% if g.status == "active" %}
+            {% if not is_tour %}
+            <a href="/share/as/{{ g.id }}/" class="mt-1 flex min-h-[44px] items-center py-2 text-brand-700 underline decoration-line underline-offset-4">View as {{ g.grantee }}</a>
+            {% endif %}
+            {% if is_admin %}
+            <form method="post" action="{{ farm_url('/share/grants/' ~ g.id ~ '/revoke') }}" class="mt-1">
+              <button type="submit" class="min-h-[44px] rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800 hover:bg-rose-50">Revoke</button>
+            </form>
+            {% endif %}
+            {% endif %}
+          </td>
+          <td class="block min-w-0 break-words py-2 sm:table-cell sm:px-2"><span class="font-semibold sm:hidden">May read: </span>{{ g.scopes|map(attribute='words')|join(', ') }}
+            <details class="mt-1 text-xs text-muted"><summary class="cursor-pointer py-1">Permission details</summary>{% for s in g.scopes %}{{ s.words }} (<code>{{ s.scope }}</code>){% if not loop.last %}, {% endif %}{% endfor %}</details>
+          </td>
+          <td class="block min-w-0 break-words py-2 sm:table-cell sm:px-2"><span class="font-semibold sm:hidden">Purpose: </span>{{ g.purpose }}</td>
+          <td class="block py-2 tabular-nums sm:table-cell sm:whitespace-nowrap sm:px-2"><span class="font-semibold sm:hidden">Valid from: </span>{{ g.valid_from or '—' }}</td>
+          <td class="block py-2 tabular-nums sm:table-cell sm:whitespace-nowrap sm:px-2"><span class="font-semibold sm:hidden">Valid until: </span>{{ g.valid_to }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not grants %}
+    <p class="p-4 text-sm text-stone-500">{{ 'No grants match these filters.' if scope_filter != 'all' or status_filter != 'all' else 'No third party can read this farm yet.' }}</p>
+    {% endif %}
+  </div>
+</section>
+
+</div>
+<details id="access-log" class="mt-6 rounded-xl border border-line bg-surface p-4"{% if audit_open %} open{% endif %}>
+  <summary class="flex min-h-[44px] cursor-pointer items-center font-semibold">Access log</summary>
+  <div class="flex flex-wrap items-baseline justify-between gap-2">
+
+    <div class="flex gap-1 text-sm" role="group" aria-label="Whose reads">
+      <a href="{{ farm_url(all_reads_url) }}" class="rounded border px-2 py-0.5 {{ 'border-stone-800 bg-stone-800 text-white' if not grantees_only else 'border-stone-300 hover:bg-stone-100' }}"{% if not grantees_only %} aria-current="true"{% endif %}>All reads</a>
+      <a href="{{ farm_url(grantee_reads_url) }}" class="rounded border px-2 py-0.5 {{ 'border-stone-800 bg-stone-800 text-white' if grantees_only else 'border-stone-300 hover:bg-stone-100' }}"{% if grantees_only %} aria-current="true"{% endif %}>Third parties only</a>
+    </div>
+  </div>
+  <p class="mt-1 text-sm text-stone-600">
+    The last {{ access_limit }} reads of this farm's data, newest first. Chat ids show their last
+    four digits only.
+  </p>
+  <div class="mt-2 overflow-x-auto rounded-lg border border-stone-200 bg-white">
+    <table data-access-log class="min-w-full border-collapse text-xs sm:text-sm">
+      <thead>
+        <tr class="border-b border-stone-300 bg-stone-50 text-left">
+          <th class="whitespace-nowrap px-2 py-2 font-medium">When</th>
+          <th class="px-2 py-2 font-medium">Who</th>
+          <th class="px-2 py-2 font-medium">Purpose</th>
+          <th class="px-2 py-2 font-medium">What</th>
+          <th class="px-2 py-2 font-medium">Scope</th>
+          <th class="px-2 py-2 font-medium">Grant</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in access %}
+        <tr class="border-b border-stone-100">
+          <td class="whitespace-nowrap px-2 py-1.5 tabular-nums">{{ r.ts }}</td>
+          <td class="whitespace-nowrap px-2 py-1.5">{{ r.actor }}</td>
+          <td class="px-2 py-1.5">{{ r.purpose }}</td>
+          <td class="whitespace-nowrap px-2 py-1.5"><code>{{ r.resource }}</code></td>
+          <td class="whitespace-nowrap px-2 py-1.5"><code>{{ r.scope }}</code></td>
+          <td class="whitespace-nowrap px-2 py-1.5">{{ r.grant }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if not access %}
+    <p class="p-4 text-sm text-stone-500">No third-party reads yet.</p>
+    {% endif %}
+  </div>
+</details>
+{% endblock %}

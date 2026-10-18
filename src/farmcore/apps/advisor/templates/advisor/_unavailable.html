@@ -1,0 +1,7 @@
+<section data-advice-unavailable class="min-w-0 rounded-xl border border-line bg-surface p-4">
+  <h2 class="text-lg font-semibold">Crop protection unavailable</h2>
+  {% if parcel %}<p class="mt-2 break-words font-semibold">{{ parcel.alias }} · {{ parcel.name }}</p>{% endif %}
+  <p class="mt-2 text-[15px]">{{ reason }}</p>
+  <p class="mt-2 text-[14px] text-muted">No verified product catalogue for this farm. No treatment recommendation is made.</p>
+  <a class="mt-2 inline-flex min-h-[44px] items-center text-brand-700 underline" href="{{ farm_url('/stations/') }}">Inspect the station archive</a>
+</section>

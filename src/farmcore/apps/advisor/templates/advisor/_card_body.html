@@ -1,0 +1,17 @@
+{% from "core/_fragment.html" import fragment_slot %}
+<div class="fc-card mx-auto max-w-3xl">
+{% include "advisor/_current_advice.html" %}
+{#- The forecast app's graded window (weather only), while that app is on. #}
+{% if manifests|selectattr("name", "equalto", "forecast")|list %}
+{{ fragment_slot("card-spray-window-" ~ parcel.id, "Spray window", farm_url("/forecast/parcels/" ~ parcel.id)) }}
+{% endif %}
+
+<p class="mt-4">{% include "advisor/_about_link.html" %}</p>
+
+<section class="mt-6">
+  <h2 class="text-lg font-semibold">What happened here</h2>
+  <div class="mt-2" hx-get="{{ farm_url('/operations/parcels/' ~ parcel.id ~ '/timeline') }}" hx-trigger="load" hx-swap="innerHTML">
+    <p class="text-sm text-muted">Loading timeline…</p>
+  </div>
+</section>
+</div>

@@ -1,0 +1,40 @@
+{# Advisor debug panel: a fragment the core debug drawer loads from its `debug_panels` URL.
+   Admin only. Rule codes, raw inputs, thresholds (assumed ones marked) and sources per reason,
+   then the raw advice JSON. The drawer's ink ground colours it (shell tokens). #}
+<div data-debug-panel="advisor" data-advice-id="{{ advice.id if advice.id is not none else '' }}" class="space-y-3 font-mono text-xs">
+  <p>
+    parcel {{ advice.parcel.id }} ({{ advice.parcel.alias }}) · advice {{ advice.id if advice.id is not none else '—' }} ·
+    <span data-decision="{{ advice.decision }}">{{ advice.decision }}</span>
+    {% if advice.evaluated_at %}· evaluated {{ advice.evaluated_at }}{% endif %}
+  </p>
+  {% for r in reasons %}
+  <section data-rule-code="{{ r.rule }}" class="rounded-lg border border-white/15 p-2">
+    <p class="flex flex-wrap gap-x-3">
+      <strong>{{ r.rule }}</strong>
+      <span>verdict: {{ r.verdict }}</span>
+      <span class="text-white/60">source: {{ r.source }}</span>
+    </p>
+    {% if r.note %}<p class="text-white/60">{{ r.note }}</p>{% endif %}
+    <div class="mt-1 grid gap-2 md:grid-cols-2">
+      <div>
+        <h4 class="font-semibold">inputs</h4>
+        <dl class="grid grid-cols-[max-content_1fr] gap-x-3">
+          {% for k, v in r.inputs %}<dt>{{ k }}</dt><dd class="break-all">{{ v }}</dd>{% else %}<dt>—</dt><dd></dd>{% endfor %}
+        </dl>
+      </div>
+      <div>
+        <h4 class="font-semibold">thresholds</h4>
+        <dl class="grid grid-cols-[max-content_1fr] gap-x-3">
+          {% for k, v, assumed in r.threshold %}
+          <dt>{{ k }}</dt><dd class="break-all" data-assumed="{{ 'true' if assumed else 'false' }}">{{ v }}{% if assumed %} <span class="inline-block whitespace-nowrap rounded-full bg-wait-soft px-1.5 font-semibold text-wait [word-break:normal]">assumed</span>{% endif %}</dd>
+          {% else %}<dt>—</dt><dd></dd>{% endfor %}
+        </dl>
+      </div>
+    </div>
+  </section>
+  {% endfor %}
+  <details>
+    <summary class="cursor-pointer">Raw advice JSON</summary>
+    <pre class="mt-1 overflow-x-auto whitespace-pre">{{ raw }}</pre>
+  </details>
+</div>

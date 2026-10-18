@@ -1,0 +1,65 @@
+{# Shared UI vocabulary. Import with
+   {% from "core/_ui.html" import page_header, card, decision_chip, button, empty_state, pill %}.
+   Colour is never the only signal: every decision carries an icon and a word. #}
+{% from "core/_icons.html" import icon %}
+
+{% set DECISIONS = {
+  "spray": ("Spray", "spray", "bg-spray-soft text-spray"),
+  "wait": ("Wait", "wait", "bg-wait-soft text-wait"),
+  "protected": ("Protected", "protected", "bg-protected-soft text-protected"),
+  "none": ("No advice yet", "none", "bg-stone-100 text-stone-600"),
+} %}
+
+{# Page header in the concierge style: title, one line on what the page is for, actions right. #}
+{% macro page_header(title, subtitle=None, eyebrow=None) -%}
+<div class="mb-6 flex flex-wrap items-end justify-between gap-x-6 gap-y-3">
+  <div class="min-w-0">
+    {% if eyebrow %}<p class="text-xs font-semibold uppercase tracking-widest text-muted">{{ eyebrow }}</p>{% endif %}
+    <h1 class="text-2xl font-semibold tracking-tight text-ink lg:text-[28px]">{{ title }}</h1>
+    {% if subtitle %}<p class="mt-1 max-w-[70ch] text-[15px] text-muted">{{ subtitle }}</p>{% endif %}
+  </div>
+  {% if caller %}<div class="flex flex-wrap items-center gap-2">{{ caller() }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{# A flat hairline card. `attrs` (a dict) adds id / aria / data-* hooks; `tag` may be "details". #}
+{% macro card(cls="", attrs=None, tag="section") -%}
+<{{ tag }}{{ (attrs or {})|xmlattr }} class="rounded-xl border border-line bg-surface p-4 sm:p-5 {{ cls }}">{{ caller() }}</{{ tag }}>
+{%- endmacro %}
+
+{% macro decision_chip(decision, label=None, size="md") -%}
+{%- set word, ic, tone = DECISIONS.get(decision, DECISIONS["none"]) -%}
+<span class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full font-semibold {{ tone }} {{ 'px-2 py-0.5 text-xs' if size == 'sm' else 'px-2.5 py-1 text-[13px]' }}" data-decision="{{ decision }}">
+  {{ icon(ic, "h-3.5 w-3.5" if size == "sm" else "h-4 w-4") }}{{ label or word }}
+</span>
+{%- endmacro %}
+
+{# Priority is a treatment ranking, separate from the Spray/Wait decision. Neutral rising bars
+   plus a word keep it readable without competing with the decision's colour. #}
+{% macro priority_badge(label, level) -%}
+{%- if level -%}<span data-priority="{{ level }}" role="img" aria-label="priority {{ level }} of 3: {{ label }}" class="fc-priority">
+  <span class="fc-priority-bars" aria-hidden="true">{% for n in (1, 2, 3) %}<span data-priority-bar="{{ n }}" data-filled="{{ 'true' if n <= level else 'false' }}"></span>{% endfor %}</span>
+  <span aria-hidden="true">{{ label }}</span>
+</span>{%- endif -%}
+{%- endmacro %}
+
+{# One short sentence of what the priority used, plus the assumption label when flagged. #}
+{% macro priority_why(why, assumption, cls="") -%}
+{%- if why -%}<span data-priority-why class="{{ cls }}">{{ why }}{% if assumption %} <span data-priority-assumption class="font-semibold text-wait">Priority: {{ "assumption, agronomist to confirm" }}.</span>{% endif %}</span>{%- endif -%}
+{%- endmacro %}
+
+{# tone: neutral | ok | warn | bad #}
+{% macro pill(text, tone="neutral") -%}
+{%- set tones = {"neutral": "bg-stone-100 text-stone-700", "ok": "bg-protected-soft text-protected", "warn": "bg-wait-soft text-wait", "bad": "bg-spray-soft text-spray"} -%}
+<span class="inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-semibold leading-none {{ tones[tone] }}">{{ text }}</span>
+{%- endmacro %}
+
+{% macro button(label, href, primary=True, icon_name=None, cls="") -%}
+<a href="{{ href }}" class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg px-4 text-[15px] font-semibold transition-colors active:translate-y-px {{ 'bg-brand-900 text-white hover:bg-brand-700' if primary else 'border border-line bg-surface text-ink hover:bg-stone-50' }} {{ cls }}">
+  {% if icon_name %}{{ icon(icon_name) }}{% endif %}{{ label }}
+</a>
+{%- endmacro %}
+
+{% macro empty_state(text) -%}
+<p class="rounded-xl border border-dashed border-line p-6 text-[15px] text-muted">{{ text }}</p>
+{%- endmacro %}

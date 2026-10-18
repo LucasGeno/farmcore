@@ -1,0 +1,142 @@
+{% from "core/_parcel_shape.html" import parcel_shape with context %}
+{% from "fields/_parcel_aerial.html" import parcel_aerial with context %}
+{# Shared stored current advice. Canonical cards retain identity/back chrome; the workspace
+   supplies its own identity. History and the Operations feed are separate views there.
+   Keep the existing fact/rule hooks; density follows the explicit preference. #}
+{% from "core/_ui.html" import decision_chip, card, pill, priority_badge, priority_why %}
+{% from "core/_icons.html" import icon %}
+{% from "core/_fragment.html" import fragment_slot %}
+{% macro h2(id, text) %}<h2 id="{{ id }}" class="text-[13px] font-semibold uppercase tracking-wider text-muted">{{ text }}</h2>{% endmacro %}
+{% macro assumed() %}{{ pill("assumed", "warn") }}{% endmacro %}
+{% set band = {"spray": "border-l-spray", "wait": "border-l-wait", "protected": "border-l-protected"}.get(advice.decision, "border-l-line") %}
+{% if not workspace %}<p class="-mt-2 mb-2 text-[14px]"><a href="{{ return_destination.url }}" class="inline-flex min-h-[44px] items-center gap-1 text-muted hover:text-ink">{{ icon("chevron-left", "h-4 w-4") }}{{ return_destination.label }}</a></p>{% endif %}
+
+{% call card("border-l-[6px] " ~ band, {"aria-labelledby": "parcel-title"}) %}
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    {% if workspace %}<h2 id="parcel-title" class="text-lg font-semibold">Current protection</h2>{% else %}<div class="flex min-w-0 items-center gap-3">{{ parcel_shape(parcel.id, "large") }}<h1 id="parcel-title" class="min-w-0 break-words text-xl font-semibold tracking-tight">{{ parcel.alias }} · {{ parcel.name }}</h1></div>{% endif %}
+    <span id="decision-badge" data-decision="{{ advice.decision }}">{{ decision_chip(advice.decision, advice.chip_label) }}</span>
+  </div>
+  <p id="lead" class="mt-3 text-[18px] font-semibold sm:text-[20px] leading-snug">{{ advice.lead }}</p>
+  <p id="headline" class="mt-2 text-[13px] text-muted">{{ advice.headline }}</p>
+  {% if advice.priority %}
+  <div class="mt-3 flex flex-col items-start gap-1" data-fact="priority">
+    <span class="text-[13px] text-muted">Spraying priority</span>
+    {{ priority_badge(advice.priority_label, advice.priority) }}
+    {{ priority_why(advice.priority_why, advice.priority_assumption, "text-[13px] leading-snug text-muted") }}
+  </div>
+  {% endif %}
+  <p class="mt-2 min-w-0 break-words text-[13px] text-muted tabular-nums">
+    {% if not workspace %}{{ "%.2f"|format(parcel.area_ha) }} ha{% if parcel.variety %} · {{ parcel.variety }}{% endif %}{% endif %}
+    {% if advice.evaluated_at %} · checked {{ advice.evaluated_at }}{% endif %}
+    {% if debug %} · <a href="{{ farm_url('/advisor/parcels/' ~ parcel.id ~ '.json') }}" class="underline underline-offset-2">JSON</a>{% endif %}
+  </p>
+{% endcall %}
+
+{% if not workspace %}{{ parcel_aerial(parcel.id, "advice") }}{% endif %}
+
+{% if advice.id is not none %}
+{% if advice.checklist %}
+{% if advice.checklist|selectattr("met", "none")|list %}<p class="mt-3 text-sm text-wait">Some downy mildew checks have no data. Review the checks below.</p>{% endif %}
+<details data-advice-checklist class="mt-4 rounded-xl border border-line bg-surface p-4"{% if expert %} open{% endif %}>
+<summary class="min-h-[44px] cursor-pointer font-semibold">Downy mildew checks</summary>
+{% call card("mt-4", {"aria-labelledby": "checklist-title"}) %}
+  {{ h2("checklist-title", "Downy mildew check (3-10 rule)") }}
+  <ul id="checklist" class="mt-3 divide-y divide-line">
+    {% for c in advice.checklist %}
+    <li class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 py-2.5 first:pt-0 last:pb-0" data-check="{{ c.key }}" data-met="{{ 'true' if c.met else ('unknown' if c.met is none else 'false') }}" data-value="{{ c.raw }}">
+      {% if c.met %}<span class="whitespace-nowrap font-semibold text-ink [word-spacing:.2em]">✅ Met</span>{% elif c.met is none %}<span class="whitespace-nowrap font-semibold text-muted [word-spacing:.2em]">❔ No data</span>{% else %}<span class="whitespace-nowrap font-semibold text-muted [word-spacing:.2em]">❌ Not met</span>{% endif %}
+      <span>
+        <span class="font-semibold">{{ c.label }}</span>{% if c.assumed %} {{ assumed() }}{% endif %}<br>
+        <span class="text-[17px] font-semibold tabular-nums">{{ c.value }}</span>{% if c.window %} <span class="text-[13px] text-muted">· {{ c.window }}</span>{% endif %}
+      </span>
+    </li>
+    {% endfor %}
+  </ul>
+{% endcall %}
+</details>
+{% endif %}
+
+{% if advice.protection %}
+{% call card("mt-4", {"id": "protection", "data-protection": advice.protection.verdict, "aria-labelledby": "protection-title"}) %}
+  {{ h2("protection-title", "Downy protection") }}
+  <p class="mt-2 flex items-center gap-2 text-[17px] font-semibold">{% if advice.protection.verdict == "protected" %}{{ icon("protected", "h-5 w-5 text-protected") }}{% else %}{{ icon("x", "h-5 w-5 text-spray") }}{% endif %}{{ advice.protection.line }}</p>
+  {# The cover bar only while there is cover: an empty bar is cut on farmer pages. #}
+  {% if advice.protection.bar and advice.protection.verdict == "protected" %}
+  {% set bar = advice.protection.bar %}
+  <div id="protection-bar" class="mt-2" data-mm="{{ bar.mm }}">
+    <div class="h-2.5 overflow-hidden rounded-full bg-line" role="img" aria-label="{{ bar.label }}"><div class="h-full rounded-full motion-safe:transition-[width] motion-safe:duration-300 {{ 'bg-spray' if bar.left_pct < 34 else 'bg-protected' }}" style="width: {{ bar.left_pct }}%"></div></div>
+    <p class="mt-1 text-[13px] text-muted tabular-nums">{{ bar.label }}</p>
+  </div>
+  {% endif %}
+{% endcall %}
+{% endif %}
+
+{% call card("mt-4", {"aria-labelledby": "plan-title"}) %}
+  {{ h2("plan-title", "Plan") }}
+  <dl class="mt-2 space-y-2 text-[15px]">
+    <div><dt class="inline font-semibold">Next spray window:</dt> <dd class="inline tabular-nums">{{ advice.next_window_text }}</dd></div>
+    {% if advice.products %}
+    <div><dt class="inline font-semibold">Product{{ "s" if advice.products|length > 1 }}:</dt>
+      <dd class="inline">{{ advice.products|map(attribute="name")|join(" + ") }} · {{ advice.passes }} pass{{ "es" if advice.passes != 1 }}, {{ advice.treatments }} treatment{{ "s" if advice.treatments != 1 }}
+        <details class="mt-1 text-[13px] text-muted"{% if expert %} open{% endif %}><summary class="min-h-[44px] cursor-pointer">Passes and treatments</summary>A pass is one trip through the rows; a treatment is one product against one disease, so a tank-mix is 2 treatments in 1 pass.</details></dd></div>
+    {% endif %}
+    {% if advice.tankmix %}<div><dt class="inline font-semibold">Tank-mix:</dt> <dd class="inline">{{ advice.tankmix }}</dd></div>{% endif %}
+    {# Incubation progress is a model detail: Expert view or debug only. #}
+    {% if advice.incubation and (expert or debug) %}<div><dt class="inline font-semibold">Incubation:</dt> <dd class="inline tabular-nums">{{ advice.incubation }}. A risk indicator, not a prediction.</dd></div>{% endif %}
+  </dl>
+  {% if advice.replay %}<p id="replay-note" class="mt-2 flex items-center gap-1.5 text-[13px] text-muted">{{ icon("info", "h-3.5 w-3.5") }}Replay: the observed weather stands in for the forecast.</p>{% endif %}
+  {% if advice.flags %}
+  <ul class="mt-3 space-y-1 text-[15px]">
+    {% for flag, text in advice.flags %}<li data-flag="{{ flag }}" class="flex items-start gap-2">{{ icon("alert", "mt-0.5 h-4 w-4 text-wait") }}<span>{{ text }}.</span></li>{% endfor %}
+  </ul>
+  {% endif %}
+{% endcall %}
+
+<details id="why"{% if expert %} open{% endif %} class="group mt-4 rounded-xl border border-line bg-surface p-4 sm:p-5">
+  <summary class="flex min-h-[44px] cursor-pointer list-none items-center justify-between gap-2 font-semibold">Details: every rule, threshold and source {{ icon("chevron-down", "h-4 w-4 text-muted transition-transform group-open:rotate-180") }}</summary>
+  <p class="mt-1 text-[13px] text-muted">What the advisor checked, the threshold it compared with and where that threshold comes from. {{ assumed() }} marks a default awaiting agronomist confirmation.</p>
+  <div class="fc-why mt-2 overflow-x-auto">
+    <table class="min-w-full border-collapse text-sm">
+      <thead>
+        <tr class="text-left text-muted">
+          <th class="font-semibold">Rule</th>
+          {% if debug %}<th class="font-semibold">Inputs</th>{% endif %}
+          <th class="font-semibold">Threshold</th>
+          <th class="font-semibold">Verdict</th>
+          <th class="font-semibold">Source</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in advice.reasons %}
+        <tr data-rule="{{ r.rule }}">
+          <td><span class="font-semibold">{{ r.label }}</span>{% if debug %}<br><code class="text-xs text-muted">{{ r.rule }}</code>{% endif %}</td>
+          {% if debug %}
+          <td class="text-xs" data-label="Inputs">
+            {% for k, v in r.inputs %}<div><span class="text-muted">{{ k }}</span> {{ v }}</div>{% endfor %}
+          </td>
+          {% endif %}
+          <td class="text-xs" data-label="Threshold">
+            {% if debug %}
+            {% for k, v, is_assumed in r.threshold %}<div><span class="text-muted">{{ k }}</span> {{ v }}{% if is_assumed %} {{ assumed() }}{% endif %}</div>{% endfor %}
+            {% else %}
+            {% for label, v, is_assumed in r.plain_threshold %}<div><span class="text-muted">{{ label }}</span> <span class="tabular-nums">{{ v }}</span>{% if is_assumed %} {{ assumed() }}{% endif %}</div>{% endfor %}
+            {% endif %}
+          </td>
+          <td data-label="Verdict"><span class="font-semibold">{{ r.verdict }}</span>{% set note = r.note if debug else r.plain_note %}{% if note %}<div class="mt-1 text-xs text-muted">{{ note }}</div>{% endif %}</td>
+          <td class="text-xs text-muted" data-label="Source">
+            {% if debug %}{{ r.source }}{% else %}
+            <ul>{% for entry in r.sources %}<li>{% for text, href in entry %}{% if href %}<a class="inline-block min-h-6 py-1 underline underline-offset-2 [overflow-wrap:anywhere]" href="{{ href }}" rel="noopener noreferrer" target="_blank">{{ text }}</a>{% else %}{{ text }}{% endif %}{% endfor %}</li>{% endfor %}</ul>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</details>
+
+{% else %}
+<p class="mt-4 rounded-xl border border-dashed border-line p-4 text-[15px] text-muted">
+  The advisor has not evaluated this parcel up to {{ now|local }}. Step the replay clock or wait for the hourly run.
+</p>
+{% endif %}

@@ -1,0 +1,9 @@
+{% extends "core/base.html" %}
+{% block title %}{{ parcel.alias }} advice · farmcore{% endblock %}
+{% block content %}
+{% include "advisor/_card_body.html" %}
+<section aria-labelledby="history-heading" class="mt-6 rounded-xl border border-line bg-surface p-4 sm:p-5">
+  <h2 id="history-heading" class="text-lg font-semibold">Season history</h2>
+  {% include "advisor/_history.html" %}
+</section>
+{% endblock %}

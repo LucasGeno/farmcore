@@ -1,0 +1,25 @@
+{% from "core/_icons.html" import icon %}
+<section data-home-forecast class="min-w-0 rounded-xl border border-line bg-surface p-3" aria-label="Forecast for the next five days">
+  <h2 class="sr-only">Next days · forecast</h2>
+  {% if run %}
+  <ol data-weather-strip class="relative flex gap-1 overflow-x-auto pb-1">
+    {% for d in days %}<li data-weather-day="{{ d.day }}" class="min-w-[3.6rem] flex-1">
+      <a href="{{ farm_url('/forecast/plan?day=' ~ d.day ~ '#plan-day-' ~ d.day) }}" class="flex min-h-[44px] flex-col items-center gap-0.5 rounded-lg border border-line px-0.5 py-2 text-center text-[11px] leading-tight hover:bg-brand-50">
+        <span class="font-semibold">{{ d.label.split(' · ')[0] if ' · ' in d.label else d.label.split(' ')[0] }}</span>
+        {% if d.has_data and d.rain.value is not none %}{{ icon('rain' if d.rain.value > 0 else 'dry', 'h-5 w-5 text-brand-700') }}{% else %}<span class="h-5 leading-5 text-muted">—</span>{% endif %}
+        <span><span class="sr-only">Rain </span>{% if d.has_data and d.rain.value is not none %}{{ '%.1f'|format(d.rain.value) }} mm{% if d.rain.known < d.expected %}*<span class="sr-only">partial data</span>{% endif %}{% else %}—{% endif %}</span>
+        <span><span class="sr-only">Wind max </span>{% if d.has_data and d.wind.value is not none %}{{ '%.0f'|format(d.wind.value) }} km/h{% if d.wind.known < d.expected %}*<span class="sr-only">partial data</span>{% endif %}{% else %}—{% endif %}</span>
+        <span><span class="sr-only">Temperature </span>{% if d.has_data and d.temp.low is not none %}{{ '%.0f'|format(d.temp.low) }}–{{ '%.0f'|format(d.temp.high) }} °C{% if d.temp.known < d.expected %}*<span class="sr-only">partial data</span>{% endif %}{% else %}—{% endif %}</span>
+      </a>
+    </li>{% endfor %}
+  </ol>
+  {% if days|rejectattr("has_data")|list %}<p class="mt-1 text-[12px] text-muted">No forecast yet for days shown as —.</p>{% endif %}
+  <details class="text-[11px] leading-snug text-muted">
+    <summary class="flex min-h-[44px] cursor-pointer items-center justify-between gap-2"><span class="min-w-0">{{ run.label.split(' HRES')[0].split(' via ')[0] }} · run {{ issued }}{% if run.props.attribution %} · Open-Meteo CC BY 4.0{% endif %}</span><span class="inline-flex shrink-0 items-center gap-1 font-semibold text-brand-700">{{ icon("info", "h-4 w-4") }}<span class="sr-only">Source and notes</span></span></summary>
+    <p class="break-words">{{ run.label }} · Forecast run {{ issued }} · available {{ available }}{% if run.as_issued %} · forecast as issued{% else %} · not the forecast as it was issued{% endif %}. * partial: missing hours; missing rain is not zero. Gusts are information only.</p>
+    {% if run.props.attribution %}<p class="mt-1">{{ run.props.attribution }} · <a class="underline" href="https://open-meteo.com/">Weather data by Open-Meteo.com</a> · <a class="underline" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></p>{% endif %}
+    <a class="inline-flex min-h-[44px] items-center text-sm text-brand-700 underline" href="{{ farm_url('/stations/') }}">Open weather</a>
+  </details>
+  {% else %}<p class="mt-2 text-sm text-muted">No forecast yet for this farm at the replay clock. Station observations and archives are separate.</p>{% endif %}
+  {% if not run %}<a class="inline-flex min-h-[44px] items-center text-sm text-brand-700 underline" href="{{ farm_url('/stations/') }}">Open weather</a>{% endif %}
+</section>
