@@ -10,16 +10,17 @@
     {% else %}<p class="text-sm font-semibold text-spray">{{ planned_treatment.schedule_reason }}</p><p class="mt-1 text-[13px] text-muted">The original window above is unavailable because of Busy. Update availability or review the parcel advice.</p>{% endif %}
   </aside>
   {% endif %}
+  {% include "forecast/_freshness.html" %}
   {% if run %}
   <p class="mt-1 min-w-0 break-words text-[14px]" data-weather-only>
     Spraying weather only — whether a parcel needs a spray, and by when, is {% if on_card %}the advice above{% else %}the crop protection advice{% endif %}.
   </p>
-  {% if not expert %}<p data-forecast-freshness class="mt-1 text-[13px] text-muted">Forecast run {{ run.issued }} · available {{ run.available }} · {{ run.label }}{% if not run.as_issued %} (not the forecast as it was issued){% endif %}.</p>{% endif %}
+  {% if not expert %}<p data-forecast-freshness class="mt-1 text-[13px] text-muted">{% if run.receipt %}Fetched {{ run.available }} · provider issue time unknown{% else %}Forecast run {{ run.issued }}{% endif %} · available {{ run.available }} · {{ run.label }}{% if not run.as_issued %} (not the forecast as it was issued){% endif %}.</p>{% endif %}
   <details data-forecast-method class="mt-2 text-sm text-muted"{% if expert %} open{% endif %}>
   <summary class="min-h-[44px] cursor-pointer font-semibold">Forecast source and ranking</summary>
   <p class="mt-1 min-w-0 break-words text-[13px] text-muted">
     From {{ run.name }}; {% if on_card %}the advice's window above{% else %}the advice{% endif %} uses the station's weather.
-    Forecast run {{ run.issued }} · available {{ run.available }} · {{ run.label }}{% if not run.as_issued %} (not the forecast as it was issued){% endif %}.
+    {% if run.receipt %}Fetched {{ run.available }} · provider issue time unknown{% else %}Forecast run {{ run.issued }}{% endif %} · available {{ run.available }} · {{ run.label }}{% if not run.as_issued %} (not the forecast as it was issued){% endif %}.
     Days ranked by the spray-window rules: rain, wind{% if sulphur %}, heat for sulphur{% endif %}, {{ band }}.
   </p>
   </details>
@@ -50,7 +51,7 @@
   <a class="mt-3 inline-flex min-h-[44px] items-center text-sm text-brand-700 underline" href="{{ farm_url('/forecast/plan') }}">{% if top %}See Plan{% else %}{% if best_later %}Best weather is later · {% endif %}Open the 14-day Plan{% endif %}</a>
   {% if run.attribution %}
   <p class="mt-3 min-w-0 break-words text-[12px] text-muted" data-attribution>
-    Forecast: ECMWF IFS HRES (<a class="inline-block py-1 underline" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>) via Open-Meteo.com, aggregated to daily values ·
+    {{ run.attribution }} · <a class="inline-block py-1 underline" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a> ·
     <a class="inline-block py-1 underline" href="https://open-meteo.com/">Weather data by Open-Meteo.com</a>
   </p>
   {% endif %}

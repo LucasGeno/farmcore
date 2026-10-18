@@ -20,9 +20,9 @@ None — can start immediately.
 
 ## Acceptance criteria
 
-- [ ] Scheduled bounded fetch ingests real forecast responses through the existing run store, preserving issued/fetched/available/location/unit semantics.
-- [ ] Retries/duplicates/provider failure preserve prior valid data and report freshness/coverage.
-- [ ] Replay never consumes runs not available as of its clock; no reanalysis masquerading as issued forecast.
+- [x] Scheduled bounded fetch ingests real forecast responses through the existing run store, preserving issued/fetched/available/location/unit semantics.
+- [x] Retries/duplicates/provider failure preserve prior valid data and report freshness/coverage.
+- [x] Replay never consumes runs not available as of its clock; no reanalysis masquerading as issued forecast.
 - [ ] Missing required observations/forecast inputs are explicitly unavailable; demo saved runs remain usable.
 
 ## Execution discipline
@@ -39,4 +39,38 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 
 ## Evidence
 
-Pending implementation.
+Verification tier 3 (public ingestion/replay contracts). Failure model recorded before verification:
+- Malformed/oversized/nonfinite provider response or wrong units: bounded adapter validation, adversarial job tests.
+- Repeated/concurrent fetch: transactional farm lock and persisted cache; duplicate receipt must not overwrite values.
+- Timeout/provider failure: preserve prior valid immutable receipt; expose fetch health separately.
+- Future-issued or unavailable data leaks into replay: store selection filters plus HTTP/job regressions.
+- Missing required hourly fields/observations: typed evaluation remains limited/unavailable; UI states coverage explicitly.
+- Requested/grid locations or fetch/issue time confusion: explicit provenance metadata and rendering tests.
+
+Baseline: focused forecast/stations/advisor suite: 603 passed, 134 deselected (26.20s). Initial DB connection exit 3 resolved by parent starting local PostGIS. Preflight Ruff passed; 2927 tests collected. mypy unavailable and not configured; not a passed layer.
+
+Ownership dependency accepted by integration coordinator: ticket 05 owns the historical-observation guard in advisor jobs/service (no station, empty/insufficient historical series, rejected inputs), with explicitly unavailable stored assessment/headline and public-seam regressions. Ticket 04 owns missing forecast inputs and weather UI. Full M1 missing-input acceptance remains dependent on ticket 05 integration; this branch alone does not establish that criterion.
+
+Implementation evidence (production frozen; full gate pending):
+
+| Contract | Evidence |
+|---|---|
+| Bounded ingestion, units/location/rain, duplicate preservation, failure health | `tests/apps/forecast/test_live_weather.py` — 41 tests |
+| Generated missing-value invariant through public job/store | `tests/apps/forecast/test_live_properties.py` — 30 passing Hypothesis examples |
+| Forecast missingness/replay/source labels | HTTP Home/Plan/Data sources/Notifications and assistant public tool contracts |
+| Cross-process duplicate protection | Real separate-session concurrent `run_now`: one fetch, one receipt |
+| Per-farm malformed-response isolation | Bad second-farm timestamp cannot roll back first farm receipt |
+
+Latest post-mutation contract run: `.venv/bin/python -m pytest tests/apps/forecast/test_live_weather.py tests/apps/forecast/test_live_properties.py -q --hypothesis-show-statistics --cov=farmcore --cov-report=xml:/tmp/farmcore-weather-restored.xml` — **42 passed in 9.93s**; Hypothesis 30 passing, 0 failing, 1 discarded generated case.
+
+Independent QA: broader forecast/stations/advisor/notifications/assistant regression **690 passed, 3 skipped, 136 deselected (128.45s)** before the final test-only boundary additions; independent adverse reproductions **2 passed**. Reviewer then inspected the final added property/boundary tests and reported no remaining spec/standards findings. Browser layout not exercised.
+
+Manual mutation fallback: no mutation tool configured. Three plausible bugs planted in an isolated package copy with verified import path: dropping future-issued selection, converting null weather to zero, removing content deduplication. All **3 killed** (1 failed each: 2.07s, 18.92s, 1.46s); null mutation killed by Hypothesis. Original source SHA-256 stayed unchanged; copied mutants restored. Fresh 42-test run above passed afterward.
+
+Ruff whole-tree check passed; **445 files already formatted**. Alembic **one head** (`inventory_0001`); no migration authored. Secrets gate self-test rejected 4/4 bad and accepted 2/2 benign controls; allowlist isolation 2/2. Manual execution on a throwaway migrated DB with controlled realistic 144h hourly response: job `ok=True`, HTTP **200**, fetched/unknown-issue labels present. No production DB or live credentials used.
+
+Changed-line coverage diagnostic: every changed forecast line covered; assistant/notification historical-run branches await the full-suite coverage result. Tier-3 gauntlet started against the actual base `8709609` (same approved documentation as integration `9d7c66a`), full suite currently running. This is **not a completed gauntlet** and branch is not ready to integrate until its result is resolved.
+
+Failed then fixed: QA reproduced malformed timestamp batch rollback and fetched-time-as-issued labels in notifications/assistant; both received public-seam regression coverage and independent passing reproductions. Invalid finite values, numeric overflow, malformed health, cache starvation and incomplete forecast grading also covered.
+
+Known limits: historical-observation assessment guard belongs to ticket 05; provider uptime/commercial usage and browser layout are not established by controlled-response tests. Missing mypy/pytest-randomly/mutation tools are not passed layers.

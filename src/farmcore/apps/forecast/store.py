@@ -80,6 +80,7 @@ def latest_run(repo: ScopedRepository, now: datetime) -> StoredRun | None:
     runs = repo.list(
         ForecastRun,
         ForecastRun.available_at <= now,
+        ForecastRun.issued_at <= now,
         scope=SCOPE,
         order_by=(
             ForecastRun.available_at.desc(),
@@ -118,3 +119,49 @@ def latest_run(repo: ScopedRepository, now: datetime) -> StoredRun | None:
         gusts=gusts,
         props=props,
     )
+
+
+def freshness(repo: ScopedRepository, now: datetime) -> dict:
+    """Clock-bounded receipt health; future fetch attempts never leak into replay."""
+    from datetime import timedelta
+
+    from farmcore.core.models.canonical import Farm
+
+    runs = repo.list(
+        ForecastRun,
+        ForecastRun.available_at <= now,
+        ForecastRun.issued_at <= now,
+        scope=SCOPE,
+        order_by=(ForecastRun.available_at.desc(), ForecastRun.id.desc()),
+        limit=1,
+    )
+    row = runs[0] if runs else None
+    props = row.props or {} if row else {}
+    receipt = props.get("issued_at_kind") == "receipt"
+    coverage = props.get("coverage") or {}
+    missing = [
+        f"{name} {coverage[key]['known']}/{coverage[key]['expected']}"
+        for key, name in (
+            ("rr1_mm", "rain"),
+            ("ff_kmh", "wind"),
+            ("t_c", "temperature"),
+            ("rh_pct", "humidity"),
+        )
+        if key in coverage and coverage[key]["known"] < coverage[key]["expected"]
+    ]
+    farm = repo.get(Farm, repo.farm_id, scope=SCOPE)
+    health = (farm.props if farm else {}).get("forecast_health")
+    health = health if isinstance(health, dict) else {}
+    try:
+        attempted = datetime.fromisoformat(health.get("last_attempt", ""))
+        failed = attempted <= now and bool(health.get("error"))
+    except (ValueError, TypeError):
+        failed = False
+    return {
+        "receipt": receipt,
+        "fetched": props.get("fetched_at"),
+        "stale": bool(receipt and now - row.available_at > timedelta(hours=2)),
+        "coverage_end": props.get("coverage_end"),
+        "missing": missing,
+        "failed": failed,
+    }

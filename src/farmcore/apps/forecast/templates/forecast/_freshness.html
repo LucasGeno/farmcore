@@ -1,0 +1,9 @@
+{% if freshness %}
+<div data-live-forecast-status class="mt-1 text-sm text-muted" role="status">
+  {% if freshness.failed %}<p>Live forecast refresh unavailable. Last valid forecast retained where coverage remains.</p>{% endif %}
+  {% if freshness.receipt %}
+  <p>{% if freshness.stale %}Stale forecast · {% endif %}Fetched {{ freshness.fetched }} · provider issue time unknown. Coverage ends {{ freshness.coverage_end }}.</p>
+  {% if freshness.missing %}<p>Partial forecast inputs: {{ freshness.missing|join(', ') }} hours. Missing inputs are unavailable, never zero.</p>{% endif %}
+  {% endif %}
+</div>
+{% endif %}
