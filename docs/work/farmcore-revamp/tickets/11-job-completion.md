@@ -3,7 +3,7 @@ type: Work Ticket
 title: "Complete planned work into one confirmed operation"
 description: "Milestones 1–4: complete planned work into one confirmed operation."
 status: approved
-blocked_by: ["08", "10"]
+blocked_by: ["06", "08", "10"]
 ---
 
 # 11 — Complete planned work into one confirmed operation
@@ -12,10 +12,11 @@ blocked_by: ["08", "10"]
 
 ## Outcome and scope
 
-Complete planned work into one confirmed operation. Touchpoints: planning completion; operations confirmation; inventory; advisor recalculation; evidence links. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain; rebase migration ancestry during coordinator integration rather than creating parallel heads.
+Complete planned work into one confirmed operation. Touchpoints: planning completion; operations confirmation; inventory; advisor recalculation; evidence links. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain. Implementation workers propose schema changes; only the designated coordinator authors/serializes revision files. During access tickets 01–03, the access chat coordinator owns revisions exclusively; other chats request schema changes from the integration coordinator.
 
 ## Blocked by
 
+- [06](./06-recommendation-review.md)
 - [08](./08-resource-scheduling.md)
 - [10](./10-broader-capture.md)
 

@@ -12,7 +12,7 @@ blocked_by: ["01"]
 
 ## Outcome and scope
 
-Local identities, farm memberships and role enforcement. Touchpoints: core identity models/session/login/CLI; scoped repositories and farm switcher; web route guards; single Alembic migration. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain; rebase migration ancestry during coordinator integration rather than creating parallel heads.
+Local identities, farm memberships and role enforcement. Touchpoints: core identity models/session/login/CLI; scoped repositories and farm switcher; web route guards; single Alembic migration. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain. Implementation workers propose schema changes; only the designated coordinator authors/serializes revision files. During access tickets 01–03, the access chat coordinator owns revisions exclusively; other chats request schema changes from the integration coordinator.
 
 ## Blocked by
 
@@ -23,6 +23,7 @@ Local identities, farm memberships and role enforcement. Touchpoints: core ident
 - [ ] CLI bootstrap creates local owner securely; no public signup, credentials or session tokens in URLs/logs.
 - [ ] Owner/advisor memberships, opaque hashed sessions, expiry/logout/revocation, rate limits and CSRF enforced.
 - [ ] Farm selectors/switcher/listing and read/write routes enforce membership; advisor cannot write operations or change installation settings.
+- [ ] Owner can assign/revoke farm memberships; revoked memberships and disabled users lose access on the next request. Never infer user ownership from legacy grant names.
 - [ ] Role checks hold across browser and programmatic routes; installation admin break-glass remains documented.
 
 ## Execution discipline
