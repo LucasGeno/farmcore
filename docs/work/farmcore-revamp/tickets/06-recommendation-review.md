@@ -12,7 +12,7 @@ blocked_by: ["05"]
 
 ## Outcome and scope
 
-Farmer requests and receives an advisor check. Touchpoints: review app routes/templates/manifest; advisor cards; notification and assistant read tools. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain; rebase migration ancestry during coordinator integration rather than creating parallel heads.
+Farmer requests and receives an advisor check. Touchpoints: review app routes/templates/manifest; advisor cards; notification and assistant read tools. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain. Implementation workers propose schema changes; only the designated coordinator authors/serializes revision files. During access tickets 01–03, the access chat coordinator owns revisions exclusively; other chats request schema changes from the integration coordinator.
 
 ## Blocked by
 

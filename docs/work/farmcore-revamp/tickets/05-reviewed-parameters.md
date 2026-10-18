@@ -12,7 +12,7 @@ blocked_by: ["02"]
 
 ## Outcome and scope
 
-Versioned agronomic parameters are reviewable. Touchpoints: advisor config/evaluation and new review app; app manifest; migration; evaluation snapshots. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain; rebase migration ancestry during coordinator integration rather than creating parallel heads.
+Versioned agronomic parameters are reviewable. Touchpoints: advisor config/evaluation and new review app; app manifest; migration; evaluation snapshots. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain. Implementation workers propose schema changes; only the designated coordinator authors/serializes revision files. During access tickets 01–03, the access chat coordinator owns revisions exclusively; other chats request schema changes from the integration coordinator.
 
 ## Blocked by
 

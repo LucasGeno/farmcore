@@ -12,7 +12,7 @@ blocked_by: []
 
 ## Outcome and scope
 
-Live weather arrives with provenance and freshness. Touchpoints: forecast sources/jobs/manifest/store; stations ingestion; data-source views; focused tests. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain; rebase migration ancestry during coordinator integration rather than creating parallel heads.
+Live weather arrives with provenance and freshness. Touchpoints: forecast sources/jobs/manifest/store; stations ingestion; data-source views; focused tests. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain. Implementation workers propose schema changes; only the designated coordinator authors/serializes revision files. During access tickets 01–03, the access chat coordinator owns revisions exclusively; other chats request schema changes from the integration coordinator.
 
 ## Blocked by
 

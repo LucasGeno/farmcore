@@ -12,7 +12,7 @@ blocked_by: []
 
 ## Outcome and scope
 
-Private farm reads are closed by default. Touchpoints: core access/startup/settings; web administrator checks; share routes; security/setup docs; HTTP tests. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain; rebase migration ancestry during coordinator integration rather than creating parallel heads.
+This first slice closes private farm reads using the existing installation operator token; it does not by itself finish member authentication or all of milestone 1. Touchpoints: core access/startup/settings; web administrator checks; share routes; security/setup docs; HTTP tests. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain. Implementation workers propose schema changes; only the designated coordinator authors/serializes revision files. During access tickets 01–03, the access chat coordinator owns revisions exclusively; other chats request schema changes from the integration coordinator.
 
 ## Blocked by
 
@@ -22,7 +22,7 @@ None — can start immediately.
 
 - [ ] Private mode rejects anonymous farm pages, exports, fragments and assistant reads; health/static/login remain usable.
 - [ ] Existing installation admin token can access farms; forged tour/farm selectors and numeric grant IDs do not bypass privacy.
-- [ ] Demo mode is explicit and limited to designated demo farms; existing demo tests use deliberate fixtures.
+- [ ] Demo mode is explicit and limited to designated demo farms; existing demo tests use deliberate fixtures. Keep separate anonymous-private, authenticated and explicit-demo clients; do not globally set test settings/client to demo.
 - [ ] Global model-call audit remains installation-admin-only; no private model payload metadata leaks.
 
 ## Execution discipline
