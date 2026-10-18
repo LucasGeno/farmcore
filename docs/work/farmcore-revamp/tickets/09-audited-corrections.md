@@ -12,7 +12,7 @@ blocked_by: ["02"]
 
 ## Outcome and scope
 
-Confirmed spray records can be corrected safely. Touchpoints: operations correction service/routes; chat confirmation; stock transactions and source receipts. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain; rebase migration ancestry during coordinator integration rather than creating parallel heads.
+Confirmed spray records can be corrected safely. Touchpoints: operations correction service/routes; chat confirmation; stock transactions and source receipts. Implement this outcome end to end; other tickets and spec non-goals are out of scope. Keep a single linear migration chain. Implementation workers propose schema changes; only the designated coordinator authors/serializes revision files. During access tickets 01–03, the access chat coordinator owns revisions exclusively; other chats request schema changes from the integration coordinator.
 
 ## Blocked by
 
