@@ -155,3 +155,19 @@ rerun and broad gate remain pending. Mixed-sensitive whole-grant denial focused 
 HTTP grant requests with an authorized control, no leaked data/audit and unchanged binding;
 raw-transcript/pending export controls2 passed27 deselected3.23s. These interim numbers do not
 replace frozen-source final evidence.
+
+Runtime checkpoint `9c6c20a` preserved171 focused passing tests before clean merge of verified
+common foundation `e89dcef248bd82f11ab5e2cddc0058cf93732599` at `ec7ca4e`. Core0004 revision
+bytes remain exactly `4a741d3db55d0af524430d2ec5b2229468b1afbcf6507526ba7a1a705b147820`.
+Actual parameter-version/review/activation and operation-correction persisted private-model
+probes added: normal scoped member/operator reads succeed, foreign rows filter, ordinary grant
+list/execute/unaudited/private-scope reads deny without audit. Recipient suite37 passed21.05s;
+full Ruff check/format clean466 files. This is focused proof, not final gate evidence.
+
+Fresh static review found one P2 blocker: grant-context HTML errors still extended the private
+application shell, allowing unauthorized widget polling on revoked/expired/unknown grant pages.
+Coordinator confirmed the renderer path; a bounded standalone error fix requires observed HTTP
+HTML RED before GREEN. Browser execution, runtime mutants and final broad gate await that fix.
+No other spec/standards findings at this review. Operator-only preview retains documented legacy
+`grant:<id>` attribution; shared operator token cannot distinguish individual operators. Member
+and recipient reads use authenticated `user:<id>` plus the actual grant/farm/purpose.

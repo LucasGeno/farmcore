@@ -640,3 +640,170 @@ def test_concurrent_owner_revocations_commit_one_event_and_deny_next_read(
         assert [(r.farm_id, r.res_id, r.actor) for r in rows] == [
             (farm_id, grant_id, f"user:{owner_id}")
         ]
+
+
+def test_actual_private_history_models_never_inherit_grant_authority(
+    session, bound_grant, owner_repo, owner, demo, other_farm
+):
+    """Public repository seam: actual private rows, exact resources and real scope contracts."""
+    from farmcore.apps.review.models import (
+        ParameterActivation,
+        ParameterReview,
+        ParameterVersion,
+    )
+    from farmcore.apps.share.service import grant_repo
+    from farmcore.core.access import ScopeDenied, ScopedRepository
+    from farmcore.core.models.corrections import OperationCorrection
+
+    scope = {
+        "farm_id": demo.farm.id,
+        "crop": "vine",
+        "region": "test-region",
+        "evaluation_year": 2024,
+    }
+    private = "private-reviewer-evidence-and-raw-inputs"
+    version = ParameterVersion(
+        **scope,
+        created_by=f"user:{owner.id}",
+        evidence=private,
+        overrides={"private": private},
+        parameter_catalog={},
+        effective_config={"inputs": private},
+        config_hash="a" * 64,
+    )
+    foreign = ParameterVersion(
+        **{**scope, "farm_id": other_farm.id},
+        created_by="operator",
+        evidence="foreign evidence",
+        overrides={},
+        parameter_catalog={},
+        effective_config={},
+        config_hash="b" * 64,
+    )
+    session.add_all([version, foreign])
+    session.flush()
+    review = ParameterReview(
+        **scope,
+        version_id=version.id,
+        reviewer=private,
+        verdict="approved",
+        note=private,
+        evidence=private,
+    )
+    session.add(review)
+    session.flush()
+    activation = ParameterActivation(
+        **scope, version_id=version.id, review_id=review.id, actor=f"user:{owner.id}"
+    )
+    correction = OperationCorrection(
+        farm_id=demo.farm.id,
+        original_log_id=42,
+        request_key="private-probe",
+        actor_key=f"user:{owner.id}",
+        actor_label=private,
+        creator_identity_id=owner.id,
+        status="pending",
+        reason=private,
+        base_fingerprint="c" * 64,
+        before_snapshot={"raw_input": private},
+        after_snapshot={"raw_input": private},
+    )
+    session.add_all([activation, correction])
+    session.commit()
+    expected = (
+        (ParameterVersion, "parameters:read", version.id),
+        (ParameterReview, "parameters:read", review.id),
+        (ParameterActivation, "parameters:read", activation.id),
+        (OperationCorrection, "corrections:read", correction.id),
+    )
+    member_repo = ScopedRepository(
+        session,
+        demo.farm.id,
+        owner_repo.grant,
+        f"user:{owner.id}",
+        "member-private-history",
+        private_member=True,
+    )
+    # Existing assigned-member/operator repositories retain explicit private-scope access.
+    for normal_repo in (member_repo, owner_repo):
+        for model, private_scope, expected_id in expected:
+            assert [row.id for row in normal_repo.list(model, scope=private_scope)] == [expected_id]
+            with pytest.raises(ScopeDenied):
+                normal_repo.list(model, scope="advice:read")
+    assert member_repo.get(ParameterVersion, foreign.id, scope="parameters:read") is None
+    last = session.scalar(select(AccessLog.id).order_by(AccessLog.id.desc()).limit(1))
+    # Even operator/member actor labels in a grant context cannot add private authority.
+    for actor in (f"user:{owner.id}", "owner"):
+        scoped = grant_repo(session, bound_grant, actor=actor)
+        bound_grant.scopes = ["advice:read"]
+        for model, private_scope, _ in expected:
+            resource = model.__tablename__
+            with pytest.raises(ScopeDenied):
+                scoped.list(model, scope="advice:read")
+            with pytest.raises(ScopeDenied):
+                scoped.execute(select(model), scope="advice:read", resource=resource)
+            with pytest.raises(ScopeDenied):
+                scoped.execute_unaudited(select(model), scope="advice:read", resource=resource)
+            bound_grant.scopes = [private_scope]
+            with pytest.raises(ScopeDenied):
+                scoped.list(model, scope=private_scope)
+            with pytest.raises(ScopeDenied):
+                scoped.execute(select(model), scope=private_scope, resource=resource)
+            bound_grant.scopes = ["advice:read"]
+    assert session.scalar(select(AccessLog.id).where(AccessLog.id > last)) is None
+
+
+@pytest.mark.parametrize("case", ["revoked", "expired", "unknown", "validation"])
+def test_grant_browser_errors_never_load_private_shell_or_echo_metadata(
+    recipient_browser, bound_grant, session, case
+):
+    bound_grant.grantee = "Private inactive recipient label"
+    bound_grant.purpose = "Private inactive purpose"
+    if case == "revoked":
+        bound_grant.revoked_at = datetime.now(UTC)
+    elif case == "expired":
+        bound_grant.valid_to = datetime.now(UTC) - timedelta(seconds=1)
+    session.commit()
+    recipient_browser.cookies.set("sunlight", "1")
+    grant_id = 2**100 if case == "unknown" else bound_grant.id
+    # A bad query on the HTML endpoint reaches ordinary FastAPI validation handling.
+    path = f"/share/as/{grant_id}/"
+    if case == "validation":
+        path = "/share/as/" + "9" * 4400 + "/"
+    response = recipient_browser.get(path, headers={"Accept": "text/html"})
+    assert response.status_code == {"unknown": 404, "validation": 422}.get(case, 403)
+    assert "text/html" in response.headers["content-type"]
+    for private_widget in (
+        "/farms/switcher",
+        "/notifications",
+        "/assistant/voice",
+        "/debug/drawer",
+        "hx-trigger",
+    ):
+        assert private_widget not in response.text
+    assert response.headers.get("cache-control") == "no-store"
+    assert "Private inactive recipient label" not in response.text
+    assert "Private inactive purpose" not in response.text
+    assert "9" * 40 not in response.text
+    assert 'href="/login"' in response.text
+    assert 'data-contrast="high"' in response.text
+
+
+def test_grant_data_errors_preserve_json_even_when_browser_accepts_html(
+    recipient_browser, bound_grant, session
+):
+    path = f"/share/as/{bound_grant.id}/register.json"
+    invalid = recipient_browser.get(
+        path, params={"season": "invalid-season"}, headers={"Accept": "text/html"}
+    )
+    default = recipient_browser.get(path, params={"season": "invalid-season"})
+    assert invalid.status_code == default.status_code == 422
+    assert invalid.json() == default.json()
+    assert invalid.headers["content-type"] == "application/json"
+    bound_grant.revoked_at = datetime.now(UTC)
+    session.commit()
+    for suffix in ("", "register.json"):
+        response = recipient_browser.get(f"/share/as/{bound_grant.id}/{suffix}")
+        assert response.status_code == 403
+        assert response.headers["content-type"] == "application/json"
+        assert "This access was revoked on" in response.json()["detail"]
