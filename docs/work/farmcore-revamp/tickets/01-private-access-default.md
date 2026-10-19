@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Private farm reads are closed by default"
 description: "Milestones 1–4: private farm reads are closed by default."
-status: in_progress
+status: done
 blocked_by: []
 ---
 
@@ -40,8 +40,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 ## Evidence
 
 Local verification passed on 2026-10-19 at `f8861ef8f4b8308ff20c177b44884a43e1638c3d`.
-PR [8](https://github.com/LucasGeno/farmcore/pull/8) stays draft while exact-head CI is queued;
-status remains in progress until that integration gate completes. This is ticket01 operator-token
+PR [8](https://github.com/LucasGeno/farmcore/pull/8) merged into the integration branch after exact-head CI and the actual post-merge gate passed; final integration evidence follows below. This is ticket01 operator-token
 privacy, not full M1/member/recipient authentication.
 
 ### Failure model and TDD
@@ -133,5 +132,13 @@ tests passed before exit); parent restored only the existing dev DB and the fina
 No source skip/xfail or relaxed security assertion was added.
 
 Member sessions/CSRF and recipient-bound grants remain02/03. Shared assistant capture remains
-installation-admin-only. No production deployment or migration was performed. Exact-head
-GitHub CI remains a separate pending merge gate, never inferred from local evidence.
+installation-admin-only. No production deployment or migration was performed. Exact-head GitHub CI was verified separately from local evidence; see the completed integration gate below.
+
+
+### Completed integration gate — 2026-10-19
+
+Frozen head `cef01d70773377a52ddaa14b51ea300934a9fccf`: hosted [CI39281467499](https://github.com/LucasGeno/farmcore/actions/runs/39281467499) completed successfully for Python, Node and Docker. PR8 merged normally into `codex/farmcore-revamp` at `546b077d76bb8d28311c934ed7b852e7f407cfc5` (16:32:32UTC); no main merge or deployment.
+
+Actual-tip tier2 integration gate, real pre-merge base `f2630fa`, same focused directories and seed19012026: **1404 passed,3 skipped,58 deselected in268.45s**, changed coverage100%, Python lint and secrets clean. Dependency audit skipped because this merge does not change dependencies; the preceding combined gate audited the composed dependency set. Types unconfigured, no repository smoke convention, tier2 mutation skipped; feature tier3 manual mutations and real HTTP smoke remain separate evidence above. Ordered lifecycle **4 passed in1.88s**; Node **30 passed,0 skipped**; Alembic one `inventory_0001` head. Reports: `/tmp/farmcore-post-private-gate.json`, `/tmp/farmcore-post-private-ordered.log`, `/tmp/farmcore-post-private-node.log`.
+
+Ticket01 is complete. Ticket02 still owns member identity and the public sign-in/logout browser defect recorded in12; no full M1 or aggregate browser completion claim.

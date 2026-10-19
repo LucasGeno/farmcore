@@ -31,10 +31,10 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 
 ## Verification
 
-- [ ] `uv run pytest tests/apps/forecast tests/apps/stations tests/apps/advisor -m "not data"` — focused relevant regression passes. Adapt test directories only when real repo names differ; record exact commands.
-- [ ] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
-- [ ] `uv run alembic heads` — one head after integration.
-- [ ] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
+- [x] `uv run pytest tests/apps/forecast tests/apps/stations tests/apps/advisor -m "not data"` — focused relevant regression passes. Adapt test directories only when real repo names differ; record exact commands.
+- [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
+- [x] `uv run alembic heads` — one head after integration.
+- [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
 - [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
@@ -84,3 +84,16 @@ Total-deadline integration finding: independent real-loopback probe established 
 Fresh deadline-fix evidence: **139 forecast tests passed in 13.29s**; **46 weather/property contracts passed in 4.50s**, including 30 generated examples; real delayed-header/drip cases **2 passed in 1.90s**. Ruff check/format pass. Independent post-deadline QA and final feature gate remain pending. Earlier 42/44-test, mutation, coverage and smoke numbers refer to pre-deadline production snapshots and are not final evidence for this fix.
 
 Recovery: the retained final gate log was empty and no pytest process survived; therefore no completed gate was recovered. Subsequent attempt exited **3** because dev PostGIS was unavailable (**5 passed, 268 deselected, 3.08s**); this is environment failure, not product failure or pass. Parent restored the existing local dev database. Final verification will record selected directories/seed and run four writer-before-reader lifecycle cases separately with `--randomly-dont-reorganize`. Runtime randomization tool installed with `uv pip install pytest-randomly==5.0.0`; no test imports this optional tool.
+
+
+### Final forecast slice and integration evidence — 2026-10-19
+
+The following supersedes pending/pre-deadline diagnostics above for the integrated forecast slice. Frozen `c6762c8a498f4be4bcff66ee85c1b0a331403212` adds a total async fetch deadline and bounded DNS admission (two lazy daemon workers, two outstanding permits held until native completion). A timed-out DNS lookup can linger within that fixed bound; canceled/closed-loop work cannot issue late HTTP or retain the job lock. Parent independently passed five public-job liveness probes in3.59s and cleared the blocking review.
+
+Final feature tier3, real base3b7cca7, forecast/stations/advisor/assistant/notifications non-data selection, seed2688013886: **711 passed,3 skipped,136 deselected in251.55s**, changed coverage100%, Ruff447 formatted. Seven isolated manual mutants were all killed (future issue, missing rain, content deduplication, stream byte cap, timestamp isolation, total deadline, DNS admission); original source hashes unchanged. Ordered lifecycle4passed1.96s; real migrated-DB/controlled-provider smoke `forecast.fetch_live ok=True`,20ms, HTTP200 with fetched/unknown-issue labels. Feature environment skipped unavailable dependency audit/types/mutation tool; no skip is a pass. Report `/tmp/farmcore-weather-feature-final-gauntlet.log`, mutants `/tmp/farmcore-weather-reviewed-mutations.json`, smoke `/tmp/farmcore-weather-reviewed-smoke.log`.
+
+Exact-head hosted [CI39281777500](https://github.com/LucasGeno/farmcore/actions/runs/39281777500) completed successfully; authenticated completed logs verify checkout of the frozen PR merge and Python **2702 passed,5 skipped,268 deselected in321.11s**, lint, dependency audit, Node and Docker. Stale queued API/job metadata did not override the completed run/logs. No cancellation succeeded and no CI setting was changed. PR7 merged normally into integration at `f2630fa4785687b90c862bc0903225f0c92c561a` (16:24:17UTC).
+
+Actual-tip tier2 at f2630fa, real pre-merge base9cdf1bc, same selected directories/seed: **711 passed,3 skipped,136 deselected in273.62s**, changed coverage100%, lint/secrets/dependency audit clean (local package unavailable on PyPI), unconfigured types/smoke and tier2 mutation skipped. Report `/tmp/farmcore-post-weather-gate.json`. Single `inventory_0001` migration head, no weather migration.
+
+Forecast slice integrated; ticket04 remains in progress until ticket05's historical-observation missingness guard completes the final acceptance criterion. No full M1 or deployment claim.
