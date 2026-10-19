@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Private farm reads are closed by default"
 description: "Milestones 1–4: private farm reads are closed by default."
-status: approved
+status: in_progress
 blocked_by: []
 ---
 

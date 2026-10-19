@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Live weather arrives with provenance and freshness"
 description: "Milestones 1–4: live weather arrives with provenance and freshness."
-status: approved
+status: in_progress
 blocked_by: []
 ---
 
