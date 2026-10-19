@@ -83,8 +83,9 @@ requests remain available for trusted scripts. Never put credentials or tokens i
 - Serve over HTTPS only (the admin cookie is `Secure`) behind a reverse proxy. Keep the app
   bound to `127.0.0.1` (the compose default) and set `FORWARDED_ALLOW_IPS` to the proxy's
   address so client addresses are correct.
-- Keep PostgreSQL off the network: the compose file publishes no database port. Use a long
-  random `POSTGRES_PASSWORD`.
+- Keep PostgreSQL off the network: the compose file publishes no database port. Use long,
+  different random `POSTGRES_PASSWORD` (the owner: only `migrate` and `backup` get it) and
+  `RUNTIME_DATABASE_PASSWORD` (the DML-only role the app and bot use).
 - Limit request size, rate and timeouts at the proxy. ISOXML parsing has its own limits, but
   multipart parsing and speech transcription use CPU and memory before application checks.
 - Telegram: keep `TELEGRAM_ALLOWED_USER_IDS` set (empty means nobody); run one bot per token.

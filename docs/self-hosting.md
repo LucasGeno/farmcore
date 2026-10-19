@@ -10,19 +10,32 @@
 | `bot` | Telegram long-polling bot; only with `--profile telegram`; also waits for `migrate` |
 | `backup` | Daily `pg_dump` into the `backups` volume, checked with `pg_restore --list`, kept 7 days |
 
-The database has two roles. `farmcore` (password `POSTGRES_PASSWORD`) owns the database, the
-schema and the PostGIS extension; only `migrate` and `backup` hold it. `farmcore_app`
-(password `RUNTIME_DATABASE_PASSWORD`) is what the app, the bot and `docker compose exec app
-farmcore ...` use: it reads and writes rows and nothing else. It cannot create databases,
-roles, extensions, schemas, tables or temporary tables, alter or drop tables, or write
-`alembic_version`; it can connect to this installation's database only.
+The database has two roles. `farmcore` (password `POSTGRES_PASSWORD`) is the bootstrap
+superuser of this installation's PostgreSQL server (the image's `POSTGRES_USER`); it owns the
+`farmcore` database, its schema and the PostGIS extension. Only `migrate` and `backup` hold its
+password. `farmcore_app` (password `RUNTIME_DATABASE_PASSWORD`) is what the app, the bot and
+`docker compose exec app farmcore ...` use: it reads and writes rows and nothing else. It
+cannot create databases, roles, extensions, schemas, tables or temporary tables, alter or drop
+tables, write `alembic_version`, or become another role. It can connect to the `farmcore`
+database only: `migrate` also revokes the default `CONNECT` and `TEMPORARY` rights of every
+role on the server's `postgres`, `template1` and `template_postgis` databases. One right
+PostgreSQL gives every role and cannot take away: creating large objects (`lo_create`).
+FarmCore uses none; the runtime role could store data that way, inside this installation's
+database only, which it can already do in rows.
 
 `migrate` upgrades the schema to head, gives the installation its identity on first run, and
-creates `farmcore_app` (or resets its password and grants) every time. The identity,
-`installation_id`, is a random UUID the server generates once; nobody chooses it. It is stored
-as a setting of the database (not a table, so no schema change), survives restarts and
-upgrades, and is reported by `/health`. A copy or restore of the database gets a new one at the
-next `migrate`. It names the installation, never a farm: one installation holds many farms.
+creates `farmcore_app` every time or resets it: password, attributes, grants, role memberships
+and role settings. It refuses to run as any role other than the database owner, so
+`docker compose exec app farmcore migrate` (the runtime role) fails with an explanation; use
+`docker compose run --rm migrate`. The password reaches PostgreSQL only as a SCRAM verifier.
+
+The identity, `installation_id`, is a random UUID the server generates once; nobody chooses
+it. It is stored as a setting of the database (not a table, so no schema change), survives
+restarts and upgrades, and is reported by `/health`. It names the installation, never a farm:
+one installation holds many farms. Whatever carries database settings keeps it: a copy of the
+`pgdata` volume, `pg_dumpall`, or `pg_dump --create` restored with `pg_restore --create`.
+Whatever does not gets a new one at the next `migrate`: `CREATE DATABASE ... TEMPLATE`, or a
+plain `pg_dump` restored into a new database (the procedure under "Backups and restore").
 
 Read [SECURITY.md](../SECURITY.md) before exposing an installation to a network.
 
@@ -62,7 +75,8 @@ docker compose exec app farmcore farms list
 docker compose exec app farmcore users create farmer --farm-id 1   # see below
 docker compose exec app farmcore apps                               # optional apps and state
 docker compose exec app farmcore apps --uninstall assistant --uninstall kpi
-docker compose restart app bot                                     # app switches apply at start
+docker compose restart app                 # app switches apply at start
+docker compose --profile telegram restart bot  # if the bot runs
 ```
 
 `farmcore apps` refuses to switch off a required app or an app another installed app needs, as
@@ -79,8 +93,10 @@ the `/apps` page does. Everything else is environment, read at start (`.env`, se
 
 Nothing in an installation calls a hosting service, a subscription endpoint or an AI provider
 unless you configure a connector: with the defaults (`EXTRACTOR=regex`, no Telegram, replay
-clock) it runs with no outbound network at all. Live weather (`CLOCK_MODE=live`) fetches
-public forecasts.
+clock) the server runs with no outbound network at all. Live weather (`CLOCK_MODE=live`)
+fetches public forecasts. The browser still loads map tiles itself, from `data.geopf.fr` (IGN
+aerial imagery) and `tile.openstreetmap.org`: without them the map shows parcels on a blank
+background.
 
 Optional demo data (the open-data Saint-Émilion estate, replaying 2024), never loaded unless
 you run:
@@ -196,6 +212,9 @@ git pull
 docker compose up -d --build     # `migrate` runs once; app and bot start after it
 ```
 
+With `FARMCORE_IMAGE` set, do not `--build`: tag the new release and point `FARMCORE_IMAGE` at
+it (see "Running several installations"), then `docker compose up -d`.
+
 Take a backup first. Migrations form one linear chain and run forward only.
 
 From a release whose compose file had `name: farmcore` (app and bot connected as the owner and
@@ -215,8 +234,8 @@ Nothing is shared between projects: not the containers, network, database, roles
 volumes (database, Whisper cache, backups), image tag or cookies.
 
 ```sh
-cp .env.example farm-a.env    # own POSTGRES_PASSWORD, RUNTIME_DATABASE_PASSWORD, ADMIN_TOKEN
-cp .env.example farm-b.env    # ... and its own FARMCORE_PORT, e.g. 8001
+cp .env.example farm-a.env    # own POSTGRES_PASSWORD, RUNTIME_DATABASE_PASSWORD, ADMIN_TOKEN,
+cp .env.example farm-b.env    # PUBLIC_BASE_URL and FARMCORE_PORT (e.g. 8001); *.env is ignored
 docker compose -p farm-a --env-file farm-a.env up -d --build
 docker compose -p farm-b --env-file farm-b.env up -d --build
 curl -fsS http://127.0.0.1:8000/health    # two different installation_id values
@@ -224,10 +243,24 @@ curl -fsS http://127.0.0.1:8001/health
 ```
 
 Always pass both `-p` and `--env-file` (or set `COMPOSE_PROJECT_NAME` inside each env file):
-without `--env-file`, Compose reads `./.env`, which belongs to one installation only. To run
-the same release everywhere, build or pull it once and set `FARMCORE_IMAGE` to its tag in every
-env file; otherwise each project builds `farmcore-<project>:local`, and rebuilding one project
-never changes another. With `BACKUP_DIR` set, give each installation its own directory.
+without `--env-file`, Compose reads `./.env`, which belongs to one installation only. Each
+installation needs its own `PUBLIC_BASE_URL` (links in bot messages and exports point there).
+With `BACKUP_DIR` set, give each installation its own directory.
+
+Without `FARMCORE_IMAGE`, each project builds and runs its own `farmcore-<project>:local`, and
+rebuilding one never changes another. To run one release everywhere instead, build (or pull)
+and tag it once, then name it in every env file:
+
+```sh
+docker build -t farmcore:0.2.0 .           # once per release, from that release's checkout
+echo FARMCORE_IMAGE=farmcore:0.2.0 >> farm-a.env
+docker compose -p farm-a --env-file farm-a.env up -d    # no --build
+```
+
+Never run `up --build` while `FARMCORE_IMAGE` is set: Compose would rebuild from the current
+checkout and retag the shared release under every installation that uses it. Upgrade by
+tagging a new release (`farmcore:0.3.0`) and changing `FARMCORE_IMAGE` one installation at a
+time.
 
 What keeps them apart:
 
@@ -235,11 +268,12 @@ What keeps them apart:
   published port; a project's app cannot even resolve another project's `db`. Its runtime role
   can open only its own database and change rows only (see above).
 - **Cookies.** Browsers share cookies between ports of one host, so every cookie name carries
-  the installation (`fc-<first 12 hex of installation_id>-<name>`) and an installation ignores
-  cookies that are not its own. Signing in to one never signs you in to, or out of, another,
-  even with the same `ADMIN_TOKEN`. Exception: the notification read-state cookie that the
-  browser writes itself keeps its plain name for now, so two installations on one host share
-  which notifications look read.
+  the installation (`fc-<first 12 hex of installation_id>-<name>`, also for the notification
+  read-state cookie the browser writes itself) and an installation ignores cookies that are
+  not its own. Signing in to one never signs you in to, or out of, another, even with the same
+  `ADMIN_TOKEN`. An app started on a database `migrate` never ran on logs a warning; on a
+  network deployment (`FARMCORE_PUBLIC=1`) it then scopes cookies to the process (a restart
+  signs everyone out) rather than share them.
 - **Failure.** Stopping, upgrading or deleting one project leaves the others running.
 
 Give each installation its own hostname behind the proxy (`farm-a.example.org`,
