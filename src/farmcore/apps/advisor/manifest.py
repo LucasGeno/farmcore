@@ -16,7 +16,7 @@ MANIFEST = Manifest(
     summary="Tells you which parcels to spray, when, and why.",
     depends=("fields", "stations", "operations"),
     # advice:read is the app's own; the others are the reads its job and card make.
-    scopes=("advice:read", "fields:read", "stations:read", "logs:read"),
+    scopes=("advice:read", "parameters:read", "fields:read", "stations:read", "logs:read"),
     jobs=(
         JobSpec(
             name=JOB_NAME,
