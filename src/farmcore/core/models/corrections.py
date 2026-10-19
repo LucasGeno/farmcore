@@ -26,6 +26,9 @@ class OperationCorrection(Base):
         CheckConstraint("status IN ('pending','confirmed','cancelled')", name="status"),
         CheckConstraint("btrim(reason) <> ''", name="reason"),
         CheckConstraint("btrim(request_key) <> ''", name="request_key"),
+        CheckConstraint("btrim(actor_label) <> ''", name="actor_label"),
+        CheckConstraint("jsonb_typeof(before_snapshot) = 'object'", name="before_snapshot"),
+        CheckConstraint("jsonb_typeof(after_snapshot) = 'object'", name="after_snapshot"),
         CheckConstraint("btrim(actor_key) <> ''", name="actor_key"),
         CheckConstraint("base_fingerprint ~ '^[0-9a-f]{64}$'", name="fingerprint"),
         CheckConstraint(
@@ -46,9 +49,9 @@ class OperationCorrection(Base):
     actor_key: Mapped[str] = mapped_column(String(128))
     actor_label: Mapped[str] = mapped_column(Text)
     creator_identity_id: Mapped[int | None] = mapped_column(
-        ForeignKey("local_identity.id", ondelete="SET NULL")
+        ForeignKey("local_identity.id", ondelete="SET NULL"), index=True
     )
-    status: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(16), server_default="pending")
     reason: Mapped[str] = mapped_column(Text)
     base_fingerprint: Mapped[str] = mapped_column(String(64))
     before_snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB)
