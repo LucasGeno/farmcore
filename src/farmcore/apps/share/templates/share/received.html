@@ -1,0 +1,18 @@
+{% extends "share/recipient_base.html" %}
+{% block title %}Shared access · farmcore{% endblock %}
+{% block shared_content %}
+<h1 class="text-xl font-semibold">Shared access</h1>
+<p class="mt-2 text-sm text-muted">Only the data an owner has explicitly shared with your account appears here. Access uses real-world validity dates.</p>
+<ul class="mt-4 grid gap-3">
+{% for grant in grants %}
+  <li class="min-w-0 rounded-lg border border-line bg-surface p-4">
+    <p class="break-words font-semibold">{{ grant.grantee }}</p>
+    <p class="mt-1 break-words text-sm">{{ grant.purpose }}</p>
+    <p class="mt-1 text-sm text-muted">{{ grant.status|capitalize }} · Until {{ grant.valid_to }}</p>
+    {% if grant.status == 'active' %}<a href="/share/as/{{ grant.id }}/" class="mt-2 flex min-h-[44px] items-center font-semibold text-brand-700 underline">Open shared data</a>{% endif %}
+  </li>
+{% else %}
+  <li class="rounded-lg border border-line bg-surface p-4 text-sm">No data has been shared with this account. Ask the farm owner to grant access to your login.</li>
+{% endfor %}
+</ul>
+{% endblock %}

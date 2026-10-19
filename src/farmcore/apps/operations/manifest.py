@@ -11,7 +11,7 @@ MANIFEST = Manifest(
     summary="Every spray you log, and the register for inspections.",
     depends=("core", "fields"),
     # fields:read: parcel names; logs:write: the ISOXML TaskData import.
-    scopes=("logs:read", "logs:write", "register:read", "fields:read"),
+    scopes=("logs:read", "logs:write", "register:read", "fields:read", "corrections:read"),
     routes=(
         "farmcore.apps.operations.routes:router",
         "farmcore.apps.operations.map_sections:router",

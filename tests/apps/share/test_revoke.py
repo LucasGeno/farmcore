@@ -69,11 +69,11 @@ def test_revoke_rejects_the_owner_grant_and_another_farms_grant(
 
 
 def test_admin_revoke_then_the_next_grantee_request_is_a_revoked_403(
-    admin, anonymous, session, owner_repo, spray
+    admin, grantee_client, session, owner_repo, spray
 ) -> None:
     spray()
-    g = _grant(owner_repo, session)
-    assert anonymous.get(f"/share/as/{g.id}/register.json").status_code == 200
+    g = _grant(owner_repo, session, recipient_identity_id=grantee_client.identity_id)
+    assert grantee_client.get(f"/share/as/{g.id}/register.json").status_code == 200
 
     resp = admin.post(f"/share/grants/{g.id}/revoke", follow_redirects=False)
 
@@ -81,13 +81,20 @@ def test_admin_revoke_then_the_next_grantee_request_is_a_revoked_403(
     page = admin.get("/share/").text
     assert f'data-grant="{g.id}" data-status="revoked"' in page
     assert f'href="/share/as/{g.id}/"' not in page
-    html = anonymous.get(f"/share/as/{g.id}/", headers={"Accept": "text/html"})
+    html = grantee_client.get(f"/share/as/{g.id}/", headers={"Accept": "text/html"})
     assert html.status_code == 403
-    assert "This access was revoked on" in html.text
-    assert "can no longer read this farm" in html.text
+    assert "Shared access is unavailable" in html.text
+    assert "Co-op adviser" not in html.text
+    assert "spray advice" not in html.text
+    json_error = grantee_client.get(f"/share/as/{g.id}/")
+    assert json_error.status_code == 403
+    assert json_error.json() == {"detail": "Shared access is unavailable."}
+    assert g.grantee not in json_error.text and g.purpose not in json_error.text
+    session.refresh(g)
+    assert g.revoked_at is not None and g.revoked_at.isoformat() not in json_error.text
     assert "BOUILLIE" not in html.text
     for path in GRANTEE_PATHS:
-        assert anonymous.get(f"/share/as/{g.id}/{path}").status_code == 403, path
+        assert grantee_client.get(f"/share/as/{g.id}/{path}").status_code == 403, path
     assert len(_revoked_events(session)) == 1
     assert admin.post(f"/share/grants/{g.id}/revoke", follow_redirects=False).status_code == 303
     assert len(_revoked_events(session)) == 1
@@ -119,12 +126,20 @@ def test_admin_revoke_of_owner_or_foreign_grant_is_404(admin, session, demo, oth
     ],
 )
 def test_expired_and_scheduled_grants_are_403_with_the_right_status(
-    admin, anonymous, session, owner_repo, over, status, words
+    admin, grantee_client, session, owner_repo, over, status, words
 ) -> None:
-    g = _grant(owner_repo, session, **over)
+    g = _grant(owner_repo, session, recipient_identity_id=grantee_client.identity_id, **over)
 
     assert f'data-grant="{g.id}" data-status="{status}"' in admin.get("/share/").text
-    html = anonymous.get(f"/share/as/{g.id}/", headers={"Accept": "text/html"})
-    assert html.status_code == 403 and words in html.text
+    html = grantee_client.get(f"/share/as/{g.id}/", headers={"Accept": "text/html"})
+    assert html.status_code == 403 and "Shared access is unavailable" in html.text
+    assert "Co-op adviser" not in html.text and "spray advice" not in html.text
+    json_error = grantee_client.get(f"/share/as/{g.id}/")
+    assert json_error.status_code == 403
+    assert json_error.json() == {"detail": "Shared access is unavailable."}
+    assert words not in json_error.text
+    assert g.grantee not in json_error.text and g.purpose not in json_error.text
+    assert g.valid_from.isoformat() not in json_error.text
+    assert g.valid_to.isoformat() not in json_error.text
     for path in GRANTEE_PATHS:
-        assert anonymous.get(f"/share/as/{g.id}/{path}").status_code == 403, path
+        assert grantee_client.get(f"/share/as/{g.id}/{path}").status_code == 403, path

@@ -56,10 +56,15 @@ SCOPES = frozenset(
         "stations:read",
         "logs:read",
         "logs:write",
+        "corrections:read",
         "advice:read",
+        "parameters:read",
         "register:read",
         "audit:read",
     }
+)
+GRANT_READ_SCOPES = frozenset(
+    {"fields:read", "stations:read", "logs:read", "register:read", "advice:read"}
 )
 ALL_SCOPES = "*"
 OWNER = "owner"
@@ -79,6 +84,7 @@ _ANY = SCOPES
 _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
 # Which scopes may read which resource (table name). Unlisted tables accept any known scope.
 RESOURCE_SCOPES: dict[str, frozenset[str]] = {
+    "operation_correction": frozenset({"corrections:read"}),
     "farm": _ANY,
     "product": _ANY,
     "source": _ANY,
@@ -91,6 +97,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "log_source": _LOG_READS,
     "event": frozenset({"logs:read", "advice:read"}),
     "advice": frozenset({"advice:read"}),
+    "parameter_version": frozenset({"parameters:read"}),
+    "parameter_review": frozenset({"parameters:read"}),
+    "parameter_activation": frozenset({"parameters:read"}),
     "llm_audit": frozenset({"audit:read"}),
     "access_log": frozenset({"audit:read"}),
     "data_grant": frozenset({"audit:read"}),
@@ -115,6 +124,7 @@ class ScopedRepository:
         purpose: str,
         *,
         private_member: bool = False,
+        grant_view: bool = False,
     ) -> None:
         self.session = session
         self.farm_id = farm_id
@@ -122,10 +132,35 @@ class ScopedRepository:
         self.actor = actor
         self.purpose = purpose
         self.private_member = private_member
+        self.grant_view = grant_view
 
     def check(self, scope: str, resource: str | None = None) -> None:
         """Raise `ScopeDenied` unless the grant allows `scope` on this farm now and `scope`
         covers `resource`."""
+        if self.grant_view and (
+            not self.grant.scopes
+            or not set(self.grant.scopes) <= GRANT_READ_SCOPES
+            or scope not in GRANT_READ_SCOPES
+            or (
+                resource is not None
+                and resource
+                not in {
+                    "farm",
+                    "parcel",
+                    "product",
+                    "source",
+                    "asset",
+                    "observation",
+                    "log",
+                    "quantity",
+                    "log_parcel",
+                    "log_source",
+                    "ext_id",
+                    "advice",
+                }
+            )
+        ):
+            raise ScopeDenied("This resource is not available through ordinary grants.")
         if scope not in SCOPES:
             raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
         if resource is not None and scope not in RESOURCE_SCOPES.get(resource, _ANY):

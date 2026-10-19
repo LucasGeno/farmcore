@@ -15,7 +15,7 @@ from farmcore.core.identity import (
     token_hash,
     wall_now,
 )
-from farmcore.core.models.identity import LocalIdentity, LocalSession
+from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 from farmcore.core.routes_demo import same_origin
 from farmcore.web import is_sunlight, templates
 
@@ -72,6 +72,16 @@ def sign_in(
         valid = password_matches(password, identity.password_hash if identity else DUMMY_HASH)
         if not valid or identity is None or identity.disabled_at is not None:
             return login_page(request, error="Sign-in failed.", status=401)
+        has_membership = (
+            session.scalar(
+                select(FarmMembership.id)
+                .where(
+                    FarmMembership.identity_id == identity.id, FarmMembership.revoked_at.is_(None)
+                )
+                .limit(1)
+            )
+            is not None
+        )
         nonce, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
         now = wall_now()
         session.add(
@@ -83,7 +93,7 @@ def sign_in(
                 expires_at=now + timedelta(hours=12),
             )
         )
-    response = RedirectResponse("/", status_code=303)
+    response = RedirectResponse("/" if has_membership else "/share/received", status_code=303)
     response.headers["Cache-Control"] = "no-store"
     response.set_cookie(
         "farmcore_session", nonce, max_age=43200, secure=True, httponly=True, samesite="strict"

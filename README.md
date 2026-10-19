@@ -118,3 +118,14 @@ and anonymous farm access is closed. Public demo access requires explicit farm d
 FarmCore is licensed under the [Apache License 2.0](LICENSE). Bundled third-party libraries,
 fonts and open data keep their own licences: see [NOTICE](NOTICE) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Recipient sharing
+
+An owner opens **Sharing** to create/revoke scoped, time-limited grants. Provision a recipient
+with `uv run farmcore users create <login>` (omit `--farm-id`); the form requires that existing
+login separately from its display label. The recipient signs in at `/login` and opens
+`/share/received`. Sending a numeric grant URL alone never opens data, including public demos.
+Legacy grants without a bound identity remain inaccessible to recipients; create an explicitly
+bound replacement. Consent expiry uses real time, independently of seasonal replay. Advice-only
+consent shares stored evaluations and safe version metadata, without station/log or private
+review provenance access.

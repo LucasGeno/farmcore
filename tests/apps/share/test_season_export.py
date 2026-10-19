@@ -106,8 +106,8 @@ def test_unknown_parcel_and_bad_season_are_refused(admin, demo):
         assert admin.get(path, params={"season": 1}).status_code == 422
 
 
-def test_parcel_ids_beyond_bigint_are_422_not_500(admin, anonymous, session, owner_repo, demo):
-    grant = _grant(owner_repo, session, "adviser_logs")
+def test_parcel_ids_beyond_bigint_are_422_not_500(admin, grantee_client, session, owner_repo, demo):
+    grant = _grant(owner_repo, session, "adviser_logs", grantee_client.identity_id)
     paths = (
         "/operations/register.csv",
         "/operations/register.json",
@@ -116,7 +116,7 @@ def test_parcel_ids_beyond_bigint_are_422_not_500(admin, anonymous, session, own
         f"/share/as/{grant.id}/ngsi-ld.json",
     )
     for path in paths:
-        client = anonymous if "/as/" in path else admin
+        client = grantee_client if "/as/" in path else admin
         for bad in (2**63, 0, -1):
             assert client.get(path, params={"parcel": bad}).status_code == 422, (path, bad)
         assert client.get(path, params={"parcel": 2**63 - 1}).status_code == 404, path
@@ -161,11 +161,12 @@ def test_season_exports_write_access_log(admin, session, two_seasons):
         assert _access_count(session) > before
 
 
-def _grant(owner_repo, session, preset):
+def _grant(owner_repo, session, preset, recipient_id):
     grant = service.create_grant(
         owner_repo,
         grantee="Co-op adviser",
         preset=preset,
+        recipient_identity_id=recipient_id,
         purpose="season export",
         valid_to=datetime.now(UTC) + timedelta(days=30),
     )
@@ -174,32 +175,32 @@ def _grant(owner_repo, session, preset):
 
 
 def test_grantee_exports_take_the_filter_and_keep_their_scope(
-    anonymous, session, owner_repo, two_seasons
+    grantee_client, session, owner_repo, two_seasons
 ):
     p1 = two_seasons.parcels[0]
-    grant = _grant(owner_repo, session, "adviser_logs")
+    grant = _grant(owner_repo, session, "adviser_logs", grantee_client.identity_id)
     params = {"season": 2023, "parcel": p1.id}
 
-    rows = anonymous.get(f"/share/as/{grant.id}/register.json", params=params).json()
-    body = anonymous.get(f"/share/as/{grant.id}/ngsi-ld.json", params=params).json()
+    rows = grantee_client.get(f"/share/as/{grant.id}/register.json", params=params).json()
+    body = grantee_client.get(f"/share/as/{grant.id}/ngsi-ld.json", params=params).json()
 
     assert [(r["parcel_alias"], r["date"]) for r in rows] == [("P1", "2023-06-01")]
     assert len(_ops(body)) == 1 and _parcel_names(body) == {"P1"}
 
-    weather = _grant(owner_repo, session, "station")
+    weather = _grant(owner_repo, session, "station", grantee_client.identity_id)
     for path in ("register.json", "ngsi-ld.json"):
-        r = anonymous.get(f"/share/as/{weather.id}/{path}", params=params)
+        r = grantee_client.get(f"/share/as/{weather.id}/{path}", params=params)
         assert r.status_code == 403
 
 
 def test_grantee_cannot_name_another_farms_parcel(
-    anonymous, session, owner_repo, two_seasons, other_farm
+    grantee_client, session, owner_repo, two_seasons, other_farm
 ):
-    grant = _grant(owner_repo, session, "adviser_logs")
+    grant = _grant(owner_repo, session, "adviser_logs", grantee_client.identity_id)
     foreign = session.scalar(select(Parcel).where(Parcel.farm_id == other_farm.id))
 
     for path in ("register.json", "ngsi-ld.json"):
-        r = anonymous.get(f"/share/as/{grant.id}/{path}", params={"parcel": foreign.id})
+        r = grantee_client.get(f"/share/as/{grant.id}/{path}", params={"parcel": foreign.id})
         assert r.status_code == 404
 
 
