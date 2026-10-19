@@ -16,7 +16,7 @@ Additive schema: a neutral catalog item and typed quantities (mass, volume, area
 
 ## Scope
 
-In: models, `pint` unit registry (`non_int_type=Decimal`) with FarmCore's allowed units, adapters, semantic golden fixtures frozen before any consumer moves. Out: consumer migration (10–12), contraction (14).
+In: models, `pint` unit registry (`non_int_type=Decimal`) with FarmCore's allowed units, adapters, semantic golden fixtures frozen before any consumer moves. Include the EU record-content fields (Reg. 2023/564, from 2026-01-01): per-country authorisation number on catalog items (FR AMM, ES registration number, IT registration number), EPPO crop code and BBCH stage on applications, dose in standard units. Product-register import modules (France's E-Phy first) attach to this catalog. Out: consumer migration (10–12), contraction (14), per-country export formats.
 
 ## Touchpoints
 
@@ -32,6 +32,7 @@ core/models/canonical.py Product/Quantity; new core/units.py; apps/advisor (exte
 - [ ] No float enters the quantity or stock path (property test). Typed quantities keep entered unit and value; incompatible dimensions and missing density/area/composition raise, never silently convert.
 - [ ] A catalog item can exist with no crop-protection extension; the extension still validates targets and type.
 - [ ] Migration is additive and upgrades a populated legacy database.
+- [ ] A catalog item can carry several country authorisation numbers; an application can carry EPPO crop code, BBCH stage and a standard-unit dose, all optional for legacy rows and never invented.
 
 ## Verification
 

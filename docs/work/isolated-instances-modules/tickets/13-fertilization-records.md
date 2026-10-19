@@ -12,7 +12,7 @@ blocked_by: ["09", "11"]
 
 ## Outcome
 
-A farmer can record what fertilizer went on which parcel this season, confirm or correct it, and see stock move exactly once. This is the first farmer-visible payoff of the neutral model.
+A farmer can record what fertilizer went on which parcel this season, confirm or correct it, and see stock move exactly once. This is the first farmer-visible payoff of the neutral model. Priority is raised: Spain's RD 1051/2022 requires every fertiliser application to be recorded from 2026-01-01.
 
 ## Scope
 

@@ -16,7 +16,7 @@ A parcel carries dated crop seasons. The owner configures the current one; earli
 
 ## Scope
 
-In: season model, owner-authorized configuration over HTTP, parcel views, assessment evidence references. Out: phenology prediction, new disease models.
+In: season model, owner-authorized configuration over HTTP, parcel views, assessment evidence references. Each season carries an EPPO crop code where known. Parcels gain optional external references with source and year (FR RPG id, ES SIGPAC code, cadastral reference), which the onboarding claim flow and per-country exports will use. Out: phenology prediction, new disease models.
 
 ## Touchpoints
 
