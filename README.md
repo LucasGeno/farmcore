@@ -81,8 +81,11 @@ uv run farmcore seed --scene B                         # the open-data demo farm
 uv run uvicorn farmcore.main:create_app --factory --reload
 ```
 
-Open <http://localhost:8000>. With `ADMIN_TOKEN` unset, every visitor is administrator: local
-use only. Step the replay clock from the header, or `uv run farmcore replay --to "2024-04-10 06:00"`.
+Open <http://localhost:8000/health> to check the local server. Farms are private by default;
+unset `ADMIN_TOKEN` grants no authority. Provision an owner with
+`uv run farmcore users create farmer --farm-id <actual-id>`, then use `/login` behind HTTPS
+(browser credentials use Secure cookies). See [self-hosting](docs/self-hosting.md) for TLS and
+operator access. Step replay locally with `uv run farmcore replay --to "2024-04-10 06:00"`.
 
 On Apple silicon, set `POSTGIS_IMAGE=imresamu/postgis:17-3.5` first (the default image is
 amd64-only).
@@ -98,9 +101,9 @@ docker compose up -d --build
 docker compose exec app farmcore seed --scene B
 ```
 
-Read [docs/self-hosting.md](docs/self-hosting.md) and [SECURITY.md](SECURITY.md) first: there
-is one administrator per installation, and anonymous visitors can read everything the
-installation holds.
+Read [docs/self-hosting.md](docs/self-hosting.md) and [SECURITY.md](SECURITY.md) first: local
+member accounts have explicit farm memberships, installation administration is separate,
+and anonymous farm access is closed. Public demo access requires explicit farm designation.
 
 ## Documentation
 

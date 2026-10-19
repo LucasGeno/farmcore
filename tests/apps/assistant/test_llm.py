@@ -364,6 +364,8 @@ def test_voice_is_admin_only_when_an_admin_token_is_set(settings, session_factor
         assert c.get("/assistant/voice").status_code == 403
         assert _post_audio(c).status_code == 403
         c.cookies.set("admin_token", "t0ken")
+        assert _post_audio(c).status_code == 403
+        c.headers["Origin"] = "http://testserver"
         assert c.get("/assistant/voice").json()["voice"] is True
         assert _post_audio(c).status_code == 200
 

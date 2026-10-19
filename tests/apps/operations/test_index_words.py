@@ -75,12 +75,20 @@ def test_bbch_note_is_plain_words_without_config_text(pages):
     assert "Growth stage" in visitor and "Bordeaux" in visitor
 
 
-def test_machine_upload_panel_is_collapsed_for_visitors_and_open_for_admins(pages):
+def test_machine_upload_panel_is_collapsed_for_visitors_and_open_for_admins(pages, demo):
     visitor, admin = pages
 
     assert "<details data-isoxml-panel" in visitor
-    assert 'action="/operations/isoxml"' not in visitor
-    assert 'action="/operations/isoxml"' in admin
+    import re
+    from urllib.parse import parse_qs, urlsplit
+
+    assert not re.search(r'<form[^>]*action="/operations/isoxml', visitor)
+    action = re.search(r'<form[^>]*action="([^"]+/isoxml[^"]*)"', admin)
+    assert action is not None
+    target = urlsplit(action.group(1))
+    assert target.path == "/operations/isoxml"
+    # A form freezes the farm whose records were rendered, even without a URL selector.
+    assert parse_qs(target.query) == {"farm": [str(demo.farm.id)]}
     assert "<details data-isoxml-panel" not in admin
 
 
