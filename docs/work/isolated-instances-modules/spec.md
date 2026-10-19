@@ -7,6 +7,8 @@ authorization: "Lucas approved isolated hosted/self-hosted instances and modular
 
 # Isolated installations and modular farm workflows
 
+**Execution status:** this task publishes the approved architecture, specification and implementation tickets. It does not start or schedule new runtime implementation; clearing a ticket dependency alone does not start execution. The existing milestones 1–4 implementation, QA and merge authorization continues unchanged.
+
 ## Problem
 FarmCore can explain and record vineyard spray decisions, but independently hosted customers need separate data, configuration and upgrades. Self-hosters need the same usable product without a hosting-service dependency. Existing manifest apps provide a useful foundation; shared product, asset and assessment restrictions still encode a particular fungicide workflow. Expanding these restrictions ad hoc would couple unrelated agricultural capabilities.
 
@@ -111,4 +113,4 @@ Isolation increases per-customer resource cost; bound allocations and measure be
 No blocker to packaging, recovery or contract work. Lucas owns later merchant-provider selection, pricing/retention policy and production hosting budget/capacity. New scientific recommendation models require a separate approved scope and appropriate input/field-validation evidence. These decisions do not authorize payment processing, actual customer provisioning or deployment now.
 
 ## Reference rationale
-Patterns, not copied implementation: [Odoo manifests](https://www.odoo.com/documentation/19.0/it/developer/reference/addons/module.html), [Frappe sites](https://docs.frappe.io/framework/user/en/basics/sites), [Press hosting manager](https://github.com/frappe/press), [farmOS model](https://farmos.org/model/), [OpenAgri deployment](https://github.com/agstack/OpenAgri-Bootstrap-Deployment). Sources inspected 2026-10-19. Retain the current stack rather than migrate frameworks; share physical infrastructure while keeping customer runtimes independent. The milestone-1–4 non-goals remain binding for that initiative; this separate subsequent spec authorizes the listed architecture/recording extensions, not new agronomic models.
+Patterns, not copied implementation: [Odoo manifests](https://www.odoo.com/documentation/19.0/it/developer/reference/addons/module.html), [Frappe sites](https://docs.frappe.io/framework/user/en/basics/sites), [Press hosting manager](https://github.com/frappe/press), [farmOS model](https://farmos.org/model/), [OpenAgri deployment](https://github.com/agstack/OpenAgri-Bootstrap-Deployment). Sources inspected 2026-10-19. Retain the current stack rather than migrate frameworks; share physical infrastructure while keeping customer runtimes independent. The milestone-1–4 non-goals remain binding for that initiative; this separate subsequent spec defines the approved architecture/recording scope without starting runtime implementation or adding new agronomic models.

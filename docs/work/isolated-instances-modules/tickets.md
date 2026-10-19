@@ -7,6 +7,8 @@ title: "Isolated installations and modules — implementation graph"
 
 **Source:** [Approved Change Spec](spec.md). Publication is not a completion or deployment claim. Read each ticket for outcome, bounded scope, exact blockers, proposed public test deliverables and verification.
 
+**Execution status:** this request publishes the architecture/specification and ticket set. New runtime implementation is outside this documentation task; publication and passing dependencies do not start or schedule execution. Existing milestones 1–4 continue under their separate implementation, QA and merge authorization.
+
 Current revamp identifiers refer to the separate [milestones 1–4 ticket set](../farmcore-revamp/spec.md). A passing draft branch or locally green slice is not a completed dependency. The integration coordinator preserves a single runtime migration chain and handles the hosting control database's separate history explicitly. No parallel coordination store.
 
 | Ticket | Blocked by |
