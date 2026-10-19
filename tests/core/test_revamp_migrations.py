@@ -242,7 +242,8 @@ def test_new_history_upgrade_and_round_trip_preserve_existing_records(scratch_db
             log = db.execute(
                 text(
                     "INSERT INTO log(farm_id,type,status,name,ts_start,props) "
-                    "VALUES (:farm,'spray','done','Original',now(),CAST(:props AS jsonb)) RETURNING id"
+                    "VALUES (:farm,'spray','done','Original',now(),CAST(:props AS jsonb)) "
+                    "RETURNING id"
                 ),
                 {"farm": f, "props": json.dumps({"kept": True})},
             ).scalar_one()
