@@ -211,3 +211,99 @@ preservation is superseded by the approved no-metadata denial requirement. A con
 with explicit metadata-absence assertions is required; no implementation edits while root reviewer
 finishes active probes. Prior browser/static evidence applies only to its frozen snapshot and is
 insufficient for completion. Final QA/gate evidence must be renewed after this correction.
+
+### Root HTTP correction and final-gate controls
+
+Root's identical independent HTTP recheck on source `8e81c8e326e013aab758fc3a710e0879c43d835535ace0c86dcce80eaefd7792`:
+16 passed24.77s; actual private mapped-model public-repository probe1 passed1.53s. No remaining
+spec/standards finding. Renewed independent browser/static review: four journeys/16 error
+navigations pass,192 recipient requests with zero private polls/errors/overflow, plus20 real
+expired/revoked JSON assertions; source unchanged and all app/DB/state/TLS cleanup confirmed.
+Report `/tmp/farmcore-sharing03-report-source-8e81c8e3.json`.
+
+Five serialized runtime mutants killed (semantic assertion failures, no fixture errors): recipient
+binding bypass, inactive-grant HTTP bypass, manifest-resource bypass, private advice-props leakage,
+and private error-shell regression. Exact production bytes and original runtime diff restored;
+source SHA above, then runtime-diff SHA `6cc1d7ffeefa008b6e519a58793567b0dfdd5998fc0d830c050b2dc1f66129b4`.
+Reports `/tmp/farmcore-access03-runtime-mutants-result.json` and corresponding per-mutant logs.
+
+First full true-base tier3:1861 passed,3 skipped,72 deselected672.06s, but overall FAIL:
+changed coverage98% (145 lines,2 missing at share/routes.py487–488 advice-denial handler) and
+scanner false positives for two synthetic private-payload marker assignments. Failed reports
+preserved `/tmp/farmcore-access03-before-test-completion-{gate.json,junit.xml,coverage.json}`.
+No production fix, threshold change or weakened assertion: test-only `b864d04` adds a real
+register200 -> advice403 consent test with private stored advice, no denied-read audit and
+unchanged grant scopes; accurately renames payload canary variables.46 recipient cases passed
+33.70s; retained JSON confirms both formerly missing lines executed; Ruff466 files clean.
+Scanner added-line candidates0; canonical self-test rejects4/4 known-bad, accepts2/2 benign and
+keeps the allowlist line-scoped2/2. Production source hash unchanged, so preceding independent
+HTTP/browser/mutant evidence remains applicable without duplicate execution.
+
+Coverage blind spot discovered and fixed by integration coordinator: package-name source omitted
+standalone dynamic Alembic files. The145-line metric therefore did NOT establish migration line
+coverage. Verified config prerequisite `90419c8eb009728169cc03178b88d4b84b20da1f` changes only
+coverage source to `src/farmcore` and its explanatory comment; merged at `c2eac05890131622b52c999f1c781d3ea6fa2194`.
+Exact default bare `--cov` now includes core0004 15/15, operations0002 18/18 and review0001 28/28
+executed lines in coordinator's migration check. Canary rejects old report's3 absent files and
+accepts the new path-based report. Config gate17 passed12.56s, secrets clean. Existing functional
+round-trip/property/manual-DDL-mutant evidence remains separate. No application/dependency changes.
+
+Full true-base tier3 rerun is pending on the committed test correction and path-based configuration.
+The same six directories, random seed3037958567 and separate ordered lifecycle checks are retained;
+no source-code changes or repeated independent QA. Preflight dependency audit (triggered by generic
+pyproject file detection) exit0/no known vulnerabilities; own editable FarmCore is not a PyPI package
+and is explicitly unaudited by that tool.
+
+### Final local evidence — tier3, actual PR base
+
+PASS at `c2eac05890131622b52c999f1c781d3ea6fa2194`, actual target merge-base
+`563b11ffffcc910a707793b7b4c8fedbcb2961aa`. Local implementation/review is verified; PR CI and
+root actual-tip integration gate remain required before status changes to done.
+
+| Acceptance criterion | Evidence |
+|---|---|
+| Explicit recipient binding; numeric URL insufficient | Real wrong-enabled-identity/anonymous/demo/legacy controls; independent16 HTTP probes;32 generated hostile-ID examples/64 denied requests with authorized control |
+| Allowed farm/resources; expiry/revoke next read | Scoped real HTTP and private mapped-model probes; constant inactive403; browser next-read denial and no unauthorized polling |
+| No ordinary audit/raw transcripts; audited reads | Stored advice whitelist and no unauthorized station query/audit; pending/transcript exclusion; mixed-sensitive whole-grant denial; persisted user/grant/farm/purpose assertions |
+| Own-farm owner browser create/revoke; foreign denial | Four actual desktop/mobile×motion journeys; valid-CSRF foreign-owner denial; real concurrent double-revoke yields one event |
+
+| Layer | Fresh result |
+|---|---|
+| Relevant ordinary regressions |1862 passed,3 skipped,72 deselected636.20s; random seed3037958567 |
+| Changed executable coverage |100%:206/206 changed lines,0 missing; includes dynamic Alembic revisions |
+| Dynamic migration coverage |core0004 15/15; operations0002 18/18; review0001 28/28, each0 missing |
+| Python lint/format |Ruff clean;466 files formatted |
+| Frontend |Node30 passed,0 skipped |
+| Ordered lifecycle |4 passed1.88s, run separately without random reorganization |
+| Schema head |Sole `review_0001` |
+| Secrets |Clean,3 explicitly synthetic allowlisted lines; gate self-test rejects4/4 known-bad |
+| Types |Skipped: no configured mypy/tsconfig |
+| Dependencies |Generic skip: dependency set unchanged; separate installed-environment pip-audit exit0/no known vulnerabilities, own unpublished editable project explicitly unaudited |
+| Real execution |Generic smoke convention absent; actual HTTPS/browser+HTTP/PostGIS execution above |
+| Mutation |Generic tool absent;5 runtime mutants killed/restored; separate migration mutants/property/round-trip evidence above |
+
+```bash
+PYTEST_ADDOPTS='tests/core tests/apps/share tests/apps/chat tests/apps/assistant tests/apps/operations tests/apps/inventory -m "not data" --ignore=tests/test_conftest_isolation.py --randomly-seed=3037958567 -ra --junitxml=/tmp/farmcore-access03-final-junit.xml --cov-report=json:/tmp/farmcore-access03-final-coverage.json' bash ~/.claude/scripts/gauntlet.sh --tier=3 --base=563b11ffffcc910a707793b7b4c8fedbcb2961aa --suite-timeout=1800
+uv run pytest tests/test_conftest_isolation.py -q --randomly-dont-reorganize
+uv run ruff check src tests
+uv run ruff format --check src tests
+node --test tests/apps/fields/test_popup.mjs tests/core/test_overflow_discovery.mjs tests/core/test_navigation.mjs
+uv run alembic heads
+```
+
+Reports `/tmp/farmcore-access03-final-{gate.json,junit.xml,coverage.json}` and auxiliary logs.
+Production source remains `8e81c8e326e013aab758fc3a710e0879c43d835535ace0c86dcce80eaefd7792`;
+source/test PR diff SHA256 `7d74f7d6552ff890733f25643aa021d3cb732a7f8e43ded0de15448073f24a89`.
+The final evidence commit changes only this ticket; production/tests/config match the passing gate.
+
+Spec/standards conformance: no remaining local findings. Failed then fixed: obsolete bearer/form
+contracts, inactive landing metadata, broad legacy scopes, private HTML error shell and private JSON
+error labels/timestamps; retained observed RED and independent rechecks above. Final gate also
+corrected an untested consent-denial branch and coverage's dynamic-migration blind spot without
+weakening guards, assertions, scanner patterns or thresholds.
+
+Known limits: three assistant cases skip because SIGPAC/InfoRiego files are absent;72 data-marked
+cases were excluded by the approved ordinary-test gate. Full data/whole-application milestone
+closure remains ticket12. Operator-only preview uses legacy shared `grant:<id>` attribution;
+individual operators cannot be distinguished by one shared operator token. No production deployment
+or database migration performed. Worktree retained for root exact-head CI/review/integration.
