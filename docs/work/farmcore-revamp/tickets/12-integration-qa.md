@@ -77,3 +77,12 @@ Before feature merges, exact frozen01/04 patches composed cleanly on aeb7ece in 
 
 
 Full available-data regression on the same composed source completed: `.venv/bin/pytest --ignore=tests/test_conftest_isolation.py --randomly-seed=19012026 -q` → **2972 passed,25 skipped in950.62s**. No ordinary case failed; all four unchanged ordered lifecycle cases passed separately above. Source/test/dependency equivalence to actual integration546b077 was verified before completion; this is strong01/04 regression evidence, not final02–12 acceptance. Log `/tmp/farmcore-combined-qa-full-data.log`.
+
+
+### Inherited quantity-order assertion — diagnosed and corrected
+
+The frozen01 baseline and02 actual-base gate both failed `tests/core/test_logs.py::test_confirm_merge_null_product_uses_measure_label_unit[rate-sulphur-kg/ha-True]` with the same copper/sulphur order difference. Root retained the02 JUnit trace; no other ordinary failure appeared in that gate (1764passed,3skipped,72deselected,312.48s). This result was not reported passing.
+
+Ranked hypotheses: unordered database reload, wrong merge values, fixture leakage. A minimal copy of the exact four-case test added only real PostgreSQL `CLUSTER quantity USING (id DESC)` before expiration/reload on a disposable database. Original assertion: **3failed,1passed in1.01s**; all added-quantity cases returned identical tuples in reversed physical order. `Log.quantities` has no `order_by`; the adjacent product-ID merge test already normalizes tuple order. This confirms physical row order, with neither a changed merge value nor fixture leakage needed.
+
+Only that existing assertion now compares sorted exact `(measure,label,unit,value)` tuples to sorted expected tuples. Multiplicity, quantity IDs/reassignment, merged target, total row count and event payload checks remain. No production, fixture, skip, selector, xfail or threshold change. Same physical-order probe **4passed in0.80s**; deliberate expected dose5→6 control still **3failed,1passed in0.86s**. Fresh independent reviewer confirmed no semantic weakening/missing check. Root tier1 verification (test-harness-only, real basef3461c5): **29passed in1.11s**, randomized seed3037958567, lint/secrets clean; types unconfigured, coverage/audit/execution/mutation skipped at tier1. Reports `/tmp/farmcore-quantity-order-{red.log,green.log,gate.json}` and `/tmp/farmcore-quantity-wrong-dose-red.log`. Subsequent02 full gate must include this correction and remain fully randomized.

@@ -431,9 +431,10 @@ def test_confirm_merge_null_product_uses_measure_label_unit(session, measure, la
     session.expire_all()
     assert merged is True
     assert log.id == target.id
-    assert [(q.measure, q.label, q.unit, q.value) for q in log.quantities] == [
-        ("rate", "copper", "kg/ha", Decimal("2")),
-    ] + ([(measure, label, unit, Decimal("5"))] if added else [])
+    expected = [("rate", "copper", "kg/ha", Decimal("2"))] + (
+        [(measure, label, unit, Decimal("5"))] if added else []
+    )
+    assert sorted((q.measure, q.label, q.unit, q.value) for q in log.quantities) == sorted(expected)
     if added:
         assert session.get(Quantity, quantity_id).log_id == target.id
     assert _count(session, Quantity) == 1 + added
