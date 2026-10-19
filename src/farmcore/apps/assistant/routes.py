@@ -95,7 +95,14 @@ def ask(
         )
     if intent.intent(q) == intent.LOG:
         return response(request, token, {"text": LOG_ELSEWHERE, "links": [], "tool": None})
-    scoped = ScopedRepository(repo.session, repo.farm_id, repo.grant, "web:assistant", "assistant")
+    scoped = ScopedRepository(
+        repo.session,
+        repo.farm_id,
+        repo.grant,
+        repo.actor if repo.private_member else "web:assistant",
+        "assistant",
+        private_member=repo.private_member,
+    )
     settings = request.app.state.settings
     ctx = ToolContext(
         scoped, get_clock(repo.session, settings).now(), ZoneInfo(settings.display_tz)
@@ -265,7 +272,14 @@ def _conversation_key(request: Request, repo: Repo, token: str, conversation: st
     # Grants/viewer mode and farm are part of the key, never shared across a scope change.
     if not conversation:
         return None
-    return (token, conversation, repo.farm_id, repo.grant.id, is_admin(request))
+    return (
+        token,
+        conversation,
+        repo.farm_id,
+        repo.grant.id,
+        is_admin(request),
+        repo.actor if repo.private_member else None,
+    )
 
 
 @router.post("/confirm", dependencies=[Depends(require_admin)])
@@ -470,7 +484,14 @@ def _transcribe(request: Request, repo: ScopedRepository, audio: UploadFile) -> 
         raise HTTPException(413, "Recording too large.")
     if not data:
         raise HTTPException(422, "Empty recording.")
-    scoped = ScopedRepository(repo.session, repo.farm_id, repo.grant, "web:assistant", "assistant")
+    scoped = ScopedRepository(
+        repo.session,
+        repo.farm_id,
+        repo.grant,
+        repo.actor if repo.private_member else "web:assistant",
+        "assistant",
+        private_member=repo.private_member,
+    )
     hints = [p.name for p in parcels(scoped)] + [
         p.name for p in products_for_farm(scoped, scope="fields:read")
     ]

@@ -86,6 +86,20 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 - Read-only preparation completed in two new authorized feature chats, each verifying actual human delegation authorization and creating own managed checkout. Parameters05→06: chat01a15519-e39c-7bd0-8919-e66b9d47e383, worktree farmcore-parameters-review. Corrections09→10: chat01a1551a-2f3e-7d01-b890-d481cf95e8e7, worktree farmcore-corrections-09-10. Both now released for speculative05/09 TDD from verifiedfrozen563b11f, keeping unmerged02 dependency explicit. No dependent merge before02exactCI and actual-tip gate;06/10 await their respective first ticket integration. No architecture-initiative runtime work.
 - Max3implementers: oneaccess03, one05, one09. Access solely authors core_0004_grant_recipients aftercore_0003 (nullable indexed data_grant.recipient_identity_id FK local_identity, no legacyname backfill); root authors/serializes subsequent05/09 revisions. Proposals received, no later revision authored yet. Shared consumer ownership explicit:05 advisor config/evaluation/about, forecast effective config, assistant readfacts, notification reviewfacts;09 assistant capture routes/chat. Existing bounded operator demo reset must preserve audit-snapshot/reset compatibility.
 
+
+## 2026-10-19 — Member authentication integrated
+
+- PR11 exact563b11f CI39290788752 Python/Node/Docker SUCCESS; normalmerge dca8477 at17:12:34UTC. Actual-tip tier2 1783passed3skipped72deselected327.86s,cov100%,lint/secretsclean. Ordered4passed2.16s,Node30pass,singlecore_0003; source/tests/dependencies match frozenreviewedsource. Ticket02 done;03/05/09 dependency hold cleared, each retains independent acceptance/QA/CI/integration gates.
+- Original public login/logout/widget browser blocker closed on identical frozen/integratedsource, fourrootjourneys clear after finalfix. Final12 latermilestone journeys remain pending; aggregatePR6 stays draft, no mainmerge/deploy.
+- Root isolated migration checkout farmcore-revamp-migrations contains only02 plus09schema-only350505b/8a77dca and05schema-only993687c(cherry-pickedb5f7c80). Root observed realAlembicmetadataRED missingfourtables1failed2.75s; authoring fixed literaloperations_0002→core_0004 and review_0001→operations_0002 with public retention/scope/append-only/retry/roundtrip tests. Awaitaccess-ownedcore_0004 verifiedfoundation; no migration shortcuts, no source copied from unfinishedfeature services.
+
+
+## 2026-10-19 — Verified shared schema foundation
+
+- Root serialized original03/05/09 schema/policy commits into frozen migration branch e89dcef; sole chain core_0004_grant_recipients→operations_0002→review_0001. No feature routes copied. Models retain audit evidence, enforce scoped parameter ancestry and database append-only parameter history.
+- Final tier3:246passed4deselected30.23s,cov100%,lint/secrets clean; ordered4passed1.89s,Node30passed,format10files. Four actual planted faults killed/restored; independent seven public-Alembic/PostGIS/repository checks clear. First wider gate caught an uncategorized review tile; unchanged HTTP RED→one-line category fix→GREEN, independently rechecked. Full evidence/known limits in existing ticket12.
+-03/05/09 workers may consume this verified shared foundation; each retains its own HTTP/concurrency/browser/QA/CI/integration gates. Foundation not merged into integration yet. AggregatePR6 stays draft; no milestone/main/deploy claim.
+
 ## 2026-10-19 — Reshaped installation and module initiative (revision 2)
 
 - Critical review of revision 1 found: hosting-platform scope (portal, control DB, provisioning state machine) ahead of any customer; a 13-deep serial graph that made fertilization wait on customer suspension; a contradiction between modules shipping migrations and a single coordinator-only chain; a hand-rolled lease/fencing queue where Postgres libraries exist; a database/file backup consistency problem that does not exist (no private bytes persist outside Postgres today: voice notes use a tempdir, ISOXML is parsed in memory).

@@ -42,6 +42,7 @@
   <script src="/static/core/fragments.js" defer></script>
   <script src="/static/core/navigation.js" defer></script>
   <link rel="stylesheet" href="/static/core/farmcore.css">
+  {% if principal_login %}<meta name="csrf-token" content="{{ csrf_token }}"><script src="/static/core/auth.js" defer></script>{% endif %}
   {% block head %}{% endblock %}
 </head>
 <body class="min-h-screen bg-ground font-sans text-[15px] text-ink antialiased">
@@ -56,11 +57,18 @@
       <div class="hidden min-w-0 text-sm text-white/80 md:block">
         {% block farm_switcher %}{% include "core/_farm_switcher.html" %}{% endblock %}
       </div>
-      <div class="fc-header-clock ml-auto">{% include "core/_replay_control.html" %}</div>
+      <div class="fc-header-clock ml-auto">{% if not principal_login or is_admin %}{% include "core/_replay_control.html" %}{% endif %}</div>
       <div data-shell-slot="notifications">{% include "core/_notifications_slot.html" ignore missing %}</div>
     </div>
   </header>
 
+  {% if principal_login %}
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-4 py-2 text-sm">
+    <span>{{ principal_login }} · {{ member_role or 'no farm selected' }}</span>
+    {% if is_farm_owner %}<a href="{{ resolved_farm_url('/farms/members') }}" class="min-h-[44px] inline-flex items-center underline">Farm members</a>{% endif %}
+    <form method="post" action="/logout"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="min-h-[44px] rounded-lg border border-line px-3 hover:bg-ground">Sign out</button></form>
+  </div>
+  {% endif %}
   <div class="lg:grid lg:grid-cols-[232px_minmax(0,1fr)]">
     {# Desktop sidebar: Your farm, Apps, then Records (collapsed unless open), then Admin. #}
     <aside class="hidden border-r border-line bg-surface lg:block">
@@ -162,7 +170,7 @@
   <div data-shell-slot="assistant">{% include "core/_assistant_slot.html" ignore missing %}</div>
 
   {# The debug drawer; renders nothing until it exists. #}
-  {% include "core/_debug_drawer.html" ignore missing %}
+  {% if not principal_login or is_admin %}{% include "core/_debug_drawer.html" ignore missing %}{% endif %}
 </body>
 </html>
 

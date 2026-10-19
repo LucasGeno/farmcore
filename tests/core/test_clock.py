@@ -150,6 +150,8 @@ def test_post_clock_step_requires_the_admin_token_when_set(settings, session_fac
         ok = c.post("/clock/step", data=form, headers={"X-Admin-Token": "tok-test"})
         assert ok.status_code == 200
         c.cookies.set("admin_token", "tok-test")
+        assert c.post("/clock/step", data=form).status_code == 403
+        c.headers["Origin"] = "http://testserver"
         assert c.post("/clock/step", data=form).status_code == 200
 
 

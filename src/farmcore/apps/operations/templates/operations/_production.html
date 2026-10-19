@@ -6,8 +6,9 @@
 <div class="flex flex-col gap-4" data-production-mode="{{ p.mode }}">
   <div class="flex flex-wrap items-center justify-between gap-2">
     <p class="flex items-center gap-2 text-[15px]">{{ icon("leaf", "h-5 w-5") }}<span class="font-semibold">{{ "Organic farm" if p.mode == "organic" else "Conventional farm" }}</span></p>
-    {% if is_admin %}
-    <form method="post" action="{{ farm_url('/operations/production') }}" class="flex items-center gap-2 text-[13px]">
+    {% if is_farm_owner %}
+    <form method="post" action="{{ resolved_farm_url('/operations/production') }}" class="flex items-center gap-2 text-[13px]">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
       <label for="production-mode" class="text-muted">Production</label>
       <select id="production-mode" name="mode" class="min-h-[44px] rounded-lg border border-line bg-surface px-3 text-[15px] text-ink">
         <option value="conventional"{% if p.mode != "organic" %} selected{% endif %}>Conventional</option>

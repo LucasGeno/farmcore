@@ -5,6 +5,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from farmcore.core.access import FarmNotSeeded, selected_farm
+from farmcore.core.identity import resolve_principal
 from farmcore.web import operator_authenticated
 
 PUBLIC_PATHS = frozenset({"/health", "/admin/sign-in", "/admin/sign-out", "/login"})
@@ -18,11 +19,47 @@ class PrivacyMiddleware:
         if scope["type"] == "http":
             request = Request(scope)
             path = request.url.path
+            request.state.principal = resolve_principal(request)
+            if request.state.principal is not None:
+                restricted = (
+                    path.rstrip("/") in {"/apps", "/apps.json", "/clock"}
+                    or path.startswith(("/demo", "/debug", "/chat", "/share"))
+                    or (
+                        path.startswith("/assistant/")
+                        and path not in {"/assistant/ask", "/assistant/voice"}
+                    )
+                )
+                if restricted and not operator_authenticated(request):
+                    await JSONResponse(
+                        {"detail": "Installation operator required."}, status_code=403
+                    )(scope, receive, send)
+                    return
+                if (
+                    not operator_authenticated(request)
+                    and path not in PUBLIC_PATHS | {"/logout"}
+                    and not path.startswith("/static/")
+                ):
+                    try:
+                        with request.app.state.session_factory() as session:
+                            farm = selected_farm(request, session, request.app.state.settings)
+                            request.state.selected_farm_id = farm.id
+                    except (HTTPException, FarmNotSeeded):
+                        await JSONResponse({"detail": "Farm access denied."}, status_code=403)(
+                            scope, receive, send
+                        )
+                        return
+                await self.app(scope, receive, send)
+                return
             if (
                 path not in PUBLIC_PATHS
                 and not path.startswith("/static/")
                 and not operator_authenticated(request)
             ):
+                if request.cookies.get("farmcore_session"):
+                    await JSONResponse({"detail": "Authentication required."}, status_code=403)(
+                        scope, receive, send
+                    )
+                    return
                 allowed = False
                 settings = request.app.state.settings
                 if settings.demo_mode and request.method in {"GET", "HEAD"}:

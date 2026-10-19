@@ -135,6 +135,6 @@ async def sign_in(request: Request, token: Annotated[str, Form(max_length=512)] 
 
 @router.post("/admin/sign-out", dependencies=[Depends(same_origin)])
 def sign_out(request: Request) -> RedirectResponse:
-    response = RedirectResponse("/", status_code=303)
+    response = RedirectResponse("/admin/sign-in", status_code=303)
     response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="strict")
     return response

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"{% if sunlight %} data-contrast="high"{% endif %}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>{% block title %}Sign in · farmcore{% endblock %}</title>
+  <link rel="stylesheet" href="/static/core/vendor/dm-sans.css">
+  <link rel="stylesheet" href="/static/core/vendor/tailwind-3.4.17.min.css">
+  <link rel="stylesheet" href="/static/core/farmcore.css">
+</head>
+<body class="min-h-screen bg-ground font-sans text-ink antialiased">
+  <main id="main" class="mx-auto w-full max-w-xl px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

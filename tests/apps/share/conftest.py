@@ -143,6 +143,7 @@ def make_client(settings, session_factory, demo) -> Iterator[Callable[..., TestC
         c.__enter__()
         if admin:
             c.cookies.set("admin_token", TOKEN)
+            c.headers["Origin"] = "http://testserver"
         clients.append(c)
         return c
 

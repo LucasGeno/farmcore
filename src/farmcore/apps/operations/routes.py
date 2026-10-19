@@ -38,16 +38,14 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
 from farmcore.apps.operations import bbch, checks, isoxml, register
-from farmcore.core.access import Repo
+from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel
 from farmcore.core.navigation import return_destination
-from farmcore.core.routes_clock import require_admin
 from farmcore.web import context_url, render
 
 router = APIRouter()
 
-ACTOR = "owner"
 MAX_UPLOAD_BYTES = 20_000_000  # a TaskData zip with TLG logs; far above a demo file
 RECENT_LOGS = 20
 TIMELINE_LIMIT = 50  # record events (log.*, …)
@@ -201,7 +199,7 @@ def _isoxml_view(result: isoxml.ImportResult) -> dict[str, Any]:
     return {"tasks": tasks, "notes": list(result.notes)}
 
 
-@router.post("/isoxml", response_class=HTMLResponse, dependencies=[Depends(require_admin)])
+@router.post("/isoxml", response_class=HTMLResponse, dependencies=[Depends(require_farm_owner)])
 def import_isoxml(
     request: Request, repo: Repo, file: Annotated[UploadFile, File()]
 ) -> HTMLResponse:
@@ -219,7 +217,7 @@ def import_isoxml(
                 repo,
                 data,
                 now=_now(request, repo),
-                actor=ACTOR,
+                actor=repo.actor,
                 tz=settings.display_tz,
                 weather_reader=getattr(request.app.state, "spray_weather_reader", None),
             )
@@ -401,7 +399,7 @@ def production_section(request: Request, repo: Repo) -> HTMLResponse:
     )
 
 
-@router.post("/production", dependencies=[Depends(require_admin)])
+@router.post("/production", dependencies=[Depends(require_farm_owner)])
 def set_production(
     request: Request, repo: Repo, mode: Annotated[str, Form()] = ""
 ) -> RedirectResponse:
