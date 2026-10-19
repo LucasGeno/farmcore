@@ -99,19 +99,21 @@ templates.env.globals["map_read_url"] = map_read_url
 templates.env.globals["resolved_farm_url"] = resolved_farm_url
 
 
-def is_admin(request: Request) -> bool:
-    """The admin check behind `require_admin`: with no `admin_token` configured everyone is admin;
-    otherwise the token must come as `X-Admin-Token` header or `admin_token` cookie."""
-    if is_tour(request):
-        return False
+def operator_authenticated(request: Request) -> bool:
+    """Operator credential authority, independent of the read-only tour preference."""
     settings = getattr(request.app.state, "settings", None)
     if not isinstance(settings, Settings):
         return False
     token = settings.admin_token
-    if token is None:
-        return True
+    if token is None or not token.get_secret_value():
+        return False
     given = request.headers.get("X-Admin-Token") or request.cookies.get("admin_token") or ""
     return secrets.compare_digest(given.encode(), token.get_secret_value().encode())
+
+
+def is_admin(request: Request) -> bool:
+    """Operator actions/UI are disabled in tour mode; farm reads retain credential authority."""
+    return not is_tour(request) and operator_authenticated(request)
 
 
 EXPERT_COOKIE = "expert"

@@ -122,12 +122,19 @@ def spray(session, demo) -> Callable[..., Log]:
 
 
 @pytest.fixture
-def make_client(settings, session_factory) -> Iterator[Callable[..., TestClient]]:
+def make_client(settings, session_factory, demo) -> Iterator[Callable[..., TestClient]]:
     """`make_client(admin=True|False)`: the real app with an admin token configured; the admin
-    client sends it as a cookie, the anonymous one sends nothing."""
+    client sends it as a cookie. Anonymous reads expose only the designated synthetic
+    demo farm; private-mode denial is covered separately in test_private_access."""
     clients: list[TestClient] = []
     app = create_app(
-        settings.model_copy(update={"admin_token": SecretStr(TOKEN)}),
+        settings.model_copy(
+            update={
+                "admin_token": SecretStr(TOKEN),
+                "demo_mode": True,
+                "demo_farm_ids": [demo.farm.id],
+            }
+        ),
         session_factory=session_factory,
     )
 

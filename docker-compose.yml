@@ -21,6 +21,8 @@ x-farmcore: &farmcore
     ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env (openssl rand -hex 24)}
     # Refuse to start without a strong ADMIN_TOKEN; turn off the interactive API docs.
     FARMCORE_PUBLIC: "1"
+    DEMO_MODE: ${DEMO_MODE:-false}
+    DEMO_FARM_IDS: "${DEMO_FARM_IDS:-[]}"
     PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
     DISPLAY_TZ: ${DISPLAY_TZ:-Europe/Paris}
     CLOCK_MODE: ${CLOCK_MODE:-replay}

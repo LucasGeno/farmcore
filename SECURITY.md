@@ -11,29 +11,33 @@ ready and credited unless you ask otherwise.
 
 ## Access model
 
-FarmCore has **one administrator per installation** and no user accounts.
+Farm reads are private by default, including on localhost and when `ADMIN_TOKEN` is unset.
+This access phase uses the installation operator token; member accounts and authenticated
+recipient grants are separate work. Do not treat a numeric grant URL as a credential.
 
 | Who | Can |
 |---|---|
-| Administrator (`ADMIN_TOKEN` holder) | Everything: replay clock and demo controls, app install/uninstall, ISOXML upload, grant create/revoke, stock changes, the model-call payloads, debug views, the web assistant's model and voice input |
-| Anonymous visitor | Read every farm page and export of the installation; no writes. Reads are recorded in the access log |
-| Tour visitor (`/tour`) | Like an anonymous visitor, and every non-GET request is refused, even with the admin token |
-| Grantee link (`/share/as/<id>/`) | Read the grant's scopes; links are not authenticated, so anyone with the URL can open them |
+| Administrator (`ADMIN_TOKEN` holder) | Farm reads and operator actions, including global model-call audit |
+| Anonymous visitor | Health, static files and sign-in; no private farm reads or writes |
+| Explicit demo visitor | Read only explicitly designated demo farms; no model-call audit |
+| Tour visitor (`/tour`) | Same farm permissions as any visitor, with all mutations refused |
+| Numeric grantee URL | No authority to read a private farm; operator access required until recipient authentication |
 
-Consequences you should plan for:
-
-- **Everything the installation holds is readable without signing in.** Do not load data you
-  are not willing to publish on a network-reachable install, or put the whole site behind your
-  own authentication (reverse-proxy basic auth, an identity-aware proxy, a VPN).
-- **Without `ADMIN_TOKEN`, every visitor is administrator.** That mode is for local
-  development only. `FARMCORE_PUBLIC=1` (always set by `docker-compose.yml`) makes the app refuse
-  to start without a token of at least 32 characters with no whitespace, and turns off the
-  interactive API docs. Generate the token with `openssl rand -hex 24`.
-- The administrator signs in at `/admin/sign-in`; the session cookie holds the token itself
+- Set `ADMIN_TOKEN` with `openssl rand -hex 24`. `FARMCORE_PUBLIC=1` requires at least
+  32 characters without whitespace and disables interactive API docs. Missing/empty tokens
+  never grant operator privileges.
+- The operator signs in at `/admin/sign-in`; its cookie contains the token itself
   (HttpOnly, Secure, SameSite=Strict, 12 h). Scripts send `X-Admin-Token`. Rotating the token
-  signs every browser out. Never put the token in a URL.
-- Sign-in failures are throttled per client in memory (per process, not distributed). Security
-  rests on the token's entropy, not on the limiter.
+  signs browsers out. Never put the token in a URL.
+- Public showcases require both `DEMO_MODE=true` and `DEMO_FARM_IDS=[1,2]` (actual IDs of
+  intentionally public farms). Seeding demo data alone does not publish it. Use a dedicated
+  showcase database; designation publishes that farm's supported read views and exports.
+  A forged farm selector or tour cookie cannot publish other farms. Missing designations
+  fail closed. Demo mode never grants write/admin access, even without an operator token.
+- `/chat/` and shared model-call audit reads remain operator-only, including metadata;
+  audit rows have no farm binding. Anonymous demo views never query the global audit.
+- Sign-in failures are throttled per client in memory (per process, not distributed).
+  Security rests on token entropy, not on the limiter.
 
 ## Deployment checklist
 
@@ -52,6 +56,7 @@ Consequences you should plan for:
 
 ## Known limits
 
-No per-user accounts or multi-tenant isolation, no authenticated grant recipients, no
+No per-user accounts or authenticated grant recipients yet; private HTTP access uses the
+installation operator token. No
 distributed rate limiting, and no independent validation of the agronomic rules. The advice is
 decision support; product labels and local regulations take precedence.

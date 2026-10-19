@@ -207,7 +207,13 @@ def test_visitors_do_not_see_the_import_file_path(settings, session_factory, ses
     station.props = {**station.props, "file": "meteofrance/demo_station_33394002_2024_2025.csv"}
     session.flush()
     app = create_app(
-        settings.model_copy(update={"admin_token": SecretStr("tok-st")}),
+        settings.model_copy(
+            update={
+                "admin_token": SecretStr("tok-st"),
+                "demo_mode": True,
+                "demo_farm_ids": [station.farm_id],
+            }
+        ),
         session_factory=session_factory,
     )
 

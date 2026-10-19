@@ -42,7 +42,13 @@ def pages(settings, session_factory, session, demo):
     clock.set_replay(session, CLOCK, settings)
     session.commit()
     app = create_app(
-        settings.model_copy(update={"admin_token": SecretStr(TOKEN)}),
+        settings.model_copy(
+            update={
+                "admin_token": SecretStr(TOKEN),
+                "demo_mode": True,
+                "demo_farm_ids": [demo.farm.id],
+            }
+        ),
         session_factory=session_factory,
     )
     with TestClient(app) as c:

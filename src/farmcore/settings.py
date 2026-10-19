@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # Set on any network-reachable deployment: the app then refuses to start without a strong
     # ADMIN_TOKEN and turns off the interactive API docs.
     farmcore_public: bool = False
+    demo_mode: bool = False
+    demo_farm_ids: list[int] = Field(default_factory=list)
     default_farm_key: str = "chateau"
     telegram_bot_token: SecretStr | None = None
     # Public @username of the bot (no "@"): the web "Log a spray" button opens t.me/<username>.

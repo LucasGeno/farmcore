@@ -74,6 +74,7 @@ def test_local_filter_shows_display_timezone(settings, session_factory) -> None:
 def test_root_redirects_to_health_without_nav(settings, session_factory) -> None:
     app = create_app(settings, manifests=[], session_factory=session_factory)
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         resp = c.get("/", follow_redirects=False)
     assert resp.status_code in (302, 307)
     assert resp.headers["location"] == "/health"
@@ -87,6 +88,7 @@ def test_root_redirects_to_first_nav_entry(settings, session_factory) -> None:
     with TestClient(
         create_app(settings, manifests=manifests, session_factory=session_factory)
     ) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         resp = c.get("/", follow_redirects=False)
     assert resp.headers["location"] == "/b/"
 
@@ -142,6 +144,7 @@ def test_create_app_discovers_a_non_default_package_only(
     app = create_app(settings, app_packages=(pkg,), session_factory=session_factory)
     assert [m.name for m in app.state.manifests] == ["core", "orchard"]
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert c.get("/static/orchard/probe.txt").text == "fake static"
         assert c.get("/", follow_redirects=False).headers["location"] == "/orchard/"
 
@@ -156,6 +159,7 @@ def test_fake_app_reusing_a_real_name_keeps_its_own_static(
     registry.discover()  # the real `fields` manifest is discovered afterwards
     app = create_app(settings, manifests=fake, session_factory=session_factory)
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert c.get("/static/fields/probe.txt").text == "fake static"
 
 

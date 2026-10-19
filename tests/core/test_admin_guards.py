@@ -12,8 +12,14 @@ TOKEN = "tok-guard"
 
 
 def _client(settings, session_factory, manifests) -> TestClient:
+    with session_factory() as session:
+        farm = ensure_default_farm(session, settings)
+        farm_id = farm.id
+        session.commit()
     app = create_app(
-        settings.model_copy(update={"admin_token": SecretStr(TOKEN)}),
+        settings.model_copy(
+            update={"admin_token": SecretStr(TOKEN), "demo_mode": True, "demo_farm_ids": [farm_id]}
+        ),
         manifests=manifests,
         session_factory=session_factory,
     )
@@ -29,13 +35,13 @@ def test_uninstall_and_install_need_the_admin_token(settings, session_factory) -
         assert ok.status_code == 200
 
 
-def test_chat_audit_page_is_sanitised_without_the_admin_token(settings, session_factory) -> None:
+def test_chat_audit_page_is_denied_without_the_admin_token(settings, session_factory) -> None:
     with session_factory() as s:
         ensure_default_farm(s, settings)
         s.commit()
     with _client(settings, session_factory, None) as c:
         anonymous = c.get("/chat/")
-        assert anonymous.status_code == 200
+        assert anonymous.status_code == 403
         assert "Full request body" not in anonymous.text
         c.cookies.set("admin_token", TOKEN)
         assert c.get("/chat/").status_code == 200

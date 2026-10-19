@@ -31,7 +31,7 @@ from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import DataGrant, LlmAudit, Observation, Parcel
 from farmcore.core.routes_clock import require_admin
 from farmcore.db import get_session
-from farmcore.web import context_url, render
+from farmcore.web import context_url, is_admin, operator_authenticated, render
 
 router = APIRouter()
 
@@ -250,6 +250,11 @@ def get_grant_repo(
     grant = session.get(DataGrant, grant_id) if in_range else None  # the authorisation lookup
     if grant is None or service.is_owner_grant(grant):
         raise HTTPException(status_code=404, detail="Not found.")
+    if (
+        not operator_authenticated(request)
+        and grant.farm_id not in request.app.state.settings.demo_farm_ids
+    ):
+        raise HTTPException(status_code=404, detail="Not found.")
     status = service.grant_status(grant, datetime.now(UTC))
     if status != "active":
         raise HTTPException(
@@ -293,8 +298,9 @@ def _observations(repo: ScopedRepository, now: datetime, limit: int) -> list[dic
     return [{"ts": o.ts.isoformat(), "variable": o.variable, "value": o.value} for o in rows]
 
 
-def _audit(repo: ScopedRepository, limit: int) -> list[dict[str, Any]]:
+def _audit(request: Request, repo: ScopedRepository, limit: int) -> list[dict[str, Any]]:
     """Model-call audit rows (`audit:read`): id, time, adapter, status — never the bodies."""
+    require_admin(request)
     stmt = select(LlmAudit).order_by(LlmAudit.id.desc()).limit(limit)
     rows = repo.execute(stmt, scope=AUDIT_SCOPE, resource="llm_audit").scalars()
     return [
@@ -315,13 +321,15 @@ PROBES: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _probe(repo: ScopedRepository, key: str, now: datetime) -> bool:
+def _probe(request: Request, repo: ScopedRepository, key: str, now: datetime) -> bool:
     """Try one read; True when the grant allows it, False on `ScopeDenied` (nothing logged)."""
     try:
         if key == "stations":
             _observations(repo, now, limit=1)
         else:
-            _audit(repo, limit=1)
+            if not is_admin(request):
+                return False
+            _audit(request, repo, limit=1)
     except ScopeDenied:
         return False
     return True
@@ -357,7 +365,7 @@ def grantee_page(request: Request, repo: GrantRepo) -> HTMLResponse:
     rows = _register(repo, now, tz)
     probes = []
     for key, title, yes in PROBES:
-        shared = _probe(repo, key, now)
+        shared = _probe(request, repo, key, now)
         probes.append(
             {
                 "key": key,
@@ -415,8 +423,8 @@ def grantee_observations(request: Request, repo: GrantRepo) -> JSONResponse:
 
 
 @router.get("/as/{grant_id}/audit.json")
-def grantee_audit(repo: GrantRepo) -> JSONResponse:
+def grantee_audit(request: Request, repo: GrantRepo) -> JSONResponse:
     try:
-        return JSONResponse(_audit(repo, PROBE_LIMIT))
+        return JSONResponse(_audit(request, repo, PROBE_LIMIT))
     except ScopeDenied as exc:
         raise _denied("audit") from exc

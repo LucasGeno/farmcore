@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from farmcore.core.access import (
     FARM_COOKIE,
     FarmNotSeeded,
+    authorize_farm_read,
     owned_farms,
     selectable_farm,
     selected_farm,
@@ -30,7 +31,7 @@ from farmcore.core.access import (
 from farmcore.core.navigation import farm_switch_parent
 from farmcore.core.urls import with_farm
 from farmcore.db import get_session
-from farmcore.web import render
+from farmcore.web import operator_authenticated, render
 
 router = APIRouter()
 
@@ -61,6 +62,8 @@ def switcher(
     request: Request, slot: str = "header", session: Session = Depends(get_session)
 ) -> HTMLResponse:
     farms = owned_farms(session)
+    if not operator_authenticated(request):
+        farms = [f for f in farms if f.id in request.app.state.settings.demo_farm_ids]
     try:
         selected_id = selected_farm(request, session, request.app.state.settings).id
     except FarmNotSeeded:
@@ -83,6 +86,7 @@ def select_farm(
     chosen = selectable_farm(session, farm)
     if chosen is None:
         raise HTTPException(status_code=404, detail="farm not found")
+    authorize_farm_read(request, chosen.id, request.app.state.settings)
     target = safe_next(next)
     if parent := farm_switch_parent(target):
         target = with_farm(parent, chosen.id)

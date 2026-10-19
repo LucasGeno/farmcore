@@ -285,12 +285,34 @@ def selected_farm(request: Request, session: Session, settings: Settings) -> Far
     """The request's farm: `?farm=<id>`, else cookie `farmcore_farm`, else the default farm.
     An id that is not a farm with a live owner grant falls back to the default farm. Only web
     routes use it (`get_repo`); jobs, chat and the bot keep `default_farm`."""
+    from farmcore.web import operator_authenticated
+
     for value in (request.query_params.get(FARM_PARAM), request.cookies.get(FARM_COOKIE)):
         if value:
+            if not operator_authenticated(request):
+                try:
+                    farm_id = int(value)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=403, detail="Authentication required."
+                    ) from None
+                authorize_farm_read(request, farm_id, settings)
             farm = selectable_farm(session, value)
             if farm is not None:
+                authorize_farm_read(request, farm.id, settings)
                 return farm
-    return default_farm(session, settings)
+    farm = default_farm(session, settings)
+    authorize_farm_read(request, farm.id, settings)
+    return farm
+
+
+def authorize_farm_read(request: Request, farm_id: int, settings: Settings) -> None:
+    from farmcore.web import operator_authenticated
+
+    if not operator_authenticated(request) and (
+        not settings.demo_mode or farm_id not in settings.demo_farm_ids
+    ):
+        raise HTTPException(status_code=403, detail="Authentication required.")
 
 
 def get_repo(
