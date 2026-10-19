@@ -93,3 +93,9 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 - 20 tickets replaced by 18 in four independent tracks (portable, background work, neutral domain, module ecosystem) plus deferred ticket 18 (hosting). Rev1→rev2 mapping is in tickets.md. The vault architecture note still describes revision 1 and needs a `/doc` update.
 - No product implementation or test pass claimed.
 - Independent read-only review of revision 2 found 15 issues; all applied. Main ones: forecast, chat and kpi depend on advisor (ticket 14 now decouples them); the real outbound effect is `chat.push_advice`, not notifications (02 and 07 retargeted); split owner/runtime DB roles; restore fences queued tasks; Decimal-only units; explicit Alembic branch shape and a build-time bundle. Links, YAML and acyclic dependencies re-checked.
+
+## 2026-10-19 — Isolated-installation planning moved to the private vault
+
+- Lucas asked that specs and tickets stop living in this public repository. Revision 2 of the isolated-installations spec and its 18 tickets were copied to the private `LucasGeno/farmcore-vault` (`work/isolated-instances-modules/`), which is now canonical. This directory keeps a pointer README only.
+- New initiatives (farmer-first experience, compliant records, weather providers, bring your own agent, irrigation, crop models) live only in the vault.
+- The milestone 1–4 revamp planning stays here until ticket 12 closes, then moves too. This entry changes no revamp ticket status, ownership or authorization.
