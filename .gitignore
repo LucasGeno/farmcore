@@ -1,6 +1,8 @@
 .DS_Store
 .env
 .env.*
+# Per-installation env files (docs/self-hosting.md): farm-a.env, ...
+*.env
 !.env.example
 .venv/
 __pycache__/
