@@ -11,7 +11,7 @@ from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.core import clock
 from farmcore.core.jobs import run_now
-from tests.apps.forecast.conftest import provider_stream
+from tests.apps.forecast.conftest import provider_client
 
 JOB = "forecast.fetch_live"
 
@@ -28,7 +28,7 @@ def test_live_job_stores_bounded_receipt_with_units_location_and_rain(
         calls.append((url, kwargs))
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(provider))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
     result = run_now(session_factory, [MANIFEST], JOB, settings)
     assert result is not None, "manifest must schedule the live ingestion job"
     assert result.ok, result.error
@@ -118,8 +118,8 @@ def test_invalid_provider_response_preserves_last_good_receipt(
     payload = live_payload
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(200, request=httpx.Request("GET", url), json=payload)
         ),
     )
@@ -218,7 +218,7 @@ def test_replay_rejects_future_issue_even_when_marked_available_and_never_fetche
     def forbidden(*args, **kwargs):
         raise AssertionError("replay must never request current weather")
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(forbidden))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(forbidden))
     assert run_now(session_factory, [MANIFEST], JOB, settings).ok
     html = client.get("/forecast/home-weather", params={"farm": farm.id}).text
     assert "Safe saved forecast" in html
@@ -233,8 +233,8 @@ def test_receipt_http_labels_fetch_time_unknown_issue_and_stale_partial_coverage
     session.commit()
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(
                 200, request=httpx.Request("GET", url), json=live_payload
             )
@@ -271,8 +271,8 @@ def test_identical_provider_retry_and_network_failure_preserve_receipt_and_repor
     session.commit()
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(
                 200, request=httpx.Request("GET", url), json=live_payload
             )
@@ -297,7 +297,7 @@ def test_identical_provider_retry_and_network_failure_preserve_receipt_and_repor
             def unavailable(*args, **kwargs):
                 raise httpx.ConnectError("provider offline")
 
-            monkeypatch.setattr(httpx, "stream", provider_stream(unavailable))
+            monkeypatch.setattr(httpx, "AsyncClient", provider_client(unavailable))
         assert run_now(session_factory, [MANIFEST], JOB, settings).ok
         session.expire_all()
         held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()
@@ -331,7 +331,7 @@ def test_bounded_schedule_prioritizes_unattempted_farms_over_expired_cache(
         calls.append(url)
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(provider))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
     assert run_now(session_factory, [MANIFEST], JOB, settings).ok
     assert len(calls) == 5
     session.expire_all()
@@ -370,8 +370,8 @@ def test_missing_required_forecast_inputs_are_unavailable_not_adverse_conditions
     session.commit()
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(
                 200, request=httpx.Request("GET", url), json=live_payload
             )
@@ -392,8 +392,8 @@ def test_data_sources_reports_receipt_freshness_and_partial_coverage(
     session.commit()
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(
                 200, request=httpx.Request("GET", url), json=live_payload
             )
@@ -433,7 +433,7 @@ def test_concurrent_job_requests_serialize_and_fetch_once(
         assert release.wait(5), "test must release the external provider"
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(provider))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
 
     def execute_second():
         second_started.set()
@@ -470,8 +470,8 @@ def test_generated_missingness_survives_receipts_without_zero_imputation(
     payload = None
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(200, request=httpx.Request("GET", url), json=payload)
         ),
     )
@@ -513,8 +513,8 @@ def test_malformed_cached_health_cannot_disable_weather_ingestion(
     session.commit()
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(
                 200, request=httpx.Request("GET", url), json=live_payload
             )
@@ -552,7 +552,7 @@ def test_malformed_second_farm_response_keeps_first_farms_committed_receipt(
     def provider(url, **kwargs):
         return httpx.Response(200, request=httpx.Request("GET", url), json=responses.pop(0))
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(provider))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
     assert run_now(session_factory, [MANIFEST], JOB, settings).ok
     session.expire_all()
     rows = session.scalars(select(ForecastRun)).all()
@@ -577,8 +577,8 @@ def test_notification_and_assistant_provenance_never_call_receipt_a_provider_iss
     session.commit()
     monkeypatch.setattr(
         httpx,
-        "stream",
-        provider_stream(
+        "AsyncClient",
+        provider_client(
             lambda url, **kw: httpx.Response(
                 200, request=httpx.Request("GET", url), json=live_payload
             )
@@ -653,7 +653,7 @@ def test_unavailable_requested_location_never_calls_provider_or_changes_prior_re
     def forbidden(*args, **kwargs):
         raise AssertionError("missing/invalid requested location must not reach provider")
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(forbidden))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(forbidden))
     assert run_now(session_factory, [MANIFEST], JOB, settings).ok
     session.expire_all()
     held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()
@@ -705,7 +705,7 @@ def test_live_job_uses_first_own_station_coordinates_and_retains_provider_grid_c
         calls.append(parse_qs(urlsplit(url).query))
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(provider))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
     assert run_now(session_factory, [MANIFEST], JOB, settings).ok
     session.expire_all()
     assert len(calls) == 1
@@ -738,7 +738,7 @@ def test_scoped_live_job_cannot_fetch_or_write_health_for_unselected_farm(
         calls.append(parse_qs(urlsplit(url).query))
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
-    monkeypatch.setattr(httpx, "stream", provider_stream(provider))
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
     targets = (farm.id,) if select_farm else ()
     fetch_live(JobContext(session, datetime.now(UTC), settings, farm_ids=targets))
     session.commit()
@@ -764,42 +764,41 @@ def test_oversized_provider_stream_stops_reading_and_closes_while_preserving_rec
     session.commit()
     chunks = []
 
-    class OversizedBody(httpx.SyncByteStream):
+    class OversizedBody(httpx.AsyncByteStream):
         closed = False
 
-        def __iter__(self):
+        async def __aiter__(self):
             for i in range(100):
                 chunks.append(i)
                 yield b" " * 65_536
 
-        def close(self):
+        async def aclose(self):
             self.closed = True
 
     oversized = OversizedBody()
     good = True
 
-    def provider(request):
+    def provider(url, **kwargs):
         if good:
             return httpx.Response(200, json=live_payload)
         return httpx.Response(200, stream=oversized)
 
-    with httpx.Client(transport=httpx.MockTransport(provider)) as external:
-        # Exercise the real HTTP client; only the external provider transport is controlled.
-        monkeypatch.setattr(httpx, "stream", external.stream)
-        assert run_now(session_factory, [MANIFEST], JOB, settings).ok
-        session.expire_all()
-        receipt = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
-        receipt_id, receipt_props = receipt.id, deepcopy(receipt.props)
-        farm.props = {
-            **farm.props,
-            "forecast_health": {
-                **farm.props["forecast_health"],
-                "last_attempt": "2020-01-01T00:00:00+00:00",
-            },
-        }
-        session.commit()
-        good = False
-        assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    # Exercise the real async HTTP client over a controlled provider transport.
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
+    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    session.expire_all()
+    receipt = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
+    receipt_id, receipt_props = receipt.id, deepcopy(receipt.props)
+    farm.props = {
+        **farm.props,
+        "forecast_health": {
+            **farm.props["forecast_health"],
+            "last_attempt": "2020-01-01T00:00:00+00:00",
+        },
+    }
+    session.commit()
+    good = False
+    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
     session.expire_all()
     assert len(chunks) <= 4, "stop transfer before buffering the entire provider response"
     assert oversized.closed, "an oversized transfer must release the HTTP connection"
@@ -807,3 +806,129 @@ def test_oversized_provider_stream_stops_reading_and_closes_while_preserving_rec
     assert [row.id for row in held] == [receipt_id]
     assert held[0].props == receipt_props
     assert farm.props["forecast_health"]["error"] == "ValueError"
+
+
+@pytest.mark.parametrize("stall", ["headers", "tiny_body"])
+def test_live_job_total_deadline_cancels_socket_and_preserves_prior_receipt(
+    session, session_factory, settings, farm, monkeypatch, live_payload, stall
+):
+    import json
+    import select as sockets
+    import socket
+    import time
+    from contextlib import contextmanager
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Event, Thread
+
+    from farmcore.apps.forecast.sources import Run
+    from farmcore.apps.forecast.store import import_runs
+    from farmcore.core.models.canonical import Farm
+
+    closed = Event()
+    body = json.dumps(live_payload).encode()
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            own = parse_qs(urlsplit(self.path).query)["latitude"] == ["44.9"]
+            try:
+                if own and stall == "headers":
+                    # No response headers. Poll the socket so cancellation is observed
+                    # independently of the caller returning a timeout-shaped result.
+                    for _ in range(30):
+                        ready, _, _ = sockets.select([self.connection], [], [], 0.03)
+                        if ready and self.connection.recv(1, socket.MSG_PEEK) == b"":
+                            closed.set()
+                            return
+                self.send_response(200)
+                self.send_header("Content-Length", str(100 if own else len(body)))
+                self.end_headers()
+                if own:
+                    for _ in range(100):
+                        self.wfile.write(b" ")
+                        self.wfile.flush()
+                        time.sleep(0.03)
+                else:
+                    self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                closed.set()
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    server.daemon_threads = True
+    worker = Thread(target=server.serve_forever)
+    worker.start()
+    original_stream, original_async_client = httpx.stream, httpx.AsyncClient
+    local_url = f"http://127.0.0.1:{server.server_port}/v1/forecast"
+
+    def redirect(url):
+        return local_url + "?" + urlsplit(str(url)).query
+
+    @contextmanager
+    def local_stream(method, url, **kwargs):
+        with original_stream(method, redirect(url), **kwargs) as response:
+            yield response
+
+    class LocalTransport(httpx.AsyncBaseTransport):
+        def __init__(self):
+            self.network = httpx.AsyncHTTPTransport()
+
+        async def handle_async_request(self, request):
+            request.url = httpx.URL(redirect(request.url))
+            return await self.network.handle_async_request(request)
+
+        async def aclose(self):
+            await self.network.aclose()
+
+    try:
+        monkeypatch.setattr(httpx, "stream", local_stream)
+        monkeypatch.setattr(
+            httpx,
+            "AsyncClient",
+            lambda **kw: original_async_client(transport=LocalTransport(), trust_env=False, **kw),
+        )
+        configured = settings.model_copy(update={"forecast_fetch_timeout_seconds": 0.15})
+        now = datetime.now(UTC)
+        farm.props = {"forecast_location": {"latitude": 44.9, "longitude": -0.2}}
+        following = Farm(
+            name="Following farm",
+            props={"forecast_location": {"latitude": 45.9, "longitude": -0.2}},
+        )
+        session.add(following)
+        import_runs(
+            session,
+            farm.id,
+            [
+                Run(
+                    "prior",
+                    now - timedelta(hours=1),
+                    "Prior forecast",
+                    True,
+                    44.9,
+                    -0.2,
+                    [(now + timedelta(hours=1), "rr1_mm", 1.5)],
+                )
+            ],
+        )
+        prior = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
+        prior_id, prior_props = prior.id, dict(prior.props)
+        clock.set_live(session, configured)
+        session.commit()
+        started = time.monotonic()
+        result = run_now(session_factory, [MANIFEST], JOB, configured)
+        elapsed = time.monotonic() - started
+        assert result.ok, result.error
+        assert elapsed < 0.75, "total deadline must cancel headers and sub-chunk body reads"
+        assert closed.wait(1), "timeout must close the actual socket, not abandon a worker"
+        session.expire_all()
+        held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()
+        assert [row.id for row in held] == [prior_id]
+        assert held[0].props == prior_props
+        assert farm.props["forecast_health"]["error"] == "TimeoutError"
+        assert "last_success" in following.props["forecast_health"]
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+        assert not worker.is_alive()

@@ -3,11 +3,11 @@ forecast file (two runs, no network)."""
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from pathlib import Path
 
 import httpx
 import pytest
+from httpx import AsyncClient
 
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.seed import ensure_default_farm
@@ -27,16 +27,11 @@ def repo(session, farm) -> ScopedRepository:
     return ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "owner", "test")
 
 
-def provider_stream(provider):
-    """Adapt a controlled external response to HTTPX's real streaming transport."""
+def provider_client(provider):
+    """Construct a real async HTTP client over the controlled external transport."""
 
-    @contextmanager
-    def stream(method, url, **kwargs):
+    def create(**kwargs):
         transport = httpx.MockTransport(lambda request: provider(str(request.url), **kwargs))
-        with (
-            httpx.Client(transport=transport) as client,
-            client.stream(method, url, **kwargs) as response,
-        ):
-            yield response
+        return AsyncClient(transport=transport, **kwargs)
 
-    return stream
+    return create

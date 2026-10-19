@@ -6,6 +6,7 @@ label it as such. available_at and fetched_at are wall time after receipt, never
 an inferred model issue time. Saved as-issued sources keep their existing semantics.
 """
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -84,6 +85,21 @@ def _validated_values(doc, now):
     return values
 
 
+async def _fetch(url: str, timeout: float):
+    # A read timeout alone permits an endless drip. This deadline cancels header
+    # and body waits, then unwinds both contexts before the next farm can run.
+    async with asyncio.timeout(timeout):
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("GET", url) as response:
+                response.raise_for_status()
+                body = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=65_536):
+                    if len(body) + len(chunk) > 256_000:
+                        raise ValueError("response too large")
+                    body.extend(chunk)
+            return json.loads(body)
+
+
 def fetch_live(ctx: JobContext) -> None:
     if not isinstance(get_clock(ctx.session, ctx.settings), LiveClock):
         return
@@ -141,14 +157,7 @@ def fetch_live(ctx: JobContext) -> None:
                     "precipitation_unit": "mm",
                 }
             )
-            with httpx.stream("GET", url, timeout=10.0) as response:
-                response.raise_for_status()
-                body = bytearray()
-                for chunk in response.iter_bytes(chunk_size=65_536):
-                    if len(body) + len(chunk) > 256_000:
-                        raise ValueError("response too large")
-                    body.extend(chunk)
-            doc = json.loads(body)
+            doc = asyncio.run(_fetch(url, ctx.settings.forecast_fetch_timeout_seconds))
             received = datetime.now(UTC)
             values = _validated_values(doc, received)
             coverage = {
@@ -212,7 +221,14 @@ def fetch_live(ctx: JobContext) -> None:
                     ],
                 )
             health = {"last_attempt": attempted.isoformat(), "last_success": received.isoformat()}
-        except (httpx.HTTPError, ValueError, KeyError, TypeError, OverflowError) as exc:
+        except (
+            httpx.HTTPError,
+            ValueError,
+            KeyError,
+            TypeError,
+            OverflowError,
+            TimeoutError,
+        ) as exc:
             health = {**health, "last_attempt": attempted.isoformat(), "error": type(exc).__name__}
         farm.props = {**farm.props, "forecast_health": health}
     ctx.session.flush()

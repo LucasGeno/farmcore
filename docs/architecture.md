@@ -110,8 +110,10 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 The installed forecast app schedules `forecast.fetch_live` hourly in live clock mode.
 Each tick requests at most five farms, least recently attempted first, with a ten-second
-HTTP timeout per farm and six UTC forecast days. Successful and failed attempts share
-an hour-long database cache. Requests use the farm's `props.forecast_location`
+total HTTP deadline per farm (headers and body) and six UTC forecast days. Successful and failed attempts share
+an hour-long database cache. `forecast_fetch_timeout_seconds` configures the total
+per-farm deadline (default 10 seconds, bounded to 0.05–30); expiration cancels and closes
+the request before the next farm proceeds. Requests use the farm's `props.forecast_location`
 (`latitude`, `longitude` in degrees), or its first geolocated weather station; a farm
 without either reports an unavailable refresh. No provider credentials are needed.
 Operators should check [Open-Meteo's usage terms](https://open-meteo.com/en/terms) for their
