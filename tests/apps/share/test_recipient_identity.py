@@ -314,7 +314,7 @@ def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_p
     from farmcore.core.models.canonical import Advice, Parcel
     from tests.apps.share.synth import NOW
 
-    secret = "private-parameter-inputs-and-reviewer-notes"
+    private_marker = "private-parameter-inputs-and-reviewer-notes"
     bound_grant.scopes = ["advice:read"]
     parcel = session.scalar(select(Parcel).where(Parcel.farm_id == demo.farm.id))
     row = Advice(
@@ -336,19 +336,19 @@ def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_p
                 "scope": "farm",
                 "status": "active",
                 "accuracy_claim": True,
-                "reviewer": secret,
-                "input_snapshot": secret,
+                "reviewer": private_marker,
+                "input_snapshot": private_marker,
                 "review": {
                     "id": 8,
                     "verdict": "approved",
                     "status": "reviewed",
-                    "notes": secret,
-                    "reviewer_identity": secret,
+                    "notes": private_marker,
+                    "reviewer_identity": private_marker,
                 },
             },
-            "input_snapshot": {"weather": secret},
-            "effective_config": {"secret": secret},
-            "review_notes": secret,
+            "input_snapshot": {"weather": private_marker},
+            "effective_config": {"secret": private_marker},
+            "review_notes": private_marker,
         },
     )
     session.add(row)
@@ -368,7 +368,7 @@ def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_p
     }
     assert data["assessment_status"] == "limited"
     assert data["current_inputs_status"] == "not_authorized"
-    assert secret not in response.text
+    assert private_marker not in response.text
     assert "props" not in data and "input_snapshot" not in data and "effective_config" not in data
     reads = session.scalars(select(AccessLog).where(AccessLog.grant_id == bound_grant.id)).all()
     assert [(r.scope, r.resource) for r in reads] == [("advice:read", "advice")]
@@ -537,20 +537,26 @@ def test_ordinary_grant_exports_exclude_pending_capture_and_raw_transcripts(
 ):
     from farmcore.core.logs import RANK_VOICE, SourceInput
 
-    secret = "private-raw-transcript-never-shared"
+    private_marker = "private-raw-transcript-never-shared"
     done = spray(
-        source=SourceInput("voice", "synthetic:confirmed", {"transcript": secret}, 0.9, RANK_VOICE)
+        source=SourceInput(
+            "voice", "synthetic:confirmed", {"transcript": private_marker}, 0.9, RANK_VOICE
+        )
     )
     pending = spray(
         status="pending",
         source=SourceInput(
-            "voice", "synthetic:pending", {"transcript": secret + "-pending"}, 0.9, RANK_VOICE
+            "voice",
+            "synthetic:pending",
+            {"transcript": private_marker + "-pending"},
+            0.9,
+            RANK_VOICE,
         ),
     )
     for suffix in ("", "register.json", "ngsi-ld.json"):
         response = recipient_browser.get(f"/share/as/{bound_grant.id}/{suffix}")
         assert response.status_code == 200
-        assert secret not in response.text
+        assert private_marker not in response.text
         assert "raw_payload" not in response.text
         assert "transcript" not in response.text
     rows = recipient_browser.get(f"/share/as/{bound_grant.id}/register.json").json()
@@ -843,3 +849,35 @@ def test_inactive_grant_json_denial_is_constant_without_private_metadata(
     assert session.scalar(select(AccessLog.id).where(AccessLog.id > last)) is None
     session.refresh(bound_grant)
     assert bound_grant.recipient_identity_id is not None
+
+
+def test_active_register_consent_does_not_authorize_advice_json(
+    recipient_browser, bound_grant, session, demo, spray
+):
+    from farmcore.core.models.canonical import Advice
+    from tests.apps.share.synth import NOW
+
+    private_marker = "unshared-stored-advice-private-payload"
+    session.add(
+        Advice(
+            farm_id=demo.farm.id,
+            parcel_id=demo.parcels[0].id,
+            evaluated_at=NOW,
+            decision="wait",
+            props={"headline": private_marker, "input_snapshot": {"private": private_marker}},
+        )
+    )
+    session.commit()
+    confirmed = spray()
+    allowed = recipient_browser.get(f"/share/as/{bound_grant.id}/register.json")
+    assert allowed.status_code == 200
+    assert {row["log_id"] for row in allowed.json()} == {confirmed.id}
+    last = session.scalar(select(AccessLog.id).order_by(AccessLog.id.desc()).limit(1))
+    denied = recipient_browser.get(f"/share/as/{bound_grant.id}/advice.json")
+    assert denied.status_code == 403
+    assert denied.json() == {"detail": "Not shared: this grant does not include advice."}
+    assert private_marker not in denied.text
+    assert "input_snapshot" not in denied.text
+    assert session.scalar(select(AccessLog.id).where(AccessLog.id > last)) is None
+    session.refresh(bound_grant)
+    assert bound_grant.scopes == ["logs:read", "register:read"]
