@@ -1,6 +1,7 @@
 {% from "core/_icons.html" import icon %}
 <section data-home-forecast class="min-w-0 rounded-xl border border-line bg-surface p-3" aria-label="Forecast for the next five days">
   <h2 class="sr-only">Next days · forecast</h2>
+  {% include "forecast/_freshness.html" %}
   {% if run %}
   <ol data-weather-strip class="relative flex gap-1 overflow-x-auto pb-1">
     {% for d in days %}<li data-weather-day="{{ d.day }}" class="min-w-[3.6rem] flex-1">
@@ -15,8 +16,8 @@
   </ol>
   {% if days|rejectattr("has_data")|list %}<p class="mt-1 text-[12px] text-muted">No forecast yet for days shown as —.</p>{% endif %}
   <details class="text-[11px] leading-snug text-muted">
-    <summary class="flex min-h-[44px] cursor-pointer items-center justify-between gap-2"><span class="min-w-0">{{ run.label.split(' HRES')[0].split(' via ')[0] }} · run {{ issued }}{% if run.props.attribution %} · Open-Meteo CC BY 4.0{% endif %}</span><span class="inline-flex shrink-0 items-center gap-1 font-semibold text-brand-700">{{ icon("info", "h-4 w-4") }}<span class="sr-only">Source and notes</span></span></summary>
-    <p class="break-words">{{ run.label }} · Forecast run {{ issued }} · available {{ available }}{% if run.as_issued %} · forecast as issued{% else %} · not the forecast as it was issued{% endif %}. * partial: missing hours; missing rain is not zero. Gusts are information only.</p>
+    <summary class="flex min-h-[44px] cursor-pointer items-center justify-between gap-2"><span class="min-w-0">{{ run.label.split(' HRES')[0].split(' via ')[0] }} · {% if freshness.receipt %}fetched {{ available }}{% else %}run {{ issued }}{% endif %}{% if run.props.attribution %} · Open-Meteo CC BY 4.0{% endif %}</span><span class="inline-flex shrink-0 items-center gap-1 font-semibold text-brand-700">{{ icon("info", "h-4 w-4") }}<span class="sr-only">Source and notes</span></span></summary>
+    <p class="break-words">{{ run.label }} · {% if freshness.receipt %}Fetched {{ available }} · provider issue time unknown{% else %}Forecast run {{ issued }}{% endif %} · available {{ available }}{% if run.as_issued %} · forecast as issued{% else %} · not the forecast as it was issued{% endif %}. * partial: missing hours; missing rain is not zero. Gusts are information only.</p>
     {% if run.props.attribution %}<p class="mt-1">{{ run.props.attribution }} · <a class="underline" href="https://open-meteo.com/">Weather data by Open-Meteo.com</a> · <a class="underline" href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></p>{% endif %}
     <a class="inline-flex min-h-[44px] items-center text-sm text-brand-700 underline" href="{{ farm_url('/stations/') }}">Open weather</a>
   </details>

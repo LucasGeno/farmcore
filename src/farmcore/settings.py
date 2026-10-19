@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     test_database_url: str = Field("", repr=False)
     data_dir: Path = Path("sample-data")
     display_tz: str = "Europe/Paris"
+    # Total live forecast HTTP budget per farm, including headers and streamed body.
+    forecast_fetch_timeout_seconds: float = Field(10.0, ge=0.05, le=30.0)
     clock_mode: Literal["replay", "live"] = "replay"
     # Local time (display_tz), naive.
     replay_start: datetime = datetime(2024, 4, 1, 6, 0)

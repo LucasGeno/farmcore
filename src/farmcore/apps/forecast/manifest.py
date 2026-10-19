@@ -1,12 +1,8 @@
-"""Manifest of app `forecast`: imported weather forecasts (`farmcore forecast import`) and the
-graded spray window on Today and the parcel advice card.
+"""Saved forecasts and bounded live receipts, ranked for spraying."""
 
-No job and no live call: forecasts reach the database only from saved files (`farmcore forecast
-import`, or this app's seed reading `DATA_DIR/open-meteo/`), each run with its run and
-availability time. Switching the app off removes the window; the advice itself never reads it.
-"""
+from datetime import timedelta
 
-from farmcore.core.manifest import Manifest, Widget
+from farmcore.core.manifest import JobSpec, Manifest, Widget
 
 MANIFEST = Manifest(
     data_sources="farmcore.apps.forecast.data_sources:summary",
@@ -17,6 +13,11 @@ MANIFEST = Manifest(
     scopes=("stations:read", "advice:read", "fields:read"),
     models=("farmcore.apps.forecast.models",),
     routes=("farmcore.apps.forecast.routes:router",),
+    jobs=(
+        JobSpec(
+            "forecast.fetch_live", "farmcore.apps.forecast.jobs:fetch_live", timedelta(hours=1)
+        ),
+    ),
     seed="farmcore.apps.forecast.seed:seed",
     widgets=(
         Widget("/forecast/home-weather", 21, label="Forecast weather"),

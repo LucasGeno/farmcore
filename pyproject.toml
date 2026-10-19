@@ -33,7 +33,11 @@ Issues = "https://github.com/LucasGeno/farmcore/issues"
 farmcore = "farmcore.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = [
+    "hypothesis>=6.170.1",
+    "pytest",
+    "ruff",
+]
 
 [build-system]
 requires = ["hatchling"]
