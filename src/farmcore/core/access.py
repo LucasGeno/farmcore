@@ -57,6 +57,7 @@ SCOPES = frozenset(
         "logs:read",
         "logs:write",
         "advice:read",
+        "parameters:read",
         "register:read",
         "audit:read",
     }
@@ -91,6 +92,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "log_source": _LOG_READS,
     "event": frozenset({"logs:read", "advice:read"}),
     "advice": frozenset({"advice:read"}),
+    "parameter_version": frozenset({"parameters:read"}),
+    "parameter_review": frozenset({"parameters:read"}),
+    "parameter_activation": frozenset({"parameters:read"}),
     "llm_audit": frozenset({"audit:read"}),
     "access_log": frozenset({"audit:read"}),
     "data_grant": frozenset({"audit:read"}),

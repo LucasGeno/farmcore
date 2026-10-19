@@ -7,6 +7,6 @@ MANIFEST = Manifest(
     version="0.1.0",
     summary="Farm-scoped agronomic parameter versions and human review history.",
     depends=("advisor",),
-    scopes=("advice:read",),
+    scopes=("advice:read", "parameters:read"),
     models=("farmcore.apps.review.models",),
 )
