@@ -56,6 +56,7 @@ SCOPES = frozenset(
         "stations:read",
         "logs:read",
         "logs:write",
+        "corrections:read",
         "advice:read",
         "parameters:read",
         "register:read",
@@ -80,6 +81,7 @@ _ANY = SCOPES
 _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
 # Which scopes may read which resource (table name). Unlisted tables accept any known scope.
 RESOURCE_SCOPES: dict[str, frozenset[str]] = {
+    "operation_correction": frozenset({"corrections:read"}),
     "farm": _ANY,
     "product": _ANY,
     "source": _ANY,
