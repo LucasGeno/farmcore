@@ -23,7 +23,14 @@ from sqlalchemy.orm import Session
 
 from farmcore.core.manifest import Manifest
 from farmcore.core.models.kernel import AppModule
-from farmcore.core.registry import CORE, INSTALLED, UNINSTALLED, active_manifests, read_states
+from farmcore.core.registry import (
+    CORE,
+    INSTALLED,
+    UNINSTALLED,
+    join_names,
+    read_states,
+    switch_refusal,
+)
 from farmcore.core.routes_clock import require_admin
 from farmcore.db import get_session
 from farmcore.web import context_url, render
@@ -64,9 +71,7 @@ def _listing(request: Request, session: Session) -> list[dict[str, Any]]:
     ]
 
 
-def _join(names: list[str]) -> str:
-    """`A`, `A and B`, `A, B and C`."""
-    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+_join = join_names
 
 
 def _status(app: dict[str, Any]) -> str:
@@ -172,40 +177,19 @@ def apps_json(request: Request, session: Session = Depends(get_session)) -> list
     return _listing(request, session)
 
 
+def _switch(request: Request, session: Session, name: str, state: str) -> Response:
+    manifest = _manifest(request, name)
+    refusal = switch_refusal(_ordered(request), _states(request, session), manifest, state)
+    if refusal is not None:
+        return _refuse(request, session, refusal.detail, **refusal.extra)
+    return _set_state(request, session, manifest, state)
+
+
 @router.post("/apps/{name}/uninstall", dependencies=[Depends(require_admin)])
 def uninstall(name: str, request: Request, session: Session = Depends(get_session)) -> Response:
-    manifest = _manifest(request, name)
-    if _required(manifest):
-        detail = f"{manifest.display_name} is always on."
-        return _refuse(request, session, detail, dependants=[])
-    states = _states(request, session)
-    dependants = [m for m in _ordered(request) if name in m.depends and states[m.name] == INSTALLED]
-    if dependants:
-        titles = [m.display_name for m in dependants]
-        this = manifest.display_name
-        if len(titles) == 1:
-            detail = f"{titles[0]} needs {this}. Switch off {titles[0]} first."
-        else:
-            detail = f"{_join(titles)} need {this}. Switch them off first."
-        return _refuse(request, session, detail, dependants=[m.name for m in dependants])
-    return _set_state(request, session, manifest, UNINSTALLED)
+    return _switch(request, session, name, UNINSTALLED)
 
 
 @router.post("/apps/{name}/install", dependencies=[Depends(require_admin)])
 def install(name: str, request: Request, session: Session = Depends(get_session)) -> Response:
-    manifest = _manifest(request, name)
-    states = _states(request, session)
-    # A dependency that will not load at the next start (uninstalled, or installed but missing
-    # its own dependency) would leave this app unloaded too.
-    loading = {m.name for m in active_manifests(_ordered(request), states)} | {CORE.name}
-    missing = [d for d in manifest.depends if d not in loading]
-    if missing:
-        by_name = {m.name: m for m in _ordered(request)}
-        titles = [by_name[d].display_name if d in by_name else d for d in missing]
-        this = manifest.display_name
-        if len(titles) == 1:
-            detail = f"{this} needs {titles[0]}. Switch on {titles[0]} first."
-        else:
-            detail = f"{this} needs {_join(titles)}. Switch them on first."
-        return _refuse(request, session, detail, uninstalled_dependencies=missing)
-    return _set_state(request, session, manifest, INSTALLED)
+    return _switch(request, session, name, INSTALLED)

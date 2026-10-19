@@ -28,8 +28,9 @@ def check_public_settings(settings: Settings) -> None:
 
 # The installation's identity is a database-level setting written once by `farmcore migrate`
 # (as the database owner): no table, so no schema migration, and a runtime role can neither set
-# nor change it (ALTER DATABASE needs the owner). Copies of the database never inherit it:
-# CREATE DATABASE ... TEMPLATE and a plain pg_dump/pg_restore do not carry database settings.
+# nor change it (ALTER DATABASE needs the owner). It travels only with database settings: a
+# copied data directory, pg_dumpall and `pg_dump --create` + `pg_restore --create` keep it;
+# CREATE DATABASE ... TEMPLATE and a plain pg_dump/pg_restore do not, so `migrate` makes a new one.
 INSTALLATION_SETTING = "farmcore.installation_id"
 
 _READ_INSTALLATION_ID = text(

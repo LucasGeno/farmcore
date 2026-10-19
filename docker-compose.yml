@@ -63,8 +63,8 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: farmcore
-      # The owner/migrator role: owns the database, the schema and the PostGIS extension.
-      # Only `migrate` and `backup` hold its password.
+      # The owner/migrator: this server's bootstrap superuser, owner of the database, the schema
+      # and the PostGIS extension. Only `migrate` and `backup` hold its password.
       POSTGRES_USER: farmcore
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     # No published port: only this project's services reach the database.
@@ -126,6 +126,10 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
     volumes:
       - ${BACKUP_DIR:-backups}:/backups
+    # The PostGIS image declares VOLUME /var/lib/postgresql/data; this container runs no server,
+    # so a tmpfs stops Compose leaving an anonymous volume behind.
+    tmpfs:
+      - /var/lib/postgresql/data
     stop_grace_period: 2m
     entrypoint: ["/bin/sh", "-c"]
     command:

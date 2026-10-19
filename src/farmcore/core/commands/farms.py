@@ -9,6 +9,7 @@ from __future__ import annotations
 import typer
 from sqlalchemy import select
 
+from farmcore.core.access import ensure_owner_grant
 from farmcore.core.models.canonical import Farm
 from farmcore.db import make_engine, make_session_factory, session_scope
 from farmcore.settings import get_settings
@@ -20,7 +21,7 @@ def register(cli: typer.Typer) -> None:
 
     @farms.command("create")
     def create(name: str) -> None:
-        """Create a farm; prints its id."""
+        """Create a farm (with its owner grant); prints its id."""
         if not name.strip():
             raise typer.BadParameter("A farm needs a name.")
         engine = make_engine(get_settings())
@@ -29,6 +30,9 @@ def register(cli: typer.Typer) -> None:
                 farm = Farm(name=name.strip())
                 session.add(farm)
                 session.flush()
+                # The owner grant makes the farm selectable (farm switcher, `?farm=`), as for
+                # the demo farm; members still need `farmcore users create --farm-id`.
+                ensure_owner_grant(session, farm)
                 farm_id = farm.id
         finally:
             engine.dispose()

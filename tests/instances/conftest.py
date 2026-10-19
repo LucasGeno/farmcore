@@ -47,6 +47,12 @@ class Server:
     port: int
     superuser: str
     password: str
+    container: str = ""
+
+    def log(self) -> str:
+        """The server log: every statement it received (`log_statement=all`)."""
+        out = subprocess.run(["docker", "logs", self.container], capture_output=True, text=True)
+        return out.stdout + out.stderr
 
     def url(self, database: str, user: str | None = None, password: str | None = None) -> str:
         return URL.create(
@@ -87,6 +93,7 @@ def pg_server() -> Iterator[Server]:
             "docker", "run", "-d", "--rm", "--name", name,
             "-e", "POSTGRES_USER=farmcore", "-e", f"POSTGRES_PASSWORD={password}",
             "-e", "POSTGRES_DB=farmcore", "-p", "127.0.0.1::5432", postgis_image(),
+            "postgres", "-c", "log_statement=all",
         ],
         check=True, capture_output=True,
     )  # fmt: skip
@@ -95,7 +102,7 @@ def pg_server() -> Iterator[Server]:
             ["docker", "port", name, "5432/tcp"], check=True, capture_output=True, text=True
         ).stdout
         port = int(out.split()[0].rsplit(":", 1)[1])
-        server = Server("127.0.0.1", port, "farmcore", password)
+        server = Server("127.0.0.1", port, "farmcore", password, name)
         _wait(server.url("farmcore"), time.monotonic() + 90)
         yield server
     finally:

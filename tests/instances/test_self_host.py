@@ -147,7 +147,7 @@ def test_optional_apps_are_switched_through_the_cli(runtime, cli):
 
     refused = cli("apps", "--uninstall", "advisor", env=env)
     assert refused.exit_code == 1
-    assert "needs advisor" in refused.output
+    assert "need Crop protection. Switch them off first." in refused.output
 
     required = cli("apps", "--uninstall", "today", env=env)
     assert required.exit_code == 1
@@ -166,6 +166,113 @@ def test_the_setup_cli_refuses_unknown_apps_and_unnamed_farms(runtime, cli):
     blank = cli("farms", "create", "   ", env=env)
     assert blank.exit_code == 2 and "A farm needs a name." in blank.output
     assert cli("farms", "list", env=env).output.strip() == "no farms"
+
+
+def test_the_cli_and_the_apps_page_refuse_the_same_switch_with_the_same_words(runtime, cli):
+    """Advisor stays installed, but Stations is off (edited in the table): Advisor will not
+    load, so switching on Review, which needs Advisor, must be refused by both."""
+    from pydantic import SecretStr
+    from sqlalchemy import create_engine, text
+
+    from farmcore.main import create_app
+
+    env = {"DATABASE_URL": runtime}
+    assert cli("apps", "--uninstall", "review", env=env).exit_code == 0
+    engine = create_engine(runtime)
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO app_module (name, version, state) VALUES ('stations', '0', "
+                "'uninstalled') ON CONFLICT (name) DO UPDATE SET state = 'uninstalled'"
+            )
+        )
+    engine.dispose()
+
+    refused = cli("apps", "--install", "review", env=env)
+    token = secrets.token_hex(24)
+    settings = Settings(_env_file=None, database_url=runtime, admin_token=SecretStr(token))
+    with TestClient(create_app(settings), headers={"X-Admin-Token": token}) as c:
+        page = c.post("/apps/review/install")
+    assert page.status_code == 409
+    assert refused.exit_code == 1
+    assert page.json()["detail"] in refused.output
+
+
+def test_switching_on_an_app_names_every_dependency_that_will_not_load(runtime, cli):
+    from sqlalchemy import create_engine, text
+
+    env = {"DATABASE_URL": runtime}
+    off = ("forecast", "chat", "kpi", "review", "advisor")
+    args = [a for name in off for a in ("--uninstall", name)]
+    assert cli("apps", *args, env=env).exit_code == 0
+    engine = create_engine(runtime)
+    with engine.begin() as conn:  # Stations off as well, by editing the table
+        conn.execute(
+            text(
+                "INSERT INTO app_module (name, version, state) VALUES ('stations', '0', "
+                "'uninstalled') ON CONFLICT (name) DO UPDATE SET state = 'uninstalled'"
+            )
+        )
+    engine.dispose()
+    refused = cli("apps", "--install", "forecast", env=env)
+    assert refused.exit_code == 1
+    assert refused.output.strip().endswith("and Crop protection. Switch them on first.")
+
+
+def test_installing_and_uninstalling_one_app_at_once_is_an_error(runtime, cli):
+    both = cli("apps", "--install", "kpi", "--uninstall", "kpi", env={"DATABASE_URL": runtime})
+    assert both.exit_code == 2 and "both" in both.output
+
+
+@pytest.fixture
+def unmigrated(pg_server, fresh_db) -> str:
+    """Schema at head, but `farmcore migrate` never ran: no installation id."""
+    from alembic import command
+
+    from farmcore.core.commands.migrate import alembic_config
+
+    url = pg_server.url(fresh_db)
+    command.upgrade(alembic_config(url), "head")
+    return url
+
+
+def _admin_cookie_names(settings: Settings) -> list[str]:
+    from farmcore.main import create_app
+
+    token = settings.admin_token.get_secret_value()
+    with TestClient(create_app(settings, app_packages=()), base_url="https://testserver") as c:
+        resp = c.post(
+            "/admin/sign-in",
+            data={"token": token},
+            headers={"Origin": "https://testserver"},
+            follow_redirects=False,
+        )
+        assert resp.status_code == 303
+        return [h.split("=", 1)[0] for h in resp.headers.get_list("set-cookie")]
+
+
+def test_a_public_app_without_an_installation_id_still_scopes_its_cookies(unmigrated, caplog):
+    from pydantic import SecretStr
+
+    token = secrets.token_hex(24)
+    settings = Settings(
+        _env_file=None, database_url=unmigrated, farmcore_public=True, admin_token=SecretStr(token)
+    )
+    with caplog.at_level("WARNING", logger="farmcore.main"):
+        first = _admin_cookie_names(settings)
+        second = _admin_cookie_names(settings)
+    assert "farmcore migrate" in caplog.text and "installation_id" in caplog.text
+    assert all(n.startswith("fc-") and n.endswith("-admin_token") for n in first + second)
+    # A per-process scope: a restart signs everyone out rather than sharing a cookie.
+    assert first != second
+
+
+def test_a_local_app_without_an_installation_id_warns(unmigrated, caplog):
+    from farmcore.main import create_app
+
+    with caplog.at_level("WARNING", logger="farmcore.main"):
+        create_app(Settings(_env_file=None, database_url=unmigrated), app_packages=())
+    assert "farmcore migrate" in caplog.text
 
 
 OFFLINE = """\

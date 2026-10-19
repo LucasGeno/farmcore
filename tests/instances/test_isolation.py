@@ -21,7 +21,7 @@ from sqlalchemy.exc import DBAPIError
 from typer.testing import CliRunner
 
 from farmcore.settings import get_settings
-from tests.instances.conftest import Project, inspect, postgis_image
+from tests.instances.conftest import REPO, Project, docker_available, inspect, postgis_image
 
 
 @dataclass(frozen=True)
@@ -30,19 +30,26 @@ class Installed:
     owner_url: str
     runtime_url: str
     role: str
+    password: str
 
 
-def _migrate(monkeypatch, env: dict[str, str]) -> None:
+def _run(monkeypatch, env: dict[str, str], *args: str) -> str:
+    """`farmcore <args>` with this environment; its output (the command must succeed)."""
     from farmcore.cli import cli
 
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
     try:
-        result = CliRunner().invoke(cli, ["migrate"], catch_exceptions=False)
+        result = CliRunner().invoke(cli, list(args), catch_exceptions=False)
     finally:
         get_settings.cache_clear()
     assert result.exit_code == 0, result.output
+    return result.output
+
+
+def _migrate(monkeypatch, env: dict[str, str]) -> None:
+    _run(monkeypatch, env, "migrate")
 
 
 @pytest.fixture
@@ -51,15 +58,19 @@ def install(pg_server, monkeypatch) -> Iterator:
     made: list[Installed] = []
     admin = create_engine(pg_server.url("farmcore"), isolation_level="AUTOCOMMIT")
 
-    def make() -> Installed:
+    def make(password: str | None = None, before=None) -> Installed:
+        """`before(admin_connection, role)` runs before `farmcore migrate`."""
         name = f"inst_{uuid.uuid4().hex[:10]}"
         role = f"rt_{uuid.uuid4().hex[:10]}"
-        password = secrets.token_hex(16)
+        password = password or secrets.token_hex(16)
         with admin.connect() as conn:
             conn.execute(text(f'CREATE DATABASE "{name}"'))
+            if before is not None:
+                before(conn, role)
         with create_engine(pg_server.url(name)).begin() as conn:
             conn.execute(text("CREATE EXTENSION postgis"))
         owner = pg_server.url(name)
+        made.append(Installed(name, owner, pg_server.url(name, role, password), role, password))
         _migrate(
             monkeypatch,
             {
@@ -68,7 +79,6 @@ def install(pg_server, monkeypatch) -> Iterator:
                 "RUNTIME_DATABASE_PASSWORD": password,
             },
         )
-        made.append(Installed(name, owner, pg_server.url(name, role, password), role))
         return made[-1]
 
     yield make
@@ -156,8 +166,7 @@ def test_tables_added_by_a_later_migration_are_usable_by_the_runtime(install) ->
 def test_one_installations_runtime_cannot_connect_to_another_database(install, pg_server) -> None:
     """Even on one shared server, A's runtime credentials cannot open B's database."""
     a, b = install(), install()
-    role_a, password_a = a.role, a.runtime_url.split(":")[2].split("@")[0]
-    engine = create_engine(pg_server.url(b.database, role_a, password_a))
+    engine = create_engine(pg_server.url(b.database, a.role, a.password))
     try:
         with pytest.raises(DBAPIError) as exc, engine.connect():
             pass
@@ -168,7 +177,7 @@ def test_one_installations_runtime_cannot_connect_to_another_database(install, p
 
 def test_migrate_is_repeatable_and_keeps_the_runtime_password(install, monkeypatch) -> None:
     inst = install()
-    password = inst.runtime_url.split(":")[2].split("@")[0]
+    password = inst.password
     _migrate(
         monkeypatch,
         {
@@ -183,6 +192,143 @@ def test_migrate_is_repeatable_and_keeps_the_runtime_password(install, monkeypat
             assert conn.execute(text("SELECT count(*) FROM farm")).scalar_one() == 0
     finally:
         engine.dispose()
+
+
+@pytest.mark.parametrize("database", ["postgres", "template1", "template_postgis"])
+def test_runtime_role_cannot_open_the_servers_own_databases(install, pg_server, database) -> None:
+    inst = install()
+    engine = create_engine(pg_server.url(database, inst.role, inst.password))
+    try:
+        with pytest.raises(DBAPIError) as exc, engine.connect():
+            pass
+        assert "permission denied for database" in str(exc.value)
+    finally:
+        engine.dispose()
+
+
+def test_a_password_with_sql_and_format_characters_works_and_is_never_echoed(
+    install, pg_server, capsys
+) -> None:
+    password = "p%s%%'\";--" + secrets.token_hex(8)
+    inst = install(password=password)
+    engine = create_engine(inst.runtime_url)
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT current_user")).scalar_one() == inst.role
+    finally:
+        engine.dispose()
+    out = capsys.readouterr()
+    assert password not in out.out + out.err
+    assert inst.role in pg_server.log()  # the role statements are logged ...
+    assert password not in pg_server.log()  # ... but never with the password
+    # Only a SCRAM verifier reaches the server: the plaintext is never in the statement.
+    admin = create_engine(pg_server.url("farmcore"))
+    try:
+        with admin.connect() as conn:
+            stored = conn.execute(
+                text("SELECT rolpassword FROM pg_authid WHERE rolname = :r"), {"r": inst.role}
+            ).scalar_one()
+    finally:
+        admin.dispose()
+    assert stored.startswith("SCRAM-SHA-256$")
+
+
+def _migrate_fails(monkeypatch, env: dict[str, str]) -> str:
+    from farmcore.cli import cli
+
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    try:
+        result = CliRunner().invoke(cli, ["migrate"])
+    finally:
+        get_settings.cache_clear()
+    assert result.exit_code != 0
+    text_ = result.output + (str(result.exception) if result.exception else "")
+    return text_
+
+
+def test_a_failing_role_statement_never_echoes_the_password(
+    install, monkeypatch, pg_server
+) -> None:
+    inst = install()
+    password = "never-shown-" + secrets.token_hex(8)
+    out = _migrate_fails(
+        monkeypatch,
+        {
+            "DATABASE_URL": inst.owner_url,
+            "RUNTIME_DATABASE_ROLE": "pg_monitor",  # reserved: ALTER ROLE fails server-side
+            "RUNTIME_DATABASE_PASSWORD": password,
+        },
+    )
+    assert "runtime role" in out
+    assert password not in out and "SCRAM" not in out and "PASSWORD" not in out
+    assert password not in pg_server.log()  # not in the failing statement the server logs
+
+
+def test_migrate_refuses_to_run_as_the_runtime_role(install, monkeypatch) -> None:
+    inst = install()
+    out = _migrate_fails(monkeypatch, {"DATABASE_URL": inst.runtime_url})
+    assert "database owner" in out
+
+
+def test_migrate_refuses_a_runtime_role_named_like_the_owner(install, monkeypatch) -> None:
+    inst = install()
+    out = _migrate_fails(
+        monkeypatch,
+        {
+            "DATABASE_URL": inst.owner_url,
+            "RUNTIME_DATABASE_ROLE": "farmcore",
+            "RUNTIME_DATABASE_PASSWORD": secrets.token_hex(16),
+        },
+    )
+    assert "must differ from the owner" in out
+
+
+def test_an_existing_runtime_role_loses_memberships_and_role_settings(install) -> None:
+    """A pre-existing role granted the owner could otherwise SET ROLE to it and run DDL."""
+
+    def pre_create(conn, role: str) -> None:
+        conn.execute(text(f'CREATE ROLE "{role}" LOGIN'))
+        conn.execute(text(f'GRANT farmcore, pg_read_all_data TO "{role}"'))
+        conn.execute(text(f'ALTER ROLE "{role}" SET search_path = pg_catalog'))
+
+    inst = install(before=pre_create)
+    _denied(inst.runtime_url, "SET ROLE farmcore")
+    engine = create_engine(inst.runtime_url)
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(text("SHOW search_path")).scalar_one() != "pg_catalog"
+            members = conn.execute(
+                text(
+                    "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member "
+                    "WHERE r.rolname = current_user"
+                )
+            ).scalar_one()
+            assert members == 0
+    finally:
+        engine.dispose()
+
+
+def test_a_session_override_of_the_setting_does_not_change_the_reported_id(install) -> None:
+    from fastapi.testclient import TestClient
+
+    from farmcore.main import create_app
+    from farmcore.settings import Settings
+
+    inst = install()
+    with TestClient(create_app(Settings(_env_file=None, database_url=inst.runtime_url))) as c:
+        real = c.get("/health").json()["installation_id"]
+    forged = str(uuid.uuid4())
+    url = f"{inst.runtime_url}?options=-c%20farmcore.installation_id%3D{forged}"
+    probe = create_engine(url)
+    try:
+        with probe.connect() as conn:  # the override is live in these sessions
+            assert conn.execute(text("SHOW farmcore.installation_id")).scalar_one() == forged
+    finally:
+        probe.dispose()
+    with TestClient(create_app(Settings(_env_file=None, database_url=url))) as c:
+        assert c.get("/health").json()["installation_id"] == real
 
 
 SIGNED_IN = "You are signed in as admin."
@@ -248,8 +394,12 @@ def test_signing_in_to_one_installation_keeps_the_other_signed_in(install) -> No
         assert len({c.name for c in ca.cookies.jar}) == 2
 
 
-def test_a_browser_written_preference_cookie_still_reaches_the_app(install) -> None:
-    """bell.js writes `farmcore_notifications_read_<farm>` itself, under its plain name."""
+def _prefix(installation_id: str) -> str:
+    """The documented scheme: `fc-<first 12 hex digits of installation_id>-`."""
+    return f"fc-{uuid.UUID(installation_id).hex[:12]}-"
+
+
+def test_only_this_installations_cookies_reach_the_app(install) -> None:
     from fastapi.testclient import TestClient
 
     token = secrets.token_hex(24)
@@ -260,10 +410,37 @@ def test_a_browser_written_preference_cookie_still_reaches_the_app(install) -> N
         return dict(request.cookies)
 
     with TestClient(app, base_url=BASE, headers={"X-Admin-Token": token}) as c:
-        c.cookies.set("farmcore_notifications_read_1", "abc")
+        own = _prefix(c.get("/health").json()["installation_id"])
+        c.cookies.set(f"{own}farmcore_notifications_read_1", "abc")
+        c.cookies.set("farmcore_notifications_read_2", "plain-name")
         c.cookies.set("farmcore_session", "foreign-or-legacy")
         c.cookies.set("fc-000000000000-farmcore_session", "other-installation")
         assert c.get("/_cookies").json() == {"farmcore_notifications_read_1": "abc"}
+
+
+def test_the_notification_read_cookie_is_scoped_per_installation(install, monkeypatch) -> None:
+    """bell.js writes the read-state cookie itself, under the name the page gives it."""
+    from fastapi.testclient import TestClient
+    from pydantic import SecretStr
+
+    from farmcore.main import create_app
+    from farmcore.settings import Settings
+
+    names = []
+    for inst in (install(), install()):
+        created = _run(monkeypatch, {"DATABASE_URL": inst.runtime_url}, "farms", "create", "F")
+        farm_id = created.split()[1]
+        token = secrets.token_hex(24)
+        settings = Settings(
+            _env_file=None, database_url=inst.runtime_url, admin_token=SecretStr(token)
+        )
+        with TestClient(create_app(settings), base_url=BASE, headers={"X-Admin-Token": token}) as c:
+            own = _prefix(c.get("/health").json()["installation_id"])
+            page = c.get(f"/notifications?farm={farm_id}").text
+        name = page.split('data-cookie="')[1].split('"')[0]
+        assert name == f"{own}farmcore_notifications_read_{farm_id}"
+        names.append(name)
+    assert names[0] != names[1]
 
 
 # --- Two real Compose projects from one image -------------------------------------------------
@@ -386,3 +563,32 @@ def test_stopping_one_project_leaves_the_other_healthy(two_installations) -> Non
         assert state["Running"] and state["Health"]["Status"] == "healthy"
     finally:
         a.compose("start")
+
+
+@pytest.mark.slow
+def test_no_container_leaves_an_anonymous_volume_behind(two_installations) -> None:
+    """`docker compose down` without `-v` must leave only the project's named volumes."""
+    a, _ = two_installations
+    for cid in a.compose("ps", "-a", "-q").stdout.split():
+        info = inspect(cid)
+        for mount in info["Mounts"]:
+            if mount["Type"] == "volume":
+                assert mount["Name"].startswith(f"{a.name}_"), (info["Name"], mount)
+
+
+@pytest.mark.skipif(not docker_available(), reason="needs Docker")
+def test_without_farmcore_image_each_project_builds_its_own_tag(tmp_path) -> None:
+    env = tmp_path / "x.env"
+    env.write_text("POSTGRES_PASSWORD=x\nRUNTIME_DATABASE_PASSWORD=y\nADMIN_TOKEN=z\n")
+    images = set()
+    for project in ("farm-a", "farm-b"):
+        out = subprocess.run(
+            ["docker", "compose", "-p", project, "--env-file", str(env), "--profile", "telegram",
+             "config", "--format", "json"],
+            cwd=REPO, capture_output=True, text=True, check=True,
+        ).stdout  # fmt: skip
+        services = json.loads(out)["services"]
+        tags = {services[s]["image"] for s in ("migrate", "app", "bot")}
+        assert tags == {f"farmcore-{project}:local"}
+        images |= tags
+    assert len(images) == 2

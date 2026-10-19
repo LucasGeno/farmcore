@@ -6,18 +6,13 @@ admin cookies. This outermost ASGI middleware renames every cookie the app sets 
 `fc-<installation>-<name>` and, on the way in, passes the app only this installation's cookies
 with the prefix removed. Code inside the app keeps using the plain names.
 
-Cookies a browser script writes itself (`CLIENT_COOKIES`, non-secret view preferences) cannot
-carry the prefix yet and pass through unchanged.
+A cookie a browser script writes itself must use the scoped name too: the prefix is on
+`request.state.cookie_prefix` for pages that hand a cookie name to a script.
 """
 
 from __future__ import annotations
 
-import re
-
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
-
-# Written by browser scripts under their plain name (notifications/static/bell.js).
-CLIENT_COOKIES = re.compile(r"farmcore_notifications_read_\d+")
 
 
 def cookie_prefix(installation_id: str) -> str:
@@ -30,8 +25,6 @@ def _scope_request_cookies(header: str, prefix: str) -> str:
         name, sep, value = part.strip().partition("=")
         if name.startswith(prefix) and len(name) > len(prefix):
             kept.append(f"{name[len(prefix) :]}{sep}{value}")
-        elif CLIENT_COOKIES.fullmatch(name):
-            kept.append(f"{name}{sep}{value}")
     return "; ".join(kept)
 
 
@@ -54,7 +47,8 @@ class InstallationCookies:
                 if not value:
                     continue
             headers.append((key, value))
-        scope = {**scope, "headers": headers}
+        state = {**scope.get("state", {}), "cookie_prefix": self.prefix}
+        scope = {**scope, "headers": headers, "state": state}
 
         async def send_scoped(message: Message) -> None:
             if message["type"] == "http.response.start":

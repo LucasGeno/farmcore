@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -22,6 +24,8 @@ from farmcore.core.tour import TourMiddleware
 from farmcore.db import get_session, make_engine, make_session_factory
 from farmcore.settings import Settings, get_settings
 from farmcore.web import context_url
+
+log = logging.getLogger(__name__)
 
 
 def create_app(
@@ -61,9 +65,20 @@ def create_app(
     )
     app.add_middleware(PrivacyMiddleware)
     app.add_middleware(TourMiddleware)
-    if installation_id:
+    cookie_scope = installation_id
+    if not installation_id:
+        # Fail closed on a network deployment: a per-process scope (everyone signs in again
+        # after a restart) rather than cookies another installation on this host could read.
+        if settings.farmcore_public:
+            cookie_scope = str(uuid.uuid4())
+        log.warning(
+            "No installation_id in this database: run `farmcore migrate` as the database owner. "
+            "Cookies are %s until then.",
+            "scoped to this process" if cookie_scope else "NOT scoped to this installation",
+        )
+    if cookie_scope:
         # Outermost: every other layer sees this installation's cookies under plain names.
-        app.add_middleware(InstallationCookies, installation_id=installation_id)
+        app.add_middleware(InstallationCookies, installation_id=cookie_scope)
     app.state.installation_id = installation_id
     app.state.settings = settings
     app.state.engine = engine
