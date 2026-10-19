@@ -38,6 +38,11 @@ class Settings(BaseSettings):
     # Local time (display_tz), naive.
     replay_start: datetime = datetime(2024, 4, 1, 6, 0)
     public_base_url: str = "http://localhost:8000"
+    # `farmcore migrate` only (run as the database owner): the DML-only role the app and bot
+    # connect as. It is created or updated, with this password, on every migrate. No password:
+    # no runtime role is provisioned (local development against the owner URL).
+    runtime_database_role: str = Field("farmcore_app", pattern=r"^[a-z_][a-z0-9_]{0,62}$")
+    runtime_database_password: SecretStr | None = None
     admin_token: SecretStr | None = None
     # Set on any network-reachable deployment: the app then refuses to start without a strong
     # ADMIN_TOKEN and turns off the interactive API docs.

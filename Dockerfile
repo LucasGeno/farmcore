@@ -33,6 +33,7 @@ COPY sample-data ./sample-data
 
 USER farmcore
 EXPOSE 8000
-# Migrate, then serve. The `bot` service overrides this command.
+# Serve only: migrations run in the one-shot `migrate` service (`farmcore migrate`, as the
+# database owner) before the app starts. The `migrate` and `bot` services override this command.
 # Behind a reverse proxy, set FORWARDED_ALLOW_IPS (read by uvicorn) to the proxy's address.
-CMD ["sh", "-c", "farmcore migrate && exec uvicorn farmcore.main:create_app --factory --host 0.0.0.0 --port 8000"]
+CMD ["uvicorn", "farmcore.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

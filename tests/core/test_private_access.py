@@ -100,7 +100,7 @@ def test_operator_and_public_bootstrap_remain_usable(settings, session_factory, 
     ensure_default_farm(session, settings)
     session.commit()
     with TestClient(create_app(settings, session_factory=session_factory)) as client:
-        assert client.get("/health").json() == {"db": "ok"}
+        assert client.get("/health").json()["db"] == "ok"
         assert client.get("/admin/sign-in").status_code == 200
         assert client.get("/static/core/navigation.js").status_code == 200
         assert client.get("/today/").status_code == 403

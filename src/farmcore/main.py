@@ -13,10 +13,11 @@ from sqlalchemy.orm import Session, sessionmaker
 from farmcore import __version__
 from farmcore.composition import compose_spray_weather_reader
 from farmcore.core import errors, jobs, registry
+from farmcore.core.cookie_scope import InstallationCookies
 from farmcore.core.identity import require_csrf
 from farmcore.core.manifest import Manifest
 from farmcore.core.privacy import PrivacyMiddleware
-from farmcore.core.startup import check_public_settings
+from farmcore.core.startup import check_public_settings, read_installation_id
 from farmcore.core.tour import TourMiddleware
 from farmcore.db import get_session, make_engine, make_session_factory
 from farmcore.settings import Settings, get_settings
@@ -36,6 +37,8 @@ def create_app(
     if session_factory is None:
         engine = make_engine(settings)
         session_factory = make_session_factory(engine)
+    with session_factory() as session:
+        installation_id = read_installation_id(session)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -58,6 +61,10 @@ def create_app(
     )
     app.add_middleware(PrivacyMiddleware)
     app.add_middleware(TourMiddleware)
+    if installation_id:
+        # Outermost: every other layer sees this installation's cookies under plain names.
+        app.add_middleware(InstallationCookies, installation_id=installation_id)
+    app.state.installation_id = installation_id
     app.state.settings = settings
     app.state.engine = engine
     app.state.session_factory = session_factory
@@ -70,9 +77,9 @@ def create_app(
     app.state.spray_weather_reader = compose_spray_weather_reader(app.state.all_manifests)
 
     @app.get("/health")
-    def health(session: Session = Depends(get_session)) -> dict[str, str]:
+    def health(session: Session = Depends(get_session)) -> dict[str, str | None]:
         session.execute(text("SELECT 1"))
-        return {"db": "ok"}
+        return {"db": "ok", "installation_id": installation_id}
 
     @app.get("/", include_in_schema=False)
     def index(request: Request) -> RedirectResponse:
