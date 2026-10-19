@@ -189,6 +189,56 @@ def test_demo_audit_grant_never_queries_global_audit(settings, session_factory, 
     assert session.scalar(select(AccessLog).where(AccessLog.resource == "llm_audit")) is None
 
 
+def test_operator_grant_page_probes_audit_with_grant_bound_access_log(
+    settings, session_factory, session
+):
+    """The operator can inspect the global audit through a live grant; every read stays logged."""
+    from sqlalchemy import select
+
+    from farmcore.core.models.canonical import AccessLog, DataGrant, LlmAudit
+    from farmcore.core.seed import ensure_default_farm
+
+    farm = ensure_default_farm(session, settings)
+    grant = DataGrant(
+        farm_id=farm.id,
+        grantee="Synthetic audit adviser",
+        scopes=["register:read", "audit:read"],
+        purpose="operator audit inspection",
+    )
+    session.add_all(
+        [
+            grant,
+            LlmAudit(
+                adapter="synthetic-adapter",
+                model="synthetic-model",
+                endpoint="synthetic-endpoint",
+                request_body={"private": "payload-only-for-operator"},
+                status="ok",
+            ),
+        ]
+    )
+    session.commit()
+    before = session.scalar(select(AccessLog.id).order_by(AccessLog.id.desc()).limit(1)) or 0
+    with TestClient(
+        create_app(settings, session_factory=session_factory),
+        headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+    ) as client:
+        response = client.get(f"/share/as/{grant.id}/")
+
+    assert response.status_code == 200
+    assert "Shared: this grant includes the model-call audit." in response.text
+    assert "Not shared: this grant does not include the model-call audit." not in response.text
+    assert "payload-only-for-operator" not in response.text
+    reads = list(
+        session.scalars(
+            select(AccessLog).where(AccessLog.id > before, AccessLog.resource == "llm_audit")
+        )
+    )
+    assert [(row.farm_id, row.grant_id, row.actor, row.scope, row.purpose) for row in reads] == [
+        (farm.id, grant.id, f"grant:{grant.id}", "audit:read", "operator audit inspection")
+    ]
+
+
 # Each example shares the function-scoped rollback connection intentionally: setup is
 # idempotent, all requests must deny, and the audit count is checked after every example.
 @hypothesis_settings(
