@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 import httpx
 from sqlalchemy import func, or_, select
 
+from farmcore.apps.forecast._fetch_loop import FetchLoop
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.apps.forecast.sources import UNITS, VARIABLES, Run, _utc, parse_hourly
 from farmcore.apps.forecast.store import import_runs
@@ -157,7 +158,8 @@ def fetch_live(ctx: JobContext) -> None:
                     "precipitation_unit": "mm",
                 }
             )
-            doc = asyncio.run(_fetch(url, ctx.settings.forecast_fetch_timeout_seconds))
+            with asyncio.Runner(loop_factory=FetchLoop) as runner:
+                doc = runner.run(_fetch(url, ctx.settings.forecast_fetch_timeout_seconds))
             received = datetime.now(UTC)
             values = _validated_values(doc, received)
             coverage = {

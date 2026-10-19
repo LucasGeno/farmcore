@@ -113,7 +113,12 @@ Each tick requests at most five farms, least recently attempted first, with a te
 total HTTP deadline per farm (headers and body) and six UTC forecast days. Successful and failed attempts share
 an hour-long database cache. `forecast_fetch_timeout_seconds` configures the total
 per-farm deadline (default 10 seconds, bounded to 0.05–30); expiration cancels and closes
-the request before the next farm proceeds. Requests use the farm's `props.forecast_location`
+the HTTP request before the next farm proceeds. Native OS DNS lookups cannot be killed
+safely: at most two may continue after their HTTP request times out. The forecast's two
+process-shared daemon resolver workers start lazily; two admission slots cover both queued
+and running lookups and remain occupied until the native work finishes (or canceled queued
+work is skipped). Saturation fails immediately rather than holding the job lock or growing
+threads/queues. Late DNS completion never restarts a canceled HTTP request. Requests use the farm's `props.forecast_location`
 (`latitude`, `longitude` in degrees), or its first geolocated weather station; a farm
 without either reports an unavailable refresh. No provider credentials are needed.
 Operators should check [Open-Meteo's usage terms](https://open-meteo.com/en/terms) for their
