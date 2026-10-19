@@ -2,113 +2,228 @@
 type: Change Spec
 title: "Isolated installations and modular farm workflows"
 status: approved
-authorization: "Lucas approved isolated hosted/self-hosted instances and modular architecture, and requested specification and implementation tickets on 2026-10-19."
+authorization: "Lucas approved isolated hosted/self-hosted installations and a modular architecture on 2026-10-19. Revision 2 (same day, after critical review) narrows scope to self-host-first portability, adopts a Postgres task library, decouples the dependency graph and defers the hosting manager behind a demand trigger; Lucas asked for this reshaping."
+revision: 2
 ---
 
 # Isolated installations and modular farm workflows
 
 ## Problem
-FarmCore can explain and record vineyard spray decisions, but independently hosted customers need separate data, configuration and upgrades. Self-hosters need the same usable product without a hosting-service dependency. Existing manifest apps provide a useful foundation; shared product, asset and assessment restrictions still encode a particular fungicide workflow. Expanding these restrictions ad hoc would couple unrelated agricultural capabilities.
+
+FarmCore's promise is open, farmer-controlled farm data: a farmer can run it themselves, or have it run for them, and leave at any time with everything. Three things stand in the way.
+
+1. **Portability is informal.** Self-hosting works through one Compose file, but there is no tested way to run several independent installations from one release, move an installation to a new host, or upgrade one safely.
+2. **Background work is fragile.** Jobs run on an in-process APScheduler under one global advisory lock. A slow weather provider stalls every farm, and a crash loses in-flight work.
+3. **The core is a fungicide app.** `Product` hard-codes contact/penetrant and downy/powdery. Any non-spray workflow, like fertilization, would either fake those fields or fork the model.
+
+FarmCore is at 0.1 with no paying customers. This spec therefore builds what both self-hosters and a future hosted offer need. Hosting-only machinery waits until a real customer needs it.
 
 ## Goals
-- One open-source runtime and reproducible module bundles for hosted and self-hosted installations.
-- Isolated, independently configurable customer installations with recoverable provisioning, upgrades and portability.
-- A separate optional hosting manager, with customer administration distinct from farm membership and operator access.
-- Reliable background execution and explicit module lifecycle behavior.
-- A reusable farm model and parcel workspace, proven by independent weather-risk and fertilization-record apps.
+
+- One open-source release that runs as several fully isolated installations, self-hosted or operated by someone else. The artifact is the same either way.
+- A tested backup → restore → upgrade path, so leaving a host or recovering from a failed upgrade is routine.
+- Durable, per-farm background work that survives crashes and cannot publish stale results.
+- A neutral farm model (catalog, quantities, crop seasons), proven by an in-tree fertilization app and an externally packaged alert app.
 
 ## Non-goals
-Production deployment, accepting payments, choosing a merchant or cloud vendor, automatic deletion of customer data, unrestricted hosted code uploads, Kubernetes, framework replacement, a service for every app, training on private farm data, pump/machinery control and new irrigation/pest/drought/nutrient recommendation algorithms. Existing milestones 1–4 remain a separate approved initiative; this spec does not mark them complete or replace their QA. Irrigation facts already in that work are preserved, not rebuilt as a duplicate capture system.
+
+- A customer portal, self-service signup, payments or a separate control-plane database. These are deferred behind a trigger; see Deferred.
+- Kubernetes, a framework change, or a service per app.
+- Shared-process or shared-table multi-tenancy across customers.
+- Permanent or automatic deletion of customer data.
+- Running hosted code uploads.
+- New agronomic recommendation models (irrigation, nutrient rates, drought, pests). Pump or machinery control. Training on private farm data.
+
+Milestones 1–4 ([revamp spec](../farmcore-revamp/spec.md)) remain a separate initiative. This spec neither completes nor replaces their QA. Irrigation and observation records from that work are preserved, not rebuilt.
 
 ## Vocabulary
-Use the [domain glossary](../../../CONTEXT.md). A Customer can own more than one Installation; an Installation contains Farms. Hosted and self-hosted describe operating responsibility, not feature editions. An installed Module is available to an Installation; farm-specific configuration and user permissions determine its use. A Planned job is agricultural work; a Background task is software execution. A confirmed Record is a fact; an Assessment is a typed module result, not evidence of independent agronomic accuracy.
 
-## Constraints
-Retain FastAPI, PostgreSQL/PostGIS, typed Python agronomic calculations, manifest composition and the existing confirmation/provenance model. Keep one supported linear migration chain per runtime release bundle; only the integration coordinator authors and serializes revisions. The separate hosting manager has its own control database and independently managed migration history; it must not introduce competing heads into the runtime chain or populate the control database with farm tables. This clarifies how the existing single-runtime-chain rule applies to a new separately deployed system. Independently migratable arbitrary runtime module mixes are deferred. Customer customization is validated configuration or a reproducible reviewed bundle, not an untracked customer branch.
+See the [domain glossary](../../../CONTEXT.md). In short:
+- An **Installation** is one deployment: its own database, secrets and configuration. It holds one or more Farms.
+- *Hosted* and *self-hosted* describe who operates an installation, not which features it has.
+- A **Planned job** is agricultural work. A **Background task** is software execution.
+- A **Record** is a confirmed fact. An **Assessment** is a module's computed result, not proof of agronomic accuracy.
 
-The implementation remains in the repository-local work graph. The accepted architecture note in the vault contains durable rationale, not duplicated tickets or task status. Current access and weather PRs keep their existing review/CI gates. Core model, worker and module changes wait for the [current revamp integration QA](../farmcore-revamp/tickets/12-integration-qa.md); portable packaging and backup work may proceed before the full revamp once their listed privacy/identity prerequisites pass, on an isolated branch. No existing checkout or deployed installation is repurposed as a test tenant.
+## Decisions
+
+Each decision names the alternatives considered and why they lost.
+
+### D1 — One Compose project per installation
+Every installation is the stock `docker-compose.yml` project with a unique project name: its own app container, Postgres, network, volumes and secrets. A hosted installation is exactly a self-hosted one that the operator runs.
+
+- *Rejected: a shared process with one database per site* (the Frappe/Odoo multi-site model). It is cheaper per customer, but one routing bug leaks data across customers, and every customer must upgrade in lockstep.
+- *Rejected: one shared hosted installation with many farms.* Per-farm access already exists after revamp02/03, but export, upgrade timing and configuration would all be shared, which contradicts "leave with everything".
+- *Revisit when:* the measured idle cost per installation (ticket 01) times the expected customer count exceeds the hosting budget. The first option to try then is a shared Postgres server with one database and one least-privilege role per installation; app containers stay separate.
+
+### D2 — Private bytes live in Postgres
+Today no private file outlives a request: voice notes are transcribed from a temporary directory and ISOXML uploads are parsed in memory. Rule from now on: any persisted private bytes (retained uploads, evidence attachments) go into a content-addressed table in the installation database.
+
+A consistent backup is then one `pg_dump`, with no separate cross-store snapshot. `DATA_DIR` stays for open-data caches, which can be fetched again and are not backed up.
+- *Rejected: object storage plus a coordinated snapshot.* Real complexity for a problem FarmCore does not have. Revisit if a feature needs large media (more than about 50 MB per object).
+
+### D3 — Adopt a Postgres task library, own only the fencing
+Live-mode background work moves to a Postgres-backed queue. The first candidate is **Procrastinate** (MIT, psycopg3 connectors, retries, locks, cancellation, periodic tasks, stalled-job retry). Two things are unverified: transactional enqueue from SQLAlchemy's underlying psycopg3 connection, and running sync tasks under its async worker. The spike must prove both. The fallback is a minimal in-house `SKIP LOCKED` table. Ticket 04 is a time-boxed spike that decides between them against written criteria.
+
+FarmCore owns only what no library knows: the **publication fence**, stored in a FarmCore-owned attempt row rather than the library's job-status tables. Before committing a result, a task checks inside the same transaction that its attempt is still current, its farm is still eligible, the clock mode is unchanged and its module is still enabled.
+
+Replay mode keeps the deterministic in-process `step_to`; the queue is only for live work. Determinism and liveness are different requirements.
+- *Rejected: hand-rolled leases, attempt tokens and retry state* (the original tickets 07–08). That is roughly two Tier-3 tickets of concurrency code a maintained library already ships.
+- *Rejected: Redis-based queues (Celery, RQ, Dramatiq).* They add a stateful service and lose transactional enqueue.
+
+### D4 — External effects go through a transactional outbox
+Today the only outbound effect is the Telegram advice push (`chat.push_advice`). It is cursor-based and at-most-once; in-app notifications are presentation-only. The source transaction writes a delivery intent to an `outbox` table. A background task dispatches it, deduplicating by intent ID and recording provider receipts. An ambiguous delivery is shown for reconciliation, never reported as exactly-once.
+
+The installation-level `external_effects` switch (`enabled`/`paused`) is checked at dispatch. While paused, the Telegram bot does not long-poll, because two pollers on one token conflict. A restored copy starts `paused`. The switch arrives with backup/restore (ticket 02), before the outbox exists.
+
+### D5 — Modules are Python packages with entry points; schemas use Alembic branches
+- **Discovery.** In-tree apps stay where they are. External apps register through the `farmcore.apps` entry-point group and ship a `Manifest` that declares `core_api` (a compatible range).
+- **Schemas.** An external app ships its own Alembic branch in its package, loaded through `version_locations`. The branch base has `down_revision=None`, `branch_labels=("<app>",)` and `depends_on` a core revision, and revision IDs carry the app prefix. Core keeps one linear chain. A release bundle is a locked set of packages (`uv.lock`), and `farmcore migrate` upgrades `heads` (today it upgrades `head`). External packages are baked into the image at build time, never installed at runtime.
+
+  This resolves a contradiction in revision 1, which let modules declare migrations while forbidding any branch outside the core chain.
+- **Hosted installations** only run bundles the operator has reviewed and built. Manifest permissions are application policy, not a sandbox.
+- *Rejected: schema-less external apps writing into core `props` JSONB.* It hides typed data from validation and constraints.
+
+### D6 — Neutral domain by expand, migrate, contract
+- **Expand.** Add a neutral catalog item, typed quantities and crop seasons alongside existing data.
+- **Migrate.** Move consumers one group at a time: records, inventory, assessments.
+- **Contract.** Only then remove the fungicide restrictions from shared core. Crop-protection attributes move to that app's typed extension table.
+
+Unit conversion uses `pint`, with an explicit FarmCore unit registry and `Decimal` arithmetic (`non_int_type=Decimal`), so stock never passes through floats. Quantities follow the farmOS shape: measure, value, unit and label, plus the original entered value and unit. Nothing is converted without a known factor (density, area or composition).
+- *Rejected: a generic JSON payload or a rule DSL per app.* Each app owns its typed payload and validation.
+
+### D7 — Hosted operations start as operator tooling, not a platform
+When hosting begins, the operator runs installations from a declarative inventory: one YAML file per installation in a private ops repository. A `fleet` command reconciles it: create the project and secrets, apply the pinned release, run backups, set suspended or active, and print the current state.
+
+Declarative reconciliation makes provisioning idempotent and crash-safe by construction. Re-running `apply` converges, so no durable provisioning state machine is needed. Custom domains use Caddy on-demand TLS gated by an `ask` check against the inventory.
+- *Rejected for now: a separate hosting manager with its own identity store, control database and customer portal* (the Frappe Press model). It is a product in itself.
+- *Considered: Coolify, Dokploy or Kamal.* Acceptable substitutes if they can express D1 and the backup/upgrade contract. Ticket 18 evaluates them before writing the `fleet` command.
 
 ## Requirements
 
-### I1 — One runtime, independent installations
-Each Installation has a stable identity, application runtime, database authority, private file namespace, secrets, module profile, operational clock context and pinned release. One installation may contain several farms with normal farm/member/grant isolation. Hosted installations may share physical infrastructure; a customer runtime cannot connect to another installation's database, read its files or affect its configuration. Initially use distinct deployment projects with private networks/volumes and explicit resource limits. A shared database server is acceptable only with separate databases and least-privilege roles; a shared application process or shared tenant tables is not the initial model.
+### R1 — Portable, isolated installations
+- Two installations from one image run side by side on one host. They share no project name, port, network, volume, database role, secret, cookie or cache.
+- One installation's runtime cannot reach another's database. Each installation has an owner/migrator role (schema and PostGIS extension) and a DML-only runtime role.
+- Configuration supplies base URL, timezone, units, farms, connectors and optional apps.
+- An installation works fully offline from any hosting service, subscription endpoint or AI provider. Demo data is opt-in.
+- Each installation has a stable `installation_id` generated at first start. It is never derived from `farm_id` and never chosen by a user.
+- The idle resource cost (RAM, disk, CPU) of one installation is measured and published in the self-hosting docs.
 
-The same image and module bundle runs self-hosted without contacting a hosting manager, subscription endpoint or mandatory AI service. Configuration supplies location, units, timezone, farms, connectors and optional apps. Demo data is opt-in; hosted demos are separate installations. Base URLs, cookies, caches, worker leases and object/file keys must be installation-scoped. Runtime database credentials cannot provision databases or access host infrastructure.
+### R2 — Backup, restore and upgrade
+- **Backup bundle.** A backup is a single file:
+  - a `pg_dump` (custom format)
+  - a manifest with installation ID, release and module versions, Alembic heads, timestamp and SHA-256 of the dump
+  - encryption with `age` to a recipient key the owner controls
 
-### I2 — Hosting manager and customer administration
-An optional separate hosting-manager deployment owns its own identity store, operational metadata and narrowly privileged provisioning channel. Its customer portal cannot execute arbitrary host commands or browse farm records. A privileged lifecycle agent may create databases, take backups and manage deployments; these are explicit audited infrastructure operations, not a claim that the machine operator cannot access hosted data.
+  Platform and operator secrets are never included. Connector secrets are re-entered after a restore, by a documented procedure.
+- **Restore checks.** Restore decrypts and verifies the whole bundle before `pg_restore` starts. It checks the manifest and hash, rejects incompatible releases, and refuses a wrong key or a truncated or modified bundle before touching the target.
+- **Restoring into a new installation:**
+  - keeps record, source and provenance identity
+  - generates a new installation ID and new secrets
+  - invalidates all sessions
+  - starts with `external_effects = paused`, so two copies never both send. Only the owner re-enables effects.
+- **Upgrade:**
+  - check bundle compatibility
+  - take a fresh backup
+  - run migrations once from one designated process (the `migrate` one-shot service). App and worker wait for it and never migrate themselves.
+  - report health
 
-An authorized operator can allocate a customer installation through a public management command. Provisioning is idempotent and durable: retries and crashes produce one installation, with visible provisioning/ready/failed states and recoverable cleanup of newly allocated resources only. Untrusted names, domains or paths cannot select another installation's resources or become executable command text. Domain mappings use an allowlisted installation mapping and verified ownership before custom-domain activation.
+  Rolling back the image does not roll back the schema. A failed migration recovers by restoring the pre-upgrade backup, and that path is tested.
+- **Isolation of failures.** A failed upgrade or restore of one installation leaves the others serving.
 
-The customer receives an expiring one-use owner bootstrap and can configure their installation, members, approved modules and connectors. A hosting Customer, an Instance administrator, a Farm owner/advisor/recipient and the installation Operator are different authorities. Instance administration does not silently confer farm-record access; normal access still uses memberships/grants. Support/break-glass access is explicit, installation-specific and audited. Self-hosters bootstrap locally with the same runtime identity mechanisms. Initial hosted allocation is operator-approved; merchant checkout is a later adapter and must not be represented as implemented payment processing.
+### R3 — Durable, fenced background work
+- Live background tasks are persisted with farm and job identity, a bounded deadline and bounded retries.
+- A crashed worker's tasks are retried, and a stale attempt cannot commit (D3 fence).
+- A slow provider for one farm does not block other farms' tasks. No network call happens inside a long-held transaction or a global lock.
+- Replay keeps its as-of inputs, deterministic order and farm restrictions.
+- Switching between live and replay invalidates in-flight live attempts before they publish.
+- Request handlers enqueue work. They never run an unbounded live fetch.
+- Notifications and external deliveries follow D4. Internal record and stock writes happen once, through their domain identity.
 
-### I3 — Backup, restore, upgrades and suspension
-A portable recovery bundle includes database data, private files, a release/module manifest and integrity checks at one consistent recovery point. Quiesce writes or provide an equivalent consistent checkpoint/immutable-file snapshot; matching independent hashes alone is insufficient. Restored database references must resolve to the corresponding file versions under concurrent writes. The bundle is access-controlled and encrypted in storage/transfer. Platform-wide credentials and operator secrets are not exported to the customer; connector secrets use a documented per-installation recovery/re-entry procedure. Restoring to a new installation preserves record/provenance identity, rotates installation secrets and invalidates sessions; it cannot retain the source's domain binding, scheduled deliveries or hosting-agent authority. Activating a restored clone requires an explicit owner-controlled transition so two copies do not send duplicate external effects.
+### R4 — Module lifecycle and external apps
+- Each module declares identity, version, `core_api`, dependencies, settings schema, scopes, models and migrations, tasks, UI contributions and tools. Missing, incompatible or cyclic dependencies fail before activation or any write.
+- **Disabling a module** blocks its routes, mutations, assistant tools and task claims in every process (web, bot, worker), checked through a module-state generation number. In-flight work is fenced at publication.
+- Records, exports and historical assessments stay readable. Disabling never deletes data, and re-enabling never reseeds duplicates.
+- Installing code or schema is a release plus restart. Hiding a nav item is never "disable".
+- External authors can build a compatible package against a documented contract. A self-hoster can reproduce a custom bundle from its lock file.
 
-Before an upgrade, verify compatibility, backup and restore readiness; run one designated migrator and prevent concurrent app/worker migrations. Publish health and failure states. Reverting an image is not a database rollback: incompatible schema failures recover through a tested restore path. One failed upgrade/restore leaves other installations available.
+### R5 — Neutral farm model
+- **Crop seasons.** A parcel keeps a stable identity and gains dated crop seasons. Editing the current season never rewrites earlier records or assessments. Unknown crop or phenology stays unknown.
+- **Catalog items and quantities.** Catalog items and typed quantities (mass, volume, area, count and compatible rates) keep the entered value and unit plus provenance. Crop-protection attributes live in the crop-protection extension.
+- **Stable meaning.** Existing spray decisions, register exports, stock and source deduplication keep their meaning, proven by frozen semantic golden fixtures. Public representations that change get a versioned adapter.
+- **Navigation without crop protection.** Map, home and diary render from enabled module contributions. A parcel stays navigable with crop protection disabled. Unavailable capabilities say so; they never imply "no risk".
 
-Suspension stops customer work and scheduled side effects while retaining protected recovery data. Resume is idempotent and respects current module/clock state. Retirement is reversible archive/export in this scope; permanent data deletion and automatic deletion for nonpayment are excluded. Retention and recovery ownership are visible to the customer.
+### R6 — Proof apps
+- **Fertilization (in-tree, optional).** The owner previews, confirms, cancels and corrects a fertilization record on a parcel and season, with the entered units and nutrient-composition provenance kept explicit.
+  - Planned work never consumes stock. A confirmed application and its correction deltas change stock exactly once under retry and concurrency.
+  - No rate recommendation and no regulatory filing.
+- **Threshold alerts (external package).** A separately built package, installed on a bundle without crop protection, notifies when owner-configured frost or heat thresholds are crossed in the forecast.
+  - The notice shows timezone, forecast receipt time and missing/stale status.
+  - Thresholds are off until configured.
+  - It states the forecast condition only, never crop damage or safety.
+  - Disabling and re-enabling keeps past notices and creates no duplicates.
 
-### I4 — Durable, bounded background execution
-Persist background tasks per installation/farm/job, with claim leases, attempt identity, retry state, bounded deadlines and cancellation/mode-generation fencing. A crashed worker can be replaced; expired or disabled attempts cannot later commit stale results. Retried confirmed writes remain idempotent. Network work does not hold an installation-wide transaction or global job lock. A stalled provider for one farm/job cannot prevent unrelated eligible work from being claimed; bounded DNS residue and provider saturation remain visible failures, never silent success.
+## Acceptance criteria
 
-Preserve replay's as-of inputs, deterministic ordering and farm restrictions. A switch between live and replay invalidates obsolete attempts before publication. Foreground request handlers can enqueue durable work but do not run an unbounded live fetch.
+- [ ] R1: two installations from one image run concurrently. Cross-installation HTTP, cookie and database probes are denied, and stopping one leaves the other healthy. Idle cost is measured and documented.
+- [ ] R1: a disconnected installation (with revamp02 identities; verified in ticket 17) can bootstrap an owner, manage farms and members, configure modules and confirm records with no hosting service or AI.
+- [ ] R2: a backup of A restores into a new C with matching semantic records, sources and module evidence, new secrets, invalid sessions and paused effects. B is unaffected.
+- [ ] R2: injected pre-upgrade, migration and post-start failures recover through the documented restore. Concurrent upgrade attempts run one migration.
+- [ ] R3: kill, deadline, retry, slow-provider and mode-switch tests show unrelated farms progressing and stale publication rejected. Outbox intents survive a worker restart and never dispatch while paused.
+- [ ] R4: an externally built app installs, migrates its own branch, activates, disables and re-enables. Disabled state is honoured by HTTP, tools and worker in separate processes, and incompatible bundles fail before migration.
+- [ ] R5: the staged migration preserves legacy spray evidence, exports, stock and source identity, and one parcel carries distinct crop seasons.
+- [ ] R6: fertilization passes units, cross-farm, rollback, retry and concurrent-stock tests. Threshold alerts run without crop protection, honestly and repeatably, with source links.
+- [ ] Final qualification (ticket 17): full regression, browser, migration, Linux container and the two-installation backup/restore/upgrade drill pass, with exact evidence and honest skips.
 
-Record committed external side effects in the same database transaction as their cause, then dispatch with retry and deduplication. Internal operation/stock writes occur once through their domain identity. External delivery uses provider idempotency/receipts where supported; ambiguous delivery is visible for reconciliation rather than advertised as exactly-once transport.
+## Testing approach
 
-### I5 — Versioned module profiles and lifecycle
-Each reviewed module declares stable identity/version, supported core API, dependencies, validated settings scope, permissions, models/migrations, background tasks, UI/map contributions and tools. The release manifest pins compatible module code; an installation records its selected profile and revision. Missing/incompatible/cyclic dependencies fail before activation or business writes.
+1. **Installation lifecycle:** real CLI plus HTTP against disposable Compose projects. Each test gets server-generated project names and its own Postgres. Never touch an existing checkout or deployment. Covers isolation, backup/restore and upgrade. It does not cover cloud outages or container-escape resistance.
+2. **Background work:** real worker processes and separate database sessions, with controlled HTTP/DNS stubs at the provider boundary only. Covers crash, deadline, stale publication, mode switch and outbox. Build on `tests/core/test_jobs.py` and the revamp live-weather contracts.
+3. **Domain and modules:** HTTP/CLI against migrated databases, checked against frozen semantic golden fixtures (meaning, not generated IDs). Build on `test_registry.py`, `test_manifest_fields.py`, `test_schema.py` and the operations/inventory/advisor contracts. Never weaken an existing assertion to make a migration pass.
+4. **Browser:** sign-in, bootstrap, modules, map/diary and confirm/correct, on desktop and mobile with normal and reduced motion.
 
-Installation, activation and disablement are explicit. Acknowledged disablement blocks new entry points, mutations, assistant tools and task claims, including another running process; in-flight work is fenced/rechecked before publishing. Records, source evidence, exports and historical assessments remain readable through authorized retention/compatibility paths. Disabling is not data deletion. Re-enable applies a supported profile without reseeding duplicate records. Changes to installed code/schema use a controlled release/restart; activation configuration must not pretend that hiding a navigation item disables execution.
+TDD per vertical slice: observe a failing public behaviour, then write the minimum to make it green. Mock only external infrastructure and providers.
 
-Third-party authors can publish separately packaged modules through a documented discovery/contract interface. Hosted customers choose reviewed bundles; module permissions are application policy, not a sandbox for arbitrary Python. Self-hosters may build compatible custom bundles. Local extensions are reproducible and carry their own tests/licensing metadata. Secrets never appear in manifest examples.
+**Tier 3 is for isolation, auth, data loss, concurrency, migrations and stock.** It means a written failure model, adversarial and property tests, and manual or automated mutants. Other slices (docs, packaging guides, read-only UI) use the normal tier. A skipped layer is reported, never counted as a pass.
 
-### I6 — Reusable farm model with compatible migration
-Keep farm/parcel identity stable and add explicit crop seasons so a parcel's historical crop context does not change when the next season is configured. Missing crop/phenology information stays unknown. Observed facts, planned work and computed assessments remain distinct.
+## Deferred, with triggers
 
-A generic product and quantity representation supports typed mass, volume, area and compatible rate values, original units and provenance. Crop-protection attributes such as contact/penetrant behavior and downy/powdery targets belong to that module's typed extension. Each app owns its domain payload, validation, merge policy and assessment decisions; do not replace them with unrestricted JSON or a generic executable rule language.
+| Item | Trigger to start |
+|---|---|
+| Hosted fleet tooling (ticket 18) | First committed hosted customer, or Lucas runs more than two installations himself |
+| Hosting manager, customer portal and self-service signup | More than about 10 hosted installations, or manual onboarding becomes a measured bottleneck |
+| Payments or merchant adapter | Pricing decided and a portal exists |
+| Shared Postgres server (D1 revisit) | Measured cost × planned installations exceeds budget |
+| Object storage (D2 revisit) | A feature needs large private media |
+| Independently migratable arbitrary module mixes | A real external author needs them |
 
-Use expand–migrate–contract. First add compatible catalog/quantity/assessment forms alongside existing data. Migrate records/import/capture, inventory and crop-protection consumers in separately verifiable groups. Remove shared fungicide restrictions only after all internal consumers migrate and compatibility tests prove historical records, parameter versions, reviewed assessments, register exports and source deduplication unchanged. Existing spray decisions retain their meaning; they are not renamed into irrigation or nutrient decisions. Stable public representations retain an explicit versioned adapter/deprecation policy.
+## Open questions for Lucas (non-blocking)
 
-The parcel map, home page and record diary use enabled module contributions. A field remains navigable without crop-protection apps; optional agronomic apps cannot be imported as mandatory core dependencies. Empty/unknown states explain unavailable capabilities rather than showing a safe/no-risk conclusion.
-
-### I7 — Independent proof apps and broader workflows
-Prove the module contract with a separately packaged weather-risk app installed without crop protection. It shows source-linked hourly temperature threshold crossings for owner-configured heat/cold thresholds, with timezone, forecast receipt time and missing/stale status. Defaults are disabled until configured. The notice states the observed forecast condition; it does not claim crop damage probability, agronomic safety or a drought model. Disable/re-enable preserves existing notices without duplicate tasks or disclosures.
-
-Deliver a fertilization-record app using shared parcel/season/catalog/quantity and confirmation/correction infrastructure. The owner can preview, confirm, cancel and correct a record; entered units and nutrient composition provenance remain explicit. Compatible dimensional conversions are deterministic; absent composition/area/density cannot be invented. Planned work does not consume inventory. Confirmed stock-bearing applications and audited correction deltas affect inventory once, including retries and concurrent requests. No nutrient-rate recommendation or regulatory filing is included.
-
-Existing irrigation facts and field observations remain usable. Future insect scouting, water balance, drought and nutrient recommendations have their own bounded Change Specs and field-validation requirements; they do not silently inherit mildew rules.
-
-## Acceptance Criteria
-- [ ] I1: two installations from the same image/profile can run simultaneously with distinct identities/data/files/secrets; cross-installation HTTP, cookie, database and file tests deny access.
-- [ ] I1: a disconnected self-hosted installation can administer users/farms, configure modules and confirm records without the hosting manager or AI.
-- [ ] I2: repeated/crashed provisioning allocates one recoverable installation; owner bootstrap expires/is single use; portal/customer/admin/farm/operator authority tests pass.
-- [ ] I2: hostile domain/name/path inputs cannot route to another installation, escape allocated resources or execute commands.
-- [ ] I3: backup from hosted A restores into independent self-hosted C with matching record/source/module evidence, invalid sessions/new secrets, and no unsolicited external effects; B remains unaffected.
-- [ ] I3: migration/upgrade failure and suspend/resume recover as documented without duplicate tasks or data loss; retirement retains protected recovery data.
-- [ ] I4: kill/lease-expiry/retry/slow-provider/mode-switch tests prove prompt unrelated progress and reject stale publication; committed effects are dispatchable after worker restart.
-- [ ] I5: an external reviewed app can install/activate/disable/re-enable through supported contracts; direct routes/tools/tasks observe disabled state across processes; incompatible profiles fail safely.
-- [ ] I6: staged migration preserves legacy spray evidence/exports/stock/source identity and a stable parcel can carry distinct crop seasons.
-- [ ] I7: weather-risk runs without crop protection; threshold/missing/stale/replay behavior is honest, repeatable and source-linked.
-- [ ] I7: fertilization preview/cancel/confirm/correct passes units, cross-farm, rollback, retry and concurrent stock tests without nutrient recommendations.
-- [ ] Final independent spec/standards review, full regression, browser, migration, Linux container and two-installation recovery checks pass with exact evidence and explicit skips.
-
-## Testing Decisions
-1. Highest public seam: real management CLI plus HTTP against disposable Linux Compose installations and migrated PostGIS databases. Exercise provisioning/retry/bootstrap, roles, configuration, two-installation isolation, backup/restore/upgrade and self-host independence. Catch persisted contracts and operational resource separation; miss real cloud outages, billing and untrusted-container escape resistance. Existing deployment, auth, schema and registry tests provide prior art; add an installation fixture using server-allocated disposable project names, never deployed clones.
-2. Existing job execution/worker command against real separate database sessions and controlled external HTTP/DNS/provider boundaries: stalled calls, crash/lease recovery, stale publication, replay mode and outbox failure. Follow tests/core/test_jobs.py, clock tests and the revamp live-weather public-job contracts after integration. Catch transaction/concurrency/liveness behavior; miss provider uptime.
-3. Real application HTTP/CLI and reviewed package discovery against migrated databases: module lifecycle, compatibility, legacy data, pure unit validation and domain workflows. Follow tests/core/test_registry.py, test_manifest_fields.py, test_schema.py and operations/inventory/advisor public contracts. Compare frozen semantic golden evidence, not generated IDs or implementation details; do not weaken existing assertions to migrate.
-4. Browser journeys against the real app for public sign-in, bootstrap, configure modules, parcel map/diary, confirm/correct and hosted/self-hosted parity. Cover desktop/mobile and normal/reduced motion without masking console errors or private polling. These checks do not prove agronomic accuracy.
-
-TDD: one observed failing public behavior before minimum GREEN per vertical slice. Mock only external infrastructure/provider/payment boundaries, not internal collaborators. Tier 3 applies to isolation, auth, data loss, concurrency, migrations and public contracts: written failure model, property tests, adversarial tests, actual execution and mutation/manual mutants. Skipped layers are not passes. Focused gates use the real merge base; final full regression and dataset/replay checks remain required. Preserve the documented ordered lifecycle test exception while randomizing ordinary tests. Specs/docs alone do not require product tests.
+- Hosting jurisdiction and processor terms: EU data residency and a GDPR data-processing agreement template. This is needed before ticket 18, not before.
+- Whether frost alerts are the right external proof app, or a partner has a better candidate.
 
 ## Dependencies
-[Current milestones 1–4 spec](../farmcore-revamp/spec.md), especially member identities/grants, reviewed assessment evidence, confirmed correction/completion contracts and final integration QA. Linux container test infrastructure and disposable PostGIS; no production cloud credentials needed for local lifecycle tests. Payment provider, live commercial weather entitlement and production hosting cutover require later operational decisions.
+
+- [Milestones 1–4](../farmcore-revamp/spec.md). Member identities (revamp02) are needed before restore and session invalidation can be tested. Integration QA (revamp12) gates core, worker and domain changes, to avoid conflicts over file ownership.
+- Linux container test infrastructure and a disposable PostGIS. No production credentials are needed.
 
 ## Risks
-Isolation increases per-customer resource cost; bound allocations and measure before sharing runtimes. The hosting lifecycle agent is privileged and needs a narrow audited interface. Backups contain private data; portable does not mean public. Addon compatibility and data migration can break historical records; staged adapters and semantic golden fixtures are mandatory. A module state change can race workers; transaction fencing must apply at publication, not only task start. Generic quantities cannot silently infer agronomic meaning. Container/process isolation is not a guarantee against a hostile kernel exploit; unrestricted hosted custom code is excluded.
 
-## Unresolved Items
-No blocker to packaging, recovery or contract work. Lucas owns later merchant-provider selection, pricing/retention policy and production hosting budget/capacity. New scientific recommendation models require a separate approved scope and appropriate input/field-validation evidence. These decisions do not authorize payment processing, actual customer provisioning or deployment now.
+- **Per-installation cost.** Measure it in ticket 01 before promising prices.
+- **Backups contain private farm data.** "Portable" never means "public"; bundles are encrypted to an owner key.
+- **Library risk (D3).** The spike must check maintenance health and the exit path; the fallback is the in-house table.
+- **Migration risk.** Staged migrations and golden fixtures are mandatory, and a contract step lands only after every consumer has moved.
+- **Container isolation** does not protect against a hostile kernel exploit. Hosted code uploads stay excluded.
 
 ## Reference rationale
-Patterns, not copied implementation: [Odoo manifests](https://www.odoo.com/documentation/19.0/it/developer/reference/addons/module.html), [Frappe sites](https://docs.frappe.io/framework/user/en/basics/sites), [Press hosting manager](https://github.com/frappe/press), [farmOS model](https://farmos.org/model/), [OpenAgri deployment](https://github.com/agstack/OpenAgri-Bootstrap-Deployment). Sources inspected 2026-10-19. Retain the current stack rather than migrate frameworks; share physical infrastructure while keeping customer runtimes independent. The milestone-1–4 non-goals remain binding for that initiative; this separate subsequent spec authorizes the listed architecture/recording extensions, not new agronomic models.
+
+These references supply patterns; no code is copied:
+- [Odoo manifests](https://www.odoo.com/documentation/19.0/developer/reference/backend/module.html)
+- [Frappe sites](https://docs.frappe.io/framework/user/en/basics/sites)
+- [Frappe Press](https://github.com/frappe/press), a model to defer
+- [farmOS data model](https://farmos.org/model/)
+- [Procrastinate](https://procrastinate.readthedocs.io/)
+- [Alembic branches](https://alembic.sqlalchemy.org/en/latest/branches.html)
+- [age](https://age-encryption.org/)
+- [pint](https://pint.readthedocs.io/)
+
+Sources were inspected on 2026-10-19.

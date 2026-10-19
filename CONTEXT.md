@@ -14,7 +14,9 @@ _Avoid_: Farm, workspace when meaning a deployment.
 
 **Self-hosted installation**: An installation operated by its owner or chosen operator, independently of the hosting manager.
 
-**Hosting manager**: The optional system that manages customer installations and their operational lifecycle.
+**Hosting manager**: A possible future system with its own customer portal and control data. Deferred; hosted installations start as operator fleet tooling.
+
+**Fleet inventory**: The operator's declarative list of hosted installations (release, domain, limits, state) that fleet tooling converges to.
 
 **Instance administrator**: A person authorized to configure an installation and its approved modules/users. Farm-record authority still follows memberships or explicit operator access.
 
@@ -55,3 +57,7 @@ _Avoid_: Planned job.
 **Module profile**: The selected compatible module set and configuration revision of an installation.
 
 **Release bundle**: A reproducible runtime and compatible module versions distributed together.
+
+**Backup bundle**: One encrypted file holding an installation's database dump and a manifest of its identity, release and modules; restoring it creates a new installation.
+
+**External effects**: Anything an installation sends outside itself (notifications, messages, deliveries). An installation-level switch can pause them; restored copies start paused.
