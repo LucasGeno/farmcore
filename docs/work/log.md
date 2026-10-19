@@ -20,8 +20,6 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 - Research delivered to `/Users/Lucas.reed/Documents/lucas-vault/projects/EU Agri Hackathon/2026-10-18-project-case-studies.md`: 10 case studies + index + ecosystem/data note, linked existing event notes. Source-inspected, tests not executed; attribution/licence limitations explicit.
 - Docker Desktop started and local PostGIS 17/3.5 dev server verified accepting connections on localhost55442. Existing test fixture creates a unique disposable database per session; no production migrations run.
 - Remaining frontier after access02: reviewed parameters05 and audited corrections09. Planning07 needs weather04 + parameters05. Completion11 needs review06 + scheduling08 + broader capture10. Final independent QA12 follows all workstreams.
-<<<<<<< HEAD
-=======
 
 ## 2026-10-18 — Integration ownership and dependency checks
 
@@ -43,4 +41,3 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 - Access draft PR8 at `3d9862a` contains the reviewed source/tests (diff SHA256 `4a2ddf84dd7dd27da0d1c24c3f29fcb3976f1736f69bf12eb513ccf9c50d7d18`). Fresh root QA: no Spec/Standards findings, 8 public adversarial probes passed in1.46s. Fresh focused gate failed: 2 obsolete anonymous-audit-view expectations, 1401 passed, 3 skipped, 58 deselected in241.11s; changed coverage71/72 (98%). Worker debugging/adapting the approved admin-only audit contract and covering the missing behavior; PR remains draft/unmerged.
 - PR7 at `97084be` had both initial root QA defects fixed (timestamp overflow isolation, streaming byte limit) and independently rerun green. Parent then reproduced a slow-drip response holding the global job lock beyond per-read timeout; weather worker owns an enforced total header/body deadline and real loopback TDD. No final green gate or merge claimed.
 - Read-only correction preparation at `/tmp/farmcore-corrections-seams.md` records existing observation/irrigate types, computed stock semantics, audited revision/retry/stale-preview requirements across imports. Parameters05 and corrections09 remain blocked on member identity02.
->>>>>>> origin/codex/farmcore-revamp
