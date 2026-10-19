@@ -1,5 +1,7 @@
 """Fail-closed HTTP boundary, including routes that do not use a repository."""
 
+import re
+
 from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -19,11 +21,18 @@ class PrivacyMiddleware:
         if scope["type"] == "http":
             request = Request(scope)
             path = request.url.path
+            recipient_path = path == "/share/received" or bool(
+                re.fullmatch(
+                    r"/share/as/-?[0-9]+/(?:register\.json|ngsi-ld\.json|"
+                    r"observations\.json|audit\.json|advice\.json)?",
+                    path,
+                )
+            )
             request.state.principal = resolve_principal(request)
             if request.state.principal is not None:
                 restricted = (
                     path.rstrip("/") in {"/apps", "/apps.json", "/clock"}
-                    or path.startswith(("/demo", "/debug", "/chat", "/share"))
+                    or path.startswith(("/demo", "/debug", "/chat"))
                     or (
                         path.startswith("/assistant/")
                         and path not in {"/assistant/ask", "/assistant/voice"}
@@ -38,6 +47,7 @@ class PrivacyMiddleware:
                     not operator_authenticated(request)
                     and path not in PUBLIC_PATHS | {"/logout"}
                     and not path.startswith("/static/")
+                    and not recipient_path
                 ):
                     try:
                         with request.app.state.session_factory() as session:

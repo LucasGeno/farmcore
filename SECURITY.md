@@ -14,17 +14,19 @@ ready and credited unless you ask otherwise.
 Farm reads are private by default, including on localhost and when `ADMIN_TOKEN` is unset.
 Local identities and explicit farm memberships are separate from the installation operator.
 No public registration, email service or legacy grant-name mapping creates an account.
-Numeric grant URLs are not credentials; recipient authentication follows in the sharing phase.
+Numeric grant URLs are not credentials: ordinary sharing requires an active authenticated recipient
+explicitly bound to the grant. This also applies to intentionally public demo farms.
 
 | Who | Can |
 |---|---|
 | Installation operator (`ADMIN_TOKEN`) | Installation controls, all configured farms, global model-call audit and legacy capture |
-| Farm owner | Read/export assigned farms, import machine operations, set production/inventory thresholds, assign/revoke existing local identities |
+| Farm owner | Read/export assigned farms, import machine operations, set production/inventory thresholds, assign/revoke existing local identities and recipient-bound grants |
 | Farm advisor | Read/export assigned farms; no arbitrary operation writes, membership administration or installation controls |
 | Anonymous visitor | Health, static files and sign-in; no private farm reads or writes |
 | Explicit demo visitor | Read only explicitly designated demo farms; no model-call audit |
 | Tour visitor | Same farm authority as the underlying identity; every mutation refused |
-| Numeric grantee URL | No authority; recipient binding is required before ordinary grant access opens |
+| Grant recipient | Read only active explicitly bound grant resources; no farm membership, audit, raw transcripts or pending capture |
+| Numeric grantee URL | No authority without a valid authenticated recipient session |
 
 Provision identities locally with `farmcore users create <login> --farm-id <id>`; this prompts
 for a hidden, confirmed password. Omit `--farm-id` to create an account without farm authority.
@@ -93,7 +95,22 @@ requests remain available for trusted scripts. Never put credentials or tokens i
 
 ## Known limits
 
-Recipient-bound sharing is not open in this phase: the sharing UI and routes remain operator-only.
+Owners manage grants from **Sharing**, choosing an existing enabled recipient login separately
+from the display name. Create recipients with `farmcore users create <login>` without `--farm-id`
+when no membership is intended. Those users sign in at `/login` and land on `/share/received`;
+only `/share/as/<grant-id>/` and its authorized exports expose shared data. Farm selectors,
+notifications, ordinary assistant tools and other farm pages never inherit grant authority.
+Owners can preview their own grants with the same scope and real-time validity restrictions.
+Legacy unbound grants remain stored but confer no recipient authority; no display-name backfill
+occurs. Replace them with explicitly bound grants. Expiry, revocation and disabled identities
+deny the next read, independent of the replay clock. Reads preserve user, farm, grant and purpose
+in the owner's access log. Owners can inspect only their own farm's consent ledger.
+
+The advice-only preset exports stored facts and a whitelisted configuration identifier/review
+status; it never exports parameter snapshots, reviewer identity/notes or raw weather. Advice
+consent does not imply logs, stations or private parameter/correction history. Grant repositories
+fail closed for unlisted app resources, audit and writes even when legacy scope arrays are broad.
+There is no generic grant model-table export endpoint.
 The shared `WEB_CHAT_ID` capture/confirmation workflow remains operator-only until drafts and
 confirmations are bound to a principal and farm; ordinary membership login does not unlock it.
 Advisor recommendation-review writes arrive with the review feature; advisors currently read.

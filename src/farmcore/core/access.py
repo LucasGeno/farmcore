@@ -61,6 +61,9 @@ SCOPES = frozenset(
         "audit:read",
     }
 )
+GRANT_READ_SCOPES = frozenset(
+    {"fields:read", "stations:read", "logs:read", "register:read", "advice:read"}
+)
 ALL_SCOPES = "*"
 OWNER = "owner"
 DEMO_SOURCE = "farmcore-demo"
@@ -115,6 +118,7 @@ class ScopedRepository:
         purpose: str,
         *,
         private_member: bool = False,
+        grant_view: bool = False,
     ) -> None:
         self.session = session
         self.farm_id = farm_id
@@ -122,10 +126,35 @@ class ScopedRepository:
         self.actor = actor
         self.purpose = purpose
         self.private_member = private_member
+        self.grant_view = grant_view
 
     def check(self, scope: str, resource: str | None = None) -> None:
         """Raise `ScopeDenied` unless the grant allows `scope` on this farm now and `scope`
         covers `resource`."""
+        if self.grant_view and (
+            not self.grant.scopes
+            or not set(self.grant.scopes) <= GRANT_READ_SCOPES
+            or scope not in GRANT_READ_SCOPES
+            or (
+                resource is not None
+                and resource
+                not in {
+                    "farm",
+                    "parcel",
+                    "product",
+                    "source",
+                    "asset",
+                    "observation",
+                    "log",
+                    "quantity",
+                    "log_parcel",
+                    "log_source",
+                    "ext_id",
+                    "advice",
+                }
+            )
+        ):
+            raise ScopeDenied("This resource is not available through ordinary grants.")
         if scope not in SCOPES:
             raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
         if resource is not None and scope not in RESOURCE_SCOPES.get(resource, _ANY):

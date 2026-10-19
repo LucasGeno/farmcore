@@ -61,10 +61,17 @@
     </label>
     <button type="submit" class="col-span-2 min-h-[44px] rounded-lg border border-line bg-surface px-4 py-2 text-sm font-semibold">Filter grants</button>
   </form>
-{% if is_admin %}
+{% if is_farm_owner and not is_tour %}
 <details class="mt-4 rounded-xl border border-line bg-surface p-4">
   <summary class="flex min-h-[44px] cursor-pointer items-center font-semibold">Grant read access</summary>
-  <form method="post" action="{{ farm_url('/share/grants') }}" class="mt-3 grid gap-3 sm:grid-cols-2">
+  <form method="post" action="/share/grants?farm={{ farm_id }}" class="mt-3 grid gap-3 sm:grid-cols-2">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="grid min-w-0 gap-1 text-sm">
+      <span class="font-medium">Recipient login</span>
+      <input name="recipient_login" required maxlength="128" autocomplete="off"
+             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+      <span class="text-sm text-muted">An existing enabled account. Names do not grant access.</span>
+    </label>
     <label class="grid min-w-0 gap-1 text-sm">
       <span class="font-medium">Third party</span>
       <input name="grantee" value="{{ default_grantee }}" required maxlength="{{ grantee_max_len }}"
@@ -121,8 +128,9 @@
             {% if not is_tour %}
             <a href="/share/as/{{ g.id }}/" class="mt-1 flex min-h-[44px] items-center py-2 text-brand-700 underline decoration-line underline-offset-4">View as {{ g.grantee }}</a>
             {% endif %}
-            {% if is_admin %}
-            <form method="post" action="{{ farm_url('/share/grants/' ~ g.id ~ '/revoke') }}" class="mt-1">
+            {% if is_farm_owner and not is_tour %}
+            <form method="post" action="/share/grants/{{ g.id }}/revoke?farm={{ farm_id }}" class="mt-1">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
               <button type="submit" class="min-h-[44px] rounded-lg border border-rose-300 px-3 py-2 text-sm text-rose-800 hover:bg-rose-50">Revoke</button>
             </form>
             {% endif %}

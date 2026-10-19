@@ -293,8 +293,13 @@ def test_sharing_form_and_redirect_preserve_the_selected_query_farm(client, farm
     import re
     from datetime import timedelta
 
+    from farmcore.core.identity import DUMMY_HASH
     from farmcore.core.models.canonical import DataGrant
+    from farmcore.core.models.identity import LocalIdentity
 
+    recipient = LocalIdentity(login="qa-context-recipient", password_hash=DUMMY_HASH)
+    session.add(recipient)
+    session.commit()
     chateau, other = farms
     client.cookies.set(FARM_COOKIE, str(chateau.id))
     page = client.get("/share/", params={"farm": other.id}).text
@@ -303,6 +308,7 @@ def test_sharing_form_and_redirect_preserve_the_selected_query_farm(client, farm
         action,
         data={
             "grantee": "QA explicit farm",
+            "recipient_login": recipient.login,
             "purpose": "synthetic context regression",
             "preset": "adviser_logs",
             "valid_to": (datetime.now(UTC) + timedelta(days=30)).date().isoformat(),
@@ -312,6 +318,7 @@ def test_sharing_form_and_redirect_preserve_the_selected_query_farm(client, farm
     assert response.status_code == 303
     grant = session.scalar(select(DataGrant).where(DataGrant.grantee == "QA explicit farm"))
     assert grant.farm_id == other.id
+    assert grant.recipient_identity_id == recipient.id
     assert response.headers["location"] == f"/share/?farm={other.id}"
     assert client.cookies.get(FARM_COOKIE) == str(chateau.id)
     denied = client.post(

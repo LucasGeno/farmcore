@@ -23,6 +23,7 @@ def _today() -> date:
 def _form(**over) -> dict[str, str]:
     data = {
         "grantee": "Co-op adviser",
+        "recipient_login": "share-recipient",
         "preset": "adviser_logs",
         "purpose": "spray advice",
         "valid_to": (_today() + timedelta(days=30)).isoformat(),
@@ -89,17 +90,17 @@ def test_invalid_input_is_a_plain_words_422_and_writes_nothing(admin, session, d
     assert _third_party_grants(session) == []
 
 
-def test_anonymous_sees_the_page_read_only_and_cannot_post(anonymous, admin, session, demo) -> None:
+def test_anonymous_cannot_read_consent_ledger_or_post(anonymous, admin, session, demo) -> None:
     admin.post("/share/grants", data=_form(), follow_redirects=False)
     [grant] = _third_party_grants(session)
 
     page = anonymous.get("/share/")
 
-    assert page.status_code == 200
-    assert "Co-op adviser" in page.text
+    assert page.status_code == 403
+    assert "Co-op adviser" not in page.text
     assert 'action="/share/grants"' not in page.text
     assert not re.search(r"<button\b[^>]*>\s*Revoke\s*</button>", page.text)
-    assert "Access log" in page.text
+    assert "Access log" not in page.text
     assert anonymous.post("/share/grants", data=_form()).status_code == 403
     assert anonymous.post(f"/share/grants/{grant.id}/revoke").status_code == 403
     assert len(_third_party_grants(session)) == 1
@@ -107,7 +108,7 @@ def test_anonymous_sees_the_page_read_only_and_cannot_post(anonymous, admin, ses
 
 def test_admin_page_shows_the_form_with_defaults(admin, demo) -> None:
     page = admin.get("/share/").text
-    assert 'action="/share/grants"' in page
+    assert f'action="/share/grants?farm={demo.farm.id}"' in page
     assert 'value="Co-op adviser"' in page and 'value="spray advice"' in page
     assert (_today() + timedelta(days=30)).isoformat() in page
     assert "Co-op adviser — spray logs and register (read only)" in page

@@ -14,6 +14,7 @@ PRESETS: MappingProxyType[str, tuple[str, tuple[str, ...]]] = MappingProxyType(
             ("logs:read", "register:read"),
         ),
         "station": ("Weather service — weather station data (read only)", ("stations:read",)),
+        "advice": ("Advice reviewer — stored advice only (read only)", ("advice:read",)),
     }
 )
 DEFAULT_PRESET = next(iter(PRESETS))

@@ -99,3 +99,59 @@ PYTEST_ADDOPTS='tests/core/test_schema.py tests/apps/share -m "not data" --rando
 
 This verifies only the standalone migration foundation. Runtime recipient authorization, browser
 management and all ticket03 acceptance criteria remain pending implementation/review/full tier3.
+
+### Runtime failure model before verification
+
+- Guessing a grant ID, sharing its URL, or matching a legacy grantee label confers authority:
+  real HTTP anonymous, wrong-identity and unbound legacy controls must deny; authenticated
+  exact-recipient controls must succeed without requiring unrelated farm membership.
+- A selected farm, foreign farm query parameter, stale cookie or separate member role widens
+  grant authority: HTTP tests vary identities, membership, resource IDs and farm selectors;
+  principal resolution and exact-grant scope checks enforce both identity and farm boundaries.
+- Revoked/expired grants or disabled identities remain usable: next-request wall-clock validity,
+  revoke and identity-disable probes must deny every read/export surface.
+- Broad/reserved grants or generic resource manifests expose audit, transcripts, pending capture,
+  private advice inputs or parameter history: explicit resource policy and advice projection
+  whitelist tests deny raw provenance and retain only consented stored assessment facts.
+- Advice-only consent triggers station/weather reads: advice-only recipient probes must show
+  limited current-input availability without weather payload or unauthorized resource audit;
+  explicit weather consent and member provenance remain positive controls.
+- Owner management admits foreign farms or forged requests: real browser/HTTP create/revoke
+  tests cover owner authority, existing enabled recipient selection, CSRF and foreign-member denial.
+- Recipient pages leak other farm metadata through layout/widgets/polling: fresh desktop/mobile
+  browser review checks recipient-only landing, allowed content, logout and forbidden background reads.
+- Guards pass vacuous tests: after source freeze, serialize plausible runtime mutants for recipient
+  equality, validity/revocation, farm/resource scoping and private projection; require each killed,
+  restore exact source bytes and diff, then run final gate on the restored tree.
+
+These are verification obligations, not completed evidence. Foundation evidence above does not
+prove runtime authorization or browser behavior.
+
+Verification seam clarification: existing share HTTP exports are typed endpoints; there is no
+arbitrary generic model-export HTTP route. Test the real advice HTTP projection directly, and
+exercise the established public `ScopedRepository` resource-policy API against migrated PostGIS
+for arbitrary app-owned resource denial, following `tests/core/test_access.py`. No mocked internal
+collaborators or test-only production routes. Parameter/history and operation-correction resources
+remain member-only in this ticket; ordinary recipient presets do not expose their private scopes.
+
+Runtime TDD progress (not final verification): zero-membership exact recipient HTTP RED403
+(1 failed2.53s) -> minimum GREEN1 passed2.48s. Owner create/revoke RED403 ->2 passed3.35s;
+recipient landing redirect RED ->3 passed4.19s; own-farm owner scoped preview RED404 ->4 passed4.26s.
+Adversarial identity/status/selector matrix14 passed8.36s. Advice projection HTTP RED403 ->
+1 passed14 deselected3.12s. Public repository API unlisted app-owned resource RED (1 failed1.52s)
+-> explicit grant-view readonly resource/scope guard,17 new tests passed9.73s.
+First broad share diagnostic:26 failed82 passed4 deselected16.23s, reflecting obsolete
+bearer-positive fixtures, recipient form and anonymous-ledger contracts. These must be converted
+to real authenticated bound recipient positives while retaining genuine anonymous denials and
+strengthening actor attribution; this diagnostic is not a passing gate.
+
+Subsequent diagnostic core+share run:5 failed807 passed6 deselected139.15s. Remaining old
+contracts concerned operator elevation inside grant audit, anonymous demo audit grants,
+resolved-farm form URLs, recipient provisioning in a farm-switcher fixture, and anonymous tour
+consent ledger access. Corrections preserve separate operator global-audit positive controls and
+explicit recipient provisioning rather than widening grant or anonymous authority. Final focused
+rerun and broad gate remain pending. Mixed-sensitive whole-grant denial focused control:
+6 passed21 deselected6.10s. Runtime property work now includes32 generated examples/64 hostile
+HTTP grant requests with an authorized control, no leaked data/audit and unchanged binding;
+raw-transcript/pending export controls2 passed27 deselected3.23s. These interim numbers do not
+replace frozen-source final evidence.

@@ -139,7 +139,8 @@ def test_tour_ui_preferences_and_read_only_routes(settings, session_factory, cre
             ("/share/", 'action="/share/grants"'),
         ):
             response = client.get(path)
-            assert response.status_code == 200, path
+            expected = 403 if path == "/share/" and credential == "unconfigured" else 200
+            assert response.status_code == expected, path
             assert forbidden not in response.text
         assert client.get("/chat/").status_code == 403
         assert client.get("/debug/drawer?debug=1").text == ""

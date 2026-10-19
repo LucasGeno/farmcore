@@ -50,10 +50,11 @@ def _log(session, farm_id: int, grant_id: int | None, actor: str, **kw) -> Acces
 
 
 @pytest.fixture
-def adviser(session, owner_repo):
+def adviser(session, owner_repo, grantee_identity):
     g = service.create_grant(
         owner_repo,
         grantee="Co-op adviser",
+        recipient_identity_id=grantee_identity.id,
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
@@ -116,12 +117,12 @@ def test_page_masks_chat_ids_and_toggles_third_parties(
     )
     session.commit()
 
-    for c in (admin, anonymous):
-        page = c.get("/share/").text
-        assert "chat …8777" in page
-        assert RAW_CHAT not in page
-        assert "tok-share" not in page
-    only = anonymous.get("/share/", params={"who": "grantees"}).text
+    assert anonymous.get("/share/").status_code == 403
+    page = admin.get("/share/").text
+    assert "chat …8777" in page
+    assert RAW_CHAT not in page
+    assert "tok-share" not in page
+    only = admin.get("/share/", params={"who": "grantees"}).text
     log_html = only.split("Access log", 1)[1]
     assert "chat …8777" not in log_html
     assert f"grant:{adviser.id}" in log_html and "spray advice" in log_html
@@ -129,9 +130,11 @@ def test_page_masks_chat_ids_and_toggles_third_parties(
 
 
 def test_pages_use_data_act_framing_and_never_intermediary_words(
-    anonymous, session, demo, adviser
+    admin, grantee_client, session, demo, adviser
 ) -> None:
-    for path in ("/share/", f"/share/as/{adviser.id}/"):
-        text = anonymous.get(path).text
+    for client, path in ((admin, "/share/"), (grantee_client, f"/share/as/{adviser.id}/")):
+        response = client.get(path)
+        assert response.status_code == 200
+        text = response.text
         assert "Data Act" in text, path
         assert not re.search(r"intermediation|intermediary|\bDGA\b", text, re.IGNORECASE), path

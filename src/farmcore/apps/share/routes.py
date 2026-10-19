@@ -26,9 +26,11 @@ from sqlalchemy.orm import Session
 
 from farmcore.apps.operations import register
 from farmcore.apps.share import config, ngsi, service
-from farmcore.core.access import OWNER, Repo, ScopeDenied, ScopedRepository
+from farmcore.core.access import OWNER, Repo, ScopeDenied, ScopedRepository, require_farm_owner
 from farmcore.core.clock import get_clock
-from farmcore.core.models.canonical import DataGrant, LlmAudit, Observation, Parcel
+from farmcore.core.identity import canonical_login, principal_for
+from farmcore.core.models.canonical import Advice, DataGrant, LlmAudit, Observation, Parcel
+from farmcore.core.models.identity import LocalIdentity
 from farmcore.core.routes_clock import require_admin
 from farmcore.db import get_session
 from farmcore.web import context_url, is_admin, operator_authenticated, render
@@ -131,6 +133,30 @@ def _grant_view(grant: DataGrant, now: datetime, tz: str) -> dict[str, Any]:
     }
 
 
+@router.get("/received", response_class=HTMLResponse)
+def received(request: Request, session: Session = Depends(get_session)):
+    principal = principal_for(request)
+    if principal is None:
+        raise HTTPException(403, "Authentication required.")
+    grants = session.scalars(
+        select(DataGrant)
+        .where(DataGrant.recipient_identity_id == principal.identity_id)
+        .order_by(DataGrant.id.desc())
+    )
+    response = render(
+        request,
+        "share/received.html",
+        grants=[
+            _grant_view(g, datetime.now(UTC), _tz(request))
+            for g in grants
+            if service.is_shareable_grant(g)
+            and service.grant_status(g, datetime.now(UTC)) == "active"
+        ],
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @router.get("/", response_class=HTMLResponse)
 def index(
     request: Request,
@@ -140,6 +166,8 @@ def index(
     season: Annotated[str | None, Query(max_length=4)] = None,  # a year or "all"
     parcel: Annotated[str, Query(max_length=19)] = "",  # the form's "All parcels" sends ""
 ) -> HTMLResponse:
+    if not operator_authenticated(request):
+        require_farm_owner(request, repo)
     now = datetime.now(UTC)
     grants = repo.list(
         DataGrant, DataGrant.grantee != OWNER, scope=AUDIT_SCOPE, order_by=DataGrant.id.desc()
@@ -190,20 +218,30 @@ def _valid_to(value: str, tz: str) -> datetime:
     return datetime.combine(day, END_OF_DAY, tzinfo=ZoneInfo(tz))
 
 
-@router.post("/grants", dependencies=[Depends(require_admin)])
+@router.post("/grants", dependencies=[Depends(require_farm_owner)])
 def create(
     request: Request,
     repo: Repo,
     grantee: str = Form(""),
+    recipient_login: str = Form("", max_length=128),
     preset: str = Form(""),
     purpose: str = Form(""),
     valid_to: str = Form(""),
 ) -> RedirectResponse:
     tz = _tz(request)
     try:
+        normalized = canonical_login(recipient_login)
+        recipient = repo.session.scalar(
+            select(LocalIdentity).where(
+                LocalIdentity.login == normalized, LocalIdentity.disabled_at.is_(None)
+            )
+        )
+        if recipient is None:
+            raise ValueError("Choose an existing enabled recipient login.")
         service.create_grant(
             repo,
             grantee=grantee,
+            recipient_identity_id=recipient.id,
             preset=preset,
             purpose=purpose,
             valid_to=_valid_to(valid_to, tz),
@@ -228,8 +266,10 @@ def export_ngsi(
     return _ld_json(ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id))
 
 
-@router.post("/grants/{grant_id}/revoke", dependencies=[Depends(require_admin)])
+@router.post("/grants/{grant_id}/revoke", dependencies=[Depends(require_farm_owner)])
 def revoke(request: Request, repo: Repo, grant_id: int) -> RedirectResponse:
+    if not 0 < grant_id <= MAX_ID:
+        raise HTTPException(404, "Not found.")
     try:
         service.revoke_grant(repo, grant_id, tz=_tz(request))
     except LookupError as exc:
@@ -248,11 +288,15 @@ def get_grant_repo(
     rows of the reads persist), rolls back if it raises."""
     in_range = 0 < grant_id <= MAX_ID  # beyond bigint is no grant, not a database error
     grant = session.get(DataGrant, grant_id) if in_range else None  # the authorisation lookup
-    if grant is None or service.is_owner_grant(grant):
+    if grant is None or not service.is_shareable_grant(grant):
         raise HTTPException(status_code=404, detail="Not found.")
-    if (
-        not operator_authenticated(request)
-        and grant.farm_id not in request.app.state.settings.demo_farm_ids
+    principal = principal_for(request)
+    if not operator_authenticated(request) and (
+        principal is None
+        or (
+            grant.recipient_identity_id != principal.identity_id
+            and principal.memberships.get(grant.farm_id) != "owner"
+        )
     ):
         raise HTTPException(status_code=404, detail="Not found.")
     status = service.grant_status(grant, datetime.now(UTC))
@@ -260,7 +304,9 @@ def get_grant_repo(
         raise HTTPException(
             status_code=403, detail=service.denied_message(grant, status, _tz(request))
         )
-    repo = service.grant_repo(session, grant)
+    repo = service.grant_repo(
+        session, grant, actor=f"user:{principal.identity_id}" if principal else None
+    )
     try:
         yield repo
     except BaseException:
@@ -428,3 +474,21 @@ def grantee_audit(request: Request, repo: GrantRepo) -> JSONResponse:
         return JSONResponse(_audit(request, repo, PROBE_LIMIT))
     except ScopeDenied as exc:
         raise _denied("audit") from exc
+
+
+@router.get("/as/{grant_id}/advice.json")
+def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
+    try:
+        rows = repo.list(
+            Advice,
+            Advice.evaluated_at <= _clock_now(request, repo),
+            scope="advice:read",
+            order_by=(Advice.evaluated_at.desc(), Advice.id.desc()),
+            limit=50,
+        )
+    except ScopeDenied as exc:
+        raise HTTPException(403, "Not shared: this grant does not include advice.") from exc
+    current_inputs = "not_loaded" if "stations:read" in repo.grant.scopes else "not_authorized"
+    return JSONResponse(
+        [{**service.shared_advice(row), "current_inputs_status": current_inputs} for row in rows]
+    )
