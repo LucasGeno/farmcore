@@ -10,9 +10,8 @@ MIN_TOKEN_CHARS = 32
 def check_public_settings(settings: Settings) -> None:
     """Refuse a public deployment without a strong admin token.
 
-    Without a token `web.is_admin` treats every visitor as admin, so a public site would expose
-    the clock step form, uploads and the full chat audit to anyone. The message names the
-    variables only, never a value.
+    Private reads fail closed without a token. Network deployments additionally require a
+    strong operator token for bootstrap. The message names variables only, never a value.
     """
     if not settings.farmcore_public:
         return

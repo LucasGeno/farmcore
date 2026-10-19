@@ -51,6 +51,14 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 - Isolated02 public-auth UI slice reports HTTP/browser RED→GREEN for public logout landing and no unauthorized widgets; four HTTPS desktop/mobile normal/reduced-motion journeys have no page errors/private polls/overflow. Early QA additionally caught and fixed lost Sunlight preference. Root must independently rerun the final frozen02; final12 browser blocker is not yet cleared.
 - Root created an isolated combined validation worktree `/Users/Lucas.reed/.codex/worktrees/farmcore-combined-qa/FarmCore` at aeb7ece, applying exact frozen01/04 patches without conflicts. Staged validation tree `53e48c630df30f58b08e051a7fc675ccced3ee3a`; ordinary randomized non-data suite+coverage running (seed19012026), four lifecycle tests separate. This is test input only: no feature/integration branch merge or milestone completion implied.
 
+
+## 2026-10-19 — Verified forecast and privacy integration
+
+- PR7 exactc6762c8 hosted CI succeeded; completed authenticated logs verified Python2702passed5skipped268deselected321.11s plus Node/Docker/lint/audit. Parent's five public-job liveness probes clear. Normal merge f2630fa at16:24:17UTC; actual-tip tier2 711passed3skipped136deselected273.62s,changedcoverage100%,lint/secrets/audit clean. Forecast slice integrated; historical-observation missingness acceptance stays05, so04/M1 not complete.
+- PR8 exactcef01d7 hosted Python/Node/Docker CI succeeded. Normal merge546b077 at16:32:32UTC after PR7 post-merge gate. Actual-tip tier2 1404passed3skipped58deselected268.45s,changedcoverage100%,lint/secrets clean; unchanged-dependency audit skipped. Ordered4passed1.88s,Node30passed,singleinventory_0001head. Ticket01 done;02 now may safely move onto this verified integration tip. Public logout/widget browser blocker remains02/final12.
+- Isolated composed tree53e48c630df30f58b08e051a7fc675ccced3ee3a passed2726 non-data tests,3skipped268deselected501.29s,cov100%,lint/secrets/audit clean; ordered4/Node30 pass separately. Product/test/dependency files exactly match merged546b077. Full-data check remains running; preliminary evidence only. AggregatePR6 remains draft/incomplete; no mainmerge or deployment.
+- PR9 architecture docs independently reviewed; sole execution-authority ambiguity fixed atb68c05e and rechecked clear.24YAML/96relative links/20ticket acyclicgraph pass. Exact-head CI pending; new initiative publication does not start/schedule runtime execution or widen current revamp work.
+
 ## 2026-10-19 — Accepted installation and module architecture
 
 - User approved independently isolated hosted/self-hosted installations and modular architecture, and requested a spec plus implementation tickets while current QA/merges continue.

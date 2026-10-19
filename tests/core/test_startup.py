@@ -1,7 +1,7 @@
 """A public deployment (FARMCORE_PUBLIC=1) refuses to start without a strong admin token.
 
-Without a token, `web.is_admin` treats every visitor as admin, so the app-level assert is the
-defence in depth behind the compose `${ADMIN_TOKEN:?}` guard.
+The app-level assertion complements fail-closed private reads and the compose
+`${ADMIN_TOKEN:?}` guard.
 """
 
 from __future__ import annotations
@@ -50,7 +50,11 @@ def test_public_with_a_token_starts_and_is_healthy(settings, session_factory) ->
 
 def test_not_public_without_a_token_starts(settings, session_factory) -> None:
     assert settings.farmcore_public is False
-    app = create_app(settings, manifests=[], session_factory=session_factory)
+    app = create_app(
+        settings.model_copy(update={"admin_token": None}),
+        manifests=[],
+        session_factory=session_factory,
+    )
     with TestClient(app) as c:
         assert c.get("/health").status_code == 200
 

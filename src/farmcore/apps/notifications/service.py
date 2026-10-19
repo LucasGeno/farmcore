@@ -147,7 +147,15 @@ def forecast_items(repo, now, tz, farm, busy_days):
     config = advisor.config_for(farm, now, tz)
     days = ranking.rank_days(run.series, now, tz, config, busy_days=busy_days)
     provenance = "As-issued forecast" if run.as_issued else "Forecast not as issued"
-    provenance += f" · {run.label} · issued {run.issued_at.astimezone(ZoneInfo(tz)):%d %b %H:%M}."
+    if run.props.get("issued_at_kind") == "receipt":
+        fetched = run.available_at.astimezone(ZoneInfo(tz))
+        provenance += (
+            f" · {run.label} · fetched {fetched:%d %b %H:%M} · provider issue time unknown."
+        )
+    else:
+        provenance += (
+            f" · {run.label} · issued {run.issued_at.astimezone(ZoneInfo(tz)):%d %b %H:%M}."
+        )
     out = []
     by_ts = {row.ts: row for row in run.series}
     missing = []

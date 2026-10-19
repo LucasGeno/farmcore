@@ -103,13 +103,13 @@ def _set_state(factory, name: str, state: str) -> None:
 
 def test_uninstalled_app_is_skipped_at_next_start(settings, session_factory) -> None:
     app = create_app(settings, app_packages=FAKE, session_factory=session_factory)
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Admin-Token": settings.admin_token.get_secret_value()}) as c:
         assert c.get("/a/ping").json() == {"app": "a"}
     _set_state(session_factory, "a", "uninstalled")
     app = create_app(settings, app_packages=FAKE, session_factory=session_factory)
     assert [m.name for m in app.state.manifests] == ["core", "c", "b"]
     assert [m.name for m in app.state.all_manifests] == ["core", "c", "b", "a"]
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Admin-Token": settings.admin_token.get_secret_value()}) as c:
         assert c.get("/a/ping").status_code == 404
     assert _rows(session_factory)["a"][0] == "uninstalled"
 

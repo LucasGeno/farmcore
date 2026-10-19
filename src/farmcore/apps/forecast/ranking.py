@@ -99,6 +99,20 @@ def _grade_day(
     lookahead = config.window_rain_lookahead_h.value * HOUR
     if last_ts is None or hours[-1] + lookahead > last_ts:
         return DayGrade(day, NO_FORECAST, "Beyond the forecast", has_forecast=False)
+    by_ts = {o.ts: o for o in series}
+    rain_hours = {
+        h + i * HOUR for h in hours for i in range(config.window_rain_lookahead_h.value + 1)
+    }
+    if any(h not in by_ts or by_ts[h].rr1_mm is None for h in rain_hours) or any(
+        h not in by_ts or by_ts[h].ff_kmh is None or (sulphur and by_ts[h].t_c is None)
+        for h in hours
+    ):
+        return DayGrade(
+            day,
+            NO_FORECAST,
+            "Forecast inputs unavailable: missing required hours",
+            has_forecast=False,
+        )
     closed = closed_by(series, hours, config, sulphur=sulphur)
     run = _longest_run(hours, closed)
     if not run:

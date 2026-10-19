@@ -154,8 +154,15 @@ def test_anonymous_pages_leak_nothing_even_with_debug_1(
     _chat_spray(session, settings, "P1")
     grant_ids = [str(g) for g in session.scalars(select(DataGrant.id))]
     guarded.cookies.set("farmcore_debug", "1")  # a stale cookie gives nothing either
+    paths = ("/fields/", f"/advisor/parcels/{p1.id}", "/operations/register")
+    for path in paths:
+        assert guarded.get(path, params={"debug": "1"}).status_code == 403
+    assert guarded.get("/debug/drawer?debug=1").status_code == 403
+    guarded.app.state.settings = guarded.app.state.settings.model_copy(
+        update={"demo_mode": True, "demo_farm_ids": [p1.farm_id]}
+    )
 
-    for path in ("/fields/", f"/advisor/parcels/{p1.id}", "/operations/register"):
+    for path in paths:
         page = guarded.get(path, params={"debug": "1"})
         assert page.status_code == 200, path
         html = page.text

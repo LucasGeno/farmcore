@@ -28,7 +28,7 @@ def test_admin_debug_before_seed_has_clock_and_no_invented_farm(settings, sessio
         client.cookies.set("admin_token", TOKEN)
         response = client.get("/debug/drawer", params={"debug": "1", "path": "/fields/"})
 
-    assert anonymous.status_code == 200 and anonymous.text == ""
+    assert anonymous.status_code == 403
     assert "set-cookie" not in anonymous.headers
     assert response.status_code == 200
     assert "No farm seeded yet" in response.text
@@ -47,7 +47,9 @@ def test_validation_missing_and_long_input_get_plain_safe_html(settings, session
     def integer(value: int = Query()):
         return {"value": value}
 
-    with TestClient(app) as client:
+    with TestClient(
+        app, headers={"X-Admin-Token": settings.admin_token.get_secret_value()}
+    ) as client:
         missing = client.get("/__synthetic__/integer", headers=HTML)
         long = client.get("/__synthetic__/integer", params={"value": "x" * 80}, headers=HTML)
         json_error = client.get("/__synthetic__/integer", params={"value": "x" * 80})

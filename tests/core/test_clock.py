@@ -85,7 +85,12 @@ def _app_client(settings, session_factory, **overrides):
     app = create_app(
         settings.model_copy(update=overrides), manifests=manifests, session_factory=session_factory
     )
-    return TestClient(app)
+    return TestClient(
+        app,
+        headers={}
+        if "admin_token" in overrides
+        else {"X-Admin-Token": settings.admin_token.get_secret_value()},
+    )
 
 
 def test_get_clock_partial_shows_mode_time_input_and_presets(client) -> None:

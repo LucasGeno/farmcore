@@ -176,9 +176,10 @@ def test_the_token_never_appears_in_responses_or_logs(admin_client, caplog):
 
 
 def test_without_a_configured_token_the_page_says_so(client, session, settings):
+    client.app.state.settings = settings.model_copy(update={"admin_token": None})
     ensure_default_farm(session, settings)
     session.commit()
-    assert settings.admin_token is None
+    assert client.app.state.settings.admin_token is None
 
     page = client.get("/admin/sign-in").text
 

@@ -12,12 +12,12 @@ DOC_PATHS = ("/docs", "/redoc", "/openapi.json")
 
 
 def _client(settings, session_factory, *, public: bool) -> TestClient:
-    token = SecretStr("test-only-api-docs-credential-000000") if public else None
+    token = SecretStr("test-only-api-docs-credential-000000")
     update = {"farmcore_public": public, "admin_token": token}
     app = create_app(
         settings.model_copy(update=update), manifests=[], session_factory=session_factory
     )
-    return TestClient(app)
+    return TestClient(app, headers={"X-Admin-Token": token.get_secret_value()})
 
 
 @pytest.mark.parametrize("path", DOC_PATHS)

@@ -14,6 +14,7 @@ from farmcore import __version__
 from farmcore.composition import compose_spray_weather_reader
 from farmcore.core import errors, jobs, registry
 from farmcore.core.manifest import Manifest
+from farmcore.core.privacy import PrivacyMiddleware
 from farmcore.core.startup import check_public_settings
 from farmcore.core.tour import TourMiddleware
 from farmcore.db import get_session, make_engine, make_session_factory
@@ -53,6 +54,7 @@ def create_app(
         lifespan=lifespan,
         **(docs if settings.farmcore_public else {}),
     )
+    app.add_middleware(PrivacyMiddleware)
     app.add_middleware(TourMiddleware)
     app.state.settings = settings
     app.state.engine = engine

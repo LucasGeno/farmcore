@@ -13,7 +13,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import event, func, select
 
 from farmcore.apps.chat.handlers import on_message
 from farmcore.apps.chat.manifest import MANIFEST
@@ -99,7 +99,7 @@ def test_chat_page_writes_an_audit_read_access_log_row(client, session, settings
     assert [(r.scope, r.purpose) for r in rows] == [("audit:read", "web")]
 
 
-# --- Sanitised demo view for non-admins ----------------------------------------
+# --- Global audit metadata requires the installation operator ------------------
 
 TOKEN = "tok-chat"
 CHAT_REF = "tg:123458777:5"
@@ -142,37 +142,100 @@ def seed_audit_row(session, settings) -> None:
     session.commit()
 
 
-def test_anonymous_chat_page_is_a_sanitised_demo_view(guarded, session, settings):
+def test_anonymous_chat_page_denies_all_audit_metadata(guarded, session, settings):
+    """Previously sanitised metadata was public; private mode now denies the entire audit."""
     seed_audit_row(session, settings)
+    before = session.scalar(
+        select(func.count()).select_from(AccessLog).where(AccessLog.resource == "llm_audit")
+    )
 
     response = guarded.get("/chat/")
 
-    assert response.status_code == 200
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Authentication required."}
     page = html.unescape(response.text)
-    assert "gemini-2.5-flash" in page
-    assert "chat …8777" in page
-    assert "tg:" not in page and "123458777" not in page
-    assert TRANSCRIPT not in page
-    assert "12 characters" in page
-    assert 'data-fields="transcript,parcels,products,date"' in page
-    for value in ("Clos Secret", "Cuprum Hidden", "2024-04-10", "example.invalid"):
+    for value in (
+        "gemini-2.5-flash",
+        "vertex",
+        "chat …8777",
+        "tg:",
+        "123458777",
+        TRANSCRIPT,
+        "12 characters",
+        "data-fields",
+        "transcript",
+        "parcels",
+        "products",
+        "date",
+        "Clos Secret",
+        "Cuprum Hidden",
+        "P5",
+        "2024-04-10",
+        "example.invalid",
+    ):
         assert value not in page
+    assert (
+        session.scalar(
+            select(func.count()).select_from(AccessLog).where(AccessLog.resource == "llm_audit")
+        )
+        == before
+    )
 
 
-def test_anonymous_chat_page_is_in_plain_words_with_real_times_labelled(guarded, session, settings):
-    """Live QA 17: no "vertex · status 200 · 321 ms"; the call times are real, not the replay."""
+def test_explicit_demo_chat_page_denies_metadata_without_querying_audit(
+    guarded, session, settings, connection
+):
+    """Demo designation permits farm reads; global audit and its metadata remain operator-only."""
     seed_audit_row(session, settings)
+    assert guarded.get("/chat/").status_code == 403
+    from farmcore.core.seed import ensure_default_farm
 
-    page = html.unescape(guarded.get("/chat/").text)
+    farm = ensure_default_farm(session, settings)
+    session.commit()
+    guarded.app.state.settings = guarded.app.state.settings.model_copy(
+        update={"demo_mode": True, "demo_farm_ids": [farm.id]}
+    )
+    before = session.scalar(
+        select(func.count()).select_from(AccessLog).where(AccessLog.resource == "llm_audit")
+    )
+    audit_queries = []
 
-    call = page[page.index('data-call="demo"') :]
-    assert "AI reader (Gemini)" in call
-    assert "answered in 0.3 s" in call
-    assert "status 200" not in call and "321 ms" not in call
-    assert "real time" in call
-    assert "your words (12 characters)" in call
-    assert "parcel names" in call and "product list" in call
-    assert "real time, not the replayed farm date" in page
+    def record(_conn, _cursor, statement, _parameters, _context, _many):
+        if "from llm_audit" in " ".join(statement.lower().split()):
+            audit_queries.append(statement)
+
+    event.listen(connection, "before_cursor_execute", record)
+    try:
+        response = guarded.get("/chat/")
+    finally:
+        event.remove(connection, "before_cursor_execute", record)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "admin token required"}
+    assert audit_queries == []
+    for value in (
+        "AI reader (Gemini)",
+        "answered in 0.3 s",
+        "status 200",
+        "321 ms",
+        "real time",
+        "your words (12 characters)",
+        "parcel names",
+        "product list",
+        "gemini-2.5-flash",
+        "chat …8777",
+        "transcript",
+        "Clos Secret",
+        "Cuprum Hidden",
+        "2024-04-10",
+    ):
+        assert value not in response.text
+    assert (
+        session.scalar(
+            select(func.count()).select_from(AccessLog).where(AccessLog.resource == "llm_audit")
+        )
+        == before
+    )
 
 
 @pytest.mark.parametrize(
@@ -199,3 +262,4 @@ def test_admin_chat_page_shows_the_full_audit_view(guarded, session, settings):
     assert f'"transcript": "{TRANSCRIPT}"' in page
     assert "Clos Secret" in page
     assert CHAT_REF in page
+    assert "real time, not the replayed farm date" in page

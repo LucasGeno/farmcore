@@ -51,6 +51,7 @@ QUIET = Manifest(name="quiet", version="0.1.0")  # declares no section
 def app_client(settings, session_factory):
     ms = [FIELDS, ALPHA, BETA, QUIET]
     with TestClient(create_app(settings, manifests=ms, session_factory=session_factory)) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         yield c
 
 
@@ -295,6 +296,7 @@ def test_no_sections_says_so(settings, session_factory, session):
     parcel = make_parcel(session, farm, 7, area="1", props={})
     session.commit()
     with TestClient(create_app(settings, manifests=[FIELDS], session_factory=session_factory)) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         body = c.get(f"/fields/panel/parcels/{parcel.id}").text
         farm_body = c.get("/fields/panel").text
     assert not slots(body) and not slots(farm_body)

@@ -22,6 +22,7 @@ def links(markup):
 @pytest.fixture
 def app_client(settings, session_factory):
     with TestClient(create_app(settings, manifests=[FIELDS], session_factory=session_factory)) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         yield c
 
 
@@ -218,6 +219,7 @@ def test_generic_views_forward_only_declared_query_and_canonical_fallback(
 
     app.include_router(probe)
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         origin = f"/fields/?view=list&q=Merlot&farm={farm.id}"
         page = c.get(
             f"/fields/parcels/{parcel.id}",
@@ -293,6 +295,7 @@ def test_overview_uses_current_sections_with_noscript_reading_links(
     with TestClient(
         create_app(settings, manifests=[FIELDS, facts, provenance], session_factory=session_factory)
     ) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         body = c.get(f"/fields/parcels/{parcel.id}?farm={farm.id}").text
         assert "Retry Facts" in body and "Retry Provenance" in body
         noscript = "".join(re.findall(r"<noscript>(.*?)</noscript>", body, re.S))
@@ -352,6 +355,7 @@ def test_declared_workspace_reading_origins_preserve_provider_queries(
     with TestClient(
         create_app(settings, manifests=[FIELDS, provider], session_factory=session_factory)
     ) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         origin = f"/fields/parcels/{parcel.id}?" + urlencode(
             {"view": view, **state, "farm": farm.id}
         )
@@ -410,6 +414,7 @@ def test_provider_parent_validation_keeps_single_original_origin(
         + urlencode({"view": "archive", "season": "2023", "farm": farm.id, "return_to": origin})
     )
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         good = c.get(f"/inspect/{parcel.id}", params={"farm": farm.id, "parent": parent})
         assert good.json()["parent"] == parent
         for bad in (
@@ -518,6 +523,7 @@ def test_disabled_view_origins_and_oversized_state_recover_safely(
     with TestClient(
         create_app(settings, manifests=[FIELDS, provider], session_factory=session_factory)
     ) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         origin = f"/fields/parcels/{parcel.id}?view=archive&season=" + "2" * 257
         body = c.get(
             f"/fields/parcels/{parcel.id}", params={"farm": farm.id, "return_to": origin}
@@ -553,6 +559,7 @@ def test_overview_sections_receive_validated_workspace_parent_with_list_origin(
         return {"parent": workspace_parent(request, repo, parcel_id, "overview")}
 
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         origin = f"/fields/?view=list&q=Merlot&farm={farm.id}"
         body = c.get(
             f"/fields/parcels/{parcel.id}", params={"farm": farm.id, "return_to": origin}

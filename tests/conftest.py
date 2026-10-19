@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, Connection, Engine, make_url
 from sqlalchemy.exc import OperationalError
@@ -94,7 +95,7 @@ def settings(_test_database: URL) -> Settings:
         telegram_bot_token=None,
         gemini_api_key=None,
         vertex_access_token=None,
-        admin_token=None,
+        admin_token=SecretStr("test-installation-operator-token-00000000"),
         extractor="fake",
         vertex_project="example-project",
         data_dir=DATA_DIR,
@@ -146,7 +147,10 @@ def client(settings: Settings, session_factory: sessionmaker[Session]) -> Iterat
     """HTTP client over the real app, sharing the test connection (sees the test's rows)."""
     from farmcore.main import create_app
 
-    with TestClient(create_app(settings, session_factory=session_factory)) as c:
+    with TestClient(
+        create_app(settings, session_factory=session_factory),
+        headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+    ) as c:
         yield c
 
 
