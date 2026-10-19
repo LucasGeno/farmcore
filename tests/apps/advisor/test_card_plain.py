@@ -187,9 +187,16 @@ def test_no_action_card_shows_rain_not_met_over_the_last_48_h(
 
 
 def _locked_client(settings, session_factory) -> TestClient:
+    from farmcore.core.seed import ensure_default_farm
     from farmcore.main import create_app
 
-    locked = settings.model_copy(update={"admin_token": SecretStr(TOKEN)})
+    with session_factory() as session:
+        farm = ensure_default_farm(session, settings)
+        farm_id = farm.id
+        session.commit()
+    locked = settings.model_copy(
+        update={"admin_token": SecretStr(TOKEN), "demo_mode": True, "demo_farm_ids": [farm_id]}
+    )
     return TestClient(create_app(locked, session_factory=session_factory))
 
 

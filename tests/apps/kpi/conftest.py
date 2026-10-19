@@ -24,5 +24,7 @@ def kpi_settings(settings, tmp_path):
 @pytest.fixture
 def kpi_client(kpi_settings, session_factory) -> Iterator[TestClient]:
     app = create_app(kpi_settings, session_factory=session_factory)
-    with TestClient(app) as c:
+    with TestClient(
+        app, headers={"X-Admin-Token": kpi_settings.admin_token.get_secret_value()}
+    ) as c:
         yield c

@@ -77,7 +77,10 @@ def test_tour_get_does_not_repair_missing_owner_grant_or_clock(settings, session
 @pytest.mark.parametrize("method", ["POST", "PUT", "PATCH", "DELETE", "TRACE", "CUSTOM"])
 @pytest.mark.parametrize("value", ["1", "", "0"])
 def test_tour_blocks_all_unsafe_methods_on_unknown_routes(settings, session_factory, method, value):
-    with TestClient(create_app(settings, session_factory=session_factory)) as client:
+    with TestClient(
+        create_app(settings, session_factory=session_factory),
+        headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+    ) as client:
         client.cookies.set("farmcore_tour", value)
         assert client.request(method, "/future-webhook").status_code == 403
         # Safe requests retain the underlying application's response, including 404/405.
@@ -100,6 +103,7 @@ def test_new_endpoint_is_blocked_before_its_handler(settings, session_factory):
         assert client.post("/future-webhook", json={"valid": "payload"}).status_code == 403
         assert reached == []
         client.cookies.clear()
+        client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert client.post("/future-webhook").status_code == 200
         assert reached == [True]
 
@@ -116,6 +120,9 @@ def test_tour_ui_preferences_and_read_only_routes(settings, session_factory, cre
     with session_factory() as session:
         farm = ensure_default_farm(session, settings)
         farm_id = farm.id
+        if credential == "unconfigured":
+            configured.demo_mode = True
+            configured.demo_farm_ids = [farm_id]
         clock_row(session, settings)
         session.commit()
     with TestClient(app, base_url="https://testserver") as client:
@@ -130,11 +137,11 @@ def test_tour_ui_preferences_and_read_only_routes(settings, session_factory, cre
             ("/apps", "/activity/uninstall"),
             ("/operations/", 'action="/operations/isoxml"'),
             ("/share/", 'action="/share/grants"'),
-            ("/chat/", "Full request body"),
         ):
             response = client.get(path)
             assert response.status_code == 200, path
             assert forbidden not in response.text
+        assert client.get("/chat/").status_code == 403
         assert client.get("/debug/drawer?debug=1").text == ""
         assert client.get("/advisor/debug/parcels/1").status_code == 403
         for path in (
@@ -164,7 +171,9 @@ def test_tour_uses_selected_farm_parcel_and_optional_apps(settings, session_fact
         second = make_parcel(session, other, 1)
         first_id, second_id, other_id = first.id, second.id, other.id
         session.commit()
-    with TestClient(app) as client:
+    with TestClient(
+        app, headers={"X-Admin-Token": settings.admin_token.get_secret_value()}
+    ) as client:
         page = client.get(f"/tour?farm={other_id}")
         assert page.status_code == 200
         assert f'href="/advisor/parcels/{second_id}?farm={other_id}"' in page.text
@@ -173,7 +182,8 @@ def test_tour_uses_selected_farm_parcel_and_optional_apps(settings, session_fact
     from farmcore.core.app_manifest import MANIFEST as CORE
 
     with TestClient(
-        create_app(settings, manifests=[CORE], session_factory=session_factory)
+        create_app(settings, manifests=[CORE], session_factory=session_factory),
+        headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
     ) as client:
         page = client.get("/tour")
         assert page.status_code == 200
@@ -312,4 +322,6 @@ def test_tour_hides_configured_telegram_logging_actions(
         if path.startswith("/advisor/"):
             assert f'data-decision="{decision}"' in toured.text
         client.cookies.clear()
+        if credential == "cookie":
+            client.cookies.set("admin_token", "test-admin")
         assert 'href="https://t.me/synthetic_tour_test_bot"' in client.get(path).text

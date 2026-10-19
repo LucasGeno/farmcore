@@ -28,7 +28,10 @@ TODAY_DIR = Path(__file__).resolve().parents[3] / "src" / "farmcore" / "apps" / 
 
 
 def _app(settings, session_factory, ms):
-    return TestClient(create_app(settings, manifests=ms, session_factory=session_factory))
+    return TestClient(
+        create_app(settings, manifests=ms, session_factory=session_factory),
+        headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+    )
 
 
 def test_root_opens_today_when_the_today_app_is_loaded(settings, session_factory) -> None:

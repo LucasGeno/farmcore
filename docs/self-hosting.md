@@ -25,7 +25,8 @@ Set at least:
 
 The compose file always sets `FARMCORE_PUBLIC=1`: the app refuses to start without a strong
 `ADMIN_TOKEN`, and the interactive API docs (`/docs`, `/redoc`, `/openapi.json`) are off.
-Without that flag (local development) and without a token, every visitor is administrator.
+Private farm reads require the operator token even in local development. Without a token,
+farm access fails closed; health and sign-in remain available.
 
 On arm64 hosts set `POSTGIS_IMAGE=imresamu/postgis:17-3.5`.
 
@@ -45,7 +46,9 @@ docker compose exec app farmcore replay --to "2024-04-10 06:00"
 ```
 
 The administrator signs in at `/admin/sign-in` with `ADMIN_TOKEN`; the demo controls are at
-`/demo/`. Share `/tour` for a read-only walkthrough that refuses every change.
+`/demo/`. For a public showcase, explicitly set `DEMO_MODE=true` and `DEMO_FARM_IDS=[1,2]`
+using the intended demo farm IDs. Then share `/tour` for a read-only walkthrough. Seeding
+alone does not publish farms; a tour cookie never authorizes private data.
 
 ## 3. Reverse proxy and TLS
 

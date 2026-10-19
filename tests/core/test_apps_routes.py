@@ -17,11 +17,15 @@ FAKE = ("tests.core.fake_apps",)
 def fake_client(settings, session_factory) -> Iterator[TestClient]:
     app = create_app(settings, app_packages=FAKE, session_factory=session_factory)
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         yield c
 
 
 def _restart(settings, session_factory) -> TestClient:
-    return TestClient(create_app(settings, app_packages=FAKE, session_factory=session_factory))
+    return TestClient(
+        create_app(settings, app_packages=FAKE, session_factory=session_factory),
+        headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+    )
 
 
 def test_apps_json_lists_apps_in_load_order_with_maturity(fake_client: TestClient) -> None:
@@ -125,6 +129,7 @@ def test_uninstalling_a_leaf_unmounts_it_at_the_next_start(
     a = fake_client.get("/apps.json").json()[3]
     assert (a["state"], a["loaded"]) == ("uninstalled", True)
     with _restart(settings, session_factory) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert c.get("/a/ping").status_code == 404
         a = c.get("/apps.json").json()[3]
         assert (a["name"], a["state"], a["loaded"]) == ("a", "uninstalled", False)
@@ -188,4 +193,5 @@ def test_nav_hides_apps_that_are_not_loaded(
     assert 'href="/a/ping"' in fake_client.get("/apps").text
     fake_client.post("/apps/a/uninstall")
     with _restart(settings, session_factory) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert 'href="/a/ping"' not in c.get("/apps").text

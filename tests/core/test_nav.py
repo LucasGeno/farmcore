@@ -71,8 +71,16 @@ def test_active_path_is_the_longest_matching_prefix() -> None:
 
 
 def _app(settings, session_factory):
+    from farmcore.core.seed import ensure_default_farm
+
+    with session_factory() as session:
+        farm = ensure_default_farm(session, settings)
+        farm_id = farm.id
+        session.commit()
     return create_app(
-        settings.model_copy(update={"admin_token": SecretStr(TOKEN)}),
+        settings.model_copy(
+            update={"admin_token": SecretStr(TOKEN), "demo_mode": True, "demo_farm_ids": [farm_id]}
+        ),
         session_factory=session_factory,
     )
 

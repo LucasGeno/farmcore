@@ -134,6 +134,7 @@ def test_advisor_parcel_views_are_absent_when_advisor_starts_off(
     session.get(AppModule, "advisor").state = "uninstalled"
     session.commit()
     with TestClient(create_app(settings, session_factory=session_factory)) as restarted:
+        restarted.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         response = restarted.get(
             f"/advisor/parcels/{parcel.id}{suffix}", params={"farm": farm.id, "season": "2022"}
         )

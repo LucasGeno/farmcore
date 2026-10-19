@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     test_database_url: str = Field("", repr=False)
     data_dir: Path = Path("sample-data")
     display_tz: str = "Europe/Paris"
+    # Total live forecast HTTP budget per farm, including headers and streamed body.
+    forecast_fetch_timeout_seconds: float = Field(10.0, ge=0.05, le=30.0)
     clock_mode: Literal["replay", "live"] = "replay"
     # Local time (display_tz), naive.
     replay_start: datetime = datetime(2024, 4, 1, 6, 0)
@@ -40,6 +42,8 @@ class Settings(BaseSettings):
     # Set on any network-reachable deployment: the app then refuses to start without a strong
     # ADMIN_TOKEN and turns off the interactive API docs.
     farmcore_public: bool = False
+    demo_mode: bool = False
+    demo_farm_ids: list[int] = Field(default_factory=list)
     default_farm_key: str = "chateau"
     telegram_bot_token: SecretStr | None = None
     # Public @username of the bot (no "@"): the web "Log a spray" button opens t.me/<username>.

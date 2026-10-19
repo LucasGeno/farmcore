@@ -301,6 +301,7 @@ def test_get_repo_reads_the_default_farm_as_owner_and_keeps_the_access_log(
         s.commit()
 
     with TestClient(_probe_app(settings, session_factory)) as client:
+        client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         response = client.get("/probe")
 
     assert response.status_code == 200
@@ -314,6 +315,7 @@ def test_get_repo_reads_the_default_farm_as_owner_and_keeps_the_access_log(
 
 def test_get_repo_without_seed_is_503(settings, session_factory):
     with TestClient(_probe_app(settings, session_factory)) as client:
+        client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         response = client.get("/probe")
 
     assert response.status_code == 503
@@ -341,6 +343,7 @@ def test_get_repo_commits_before_the_response_is_sent(settings, session_factory)
         return StreamingResponse(body())
 
     with TestClient(app) as client:
+        client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert client.get("/stream").status_code == 200
 
     assert order == ["commit", "send"]

@@ -274,6 +274,7 @@ def test_kinds_of_apps_that_are_not_loaded_are_hidden(
     )  # source_app core
     session.commit()
     with TestClient(create_app(settings, manifests=[CORE], session_factory=session_factory)) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         rows = _rows(c)
     # The advice row goes with its app; both spray records stay (Records is always on), even the
     # one the not-loaded chat app took down.

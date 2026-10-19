@@ -58,7 +58,7 @@ database, a small core and installable apps, in the style of Odoo.
 | Records | Spray logs, ISOXML import, Reg. (EU) 2023/564 register with record checks |
 | Crop protection | Downy/powdery mildew rules (3-10 rule, Goidanich incubation, Gubler–Thomas, wash-off, intervals): spray / wait / protected, with reasons |
 | Weather | Météo-France station ingest, spray conditions, charts |
-| Forecast | Open-Meteo forecast runs ranked into a five-day spray plan |
+| Forecast | Saved forecast runs and live Open-Meteo receipts ranked into a spray plan |
 | Sharing | Grants, revoke, access log, NGSI-LD export, grantee view |
 | Season & impact | Model replay vs a spray calendar and the Agreste 2019 reference |
 | Activity, Inventory, Notifications | Farm timeline, product stock, in-app alerts |
@@ -104,3 +104,38 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
   authenticated multi-tenant access.
 - Assistant context is one expiring draft plus a few recent turns, kept in process: no vector
   store, long-term memory or multi-step agent loop.
+
+
+### Live weather receipts
+
+The installed forecast app schedules `forecast.fetch_live` hourly in live clock mode.
+Each tick requests at most five farms, least recently attempted first, with a ten-second
+total HTTP deadline per farm (headers and body) and six UTC forecast days. Successful and failed attempts share
+an hour-long database cache. `forecast_fetch_timeout_seconds` configures the total
+per-farm deadline (default 10 seconds, bounded to 0.05–30); expiration cancels and closes
+the HTTP request before the next farm proceeds. Native OS DNS lookups cannot be killed
+safely: at most two may continue after their HTTP request times out. The forecast's two
+process-shared daemon resolver workers start lazily; two admission slots cover both queued
+and running lookups and remain occupied until the native work finishes (or canceled queued
+work is skipped). Saturation fails immediately rather than holding the job lock or growing
+threads/queues. Late DNS completion never restarts a canceled HTTP request. Requests use the farm's `props.forecast_location`
+(`latitude`, `longitude` in degrees), or its first geolocated weather station; a farm
+without either reports an unavailable refresh. No provider credentials are needed.
+Operators should check [Open-Meteo's usage terms](https://open-meteo.com/en/terms) for their
+installation before enabling live mode. No request runs in replay mode.
+
+The [current forecast API](https://open-meteo.com/en/docs) returns a changing model blend,
+without a provider issue timestamp. These responses are immutable **receipts**, never
+labelled as issued model runs: `provider_issued_at` is unknown, `as_issued` is false,
+and the legacy non-null `issued_at` column acts only as receipt identity for this source.
+`fetched_at` and `available_at` are the wall time after the response arrived. Both requested
+coordinates and returned grid coordinates, source URL, units and per-variable coverage
+remain attached to the receipt. Duplicate response content retains the original receipt.
+Failures preserve prior valid data. Home, Plan and Data sources mark receipts older than
+two hours stale and show missing input coverage. Forecast days missing required rain/wind
+hours (or temperature for sulphur) remain unavailable for spray ranking.
+
+Rain remains millimetres over the preceding hour; wind is km/h and temperature Celsius.
+Replay reads only receipts/runs issued and available by its clock; it can replay saved
+receipts after their actual receipt time, while offline as-issued demo runs remain usable.
+Live receipts never become station observations or retrospective disease-model evidence.

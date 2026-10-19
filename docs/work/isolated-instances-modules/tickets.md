@@ -7,6 +7,8 @@ title: "Isolated installations and modules — implementation graph"
 
 **Source:** [Change Spec, revision 2](spec.md). Publishing this graph does not mean any work is complete or deployed.
 
+**Execution status:** new runtime implementation is outside this documentation task. Publishing the graph and passing dependencies do not start or schedule execution. Milestones 1–4 continue under their separate implementation, QA and merge authorization.
+
 Revision 2 replaces the original 20-ticket graph. That graph put 13 tickets in a row and made the fertilization app wait on customer suspension. Revision 2 has four parallel tracks with few cross-edges, plus one deferred hosting track. After revamp 12 the longest chain is six tickets (for example 08 → 10 → 11 → 14 → 16 → 17).
 
 ## Tickets
@@ -53,7 +55,7 @@ graph LR
 
 ## Execution order
 
-1. **Now:** start ticket 04 (throwaway spike). Prepare ticket 01 on an isolated branch; it qualifies once revamp 01 lands.
+1. **Ready, once execution is authorized:** ticket 04 (throwaway spike) and ticket 01. Revamp 01 merged through PR #8.
 2. **After revamp 02:** tickets 02 → 03. Self-hosters can then move and upgrade installations safely, whether or not anyone hosts for them.
 3. **After revamp 12:** run tracks B (05–07) and C (08–14) in parallel worktrees. Fertilization (13) can ship before the contract step (14).
 4. **Then:** track D (15–16), then 17.

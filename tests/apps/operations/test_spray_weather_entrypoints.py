@@ -80,6 +80,7 @@ def test_web_off_at_start_then_on_captures_without_a_restart(settings, session_f
     _weather(session, "uninstalled")
     session.commit()
     with TestClient(create_app(settings, session_factory=session_factory)) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert all(m.name != "stations" for m in c.app.state.manifests)  # off at start
         assert c.app.state.spray_weather_reader is read_slot  # but installed software
         _weather(session, "installed")

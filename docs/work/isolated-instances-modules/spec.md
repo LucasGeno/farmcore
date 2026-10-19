@@ -8,6 +8,8 @@ revision: 2
 
 # Isolated installations and modular farm workflows
 
+**Execution status:** this spec and its tickets are published for planning. Publishing them does not start or schedule runtime implementation, and clearing a ticket's dependencies does not start it either. The milestones 1–4 implementation, QA and merge authorization continue unchanged.
+
 ## Problem
 
 FarmCore's promise is open, farmer-controlled farm data: a farmer can run it themselves, or have it run for them, and leave at any time with everything. Three things stand in the way.

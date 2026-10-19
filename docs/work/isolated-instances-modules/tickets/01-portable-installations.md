@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Run two isolated installations from one release"
 description: "Two installations built from the same image run side by side on one host and cannot see each other."
-status: blocked
+status: ready
 blocked_by: ["../../farmcore-revamp/tickets/01-private-access-default.md"]
 ---
 

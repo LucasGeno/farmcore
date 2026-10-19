@@ -149,6 +149,7 @@ def test_tour_attention_has_no_logging_link(settings, session_factory, seeded, s
     step("2024-04-10 06:00")
     configured = settings.model_copy(update={"telegram_bot_username": "@synthetic_home_bot"})
     with TestClient(create_app(configured, session_factory=session_factory)) as client:
+        client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert "https://t.me/synthetic_home_bot" in client.get("/advisor/today?view=attention").text
         client.cookies.set("farmcore_tour", "1")
         for path in ("/today/", "/advisor/today?view=attention", "/advisor/today?view=calm"):
@@ -168,6 +169,7 @@ def test_home_does_not_show_widgets_from_disabled_apps(settings, session_factory
             session.get(AppModule, name).state = "uninstalled"
         session.commit()
     with TestClient(app) as client:
+        client.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         body = client.get("/today/").text
     for path in ("/advisor/today", "/stations/today", "/forecast/"):
         assert f'hx-get="{path}' not in body

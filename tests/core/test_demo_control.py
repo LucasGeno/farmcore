@@ -302,7 +302,8 @@ def test_popover_wording_and_admin_demo_link(demo_client):
     assert message in admin.text and 'href="/demo/"' in admin.text
     demo_client.cookies.clear()
     anonymous = demo_client.get("/clock")
-    assert message in anonymous.text and 'href="/demo/"' not in anonymous.text
+    assert anonymous.status_code == 403
+    assert message not in anonymous.text and 'href="/demo/"' not in anonymous.text
 
 
 def test_presets_step_and_back_to_replay_record_activity(demo_client, session, settings):

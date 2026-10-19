@@ -19,6 +19,7 @@ from sqlalchemy import select
 
 from farmcore.core.access import Repo
 from farmcore.core.models.canonical import LlmAudit
+from farmcore.core.routes_clock import require_admin
 from farmcore.web import is_admin, render
 
 router = APIRouter()
@@ -165,6 +166,7 @@ def _view(row: LlmAudit) -> CallView:
 # Transcripts and chat ids are personal data: only admins see them on a shared host.
 @router.get("/", response_class=HTMLResponse)
 def chat_page(request: Request, repo: Repo) -> HTMLResponse:
+    require_admin(request)
     admin = is_admin(request)
     rows = repo.execute(
         select(LlmAudit).order_by(LlmAudit.id.desc()).limit(RECENT_CALLS),
