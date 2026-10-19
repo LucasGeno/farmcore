@@ -134,11 +134,28 @@ def render(request: Request, name: str, **ctx: Any) -> HTMLResponse:
     """Render a template with the shell context: `manifests` (the visible apps: loaded and not
     switched off), `is_admin`, `expert`, and the grouped `nav` with the item matching the current
     path (`nav_current`)."""
+    from farmcore.core.identity import principal_for
+
+    principal = principal_for(request)
+    farm_id = getattr(request.state, "selected_farm_id", None)
     manifests = visible_manifests(request)
     admin = is_admin(request)
     nav = build_nav(manifests, is_admin=admin)
+    if principal and not admin:
+        nav = {
+            group: [
+                item
+                for item in items
+                if item.path.rstrip("/") not in {"/chat", "/share", "/apps", "/demo"}
+            ]
+            for group, items in nav.items()
+        }
     path = request.url.path
     base = {
+        "principal_login": principal.login if principal else None,
+        "member_role": principal.memberships.get(farm_id) if principal else None,
+        "is_farm_owner": admin or bool(principal and principal.memberships.get(farm_id) == "owner"),
+        "csrf_token": request.cookies.get("farmcore_csrf", "") if principal else "",
         "manifests": manifests,
         "is_admin": admin,
         "is_tour": is_tour(request),

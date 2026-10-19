@@ -17,10 +17,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 
 from farmcore.apps.inventory import service
 from farmcore.apps.inventory.models import InventoryStock
-from farmcore.core.access import Repo
+from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import Farm
-from farmcore.core.routes_clock import require_admin
 from farmcore.web import context_url, render
 
 router = APIRouter()
@@ -78,7 +77,7 @@ def _threshold(raw: str) -> Decimal | None:
     return rounded
 
 
-@router.post("/{stock_id}/low-stock", dependencies=[Depends(require_admin)])
+@router.post("/{stock_id}/low-stock", dependencies=[Depends(require_farm_owner)])
 def set_low_stock(
     request: Request, stock_id: int, repo: Repo, low_stock: Annotated[str, Form()] = ""
 ) -> RedirectResponse:

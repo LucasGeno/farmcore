@@ -118,6 +118,7 @@ def test_app_actions_still_require_admin_even_with_valid_farm_context(
     with TestClient(create_app(secured, session_factory=session_factory)) as browser:
         browser.cookies.set(FARM_COOKIE, str(first.id), domain="testserver.local")
         browser.cookies.set("admin_token", "qa-global-admin")
+        browser.headers["Origin"] = "http://testserver"
         for action, before, after in (("uninstall", "on", "off"), ("install", "off", "on")):
             page = browser.get("/apps", params={"farm": second.id}).text
             actual_action = attr(tile(page, "share"), "form", "action")

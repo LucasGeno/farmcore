@@ -25,8 +25,8 @@ Set at least:
 
 The compose file always sets `FARMCORE_PUBLIC=1`: the app refuses to start without a strong
 `ADMIN_TOKEN`, and the interactive API docs (`/docs`, `/redoc`, `/openapi.json`) are off.
-Private farm reads require the operator token even in local development. Without a token,
-farm access fails closed; health and sign-in remain available.
+Private farm reads require a local member session or the separate operator token, including
+in local development. Anonymous requests fail closed; health and sign-in remain available.
 
 On arm64 hosts set `POSTGIS_IMAGE=imresamu/postgis:17-3.5`.
 
@@ -50,9 +50,40 @@ The administrator signs in at `/admin/sign-in` with `ADMIN_TOKEN`; the demo cont
 using the intended demo farm IDs. Then share `/tour` for a read-only walkthrough. Seeding
 alone does not publish farms; a tour cookie never authorizes private data.
 
+## Local owner accounts
+
+After migration, identify the intended farm ID locally, then provision its owner:
+
+```sh
+docker compose exec app farmcore users create farmer --farm-id 1
+```
+
+Use the actual farm ID; no farm is inferred from its name, a grant name, or the demo default.
+The command prompts for a hidden password and confirmation (15–256 characters). Do not put a
+password in shell arguments or environment variables. For unattended provisioning,
+`--password-stdin` accepts standard input; use your secret manager's stdin pipe.
+
+Open the installation's HTTPS `/login` page. The owner can open **Farm members** to assign or
+revoke owner/advisor roles for accounts created locally with `farmcore users create <login>`.
+An advisor can read assigned farms but cannot import operations or change installation settings.
+Revocation and disabled accounts lose authority on the next request. The last enabled owner
+cannot be removed through the browser; the local operator can recover access with the CLI.
+
+```sh
+docker compose exec app farmcore users revoke-sessions farmer
+docker compose exec app farmcore users disable farmer
+docker compose exec app farmcore users set-password farmer
+```
+
+Password replacement revokes existing sessions and re-enables the identity. The installation
+operator remains a separate break-glass identity at `/admin/sign-in`. Shared web voice/draft
+capture and global model-call audit remain operator-only in this phase. Ordinary members use
+the farm-scoped read-only assistant and existing owner-authorized machine import workflow.
+Sharing UI/grant recipients remain operator-only until recipient binding is implemented.
+
 ## 3. Reverse proxy and TLS
 
-Serve FarmCore over HTTPS only: the admin cookie is `Secure`. Keep the app bound to
+Serve FarmCore over HTTPS only: member and admin cookies are `Secure`. Keep the app bound to
 `127.0.0.1` (`FARMCORE_BIND`) and proxy to it, for example with Caddy:
 
 ```caddyfile

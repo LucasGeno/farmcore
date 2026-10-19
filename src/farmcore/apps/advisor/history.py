@@ -163,6 +163,8 @@ def _demo_season(repo, parcel_id, start, end) -> bool:
         )
         .limit(1)
     )
+    if repo.private_member:
+        stmt = stmt.where(Log.status == "done")
     return repo.execute(stmt, scope=LOGS_SCOPE, resource="log_source").first() is not None
 
 

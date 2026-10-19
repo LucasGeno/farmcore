@@ -191,3 +191,39 @@ def test_without_a_configured_token_the_page_says_so(client, session, settings):
         follow_redirects=False,
     )
     assert r.status_code == 409 and "set-cookie" not in r.headers
+
+
+def test_sign_in_does_not_mount_private_farm_shell(admin_client):
+    response = admin_client.get("/admin/sign-in")
+
+    assert response.status_code == 200
+    assert 'name="token"' in response.text
+    assert "/notifications/" not in response.text
+    assert 'data-shell-slot="notifications"' not in response.text
+    assert 'id="navbar"' not in response.text
+
+
+def test_sign_out_lands_on_public_sign_in_and_keeps_private_pages_closed(admin_client):
+    _sign_in(admin_client)
+
+    response = admin_client.post("/admin/sign-out", headers=ORIGIN)
+
+    assert response.status_code == 200
+    assert response.url.path == "/admin/sign-in"
+    assert response.headers["content-type"].startswith("text/html")
+    assert 'name="token"' in response.text
+    assert admin_client.get("/demo/").status_code == 403
+
+
+def test_public_sign_in_keeps_saved_sunlight_preference_without_private_widgets(admin_client):
+    default_page = admin_client.get("/admin/sign-in")
+    assert default_page.status_code == 200
+    assert 'data-contrast="high"' not in default_page.text
+
+    admin_client.cookies.set("sunlight", "1")
+    sunlight_page = admin_client.get("/admin/sign-in")
+
+    assert sunlight_page.status_code == 200
+    assert '<html lang="en" data-contrast="high">' in sunlight_page.text
+    assert "/notifications/" not in sunlight_page.text
+    assert 'id="navbar"' not in sunlight_page.text

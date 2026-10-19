@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from farmcore import __version__
 from farmcore.composition import compose_spray_weather_reader
 from farmcore.core import errors, jobs, registry
+from farmcore.core.identity import require_csrf
 from farmcore.core.manifest import Manifest
 from farmcore.core.privacy import PrivacyMiddleware
 from farmcore.core.startup import check_public_settings
@@ -49,6 +50,7 @@ def create_app(
     # A public site serves no interactive API docs: they list the admin endpoints.
     docs = {"docs_url": None, "redoc_url": None, "openapi_url": None}
     app = FastAPI(
+        dependencies=[Depends(require_csrf)],
         title="farmcore",
         version=__version__,
         lifespan=lifespan,
