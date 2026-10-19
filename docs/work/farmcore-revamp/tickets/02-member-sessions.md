@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Local identities, farm memberships and role enforcement"
 description: "Milestones 1–4: local identities, farm memberships and role enforcement."
-status: in_progress
+status: done
 blocked_by: ["01"]
 ---
 
@@ -228,3 +228,12 @@ foreign-selector raise has a reasoned per-line exclusion because PrivacyMiddlewa
 input before dispatch; actual boundary denial and empty-selector handler are tested. Ordinary web
 capture remains installation-operator-only. Status stays in progress pending pushed-head CI and
 root's actual integration-tip gate; local evidence does not claim either.
+
+
+## Completed integration gate — 2026-10-19
+
+Frozen563b11ffffcc910a707793b7b4c8fedbcb2961aa source/tests exactly match the staged source fingerprint above. Hosted [CI39290788752](https://github.com/LucasGeno/farmcore/actions/runs/39290788752) completed Python,Node,Docker successfully. PR11 merged normally into integration atdca8477c6d5ccfbba153eab6383ccbb6bf6266ef,17:12:34UTC.
+
+Actual-tip tier2 gate, real premerge tip6665278 and same six directories/seed3037958567: **1783passed,3skipped,72deselected in327.86s**, changedcoverage100%, lint/secretsclean. Types unconfigured, unchanged-dependency audit, repository smoke convention and tier2 mutations skipped honestly; feature tier3 manual execution/mutation evidence remains above. Ordered lifecycle **4passed in2.16s**, Node **30passed,0skipped**, Alembic solecore_0003head. Source/tests/pyproject/lock byte-identical to reviewed frozen563b11f. Reports `/tmp/farmcore-post-member-{gate.json,junit.xml,ordered.log,node.log}`.
+
+Ticket02 complete; authenticated recipient grants remain03, review/capture mutations remain their own tickets. Original public bootstrap browser blocker is closed on this identical reviewed source (four independent root journeys), not a claim that all final12 journeys pass. No main merge or deployment.
