@@ -103,13 +103,18 @@ def test_html_page_shows_the_banner_and_the_register(anonymous, demo, spray, gra
 
 
 def test_grantee_view_follows_the_grant_farm_not_the_farm_cookie(
-    anonymous, session, demo, other_farm, spray, grant
+    anonymous, admin, session, demo, other_farm, spray, grant
 ) -> None:
     log = spray()
     anonymous.cookies.set(FARM_COOKIE, str(other_farm.id))
     last = _last(session)
 
-    rows = anonymous.get(f"/share/as/{grant.id}/register.json").json()
+    assert anonymous.get(f"/share/as/{grant.id}/register.json").status_code == 403
+    assert _since(session, last) == []
+    admin.cookies.set(FARM_COOKIE, str(other_farm.id))
+    response = admin.get(f"/share/as/{grant.id}/register.json")
+    assert response.status_code == 200
+    rows = response.json()
 
     assert {r["log_id"] for r in rows} == {log.id}
     assert {r.farm_id for r in _since(session, last)} == {demo.farm.id}
@@ -139,7 +144,7 @@ def test_station_and_audit_reads_are_403_and_log_nothing(
     assert obs.status_code == 403
     assert "weather station data" in obs.json()["detail"]
     assert audit.status_code == 403
-    assert "model-call audit" in audit.json()["detail"]
+    assert audit.json()["detail"] == "admin token required"
     for resp in (obs, audit):
         assert str(OBS_VALUE) not in resp.text and AUDIT_SECRET not in resp.text
     assert _since(session, last) == []

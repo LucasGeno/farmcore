@@ -62,10 +62,9 @@ def test_debug_enabled_follows_the_rule(settings, admin, query, debug_cookie, ex
     assert debug_enabled(_request(configured, query=query, cookies=cookies)) is expected
 
 
-def test_debug_enabled_without_an_admin_token_treats_everyone_as_admin(settings) -> None:
-    # `is_admin` with no admin_token configured (local development) lets everyone in; a public site
-    # asserts a token at startup.
-    assert debug_enabled(_request(settings, query="debug=1")) is True
+def test_debug_enabled_without_an_admin_token_fails_closed(settings) -> None:
+    unconfigured = settings.model_copy(update={"admin_token": None})
+    assert debug_enabled(_request(unconfigured, query="debug=1")) is False
 
 
 # --- GET /debug/drawer ----------------------------------------------------------------------
@@ -94,11 +93,10 @@ def farm(session, settings):
     return farm
 
 
-def test_anonymous_drawer_is_empty_and_sets_no_cookie(settings, session_factory, farm) -> None:
+def test_anonymous_drawer_is_denied_and_sets_no_cookie(settings, session_factory, farm) -> None:
     with _client(settings, session_factory) as c:
         resp = c.get("/debug/drawer", params={"path": "/fields/", "debug": "1"})
-    assert resp.status_code == 200
-    assert resp.text == ""
+    assert resp.status_code == 403
     assert "set-cookie" not in resp.headers
 
 
@@ -184,6 +182,7 @@ def test_every_page_carries_the_slot_with_its_path_and_debug_value(
     settings, session_factory, farm
 ) -> None:
     with _client(settings, session_factory) as c:
+        c.cookies.set("admin_token", TOKEN)
         on = c.get("/apps", params={"debug": "1"}).text
         plain = c.get("/apps").text
     assert 'hx-get="/debug/drawer?path=/apps&amp;debug=1"' in on
@@ -278,6 +277,7 @@ def test_real_advisor_manifest_loads_its_panel_on_advisor_parcel_pages(
 
 def test_slot_forwards_the_page_query_without_debug(settings, session_factory, farm) -> None:
     with _client(settings, session_factory) as c:
+        c.cookies.set("admin_token", TOKEN)
         html = c.get("/apps", params={"farm": "5", "x": "a b", "debug": "1"}).text
     assert 'hx-get="/debug/drawer?path=/apps%3Ffarm%3D5%26x%3Da%2Bb&amp;debug=1"' in html
 

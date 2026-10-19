@@ -15,6 +15,7 @@ from farmcore.apps.today.manifest import MANIFEST as TODAY
 from farmcore.core.app_manifest import MANIFEST as CORE
 from farmcore.core.manifest import Manifest, Widget
 from farmcore.core.registry import visible_manifests
+from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
 
 FAKE = ("tests.core.fake_apps",)
@@ -35,6 +36,7 @@ def _side_nav(page: str) -> str:
 @pytest.fixture
 def fake_client(settings, session_factory) -> Iterator[TestClient]:
     with TestClient(create_app(settings, app_packages=FAKE, session_factory=session_factory)) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         yield c
 
 
@@ -138,14 +140,21 @@ def test_app_not_loaded_at_start_says_after_the_next_restart(
 ) -> None:
     fake_client.post("/apps/a/uninstall")
     with TestClient(create_app(settings, app_packages=FAKE, session_factory=session_factory)) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         assert c.post("/apps/a/install").status_code == 200
         a = _tile(c.get("/apps").text, "a")
     assert "On after the next restart" in a
 
 
 def test_non_admin_sees_the_page_read_only(settings, session_factory) -> None:
+    with session_factory() as session:
+        farm = ensure_default_farm(session, settings)
+        farm_id = farm.id
+        session.commit()
     app = create_app(
-        settings.model_copy(update={"admin_token": SecretStr("tok")}),
+        settings.model_copy(
+            update={"admin_token": SecretStr("tok"), "demo_mode": True, "demo_farm_ids": [farm_id]}
+        ),
         manifests=[CORE, Manifest(name="a", version="0.1.0", title="Alpha")],
         session_factory=session_factory,
     )
@@ -180,6 +189,7 @@ WIDGETY = Manifest(
 def test_switching_off_hides_nav_and_today_widget_at_once(settings, session_factory) -> None:
     app = create_app(settings, manifests=[CORE, TODAY, WIDGETY], session_factory=session_factory)
     with TestClient(app) as c:
+        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         page = c.get("/today/").text
         assert 'href="/w/"' in _side_nav(page) and 'hx-get="/w/today"' in page
         assert c.post("/apps/w/uninstall").status_code == 200

@@ -108,7 +108,13 @@ def test_app_actions_still_require_admin_even_with_valid_farm_context(
     farms, settings, session_factory
 ):
     first, second = farms
-    secured = settings.model_copy(update={"admin_token": SecretStr("qa-global-admin")})
+    secured = settings.model_copy(
+        update={
+            "admin_token": SecretStr("qa-global-admin"),
+            "demo_mode": True,
+            "demo_farm_ids": [second.id],
+        }
+    )
     with TestClient(create_app(secured, session_factory=session_factory)) as browser:
         browser.cookies.set(FARM_COOKIE, str(first.id), domain="testserver.local")
         browser.cookies.set("admin_token", "qa-global-admin")

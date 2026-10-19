@@ -205,7 +205,13 @@ def test_upload_form_is_shown_to_admins_only(session, settings, session_factory,
     _ready(session, settings, farm, voice=False)
     locked = settings.model_copy(update={"admin_token": SecretStr("tok-test")})
     with TestClient(create_app(locked, session_factory=session_factory)) as c:
-        anonymous = c.get("/operations/").text
+        assert c.get("/operations/").status_code == 403
+        c.app.state.settings = locked.model_copy(
+            update={"demo_mode": True, "demo_farm_ids": [farm.repo.farm_id]}
+        )
+        visitor = c.get("/operations/")
+        assert visitor.status_code == 200
+        anonymous = visitor.text
         c.cookies.set("admin_token", "tok-test")
         admin = c.get("/operations/").text
     assert "/operations/isoxml" not in anonymous
