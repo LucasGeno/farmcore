@@ -66,21 +66,6 @@ def grant_repo(session: Session, grant: DataGrant, *, actor: str | None = None) 
     )
 
 
-def denied_message(grant: DataGrant, status: str, tz: str = DEFAULT_TZ) -> str:
-    """Plain words for a grantee whose grant is not active."""
-    who = grant.grantee
-    if status == "revoked" and grant.revoked_at is not None:
-        when = local_time(grant.revoked_at, tz)
-        return f"This access was revoked on {when}. {who} can no longer read this farm."
-    if status == "expired" and grant.valid_to is not None:
-        when = local_time(grant.valid_to, tz)
-        return f"This access expired on {when}. {who} can no longer read this farm."
-    if status == "scheduled":
-        when = local_time(grant.valid_from, tz)
-        return f"This access starts on {when}. {who} cannot read this farm yet."
-    return f"This access is {status}. {who} cannot read this farm."
-
-
 def grant_status(grant: DataGrant, now: datetime) -> str:
     """`revoked`, `scheduled` (not valid yet), `expired` or `active` at wall time `now`
     (the same order of checks as `ScopedRepository.check`)."""

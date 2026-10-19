@@ -171,3 +171,43 @@ HTML RED before GREEN. Browser execution, runtime mutants and final broad gate a
 No other spec/standards findings at this review. Operator-only preview retains documented legacy
 `grant:<id>` attribution; shared operator token cannot distinguish individual operators. Member
 and recipient reads use authenticated `user:<id>` plus the actual grant/farm/purpose.
+
+### Frozen runtime review and browser evidence
+
+P2 error-shell fix observed real HTTP HTML RED4 failed37 deselected3.95s -> GREEN4 passed3.68s
+(revoked, expired, unknown and4400-digit validation inputs). Final errors/recipient/revoke command:
+`uv run pytest tests/core/test_errors.py tests/apps/share/test_recipient_identity.py tests/apps/share/test_revoke.py --randomly-seed=19012026 -q --tb=short`:
+59 passed26.85s. JSON status/details preserved, HTML errors generic/standalone/no-store.
+Frozen runtime commit `bcc003b5894d9f8813c6caec4c3a81cc63abc63c`, source SHA256
+`d54595c4e7a9769309f2b0b88c66ef1f513395b1bc1da5685a61e94f1a2066ec`.
+
+Fresh independent static/browser review clears all4 acceptance criteria and standards, with no
+weakened legacy assertions. Four actual visible Chromium journeys: desktop1280x900 and
+mobile390x844, each normal/reduced motion. Actual owner login/form create/revoke, zero-membership
+recipient login/landing/read/export/logout, foreign-owner GET and valid-CSRF revoke denial, and
+next-read revocation all pass. Sixteen unknown/expired/revoked/postlogout navigations pass;
+192 recipient requests logged, zero unauthorized private polling, page exceptions or overflow.
+Twenty screenshots retained; representative active and desktop/mobile error views visually
+inspected. Mobile Sunlight18px/black ink verified. Source digest identical before/after; app port
+closed, disposable DB count0, secret state absent and TLS directories removed. P2 closed with
+real browser request evidence, not HTML-only inspection. Reports:
+`/tmp/farmcore-sharing03-report.json`, `/tmp/farmcore-sharing03-browser.log`.
+
+Fresh auxiliary checks: Ruff check/format466 files clean; Node30 passed0 skipped; ordered fixture
+isolation4 passed1.88s; one Alembic head `review_0001`. Independent root HTTP review remains separate.
+
+Final PR target is `codex/farmcore-revamp` (then `fe08924`), NOT main. The actual target merge-base
+is `563b11ffffcc910a707793b7b4c8fedbcb2961aa`; final tier3 must include the complete common
+DDL/models/policies plus recipient runtime against this base. `e89dcef` is only the independently
+verified shared prerequisite and runtime-mutant restoration fingerprint, not the final PR gate base.
+
+Independent root HTTP review subsequently BLOCKED `bcc003b`:3 failed11 passed14.29s.
+Enabled wrong-identity/active bound/role/CSRF/overflow/mixed-private controls passed, but expired,
+revoked and future bound-grant JSON errors exposed private grantee labels and validity/revocation
+timestamps through the legacy `denied_message` helper. Generic HTML did not establish JSON privacy.
+Retained RED: `/tmp/farmcore-access03-independent/test_recipient_boundaries.py`, parameterized
+`test_next_read_status_and_identity_denial` expired/revoked/future. Earlier deliberate JSON-detail
+preservation is superseded by the approved no-metadata denial requirement. A constant generic403
+with explicit metadata-absence assertions is required; no implementation edits while root reviewer
+finishes active probes. Prior browser/static evidence applies only to its frozen snapshot and is
+insufficient for completion. Final QA/gate evidence must be renewed after this correction.

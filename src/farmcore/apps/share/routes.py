@@ -301,9 +301,7 @@ def get_grant_repo(
         raise HTTPException(status_code=404, detail="Not found.")
     status = service.grant_status(grant, datetime.now(UTC))
     if status != "active":
-        raise HTTPException(
-            status_code=403, detail=service.denied_message(grant, status, _tz(request))
-        )
+        raise HTTPException(status_code=403, detail="Shared access is unavailable.")
     repo = service.grant_repo(
         session, grant, actor=f"user:{principal.identity_id}" if principal else None
     )

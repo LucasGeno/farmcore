@@ -137,7 +137,10 @@ def test_owner_browser_binds_existing_login_and_revokes_next_recipient_read(
     )
     denied = recipient_browser.get(f"/share/as/{grant.id}/register.json")
     assert denied.status_code == 403
-    assert "revoked" in denied.text
+    assert denied.json() == {"detail": "Shared access is unavailable."}
+    assert grant.grantee not in denied.text and grant.purpose not in denied.text
+    session.refresh(grant)
+    assert grant.revoked_at is not None
 
 
 def test_recipient_login_lands_on_own_shared_access_without_farm_shell(
@@ -806,4 +809,37 @@ def test_grant_data_errors_preserve_json_even_when_browser_accepts_html(
         response = recipient_browser.get(f"/share/as/{bound_grant.id}/{suffix}")
         assert response.status_code == 403
         assert response.headers["content-type"] == "application/json"
-        assert "This access was revoked on" in response.json()["detail"]
+        assert response.json() == {"detail": "Shared access is unavailable."}
+        assert bound_grant.grantee not in response.text and bound_grant.purpose not in response.text
+        assert bound_grant.revoked_at.isoformat() not in response.text
+
+
+@pytest.mark.parametrize("case", ["expired", "revoked", "scheduled"])
+def test_inactive_grant_json_denial_is_constant_without_private_metadata(
+    recipient_browser, session, bound_grant, case
+):
+    url = f"/share/as/{bound_grant.id}/register.json"
+    assert recipient_browser.get(url).status_code == 200
+    last = session.scalar(select(AccessLog.id).order_by(AccessLog.id.desc()).limit(1))
+    bound_grant.grantee = "private-recipient-do-not-repeat"
+    bound_grant.purpose = "private-purpose-do-not-repeat"
+    if case == "expired":
+        bound_grant.valid_to = datetime(2020, 7, 19, 10, 11, tzinfo=UTC)
+    elif case == "revoked":
+        bound_grant.revoked_at = datetime(2020, 8, 21, 12, 13, tzinfo=UTC)
+    else:
+        bound_grant.valid_from = datetime(2037, 6, 18, 14, 15, tzinfo=UTC)
+    session.commit()
+    for suffix in ("register.json", "observations.json", "advice.json", "ngsi-ld.json"):
+        for accept in ("application/json", "text/html"):
+            response = recipient_browser.get(
+                f"/share/as/{bound_grant.id}/{suffix}", headers={"Accept": accept}
+            )
+            assert response.status_code == 403
+            assert response.json() == {"detail": "Shared access is unavailable."}
+            assert bound_grant.grantee not in response.text
+            assert bound_grant.purpose not in response.text
+            assert "2020" not in response.text and "2037" not in response.text
+    assert session.scalar(select(AccessLog.id).where(AccessLog.id > last)) is None
+    session.refresh(bound_grant)
+    assert bound_grant.recipient_identity_id is not None
