@@ -93,6 +93,7 @@ requests remain available for trusted scripts. Never put credentials or tokens i
   key as a file (`docker-compose.vertex.yml`), and set budget alerts.
 - Back up with the `backup` service (set `BACKUP_RECIPIENT`, the public half of an age key you
   keep off the server) and test a restore before relying on the data.
+- Only install apps you trust: an app is Python code running with full database access.
 
 ## Backups and restore
 
@@ -112,14 +113,23 @@ bundle is data only, never code:
 - Member sessions are never loaded, database settings an archive records are never applied,
   and the copy starts with a new `installation_id` and external effects paused.
 - The archive is read strictly: two plain files, no links, devices or sparse files, nothing
-  larger than the archive itself.
+  larger than the archive itself. Strings from the bundle reach the terminal escaped.
+- While a restore runs, PUBLIC loses `CONNECT` and `TEMP` on every database of the server but
+  `template0`, so the loader role opens only the staging database. One restore runs per
+  target; SIGTERM and SIGHUP still clean up, and the next restore removes what a SIGKILL left.
 
-What restore cannot prove is that the rows are the ones you backed up: someone who can write to
-your backup storage can replace a bundle with other records. The integrity of restored data is
-the integrity of your backup storage; keep it writable only by you. Old plain `.dump` files from
-earlier releases are not bundles and are restored by hand as the superuser, so only restore
-dumps you made and kept yourself.
-- Only install apps you trust: an app is Python code running with full database access.
+What restore cannot prove is that the rows are the ones you backed up, and the rows are what
+grants access: members and their password hashes, farm roles and memberships, sharing grants,
+app states and settings, and the farms' links to Telegram chats are all rows. Whoever forges a
+bundle chooses who can sign in to the copy (as its owner, with a password they know) and, once
+effects are enabled, which chats its advice push writes to. A bundle someone hands you is as
+untrusted as one replaced on shared storage: restore only bundles you wrote and kept where
+only you can write. Old plain `.dump` files from earlier releases are not bundles and are
+restored by hand as the superuser, so only restore dumps you made and kept yourself.
+
+For migration authors: after a restore, `migrate` runs every newer migration as the superuser
+over those restored rows. A migration must never put a row's value into SQL text (no string
+formatting of selected values into `op.execute`); use set-based statements or bind parameters.
 
 ## Known limits
 

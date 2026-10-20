@@ -250,9 +250,13 @@ data only:
 - it never loads member sessions, never applies the database settings an archive records, and
   always starts the copy with external effects paused.
 
-What restore cannot check is whether the rows are the ones you backed up: someone who can
-write to your backup storage and knows the public key can replace a bundle with other farm
-records. Keep bundles where only you can write them, and keep the private key off the server.
+What restore cannot check is whether the rows are the ones you backed up. Everything that
+matters is a row: members and their password hashes, farm roles and memberships, sharing
+grants, app states and settings, and the farms' links to Telegram chats. Whoever forges a bundle
+therefore chooses who can sign in to the copy (as its owner, with a password they know) and,
+once you enable effects, which chats its advice push writes to. Restore only bundles you wrote
+yourself and kept where only you can write: a bundle someone hands you is just as untrusted as
+one found on shared storage. Keep the private key off the server.
 
 ### The owner's key
 
@@ -280,6 +284,7 @@ does not survive that disk.
 ```sh
 docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup     # one bundle now
 docker compose run --rm --no-deps --entrypoint ls backup -l /backups
+mkdir -p ~/farm-backups
 docker compose cp backup:/backups/farmcore-20261020T020000Z.age ~/farm-backups/   # off the server
 # Or anywhere with the owner's DATABASE_URL, pg_dump and age:
 farmcore backup --recipient age1... --output farm-a.age
@@ -332,11 +337,24 @@ name, and `migrate`'s steps follow: upgrade an older schema, generate the new
 `installation_id`, grant the runtime role. The app can connect only after that.
 
 Any refusal or failure before the swap leaves the target, the source installation, the bundle
-and older bundles as they were, and leaves no staging database, loader role or plaintext. If
-restore stops after the swap (say, the runtime role cannot be set up), the data is in, paused,
-with no sessions: fix the cause and run `docker compose -p farm-c --env-file farm-c.env up -d`,
-whose `migrate` finishes the job. If it stops during the swap itself, a database named
-`farmcore_restore_<hex>` holds the copy: rename it to `farmcore` with `ALTER DATABASE`.
+and older bundles as they were, and leaves no staging database, loader role or plaintext. That
+includes a restore stopped by `SIGTERM` or `SIGHUP` (`docker compose stop`, a closed terminal).
+`SIGKILL` (or a power cut) skips that cleanup: the staging database `farmcore_restore_<hex>`, a
+full copy of the rows in clear, and its `farmcore_restore_<hex>` role may stay, and so may the
+container's temporary directory (gone with a `run --rm` container). The next restore into the
+same target removes the database and the role first.
+
+One restore runs per target: a second one into the same database is refused while the first
+runs. Just before the swap, restore checks the target again and refuses it if it has gained data
+meanwhile. While it runs, PUBLIC loses `CONNECT` and `TEMP` on every database of the server but
+`template0`, as `migrate` does, so the loader role can open only the staging database.
+
+If restore stops after the swap (say, the runtime role cannot be set up), the data is in,
+paused, with no sessions: fix the cause and run
+`docker compose -p farm-c --env-file farm-c.env up -d`, whose `migrate` finishes the job. A swap
+that fails halfway renames the target back. Only if the process is killed between its two
+renames is there no `farmcore` database: rename `farmcore_restore_<hex>` to `farmcore` with
+`ALTER DATABASE`, and drop the empty `farmcore_old_<hex>`.
 
 The restored installation is independent of the original: restoring into C never changes A
 or any other project, and both may keep running.
@@ -405,20 +423,28 @@ migrated on start):
 4. Remove the old `backup` container with its anonymous volume (the PostGIS image's data
    directory; it holds nothing): `docker compose rm -sfv backup`. A plain `up` would carry
    that volume over into the new container.
-5. `docker compose up -d --build`. Cookie names now carry the installation, so everyone signs in
-   once more.
+5. If that release's `backup` service wrote plain `.dump` files, copy them first (step 1 of the
+   next list). Then `docker compose up -d --build`. Cookie names now carry the installation, so
+   browsers no longer send their old cookies and everyone signs in once more in the browser.
+   The sessions themselves stay valid in the database until they expire; only the cookie name
+   changed.
 
-From a release whose `backup` service wrote plain `.dump` files:
+From a release whose `backup` service wrote plain `.dump` files (do step 1 before anything
+else in the list above):
 
 1. **Before upgrading**, copy the old `.dump` files somewhere safe: they are not encrypted, and
    the new service deletes them with the bundles once they are seven days old.
    `docker compose cp backup:/backups ./old-backups` copies the whole directory.
 2. Create the owner's key and set `BACKUP_RECIPIENT` (see "The owner's key"). Until it is set,
    no backup is written at all.
-3. Upgrade (`docker compose up -d --build`). The service now runs as uid 10001, not root: give
-   it the existing directory once, then restart it:
-   `docker compose run --rm --no-deps --user root --entrypoint chown backup -R 10001:10001 /backups`
-   and `docker compose restart backup`.
+3. Upgrade (`docker compose up -d --build`). The service now runs as uid 10001, not root. Give
+   it the existing directory once (as root inside the `backup` container, `chown -R
+   10001:10001 /backups`), then restart it:
+
+   ```sh
+   docker compose run --rm --no-deps --user root --entrypoint chown backup -R 10001:10001 /backups
+   docker compose restart backup
+   ```
 
 `farmcore restore` refuses an old `.dump` file and points here. To restore one by hand into a
 new project's empty database (this runs the dump's SQL as the superuser: only do it with a
