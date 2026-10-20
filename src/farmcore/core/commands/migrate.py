@@ -5,6 +5,7 @@ never migrate."""
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from importlib.resources import files
 
 import psycopg
@@ -17,7 +18,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from farmcore.core.startup import INSTALLATION_SETTING, read_installation_id
-from farmcore.settings import get_settings
+from farmcore.settings import Settings, get_settings
 
 
 def alembic_config(url: str | None = None) -> Config:
@@ -349,6 +350,44 @@ _EXTENSION_RELATIONS = text(
 )
 
 
+def migrate_installation(
+    settings: Settings, before_access: Callable[[], None] | None = None
+) -> str:
+    """Upgrade to head, give the installation its id, set up the runtime role; the id.
+
+    `before_access` runs after the upgrade and before the runtime role is (re)granted access
+    (`farmcore restore` clears sessions there). Raises `MigrateError` on a refusal."""
+    engine = create_engine(settings.database_url)
+    try:
+        with engine.connect() as conn:
+            check_owner(conn)
+        command.upgrade(alembic_config(settings.database_url), "head")
+        if before_access is not None:
+            before_access()
+        if settings.runtime_database_password:
+            # Objects in `postgres` and shared objects first, in their own transaction.
+            maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))
+            try:
+                with maintenance.begin() as conn:
+                    reset_runtime_role_in(conn, settings.runtime_database_role)
+                    # The reset revoked CONNECT on the installation database; give it back
+                    # now, so a failure in the next step never locks out the running app.
+                    keep_connect(conn, settings.runtime_database_role, settings.database_url)
+            finally:
+                maintenance.dispose()
+        with engine.begin() as conn:
+            installation_id = ensure_installation_id(conn)
+            if settings.runtime_database_password:
+                ensure_runtime_role(
+                    conn,
+                    settings.runtime_database_role,
+                    settings.runtime_database_password.get_secret_value(),
+                )
+        return installation_id
+    finally:
+        engine.dispose()
+
+
 def register(cli: typer.Typer) -> None:
     @cli.command()
     def migrate() -> None:
@@ -356,37 +395,10 @@ def register(cli: typer.Typer) -> None:
 
         Run as this server's bootstrap superuser (the database owner); anything else is
         refused."""
-        settings = get_settings()
-        engine = create_engine(settings.database_url)
         try:
-            with engine.connect() as conn:
-                check_owner(conn)
-            command.upgrade(alembic_config(settings.database_url), "head")
-            if settings.runtime_database_password:
-                # Objects in `postgres` and shared objects first, in their own transaction.
-                maintenance = create_engine(
-                    make_url(settings.database_url).set(database="postgres")
-                )
-                try:
-                    with maintenance.begin() as conn:
-                        reset_runtime_role_in(conn, settings.runtime_database_role)
-                        # The reset revoked CONNECT on the installation database; give it back
-                        # now, so a failure in the next step never locks out the running app.
-                        keep_connect(conn, settings.runtime_database_role, settings.database_url)
-                finally:
-                    maintenance.dispose()
-            with engine.begin() as conn:
-                installation_id = ensure_installation_id(conn)
-                if settings.runtime_database_password:
-                    ensure_runtime_role(
-                        conn,
-                        settings.runtime_database_role,
-                        settings.runtime_database_password.get_secret_value(),
-                    )
+            installation_id = migrate_installation(get_settings())
         except MigrateError as exc:
             typer.echo(str(exc), err=True)
             raise typer.Exit(1) from None
-        finally:
-            engine.dispose()
         typer.echo("migrated to head")
         typer.echo(f"installation {installation_id}")

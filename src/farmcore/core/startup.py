@@ -33,7 +33,7 @@ def check_public_settings(settings: Settings) -> None:
 # CREATE DATABASE ... TEMPLATE and a plain pg_dump/pg_restore do not, so `migrate` makes a new one.
 INSTALLATION_SETTING = "farmcore.installation_id"
 
-_READ_INSTALLATION_ID = text(
+_READ_DATABASE_SETTING = text(
     "SELECT substr(cfg, length(:name) + 2) FROM pg_db_role_setting s "
     "JOIN pg_database d ON d.oid = s.setdatabase, unnest(s.setconfig) AS cfg "
     "WHERE s.setrole = 0 AND d.datname = current_database() AND split_part(cfg, '=', 1) = :name"
@@ -44,4 +44,20 @@ def read_installation_id(conn: Connection | Session) -> str | None:
     """This database's installation id, or None when `farmcore migrate` never ran on it.
 
     Read from the catalog rather than `current_setting()`, which a session could override."""
-    return conn.execute(_READ_INSTALLATION_ID, {"name": INSTALLATION_SETTING}).scalar()
+    return conn.execute(_READ_DATABASE_SETTING, {"name": INSTALLATION_SETTING}).scalar()
+
+
+# Whether this installation may act outside itself (today: the Telegram advice push, and the
+# bot's long polling). A database-level setting like the id, so no schema change and only the
+# owner can switch it (`farmcore effects`). `farmcore restore` sets it to `paused` before any
+# data arrives, so two copies of one installation never both send. Unset (every installation
+# that was never restored) means enabled.
+EFFECTS_SETTING = "farmcore.external_effects"
+EFFECTS_ENABLED = "enabled"
+EFFECTS_PAUSED = "paused"
+
+
+def read_external_effects(conn: Connection | Session) -> str:
+    """`enabled` or `paused`; anything but an explicit `enabled` or no setting is paused."""
+    value = conn.execute(_READ_DATABASE_SETTING, {"name": EFFECTS_SETTING}).scalar()
+    return EFFECTS_ENABLED if value in (None, EFFECTS_ENABLED) else EFFECTS_PAUSED

@@ -36,6 +36,7 @@ from farmcore.apps.chat.telegram import HttpxTelegramSender, TelegramSender, Tel
 from farmcore.core.access import repo_for_job
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Advice, Event, Farm, Parcel
+from farmcore.core.startup import EFFECTS_ENABLED, read_external_effects
 from farmcore.core.urls import with_farm
 from farmcore.settings import Settings
 
@@ -158,6 +159,11 @@ def _change(
 def push_advice(ctx: JobContext) -> None:
     # The token gates the job even when a test injected a sender.
     if ctx.settings.telegram_bot_token is None:
+        return
+    # A paused installation (a restored copy, until its owner enables effects) sends nothing
+    # and keeps every cursor, so enabling later pushes what changed meanwhile, once.
+    if read_external_effects(ctx.session) != EFFECTS_ENABLED:
+        logger.info("external effects are paused; advice push skipped")
         return
     farm_ids = ctx.session.scalars(
         select(Farm.id).where(Farm.id.in_(ctx.farm_ids))
