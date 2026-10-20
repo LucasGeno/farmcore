@@ -747,6 +747,29 @@ def fake_tool(directory: Path, name: str, script: str) -> None:
     exe.chmod(0o755)
 
 
+def test_a_dump_whose_entry_list_cannot_be_read_is_reported_and_nothing_is_restored(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch
+):
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    real = shutil.which("pg_restore")
+    fake_tool(tmp_path / "bin", "pg_restore", f"""case "$*" in
+  *--list*) echo "pg_restore: error: could not read the entry list" >&2; exit 1;;
+  *) exec "{real}" "$@";;
+esac
+""")  # fmt: skip
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert "the dump is unreadable: pg_restore: error: could not read" in result.output
+    assert table_rows(dbs, target) == {}
+    assert cli("effects", env=env).output.strip() == "external effects: paused"
+
+
 def test_a_failed_pg_restore_leaves_a_paused_closed_target_that_a_rerun_restores(
     source, dbs, cli, owner_key, tmp_path, monkeypatch
 ):
