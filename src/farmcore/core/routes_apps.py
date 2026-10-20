@@ -71,9 +71,6 @@ def _listing(request: Request, session: Session) -> list[dict[str, Any]]:
     ]
 
 
-_join = join_names
-
-
 def _status(app: dict[str, Any]) -> str:
     """`always` (required), `off`, `on`, or `restart` (installed, loads at the next start)."""
     if app["required"]:
@@ -105,7 +102,7 @@ def _groups(request: Request, listing: list[dict[str, Any]]) -> list[dict[str, A
             {
                 **app,
                 "icon": m.nav_icon,
-                "needs": _join(needs) if needs else "",
+                "needs": join_names(needs) if needs else "",
                 "status": status,
                 "href": m.nav[1] if m.nav and status in ("on", "always") else None,
                 "links": [item for item in m.extra_nav if item.group != "admin"]

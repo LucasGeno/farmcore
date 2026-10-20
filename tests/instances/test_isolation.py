@@ -310,6 +310,155 @@ def test_an_existing_runtime_role_loses_memberships_and_role_settings(install) -
         engine.dispose()
 
 
+def _remigrate(monkeypatch, inst: Installed) -> None:
+    _migrate(
+        monkeypatch,
+        {
+            "DATABASE_URL": inst.owner_url,
+            "RUNTIME_DATABASE_ROLE": inst.role,
+            "RUNTIME_DATABASE_PASSWORD": inst.password,
+        },
+    )
+
+
+def test_migrate_drops_privileges_granted_to_the_runtime_role_directly(
+    install, monkeypatch, pg_server
+) -> None:
+    inst = install()
+    r = f'"{inst.role}"'
+    with create_engine(inst.owner_url).begin() as conn:
+        conn.execute(text(f'GRANT CREATE ON DATABASE "{inst.database}" TO {r}'))
+        conn.execute(text(f"GRANT ALL ON SCHEMA public TO {r}"))
+        conn.execute(text(f"GRANT TRUNCATE, REFERENCES, TRIGGER ON farm TO {r}"))
+    with create_engine(pg_server.url("postgres")).begin() as conn:
+        conn.execute(text(f"GRANT CONNECT, TEMPORARY, CREATE ON DATABASE postgres TO {r}"))
+    _remigrate(monkeypatch, inst)
+    for sql in (
+        "CREATE TABLE public.runtime_made (id int)",
+        "CREATE SCHEMA runtime_made",
+        "TRUNCATE farm",
+        "CREATE TRIGGER t BEFORE INSERT ON farm FOR EACH ROW "
+        "EXECUTE FUNCTION suppress_redundant_updates_trigger()",
+    ):
+        _denied(inst.runtime_url, sql)
+    engine = create_engine(pg_server.url("postgres", inst.role, inst.password))
+    try:
+        with pytest.raises(DBAPIError) as exc, engine.connect():
+            pass
+        assert "permission denied for database" in str(exc.value)
+    finally:
+        engine.dispose()
+
+
+def test_migrate_refuses_a_runtime_role_that_owns_objects(install, monkeypatch) -> None:
+    inst = install()
+    with create_engine(inst.owner_url).begin() as conn:
+        conn.execute(text("CREATE TABLE owned_by_runtime (id int)"))
+        conn.execute(text(f'ALTER TABLE owned_by_runtime OWNER TO "{inst.role}"'))
+    out = _migrate_fails(
+        monkeypatch,
+        {
+            "DATABASE_URL": inst.owner_url,
+            "RUNTIME_DATABASE_ROLE": inst.role,
+            "RUNTIME_DATABASE_PASSWORD": inst.password,
+        },
+    )
+    assert f"{inst.role} owns" in out and "must own nothing" in out
+
+
+def test_a_membership_granted_by_another_role_is_removed_too(install, pg_server) -> None:
+    """PostgreSQL 16+: a plain REVOKE only removes grants made by the revoking role."""
+    granter = f"granter_{uuid.uuid4().hex[:8]}"
+
+    def pre_create(conn, role: str) -> None:
+        conn.execute(text(f'CREATE ROLE "{role}" LOGIN'))
+        conn.execute(text(f'CREATE ROLE "{granter}"'))
+        conn.execute(text(f'GRANT pg_read_all_data TO "{granter}" WITH ADMIN OPTION'))
+        conn.execute(text(f'GRANT pg_read_all_data TO "{role}" GRANTED BY "{granter}"'))
+
+    admin = create_engine(pg_server.url("farmcore"), isolation_level="AUTOCOMMIT")
+    try:
+        inst = install(before=pre_create)
+        with admin.connect() as conn:
+            left = conn.execute(
+                text(
+                    "SELECT count(*) FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member "
+                    "WHERE r.rolname = :r"
+                ),
+                {"r": inst.role},
+            ).scalar_one()
+        assert left == 0
+    finally:
+        with admin.connect() as conn:
+            conn.execute(text(f'DROP ROLE IF EXISTS "{granter}"'))
+        admin.dispose()
+
+
+def test_migrate_fails_if_a_membership_survives_the_revoke(install, monkeypatch) -> None:
+    """Fault injection: the catalog keeps reporting a membership after it was revoked (e.g. one
+    granted concurrently). Migrate must stop rather than leave a privileged runtime role."""
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    monkeypatch.setattr(
+        migrate, "_MEMBERSHIPS", text("SELECT 'pg_monitor'::text, current_user::text WHERE :r = :r")
+    )
+    out = _migrate_fails(
+        monkeypatch,
+        {
+            "DATABASE_URL": inst.owner_url,
+            "RUNTIME_DATABASE_ROLE": inst.role,
+            "RUNTIME_DATABASE_PASSWORD": inst.password,
+        },
+    )
+    assert f"{inst.role} is still a member of pg_monitor" in out
+
+
+def test_a_non_superuser_owner_leaves_the_servers_databases_alone(pg_server, monkeypatch) -> None:
+    """On a shared server the owner is an ordinary role: migrate then changes only what it
+    owns, never the server-wide rights on `postgres` and the templates."""
+    suffix = uuid.uuid4().hex[:8]
+    owner, role, database = f"own_{suffix}", f"rt_{suffix}", f"shared_{suffix}"
+    owner_pw, role_pw = secrets.token_hex(16), secrets.token_hex(16)
+    admin = create_engine(pg_server.url("farmcore"), isolation_level="AUTOCOMMIT")
+    acl = text("SELECT datacl::text FROM pg_database WHERE datname = :d")
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f"CREATE ROLE {owner} LOGIN CREATEROLE PASSWORD '{owner_pw}'"))
+            conn.execute(text(f"CREATE DATABASE {database} OWNER {owner}"))
+            for d in SERVER_DBS:
+                conn.execute(text(f"GRANT CONNECT, TEMPORARY ON DATABASE {d} TO PUBLIC"))
+            before = {d: conn.execute(acl, {"d": d}).scalar() for d in SERVER_DBS}
+        with create_engine(pg_server.url(database)).begin() as conn:
+            conn.execute(text("CREATE EXTENSION postgis"))
+            conn.execute(text(f"ALTER SCHEMA public OWNER TO {owner}"))
+        env = {
+            "DATABASE_URL": pg_server.url(database, owner, owner_pw),
+            "RUNTIME_DATABASE_ROLE": role,
+            "RUNTIME_DATABASE_PASSWORD": role_pw,
+        }
+        # A non-superuser may set the identity only once a superuser allows it, which the
+        # refusal says how to do.
+        refused = _migrate_fails(monkeypatch, env)
+        assert f"GRANT SET ON PARAMETER farmcore.installation_id TO {owner}" in refused
+        with admin.connect() as conn:
+            conn.execute(text(f"GRANT SET ON PARAMETER farmcore.installation_id TO {owner}"))
+        _migrate(monkeypatch, env)
+        with admin.connect() as conn:
+            assert {d: conn.execute(acl, {"d": d}).scalar() for d in SERVER_DBS} == before
+        _denied(pg_server.url(database, role, role_pw), "CREATE TABLE public.t (id int)")
+    finally:
+        with admin.connect() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS {database} WITH (FORCE)"))
+            conn.execute(text(f"DROP ROLE IF EXISTS {role}"))
+            conn.execute(text(f"REVOKE SET ON PARAMETER farmcore.installation_id FROM {owner}"))
+            conn.execute(text(f"DROP ROLE IF EXISTS {owner}"))
+        admin.dispose()
+
+
+SERVER_DBS = ("postgres", "template1", "template_postgis")
+
+
 def test_a_session_override_of_the_setting_does_not_change_the_reported_id(install) -> None:
     from fastapi.testclient import TestClient
 

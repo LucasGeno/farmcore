@@ -136,7 +136,8 @@ def test_a_fresh_installation_starts_empty_and_is_set_up_through_the_cli(runtime
             follow_redirects=False,
         )
         assert resp.status_code == 303, resp.text
-        assert c.get(f"/today/?farm={farm_id}").status_code == 200
+        resp = c.get(f"/notifications?farm={farm_id}")
+        assert resp.status_code == 200 and "data-notifications" in resp.text
 
 
 def test_optional_apps_are_switched_through_the_cli(runtime, cli):
@@ -157,6 +158,30 @@ def test_optional_apps_are_switched_through_the_cli(runtime, cli):
     assert on.exit_code == 0, on.output
     row = [line for line in on.output.splitlines() if " assistant " in line]
     assert row and "installed" in row[0].split() and "uninstalled" not in row[0]
+
+
+def test_a_farm_created_on_the_cli_is_open_to_the_operator(runtime, cli):
+    from pydantic import SecretStr
+
+    from farmcore.main import create_app
+
+    farm_id = cli("farms", "create", "Operator farm", env={"DATABASE_URL": runtime}).output.split()[
+        1
+    ]
+    token = secrets.token_hex(24)
+    settings = Settings(_env_file=None, database_url=runtime, admin_token=SecretStr(token))
+    with TestClient(create_app(settings), headers={"X-Admin-Token": token}) as c:
+        resp = c.get(f"/notifications?farm={farm_id}")
+        assert resp.status_code == 200 and "data-notifications" in resp.text
+
+
+def test_switches_apply_all_together_or_not_at_all(runtime, cli):
+    env = {"DATABASE_URL": runtime}
+    refused = cli("apps", "--uninstall", "assistant", "--uninstall", "today", env=env)
+    assert refused.exit_code == 1 and "always on" in refused.output
+    listing = cli("apps", env=env).output.splitlines()
+    row = next(line for line in listing if " assistant " in line)
+    assert "installed" in row.split() and "uninstalled" not in row
 
 
 def test_the_setup_cli_refuses_unknown_apps_and_unnamed_farms(runtime, cli):

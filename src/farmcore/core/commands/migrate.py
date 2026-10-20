@@ -36,8 +36,20 @@ def ensure_installation_id(conn: Connection) -> str:
     database = conn.dialect.identifier_preparer.quote(
         conn.execute(text("SELECT current_database()")).scalar_one()
     )
+    me = conn.execute(text("SELECT current_user")).scalar_one()
     # A UUID string is a safe literal; ALTER DATABASE takes no bind parameters.
-    conn.exec_driver_sql(f"ALTER DATABASE {database} SET {INSTALLATION_SETTING} = '{new}'")
+    try:
+        # psycopg directly, so the one error handled here arrives as itself.
+        conn.connection.driver_connection.execute(
+            f"ALTER DATABASE {database} SET {INSTALLATION_SETTING} = '{new}'"
+        )
+    except psycopg.errors.InsufficientPrivilege:
+        # PostgreSQL 15+: only a superuser, or a role granted SET on it, may store a custom
+        # setting, even on a database it owns (a shared server's ordinary owner role).
+        raise MigrateError(
+            f"{me} may not store the installation id. As a superuser, run once: "
+            f"GRANT SET ON PARAMETER {INSTALLATION_SETTING} TO {me}"
+        ) from None
     return new
 
 
@@ -71,12 +83,16 @@ def check_owner(conn: Connection) -> str:
 
 
 def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
-    """Create or update the DML-only runtime role and grant it this database, nothing more.
+    """Create or reset the DML-only runtime role and grant it this database, nothing more.
 
     The owner (the connected role) keeps the schema, the PostGIS extension and every DDL right.
     The runtime role may connect to this database only, use the `public` schema, read and write
-    rows and use sequences; default privileges extend that to tables later migrations add. An
-    existing role loses every role membership and role-level setting.
+    rows and use sequences; default privileges extend that to tables later migrations add.
+
+    An existing role is reset first: every role membership (whoever granted it), role-level
+    setting and directly granted privilege on any database, or on this database's schemas,
+    tables, sequences and functions, is removed before the intended grants are made again. A
+    role that owns any object is refused: ownership carries every right on that object.
 
     Statements go through psycopg directly, with the password sent as a SCRAM verifier computed
     here: the plaintext is never part of any statement, and a failure reports the server's
@@ -91,27 +107,27 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
     conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": "farmcore.runtime"})
     database_name = conn.execute(text("SELECT current_database()")).scalar_one()
     exists = conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role}).scalar()
-    memberships = (
-        conn.execute(
-            text(
-                "SELECT g.rolname FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid "
-                "JOIN pg_roles u ON u.oid = m.member WHERE u.rolname = :r"
-            ),
-            {"r": role},
-        )
-        .scalars()
-        .all()
+    if exists:
+        owned = conn.execute(_OWNED, {"r": role}).scalar_one()
+        if owned:
+            raise MigrateError(
+                f"{role} owns {owned} database object(s); the runtime role must own nothing. "
+                f"Reassign them (REASSIGN OWNED BY {role} TO {me}) and run migrate again."
+            )
+
+    def names(query: str, **params: object) -> list[str]:
+        return list(conn.execute(text(query), params).scalars())
+
+    # Databases whose privileges this role may change: all of them as superuser, else its own.
+    manageable = (
+        "SELECT d.datname FROM pg_database d, pg_roles r WHERE r.rolname = current_user "
+        "AND d.datallowconn AND (r.rolsuper OR d.datdba = r.oid)"
     )
-    server_dbs = (
-        conn.execute(
-            text(
-                "SELECT d.datname FROM pg_database d, pg_roles r WHERE r.rolname = current_user "
-                "AND d.datname = ANY(:names) AND (r.rolsuper OR d.datdba = r.oid)"
-            ),
-            {"names": list(SERVER_DATABASES)},
-        )
-        .scalars()
-        .all()
+    server_dbs = [d for d in names(manageable) if d in SERVER_DATABASES]
+    all_dbs = names(manageable)
+    schemas = names(
+        "SELECT nspname FROM pg_namespace WHERE nspname <> 'information_schema' "
+        "AND nspname NOT LIKE 'pg\\_%'"
     )
     r = sql.Identifier(role)
     owner = sql.Identifier(me)
@@ -123,7 +139,12 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
             r, sql.Literal(verifier.decode())
         )
     ]
-    statements += [sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(g), r) for g in memberships]
+    for granted, grantor in conn.execute(_MEMBERSHIPS, {"r": role}).all():
+        statements.append(
+            sql.SQL("REVOKE {} FROM {} GRANTED BY {}").format(
+                sql.Identifier(granted), r, sql.Identifier(grantor)
+            )
+        )
     statements += [
         sql.SQL("ALTER ROLE {} RESET ALL").format(r),
         sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(r, database),
@@ -132,6 +153,14 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
         sql.SQL("REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(d))
         for d in server_dbs
     ]
+    statements += [
+        sql.SQL("REVOKE ALL ON DATABASE {} FROM {}").format(sql.Identifier(d), r) for d in all_dbs
+    ]
+    for schema in schemas:
+        s = sql.Identifier(schema)
+        for kind in ("SCHEMA {}", "ALL TABLES IN SCHEMA {}", "ALL SEQUENCES IN SCHEMA {}",
+                     "ALL FUNCTIONS IN SCHEMA {}"):  # fmt: skip
+            statements.append(sql.SQL("REVOKE ALL ON " + kind + " FROM {}").format(s, r))
     for statement in (
         "REVOKE ALL ON DATABASE {db} FROM PUBLIC",
         "GRANT CONNECT ON DATABASE {db} TO {r}",
@@ -155,6 +184,26 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
     except psycopg.Error as exc:
         detail = exc.diag.message_primary or type(exc).__name__
         raise MigrateError(f"could not set up the runtime role {role}: {detail}") from None
+    left = [g for g, _ in conn.execute(_MEMBERSHIPS, {"r": role}).all()]
+    if left:
+        raise MigrateError(
+            f"{role} is still a member of {', '.join(sorted(set(left)))} after revoking; remove "
+            "those memberships by hand and run migrate again."
+        )
+
+
+# Objects a role owns, in any database of the server.
+_OWNED = text(
+    "SELECT count(*) FROM pg_shdepend WHERE deptype = 'o' "
+    "AND refclassid = 'pg_authid'::regclass AND refobjid = (SELECT oid FROM pg_roles "
+    "WHERE rolname = :r)"
+)
+# Every membership of a role, with who granted it (a REVOKE removes only one grantor's grant).
+_MEMBERSHIPS = text(
+    "SELECT g.rolname, gr.rolname FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid "
+    "JOIN pg_roles u ON u.oid = m.member JOIN pg_roles gr ON gr.oid = m.grantor "
+    "WHERE u.rolname = :r"
+)
 
 
 def register(cli: typer.Typer) -> None:
