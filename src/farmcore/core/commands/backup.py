@@ -22,6 +22,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -86,6 +87,43 @@ def _last_line(stderr: bytes) -> str:
     return lines[-1] if lines else "no message"
 
 
+def tool_error(stderr: bytes) -> str:
+    """A tool's own error line (`age: error: ...`, `pg_dump: error: ...`), not a footer such as
+    age's "report unexpected errors" line; the last line when none says `error:`."""
+    lines = [ln for ln in stderr.decode(errors="replace").splitlines() if ln.strip()]
+    errors = [ln for ln in lines if "error:" in ln]
+    return errors[0] if errors else _last_line(stderr)
+
+
+def _major(version_text: str) -> int | None:
+    match = re.search(r"\(PostgreSQL\) (\d+)", version_text)
+    return int(match.group(1)) if match else None
+
+
+def check_pg_dump(pg_dump: str, conn: Connection) -> None:
+    """pg_dump refuses a newer server; say so before trying, with both versions."""
+    client = _major(subprocess.run([pg_dump, "--version"], capture_output=True, text=True).stdout)
+    server = conn.execute(text("SELECT current_setting('server_version_num')::int")).scalar_one()
+    if client is not None and server // 10000 > client:
+        raise BundleError(
+            f"the database runs PostgreSQL {server // 10000} but this is pg_dump {client}: back "
+            f"up with a FarmCore image whose PostgreSQL client is {server // 10000} or later"
+        )
+
+
+def check_output(output: Path, recipients: list[str]) -> None:
+    if not recipients:
+        raise BundleError("give the owner's age recipient (--recipient or BACKUP_RECIPIENT).")
+    if not all(r.startswith("age1") and r.isascii() and " " not in r for r in recipients):
+        # Never echo the value: someone may have pasted their private key.
+        raise BundleError("recipients must be age public keys (age1...); SSH keys are not used")
+    if output.exists():
+        raise BundleError(f"{output} already exists; backups never overwrite a file.")
+    parent = output.parent
+    if not parent.is_dir() or not os.access(parent, os.W_OK | os.X_OK):
+        raise BundleError(f"cannot write into {parent}: no such directory, or no permission")
+
+
 def _manifest_facts(conn: Connection) -> dict:
     heads = sorted(conn.execute(text("SELECT version_num FROM alembic_version")).scalars())
     ordered = registry.discover(packages=APP_PACKAGES)
@@ -116,12 +154,28 @@ def _add(tar: tarfile.TarFile, name: str, path: Path, mtime: float) -> None:
         tar.addfile(info, f)
 
 
+def _encrypt(proc: subprocess.Popen, manifest: Path, dump: Path, mtime: float) -> bytes:
+    """Stream the tar into age and wait for it; age's stderr."""
+    stdin = proc.stdin
+    if stdin is None:  # pragma: no cover - Popen(stdin=PIPE) always sets it
+        raise BundleError("age failed: no input pipe")
+    # age stops reading when it fails (say, a malformed recipient); its error says why.
+    with (
+        contextlib.suppress(BrokenPipeError),
+        tarfile.open(fileobj=stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar,
+    ):
+        _add(tar, MANIFEST_NAME, manifest, mtime)
+        _add(tar, DUMP_NAME, dump, mtime)
+    with contextlib.suppress(BrokenPipeError):
+        stdin.close()
+    stderr = proc.stderr.read() if proc.stderr else b""
+    proc.wait()
+    return stderr
+
+
 def create_bundle(database_url: str, recipients: list[str], output: Path) -> dict:
     """Dump the database and write the encrypted bundle to `output`; return the manifest."""
-    if not recipients:
-        raise BundleError("give the owner's age recipient (--recipient or BACKUP_RECIPIENT).")
-    if output.exists():
-        raise BundleError(f"{output} already exists; backups never overwrite a file.")
+    check_output(output, recipients)
     age, pg_dump = tool("age"), tool("pg_dump")
     engine = create_engine(database_url, isolation_level="REPEATABLE READ")
     partial = output.with_name(output.name + ".partial")
@@ -130,6 +184,7 @@ def create_bundle(database_url: str, recipients: list[str], output: Path) -> dic
             dump = Path(tmp) / DUMP_NAME
             try:
                 with engine.connect() as conn:
+                    check_pg_dump(pg_dump, conn)
                     # One snapshot for the manifest and the dump.
                     snapshot = conn.execute(text("SELECT pg_export_snapshot()")).scalar_one()
                     facts = _manifest_facts(conn)
@@ -141,7 +196,7 @@ def create_bundle(database_url: str, recipients: list[str], output: Path) -> dic
             except DBAPIError as exc:
                 raise BundleError(f"cannot read the database: {database_error(exc)}") from None
             if done.returncode != 0:
-                raise BundleError(f"pg_dump failed: {_last_line(done.stderr)}")
+                raise BundleError(f"pg_dump failed: {tool_error(done.stderr)}")
             created = datetime.now(UTC)
             manifest = {
                 "format": FORMAT,
@@ -157,19 +212,14 @@ def create_bundle(database_url: str, recipients: list[str], output: Path) -> dic
             proc = subprocess.Popen(
                 [*args, "-o", str(partial)], stdin=subprocess.PIPE, stderr=subprocess.PIPE
             )
-            assert proc.stdin is not None
-            # age stops reading when it fails (say, a malformed recipient); its error says why.
-            with (
-                contextlib.suppress(BrokenPipeError),
-                tarfile.open(fileobj=proc.stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar,
-            ):
-                _add(tar, MANIFEST_NAME, manifest_path, created.timestamp())
-                _add(tar, DUMP_NAME, dump, created.timestamp())
-            with contextlib.suppress(BrokenPipeError):
-                proc.stdin.close()
-            stderr = proc.stderr.read() if proc.stderr else b""
-            if proc.wait() != 0:
-                raise BundleError(f"age failed: {_last_line(stderr)}")
+            try:
+                stderr = _encrypt(proc, manifest_path, dump, created.timestamp())
+            except BaseException:
+                proc.kill()
+                proc.wait()
+                raise
+            if proc.returncode != 0:
+                raise BundleError(f"age failed: {tool_error(stderr)}")
         with partial.open("rb") as f:
             os.fsync(f.fileno())
         os.replace(partial, output)
@@ -188,7 +238,8 @@ def register(cli: typer.Typer) -> None:
             "--recipient",
             "-r",
             envvar="BACKUP_RECIPIENT",
-            help="The owner's age public key (age1...); repeat for several.",
+            help="The owner's age public key (age1...); repeat for several (space-separated in "
+            "BACKUP_RECIPIENT).",
         ),  # fmt: skip
     ) -> None:
         """Write the installation (DATABASE_URL, as the owner) to one encrypted bundle."""

@@ -615,7 +615,10 @@ class Untouched:
         target = self.dbs.query(
             self.target,
             "SELECT d.oid, (SELECT count(*) FROM pg_db_role_setting WHERE setdatabase = d.oid), "
-            "(SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public') "
+            "(SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'), "
+            # No staging database or loader role is left behind.
+            "(SELECT count(*) FROM pg_database WHERE datname LIKE current_database() || '%'), "
+            "(SELECT count(*) FROM pg_roles WHERE rolname LIKE 'farmcore_restore%') "
             "FROM pg_database d WHERE datname = current_database()",
         )
         bundles = [b.exists() and hashlib.sha256(b.read_bytes()).hexdigest() for b in self.bundles]
@@ -905,8 +908,84 @@ def test_backup_rejects_a_malformed_recipient_and_leaves_no_file(source, cli, tm
 
     result = cli("backup", "-r", "age1notakey", "-o", str(out), env=source)
 
-    assert result.exit_code == 1 and "age failed" in result.output
+    assert result.exit_code == 1 and "age failed: age: error:" in result.output
+    assert "filippo.io" not in result.output  # age's footer, not the cause
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("recipient", ["ssh-ed25519 AAAAC3Nza", "AGE-SECRET-KEY-1XYZ", "bob"])
+def test_backup_takes_only_age_public_keys(source, cli, tmp_path, recipient):
+    result = cli("backup", "-r", recipient, "-o", str(tmp_path / "a"), env=source)
+
+    assert result.exit_code == 1 and "age public keys (age1...)" in result.output
+    assert recipient not in result.output  # never echo what might be a private key
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_backup_into_an_unwritable_directory_fails_in_one_line(source, cli, owner_key, tmp_path):
+    _, recipient = owner_key
+    locked = tmp_path / "locked"
+    locked.mkdir(mode=0o500)
+    try:
+        result = cli("backup", "-r", recipient, "-o", str(locked / "a"), env=source)
+        missing = cli("backup", "-r", recipient, "-o", str(tmp_path / "no" / "a"), env=source)
+    finally:
+        locked.chmod(0o700)
+
+    assert result.exit_code == 1 and result.output.count("\n") == 1
+    assert "cannot write" in result.output
+    assert missing.exit_code == 1 and "cannot write" in missing.output
+
+
+def test_backup_refuses_a_server_newer_than_its_pg_dump(
+    source, cli, owner_key, tmp_path, monkeypatch
+):
+    _, recipient = owner_key
+    fake_tool(tmp_path / "bin", "pg_dump", 'echo "pg_dump (PostgreSQL) 16.4"; exit 0\n')
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+
+    result = cli("backup", "-r", recipient, "-o", str(tmp_path / "a"), env=source)
+
+    assert result.exit_code == 1
+    assert "PostgreSQL 17" in result.output and "pg_dump 16" in result.output
+
+
+def test_the_manifest_and_the_dump_describe_one_moment(source, dbs, cli, owner_key, tmp_path):
+    """While an app is switched on and off, every bundle's manifest says what its dump holds."""
+    import threading
+
+    key, recipient = owner_key
+    stop = threading.Event()
+
+    def toggle() -> None:
+        engine = create_engine(dbs.server.url(source["name"]))
+        while not stop.is_set():
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "UPDATE app_module SET state = CASE state WHEN 'installed' THEN "
+                    "'uninstalled' ELSE 'installed' END WHERE name = 'kpi'"
+                ))  # fmt: skip
+        engine.dispose()
+
+    writer = threading.Thread(target=toggle)
+    writer.start()
+    try:
+        bundles = [backup(cli, source, recipient, tmp_path / f"{i}.age") for i in range(6)]
+    finally:
+        stop.set()
+        writer.join()
+
+    for bundle in bundles:
+        files = members(decrypt(bundle, key))
+        dump = tmp_path / "x.dump"
+        dump.write_bytes(files["farmcore.dump"])
+        sql = subprocess.run(
+            ["pg_restore", "--data-only", "--table=app_module", "-f", "-", dump],
+            check=True, capture_output=True, text=True,
+        ).stdout  # fmt: skip
+        in_dump = re.search(r"^kpi\t(\w+)\t", sql, re.M).group(1)
+        in_manifest = json.loads(files["manifest.json"])["modules"]["kpi"]["state"]
+        assert in_dump == in_manifest
 
 
 def test_backup_and_restore_say_which_tool_is_missing(source, cli, tmp_path, monkeypatch):
