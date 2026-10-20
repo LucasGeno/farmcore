@@ -296,6 +296,11 @@ def test_the_loader_role_can_do_nothing_but_load_rows(
 esac
 """)  # fmt: skip
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    # A database first created on PostgreSQL 14 or older keeps CREATE on `public` for PUBLIC.
+    engine = create_engine(dbs.server.url(target))
+    with engine.begin() as conn:
+        conn.exec_driver_sql("GRANT CREATE ON SCHEMA public TO PUBLIC")
+    engine.dispose()
 
     result = cli("restore", str(good), "--identity", str(key), env=env)
 
@@ -550,4 +555,26 @@ def test_a_failed_load_reports_no_row_data(attack, source, dbs, cli, tmp_path, p
     assert result.exit_code == 1
     assert "restore: " in result.output and secret not in result.output
     assert "999999" not in result.output
+    untouched.check()
+
+
+def test_a_row_the_load_cannot_parse_is_not_quoted_back(
+    attack, source, dbs, cli, tmp_path, private_tmp
+):
+    """PostgreSQL quotes the value it cannot parse (`invalid input syntax ...: "<value>"`)."""
+    key, recipient, good, files, target, env = attack
+    secret = f"fc-row-secret-{uuid.uuid4().hex[:8]}"
+    dump = forge_dump(dbs, files, tmp_path, [
+        "ALTER TABLE public.log ALTER COLUMN ts_start TYPE text",
+        "INSERT INTO public.log (farm_id, type, status, name, ts_start) "
+        f"SELECT id, 'spray', 'done', 'x', '{secret}' FROM public.farm LIMIT 1",
+    ])  # fmt: skip
+    bundle = forged_bundle(files, dump, recipient, tmp_path / "forged.age")
+    untouched = Untouched(dbs, source["name"], target, [good, bundle], private_tmp)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert "restore: pg_restore failed" in result.output, result.output
+    assert secret not in result.output
     untouched.check()
