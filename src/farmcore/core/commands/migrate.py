@@ -1,5 +1,6 @@
 """`farmcore migrate`: upgrade the database to the latest revision and give the installation
-its identity. Run as the database owner; the app and bot never migrate."""
+its identity. Run as the database owner (the server's bootstrap superuser); the app and bot
+never migrate."""
 
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from alembic import command
 from alembic.config import Config
 from psycopg import sql
 from sqlalchemy import Connection, create_engine, text
+from sqlalchemy.engine import make_url
 
 from farmcore.core.startup import INSTALLATION_SETTING, read_installation_id
 from farmcore.settings import get_settings
@@ -36,26 +38,15 @@ def ensure_installation_id(conn: Connection) -> str:
     database = conn.dialect.identifier_preparer.quote(
         conn.execute(text("SELECT current_database()")).scalar_one()
     )
-    me = conn.execute(text("SELECT current_user")).scalar_one()
     # A UUID string is a safe literal; ALTER DATABASE takes no bind parameters.
-    try:
-        # psycopg directly, so the one error handled here arrives as itself.
-        conn.connection.driver_connection.execute(
-            f"ALTER DATABASE {database} SET {INSTALLATION_SETTING} = '{new}'"
-        )
-    except psycopg.errors.InsufficientPrivilege:
-        # PostgreSQL 15+: only a superuser, or a role granted SET on it, may store a custom
-        # setting, even on a database it owns (a shared server's ordinary owner role).
-        raise MigrateError(
-            f"{me} may not store the installation id. As a superuser, run once: "
-            f"GRANT SET ON PARAMETER {INSTALLATION_SETTING} TO {me}"
-        ) from None
+    conn.exec_driver_sql(f"ALTER DATABASE {database} SET {INSTALLATION_SETTING} = '{new}'")
     return new
 
 
-# Tables the runtime role may read but never write.
-READ_ONLY_TABLES = ("alembic_version", "spatial_ref_sys")
-RUNTIME_ATTRIBUTES = "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS"
+RUNTIME_ATTRIBUTES = (
+    "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS "
+    "CONNECTION LIMIT -1 VALID UNTIL 'infinity'"
+)
 # Databases every PostgreSQL server has (template_postgis: PostGIS images). PUBLIC can connect
 # and create temporary tables in them by default; the runtime role must not.
 SERVER_DATABASES = ("postgres", "template1", "template_postgis")
@@ -66,74 +57,168 @@ class MigrateError(RuntimeError):
 
 
 def check_owner(conn: Connection) -> str:
-    """The connected role, which must own this database (or be a superuser); else refuse."""
-    me, owner, superuser = conn.execute(
-        text(
-            "SELECT current_user, pg_get_userbyid(d.datdba), r.rolsuper FROM pg_database d, "
-            "pg_roles r WHERE d.datname = current_database() AND r.rolname = current_user"
-        )
+    """The connected role, which must be a superuser: FarmCore runs its own PostgreSQL server
+    (one per installation) and migrates as that server's bootstrap superuser."""
+    me, superuser = conn.execute(
+        text("SELECT current_user, rolsuper FROM pg_roles WHERE rolname = current_user")
     ).one()
-    if me != owner and not superuser:
+    if not superuser:
         raise MigrateError(
-            f"farmcore migrate must run as the database owner ({owner}), not as {me}: use the "
-            "owner's DATABASE_URL (POSTGRES_PASSWORD), as the compose `migrate` service does. "
-            "The app's runtime role cannot change the schema."
+            "FarmCore expects its own PostgreSQL server; the owner role must be that server's "
+            f"bootstrap superuser (POSTGRES_USER, the database owner), not {me}. Use the owner's "
+            "DATABASE_URL (POSTGRES_PASSWORD), as the compose `migrate` service does; the app's "
+            "runtime role cannot change the schema."
         )
     return me
 
 
-def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
-    """Create or reset the DML-only runtime role and grant it this database, nothing more.
+def _run(conn: Connection, role: str, statements: list[sql.Composable]) -> None:
+    """Run through psycopg directly: a failure reports the server's message, never the SQL."""
+    raw = conn.connection.driver_connection
+    try:
+        for statement in statements:
+            raw.execute(statement)
+    except psycopg.Error as exc:
+        detail = exc.diag.message_primary or type(exc).__name__
+        raise MigrateError(f"could not set up the runtime role {role}: {detail}") from None
 
-    The owner (the connected role) keeps the schema, the PostGIS extension and every DDL right.
-    The runtime role may connect to this database only, use the `public` schema, read and write
-    rows and use sequences; default privileges extend that to tables later migrations add.
 
-    An existing role is reset first: every role membership (whoever granted it), role-level
-    setting and directly granted privilege on any database, or on this database's schemas,
-    tables, sequences and functions, is removed before the intended grants are made again. A
-    role that owns any object is refused: ownership carries every right on that object.
-
-    Statements go through psycopg directly, with the password sent as a SCRAM verifier computed
-    here: the plaintext is never part of any statement, and a failure reports the server's
-    message only, never the statement."""
+def _refuse_owner_as_runtime(conn: Connection, role: str) -> str:
     me = conn.execute(text("SELECT current_user")).scalar_one()
     if role == me:
         raise MigrateError(
             f"RUNTIME_DATABASE_ROLE must differ from the owner role ({me}): the runtime role is "
             "the restricted one."
         )
-    raw = conn.connection.driver_connection
-    conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": "farmcore.runtime"})
-    database_name = conn.execute(text("SELECT current_database()")).scalar_one()
-    exists = conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role}).scalar()
-    if exists:
-        owned = conn.execute(_OWNED, {"r": role}).scalar_one()
-        if owned:
-            raise MigrateError(
-                f"{role} owns {owned} database object(s); the runtime role must own nothing. "
-                f"Reassign them (REASSIGN OWNED BY {role} TO {me}) and run migrate again."
-            )
+    return me
 
-    def names(query: str, **params: object) -> list[str]:
-        return list(conn.execute(text(query), params).scalars())
 
-    # Databases whose privileges this role may change: all of them as superuser, else its own.
-    manageable = (
-        "SELECT d.datname FROM pg_database d, pg_roles r WHERE r.rolname = current_user "
-        "AND d.datallowconn AND (r.rolsuper OR d.datdba = r.oid)"
-    )
-    server_dbs = [d for d in names(manageable) if d in SERVER_DATABASES]
-    all_dbs = names(manageable)
-    schemas = names(
-        "SELECT nspname FROM pg_namespace WHERE nspname <> 'information_schema' "
-        "AND nspname NOT LIKE 'pg\\_%'"
-    )
+def _exists(conn: Connection, role: str) -> bool:
+    return conn.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": role}).scalar()
+
+
+def reset_runtime_role_in(conn: Connection, role: str) -> None:
+    """Revoke every privilege granted to an existing runtime role, on this database's objects
+    and on shared objects (databases, tablespaces, parameters), whoever granted it.
+
+    `DROP OWNED` would also drop what the role owns, so a role that owns anything is refused
+    first; owning nothing, `DROP OWNED` only revokes, default privileges included. It revokes
+    as the objects' owners, though, so a grant another role made survives it: those are then
+    revoked one by one, as their grantor. If any grant to the role is still left, refuse."""
+    _refuse_owner_as_runtime(conn, role)
+    if not _exists(conn, role):
+        return
+    owned = conn.execute(_OWNED, {"r": role}).all()
+    if owned:
+        where = ", ".join(f"{n} in {db}" for db, n in owned)
+        raise MigrateError(
+            f"{role} owns database objects ({where}); the runtime role must own nothing. "
+            f"Connected to each database named (shared objects: any one), run REASSIGN OWNED "
+            f"BY {role} TO <owner>, then migrate again."
+        )
     r = sql.Identifier(role)
-    owner = sql.Identifier(me)
-    database = sql.Identifier(database_name)
+    _run(conn, role, [sql.SQL("DROP OWNED BY {}").format(r)])
+    statements = []
+    for kind, name, column, grantor in conn.execute(_GRANTS_TO, {"r": role}).all():
+        # `name` comes quoted by the server (regclass, quote_ident...): appended, not formatted.
+        columns = sql.SQL(" ({})").format(sql.Identifier(column)) if column else sql.SQL("")
+        # PostgreSQL revokes an object privilege only as its grantor: become that role.
+        statements += [
+            sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(grantor)),
+            sql.Composed(
+                [
+                    sql.SQL("REVOKE ALL"),
+                    columns,
+                    sql.SQL(f" ON {kind} "),
+                    sql.SQL(name),
+                    sql.SQL(" FROM {} CASCADE").format(r),
+                ]
+            ),
+            sql.SQL("RESET ROLE"),
+        ]
+    _run(conn, role, statements)
+    left = conn.execute(_GRANTS_TO, {"r": role}).all()
+    if left:
+        raise MigrateError(
+            f"{role} still holds {len(left)} privilege(s) after revoking; revoke them by hand "
+            "and run migrate again."
+        )
+
+
+# Every privilege granted to a role, here and on shared objects: (object kind, its name as the
+# server quotes it, column or NULL, grantor). Default privileges are left to DROP OWNED.
+_GRANTS_TO = text(
+    """
+    WITH acl AS (
+        SELECT CASE c.relkind WHEN 'S' THEN 'SEQUENCE' ELSE 'TABLE' END AS kind,
+               c.oid::regclass::text AS name, NULL::name AS col, a.grantor, a.grantee
+          FROM pg_class c, aclexplode(c.relacl) a
+        UNION ALL
+        SELECT 'TABLE', t.attrelid::regclass::text, t.attname, a.grantor, a.grantee
+          FROM pg_attribute t, aclexplode(t.attacl) a
+        UNION ALL
+        SELECT 'ROUTINE', p.oid::regprocedure::text, NULL, a.grantor, a.grantee
+          FROM pg_proc p, aclexplode(p.proacl) a
+        UNION ALL
+        SELECT 'TYPE', t.oid::regtype::text, NULL, a.grantor, a.grantee
+          FROM pg_type t, aclexplode(t.typacl) a
+        UNION ALL
+        SELECT 'SCHEMA', quote_ident(n.nspname), NULL, a.grantor, a.grantee
+          FROM pg_namespace n, aclexplode(n.nspacl) a
+        UNION ALL
+        SELECT 'LANGUAGE', quote_ident(l.lanname), NULL, a.grantor, a.grantee
+          FROM pg_language l, aclexplode(l.lanacl) a
+        UNION ALL
+        SELECT 'LARGE OBJECT', m.oid::text, NULL, a.grantor, a.grantee
+          FROM pg_largeobject_metadata m, aclexplode(m.lomacl) a
+        UNION ALL
+        SELECT 'FOREIGN DATA WRAPPER', quote_ident(w.fdwname), NULL, a.grantor, a.grantee
+          FROM pg_foreign_data_wrapper w, aclexplode(w.fdwacl) a
+        UNION ALL
+        SELECT 'FOREIGN SERVER', quote_ident(s.srvname), NULL, a.grantor, a.grantee
+          FROM pg_foreign_server s, aclexplode(s.srvacl) a
+        UNION ALL
+        SELECT 'DATABASE', quote_ident(d.datname), NULL, a.grantor, a.grantee
+          FROM pg_database d, aclexplode(d.datacl) a
+        UNION ALL
+        SELECT 'TABLESPACE', quote_ident(s.spcname), NULL, a.grantor, a.grantee
+          FROM pg_tablespace s, aclexplode(s.spcacl) a
+        UNION ALL
+        SELECT 'PARAMETER', p.parname, NULL, a.grantor, a.grantee
+          FROM pg_parameter_acl p, aclexplode(p.paracl) a
+    )
+    SELECT DISTINCT kind, name, col, pg_get_userbyid(grantor)
+      FROM acl WHERE grantee = (SELECT oid FROM pg_roles WHERE rolname = :r)
+     ORDER BY 1, 2, 3, 4
+    """
+)
+
+
+def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
+    """Create or reset the DML-only runtime role and grant it this database, nothing more.
+
+    The owner (the connected superuser) keeps the schema, the PostGIS extension and every DDL
+    right. After this, the runtime role holds exactly: CONNECT on this database; USAGE on the
+    `public` schema; SELECT, INSERT, UPDATE, DELETE on its tables and views, except SELECT only
+    on `alembic_version` and on the PostGIS extension's own (`spatial_ref_sys`,
+    `geometry_columns`, `geography_columns`); USAGE, SELECT on its sequences; the same, by
+    default, on tables and sequences the owner creates there later. It is a member of no role,
+    has no role settings, and its attributes are reset (no superuser, no create, no
+    replication, no RLS bypass, no inheritance, no connection limit, no expiry).
+
+    An existing role is reset first with `reset_runtime_role_in` here (the caller also runs it
+    in `postgres`); privileges on objects inside other databases are not reset, but the role
+    cannot connect to any other database. The password is sent as a SCRAM verifier computed
+    here: the plaintext is never part of any statement."""
+    me = _refuse_owner_as_runtime(conn, role)
+    conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": "farmcore.runtime"})
+    existed = _exists(conn, role)
+    reset_runtime_role_in(conn, role)
+    raw = conn.connection.driver_connection
+    r, owner = sql.Identifier(role), sql.Identifier(me)
+    database = sql.Identifier(conn.execute(text("SELECT current_database()")).scalar_one())
     verifier = raw.pgconn.encrypt_password(password.encode(), role.encode(), b"scram-sha-256")
-    verb = "ALTER ROLE {} WITH " if exists else "CREATE ROLE {} WITH "
+    verb = "ALTER ROLE {} WITH " if existed else "CREATE ROLE {} WITH "
     statements = [
         sql.SQL(verb + RUNTIME_ATTRIBUTES + " PASSWORD {}").format(
             r, sql.Literal(verifier.decode())
@@ -145,22 +230,17 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
                 sql.Identifier(granted), r, sql.Identifier(grantor)
             )
         )
-    statements += [
-        sql.SQL("ALTER ROLE {} RESET ALL").format(r),
-        sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(r, database),
-    ]
+    for db in conn.execute(_SETTINGS, {"r": role}).scalars():
+        if db is None:
+            statements.append(sql.SQL("ALTER ROLE {} RESET ALL").format(r))
+        else:
+            statements.append(
+                sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(r, sql.Identifier(db))
+            )
     statements += [
         sql.SQL("REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(d))
-        for d in server_dbs
+        for d in conn.execute(_SERVER_DBS, {"names": list(SERVER_DATABASES)}).scalars()
     ]
-    statements += [
-        sql.SQL("REVOKE ALL ON DATABASE {} FROM {}").format(sql.Identifier(d), r) for d in all_dbs
-    ]
-    for schema in schemas:
-        s = sql.Identifier(schema)
-        for kind in ("SCHEMA {}", "ALL TABLES IN SCHEMA {}", "ALL SEQUENCES IN SCHEMA {}",
-                     "ALL FUNCTIONS IN SCHEMA {}"):  # fmt: skip
-            statements.append(sql.SQL("REVOKE ALL ON " + kind + " FROM {}").format(s, r))
     for statement in (
         "REVOKE ALL ON DATABASE {db} FROM PUBLIC",
         "GRANT CONNECT ON DATABASE {db} TO {r}",
@@ -174,35 +254,48 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
         "GRANT USAGE, SELECT ON SEQUENCES TO {r}",
     ):
         statements.append(sql.SQL(statement).format(db=database, r=r, owner=owner))
-    for table in READ_ONLY_TABLES:
+    for table in ["alembic_version", *conn.execute(_EXTENSION_RELATIONS).scalars()]:
         statements.append(
             sql.SQL("REVOKE INSERT, UPDATE, DELETE ON {} FROM {}").format(sql.Identifier(table), r)
         )
-    try:
-        for statement in statements:
-            raw.execute(statement)
-    except psycopg.Error as exc:
-        detail = exc.diag.message_primary or type(exc).__name__
-        raise MigrateError(f"could not set up the runtime role {role}: {detail}") from None
-    left = [g for g, _ in conn.execute(_MEMBERSHIPS, {"r": role}).all()]
+    _run(conn, role, statements)
+    left = conn.execute(_MEMBER_COUNT, {"r": role}).scalar_one()
     if left:
         raise MigrateError(
-            f"{role} is still a member of {', '.join(sorted(set(left)))} after revoking; remove "
-            "those memberships by hand and run migrate again."
+            f"{role} is still a member of {left} role(s) after revoking; remove those "
+            "memberships by hand and run migrate again."
         )
 
 
-# Objects a role owns, in any database of the server.
+# Objects a role owns anywhere on the server: (database, count); `-` = shared objects.
 _OWNED = text(
-    "SELECT count(*) FROM pg_shdepend WHERE deptype = 'o' "
-    "AND refclassid = 'pg_authid'::regclass AND refobjid = (SELECT oid FROM pg_roles "
-    "WHERE rolname = :r)"
+    "SELECT coalesce(d.datname, '-'), count(*) FROM pg_shdepend s "
+    "LEFT JOIN pg_database d ON d.oid = s.dbid WHERE s.deptype = 'o' "
+    "AND s.refclassid = 'pg_authid'::regclass "
+    "AND s.refobjid = (SELECT oid FROM pg_roles WHERE rolname = :r) GROUP BY 1 ORDER BY 1"
 )
 # Every membership of a role, with who granted it (a REVOKE removes only one grantor's grant).
 _MEMBERSHIPS = text(
     "SELECT g.rolname, gr.rolname FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid "
-    "JOIN pg_roles u ON u.oid = m.member JOIN pg_roles gr ON gr.oid = m.grantor "
-    "WHERE u.rolname = :r"
+    "JOIN pg_roles gr ON gr.oid = m.grantor "
+    "WHERE m.member = (SELECT oid FROM pg_roles WHERE rolname = :r)"
+)
+_MEMBER_COUNT = text(
+    "SELECT count(*) FROM pg_auth_members "
+    "WHERE member = (SELECT oid FROM pg_roles WHERE rolname = :r)"
+)
+# Role-level settings: NULL = for every database.
+_SETTINGS = text(
+    "SELECT d.datname FROM pg_db_role_setting s LEFT JOIN pg_database d ON d.oid = s.setdatabase "
+    "WHERE s.setrole = (SELECT oid FROM pg_roles WHERE rolname = :r)"
+)
+_SERVER_DBS = text("SELECT datname FROM pg_database WHERE datname = ANY(:names)")
+# Tables and views in `public` that belong to an extension (PostGIS): read-only for runtime.
+_EXTENSION_RELATIONS = text(
+    "SELECT c.relname FROM pg_depend d JOIN pg_class c ON c.oid = d.objid "
+    "JOIN pg_namespace n ON n.oid = c.relnamespace WHERE d.classid = 'pg_class'::regclass "
+    "AND d.deptype = 'e' AND n.nspname = 'public' AND c.relkind IN ('r', 'v', 'm', 'p') "
+    "ORDER BY 1"
 )
 
 
@@ -211,13 +304,24 @@ def register(cli: typer.Typer) -> None:
     def migrate() -> None:
         """Upgrade the database schema to head and set up the installation (DATABASE_URL).
 
-        Run as the database owner; the runtime role is refused."""
+        Run as this server's bootstrap superuser (the database owner); anything else is
+        refused."""
         settings = get_settings()
         engine = create_engine(settings.database_url)
         try:
             with engine.connect() as conn:
                 check_owner(conn)
             command.upgrade(alembic_config(settings.database_url), "head")
+            if settings.runtime_database_password:
+                # Objects in `postgres` and shared objects first, in their own transaction.
+                maintenance = create_engine(
+                    make_url(settings.database_url).set(database="postgres")
+                )
+                try:
+                    with maintenance.begin() as conn:
+                        reset_runtime_role_in(conn, settings.runtime_database_role)
+                finally:
+                    maintenance.dispose()
             with engine.begin() as conn:
                 installation_id = ensure_installation_id(conn)
                 if settings.runtime_database_password:

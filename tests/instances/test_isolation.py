@@ -321,33 +321,135 @@ def _remigrate(monkeypatch, inst: Installed) -> None:
     )
 
 
-def test_migrate_drops_privileges_granted_to_the_runtime_role_directly(
+ATTACK = """
+CREATE ROLE {g};
+GRANT UPDATE ON alembic_version TO {g} WITH GRANT OPTION;
+GRANT CREATE ON SCHEMA public TO {g};
+SET ROLE {g};
+GRANT UPDATE ON alembic_version TO {r};
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {r};
+ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO {r};
+RESET ROLE;
+ALTER DEFAULT PRIVILEGES FOR ROLE farmcore IN SCHEMA public GRANT ALL ON TABLES TO {r};
+ALTER DEFAULT PRIVILEGES FOR ROLE farmcore GRANT ALL ON TABLES TO {r};
+ALTER DEFAULT PRIVILEGES FOR ROLE farmcore GRANT EXECUTE ON ROUTINES TO {r};
+GRANT CREATE ON DATABASE {db} TO {r};
+GRANT ALL ON SCHEMA public TO {r};
+GRANT TRUNCATE, REFERENCES, TRIGGER ON farm TO {r};
+CREATE PROCEDURE attack_proc() LANGUAGE sql AS 'SELECT 1';
+REVOKE EXECUTE ON PROCEDURE attack_proc() FROM PUBLIC;
+GRANT EXECUTE ON PROCEDURE attack_proc() TO {r};
+CREATE TYPE attack_type AS ENUM ('a');
+REVOKE USAGE ON TYPE attack_type FROM PUBLIC;
+GRANT USAGE ON TYPE attack_type TO {r};
+GRANT SET ON PARAMETER work_mem TO {r};
+SELECT lo_create(424242);
+GRANT SELECT, UPDATE ON LARGE OBJECT 424242 TO {r};
+ALTER ROLE {r} CONNECTION LIMIT 7 VALID UNTIL '2099-01-01';
+ALTER ROLE {r} SET statement_timeout = '1s';
+ALTER ROLE {r} IN DATABASE {db} SET work_mem = '64MB';
+"""
+
+# Each probe, run as the superuser, must be false (or the stated value) after migrate.
+PROBES = {
+    "UPDATE alembic_version": "has_table_privilege({r!r}, 'alembic_version', 'UPDATE')",
+    "TRUNCATE farm": "has_table_privilege({r!r}, 'farm', 'TRUNCATE')",
+    "TRIGGER farm": "has_table_privilege({r!r}, 'farm', 'TRIGGER')",
+    "CREATE on schema": "has_schema_privilege({r!r}, 'public', 'CREATE')",
+    "CREATE on database": "has_database_privilege({r!r}, current_database(), 'CREATE')",
+    "EXECUTE procedure": "has_function_privilege({r!r}, 'attack_proc()', 'EXECUTE')",
+    "USAGE type": "has_type_privilege({r!r}, 'attack_type', 'USAGE')",
+    "SET work_mem (ACL)": (
+        "EXISTS (SELECT 1 FROM pg_parameter_acl p, aclexplode(p.paracl) a "
+        "WHERE p.parname = 'work_mem' AND a.grantee = {r!r}::regrole)"
+    ),
+    "large object": (
+        "EXISTS (SELECT 1 FROM pg_largeobject_metadata m, aclexplode(m.lomacl) a "
+        "WHERE m.oid = 424242 AND a.grantee = {r!r}::regrole)"
+    ),
+    "default privileges beyond the intended": (
+        "EXISTS (SELECT 1 FROM pg_default_acl d, aclexplode(d.defaclacl) a "
+        "WHERE a.grantee = {r!r}::regrole AND NOT (d.defaclrole = 'farmcore'::regrole "
+        "AND d.defaclnamespace = 'public'::regnamespace "
+        "AND a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'USAGE')))"
+    ),
+    "role settings": ("EXISTS (SELECT 1 FROM pg_db_role_setting WHERE setrole = {r!r}::regrole)"),
+    "connection limit": "(SELECT rolconnlimit <> -1 FROM pg_roles WHERE rolname = {r!r})",
+    "expiry": (
+        "(SELECT rolvaliduntil IS DISTINCT FROM 'infinity' FROM pg_roles WHERE rolname = {r!r})"
+    ),
+}
+
+
+def test_an_existing_runtime_role_is_reset_to_exactly_the_intended_rights(
     install, monkeypatch, pg_server
 ) -> None:
     inst = install()
-    r = f'"{inst.role}"'
-    with create_engine(inst.owner_url).begin() as conn:
-        conn.execute(text(f'GRANT CREATE ON DATABASE "{inst.database}" TO {r}'))
-        conn.execute(text(f"GRANT ALL ON SCHEMA public TO {r}"))
-        conn.execute(text(f"GRANT TRUNCATE, REFERENCES, TRIGGER ON farm TO {r}"))
-    with create_engine(pg_server.url("postgres")).begin() as conn:
-        conn.execute(text(f"GRANT CONNECT, TEMPORARY, CREATE ON DATABASE postgres TO {r}"))
-    _remigrate(monkeypatch, inst)
-    for sql in (
-        "CREATE TABLE public.runtime_made (id int)",
-        "CREATE SCHEMA runtime_made",
-        "TRUNCATE farm",
-        "CREATE TRIGGER t BEFORE INSERT ON farm FOR EACH ROW "
-        "EXECUTE FUNCTION suppress_redundant_updates_trigger()",
-    ):
-        _denied(inst.runtime_url, sql)
-    engine = create_engine(pg_server.url("postgres", inst.role, inst.password))
+    granter = f"g_{uuid.uuid4().hex[:8]}"
+    owner = create_engine(inst.owner_url, isolation_level="AUTOCOMMIT")
     try:
-        with pytest.raises(DBAPIError) as exc, engine.connect():
-            pass
-        assert "permission denied for database" in str(exc.value)
+        with owner.connect() as conn:
+            for statement in ATTACK.format(g=granter, r=inst.role, db=inst.database).split(";"):
+                if statement.strip():
+                    conn.execute(text(statement))
+        postgres = create_engine(pg_server.url("postgres"), isolation_level="AUTOCOMMIT")
+        in_postgres = f"attack_{inst.role}"
+        with postgres.connect() as conn:  # an object in the maintenance database
+            conn.execute(text(f"CREATE TABLE {in_postgres} (id int)"))
+            conn.execute(text(f"GRANT SELECT ON {in_postgres} TO {inst.role}"))
+        _remigrate(monkeypatch, inst)
+        _remigrate(monkeypatch, inst)  # twice in a row: idempotent
+        with postgres.connect() as conn:
+            privilege = f"SELECT has_table_privilege('{inst.role}', '{in_postgres}', 'SELECT')"
+            assert conn.execute(text(privilege)).scalar_one() is False
+            conn.execute(text(f"DROP TABLE {in_postgres}"))
+        postgres.dispose()
+        with owner.connect() as conn:
+            held = {
+                name: conn.execute(text("SELECT " + probe.format(r=inst.role))).scalar_one()
+                for name, probe in PROBES.items()
+            }
+            # A table the owner creates afterwards gets only the intended defaults.
+            conn.execute(text("CREATE TABLE later_owner_table (id int)"))
+            held["TRUNCATE later table"] = conn.execute(
+                text(f"SELECT has_table_privilege('{inst.role}', 'later_owner_table', 'TRUNCATE')")
+            ).scalar_one()
+            assert conn.execute(
+                text(f"SELECT has_table_privilege('{inst.role}', 'later_owner_table', 'INSERT')")
+            ).scalar_one()
+        assert {name for name, value in held.items() if value} == set()
+        _denied(inst.runtime_url, "UPDATE alembic_version SET version_num = version_num")
+        _denied(inst.runtime_url, "TRUNCATE later_owner_table")
+        _denied(inst.runtime_url, "CALL attack_proc()")
+        _denied(inst.runtime_url, "CREATE TABLE public.runtime_made (id int)")
     finally:
-        engine.dispose()
+        with owner.connect() as conn:
+            conn.execute(text(f'DROP OWNED BY "{granter}"'))
+            conn.execute(text(f"REVOKE SET ON PARAMETER work_mem FROM {inst.role}"))
+        owner.dispose()
+        admin = create_engine(pg_server.url("farmcore"), isolation_level="AUTOCOMMIT")
+        with admin.connect() as conn:
+            conn.execute(text(f'DROP OWNED BY "{granter}"'))
+            conn.execute(text(f'DROP ROLE "{granter}"'))
+        admin.dispose()
+
+
+def test_postgis_objects_are_read_only_for_the_runtime(install, pg_server) -> None:
+    inst = install()
+    admin = create_engine(pg_server.url(inst.database))
+    try:
+        with admin.connect() as conn:
+            for relation in ("spatial_ref_sys", "geometry_columns", "geography_columns"):
+                for privilege, expected in (
+                    ("SELECT", True), ("INSERT", False), ("UPDATE", False), ("DELETE", False),
+                ):  # fmt: skip
+                    held = conn.execute(
+                        text("SELECT has_table_privilege(:r, :t, :p)"),
+                        {"r": inst.role, "t": relation, "p": privilege},
+                    ).scalar_one()
+                    assert held is expected, (relation, privilege)
+    finally:
+        admin.dispose()
 
 
 def test_migrate_refuses_a_runtime_role_that_owns_objects(install, monkeypatch) -> None:
@@ -400,8 +502,27 @@ def test_migrate_fails_if_a_membership_survives_the_revoke(install, monkeypatch)
     from farmcore.core.commands import migrate
 
     inst = install()
+    monkeypatch.setattr(migrate, "_MEMBER_COUNT", text("SELECT 1 WHERE :r = :r"))
+    out = _migrate_fails(
+        monkeypatch,
+        {
+            "DATABASE_URL": inst.owner_url,
+            "RUNTIME_DATABASE_ROLE": inst.role,
+            "RUNTIME_DATABASE_PASSWORD": inst.password,
+        },
+    )
+    assert f"{inst.role} is still a member of 1 role(s)" in out
+
+
+def test_migrate_fails_if_a_grant_survives_the_revoke(install, monkeypatch) -> None:
+    """Fault injection: the catalog keeps reporting a grant to the role after the revokes."""
+    from farmcore.core.commands import migrate
+
+    inst = install()
     monkeypatch.setattr(
-        migrate, "_MEMBERSHIPS", text("SELECT 'pg_monitor'::text, current_user::text WHERE :r = :r")
+        migrate,
+        "_GRANTS_TO",
+        text("SELECT 'DATABASE', 'postgres', NULL::name, current_user::text WHERE :r = :r"),
     )
     out = _migrate_fails(
         monkeypatch,
@@ -411,52 +532,38 @@ def test_migrate_fails_if_a_membership_survives_the_revoke(install, monkeypatch)
             "RUNTIME_DATABASE_PASSWORD": inst.password,
         },
     )
-    assert f"{inst.role} is still a member of pg_monitor" in out
+    assert f"{inst.role} still holds 1 privilege(s) after revoking" in out
 
 
-def test_a_non_superuser_owner_leaves_the_servers_databases_alone(pg_server, monkeypatch) -> None:
-    """On a shared server the owner is an ordinary role: migrate then changes only what it
-    owns, never the server-wide rights on `postgres` and the templates."""
+def test_migrate_refuses_an_owner_that_is_not_the_servers_superuser(pg_server, monkeypatch) -> None:
+    """FarmCore runs its own PostgreSQL server; a shared server's ordinary owner is refused."""
     suffix = uuid.uuid4().hex[:8]
-    owner, role, database = f"own_{suffix}", f"rt_{suffix}", f"shared_{suffix}"
-    owner_pw, role_pw = secrets.token_hex(16), secrets.token_hex(16)
+    owner, database, password = f"own_{suffix}", f"shared_{suffix}", secrets.token_hex(16)
     admin = create_engine(pg_server.url("farmcore"), isolation_level="AUTOCOMMIT")
-    acl = text("SELECT datacl::text FROM pg_database WHERE datname = :d")
     try:
         with admin.connect() as conn:
-            conn.execute(text(f"CREATE ROLE {owner} LOGIN CREATEROLE PASSWORD '{owner_pw}'"))
+            conn.execute(text(f"CREATE ROLE {owner} LOGIN CREATEROLE PASSWORD '{password}'"))
             conn.execute(text(f"CREATE DATABASE {database} OWNER {owner}"))
-            for d in SERVER_DBS:
-                conn.execute(text(f"GRANT CONNECT, TEMPORARY ON DATABASE {d} TO PUBLIC"))
-            before = {d: conn.execute(acl, {"d": d}).scalar() for d in SERVER_DBS}
-        with create_engine(pg_server.url(database)).begin() as conn:
-            conn.execute(text("CREATE EXTENSION postgis"))
-            conn.execute(text(f"ALTER SCHEMA public OWNER TO {owner}"))
-        env = {
-            "DATABASE_URL": pg_server.url(database, owner, owner_pw),
-            "RUNTIME_DATABASE_ROLE": role,
-            "RUNTIME_DATABASE_PASSWORD": role_pw,
-        }
-        # A non-superuser may set the identity only once a superuser allows it, which the
-        # refusal says how to do.
-        refused = _migrate_fails(monkeypatch, env)
-        assert f"GRANT SET ON PARAMETER farmcore.installation_id TO {owner}" in refused
-        with admin.connect() as conn:
-            conn.execute(text(f"GRANT SET ON PARAMETER farmcore.installation_id TO {owner}"))
-        _migrate(monkeypatch, env)
-        with admin.connect() as conn:
-            assert {d: conn.execute(acl, {"d": d}).scalar() for d in SERVER_DBS} == before
-        _denied(pg_server.url(database, role, role_pw), "CREATE TABLE public.t (id int)")
+        out = _migrate_fails(
+            monkeypatch,
+            {
+                "DATABASE_URL": pg_server.url(database, owner, password),
+                "RUNTIME_DATABASE_ROLE": f"rt_{suffix}",
+                "RUNTIME_DATABASE_PASSWORD": secrets.token_hex(16),
+            },
+        )
+        assert "FarmCore expects its own PostgreSQL server" in out
+        assert "bootstrap superuser" in out
+        with admin.connect() as conn:  # refused before touching anything
+            exists = conn.execute(
+                text("SELECT count(*) FROM pg_roles WHERE rolname = :r"), {"r": f"rt_{suffix}"}
+            ).scalar_one()
+        assert exists == 0
     finally:
         with admin.connect() as conn:
             conn.execute(text(f"DROP DATABASE IF EXISTS {database} WITH (FORCE)"))
-            conn.execute(text(f"DROP ROLE IF EXISTS {role}"))
-            conn.execute(text(f"REVOKE SET ON PARAMETER farmcore.installation_id FROM {owner}"))
             conn.execute(text(f"DROP ROLE IF EXISTS {owner}"))
         admin.dispose()
-
-
-SERVER_DBS = ("postgres", "template1", "template_postgis")
 
 
 def test_a_session_override_of_the_setting_does_not_change_the_reported_id(install) -> None:
