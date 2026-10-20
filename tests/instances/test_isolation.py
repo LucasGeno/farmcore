@@ -559,11 +559,93 @@ def test_migrate_refuses_an_owner_that_is_not_the_servers_superuser(pg_server, m
                 text("SELECT count(*) FROM pg_roles WHERE rolname = :r"), {"r": f"rt_{suffix}"}
             ).scalar_one()
         assert exists == 0
+        with create_engine(pg_server.url(database)).connect() as conn:  # nor migrated
+            assert conn.execute(text("SELECT to_regclass('alembic_version')")).scalar() is None
     finally:
         with admin.connect() as conn:
             conn.execute(text(f"DROP DATABASE IF EXISTS {database} WITH (FORCE)"))
             conn.execute(text(f"DROP ROLE IF EXISTS {owner}"))
         admin.dispose()
+
+
+def _env(inst: Installed) -> dict[str, str]:
+    return {
+        "DATABASE_URL": inst.owner_url,
+        "RUNTIME_DATABASE_ROLE": inst.role,
+        "RUNTIME_DATABASE_PASSWORD": inst.password,
+    }
+
+
+def test_a_failing_second_step_leaves_the_runtime_role_able_to_connect(
+    install, monkeypatch
+) -> None:
+    """The `postgres` pass commits on its own; if the installation-database step then fails,
+    the running app must keep connecting."""
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    monkeypatch.setattr(migrate, "_EXTENSION_RELATIONS", text("SELECT no_such_column"))
+    out = _migrate_fails(monkeypatch, _env(inst))
+    assert "could not set up the runtime role" in out and "SELECT" not in out
+    engine = create_engine(inst.runtime_url)
+    try:
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM farm")).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+def test_grants_to_public_on_read_only_tables_are_revoked(install, monkeypatch) -> None:
+    inst = install()
+    with create_engine(inst.owner_url).begin() as conn:
+        conn.execute(text("GRANT UPDATE, DELETE ON alembic_version TO PUBLIC"))
+        conn.execute(text("GRANT INSERT, TRUNCATE ON spatial_ref_sys, geometry_columns TO PUBLIC"))
+    _remigrate(monkeypatch, inst)
+    _denied(inst.runtime_url, "UPDATE alembic_version SET version_num = version_num")
+    _denied(inst.runtime_url, "DELETE FROM alembic_version")
+    _denied(inst.runtime_url, "TRUNCATE spatial_ref_sys")
+
+
+def test_runtime_role_cannot_open_other_databases_on_the_server(
+    install, monkeypatch, pg_server
+) -> None:
+    """Every database present when migrate runs loses PUBLIC's default CONNECT."""
+    inst = install()
+    other = f"other_{uuid.uuid4().hex[:8]}"
+    admin = create_engine(pg_server.url("farmcore"), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f"CREATE DATABASE {other}"))
+        _remigrate(monkeypatch, inst)
+        engine = create_engine(pg_server.url(other, inst.role, inst.password))
+        with pytest.raises(DBAPIError) as exc, engine.connect():
+            pass
+        engine.dispose()
+        assert "permission denied for database" in str(exc.value)
+    finally:
+        with admin.connect() as conn:
+            conn.execute(text(f"DROP DATABASE IF EXISTS {other} WITH (FORCE)"))
+        admin.dispose()
+
+
+def test_migrate_refuses_a_runtime_role_named_in_a_row_security_policy(
+    install, monkeypatch
+) -> None:
+    """DROP OWNED would silently drop the policy; refuse instead."""
+    inst = install()
+    with create_engine(inst.owner_url).begin() as conn:
+        conn.execute(text(f'CREATE POLICY runtime_policy ON farm TO "{inst.role}" USING (true)'))
+    out = _migrate_fails(monkeypatch, _env(inst))
+    assert "row security policy" in out and "runtime_policy" in out
+
+
+def test_migrate_refuses_a_too_old_postgresql(install, monkeypatch) -> None:
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    monkeypatch.setattr(migrate, "MIN_SERVER_VERSION", 990000)
+    out = _migrate_fails(monkeypatch, _env(inst))
+    assert "needs PostgreSQL 99 or later" in out
 
 
 def test_a_session_override_of_the_setting_does_not_change_the_reported_id(install) -> None:

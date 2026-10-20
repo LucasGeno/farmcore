@@ -14,6 +14,7 @@ from alembic.config import Config
 from psycopg import sql
 from sqlalchemy import Connection, create_engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 
 from farmcore.core.startup import INSTALLATION_SETTING, read_installation_id
 from farmcore.settings import get_settings
@@ -47,9 +48,8 @@ RUNTIME_ATTRIBUTES = (
     "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS "
     "CONNECTION LIMIT -1 VALID UNTIL 'infinity'"
 )
-# Databases every PostgreSQL server has (template_postgis: PostGIS images). PUBLIC can connect
-# and create temporary tables in them by default; the runtime role must not.
-SERVER_DATABASES = ("postgres", "template1", "template_postgis")
+# PostgreSQL 16+: role memberships carry their grantor (`REVOKE ... GRANTED BY`).
+MIN_SERVER_VERSION = 160000
 
 
 class MigrateError(RuntimeError):
@@ -59,9 +59,17 @@ class MigrateError(RuntimeError):
 def check_owner(conn: Connection) -> str:
     """The connected role, which must be a superuser: FarmCore runs its own PostgreSQL server
     (one per installation) and migrates as that server's bootstrap superuser."""
-    me, superuser = conn.execute(
-        text("SELECT current_user, rolsuper FROM pg_roles WHERE rolname = current_user")
+    me, superuser, version = conn.execute(
+        text(
+            "SELECT current_user, rolsuper, current_setting('server_version_num')::int "
+            "FROM pg_roles WHERE rolname = current_user"
+        )
     ).one()
+    if version < MIN_SERVER_VERSION:
+        raise MigrateError(
+            f"FarmCore needs PostgreSQL {MIN_SERVER_VERSION // 10000} or later (the compose file "
+            f"runs 17); this server is {version // 10000}."
+        )
     if not superuser:
         raise MigrateError(
             "FarmCore expects its own PostgreSQL server; the owner role must be that server's "
@@ -80,6 +88,16 @@ def _run(conn: Connection, role: str, statements: list[sql.Composable]) -> None:
             raw.execute(statement)
     except psycopg.Error as exc:
         detail = exc.diag.message_primary or type(exc).__name__
+        raise MigrateError(f"could not set up the runtime role {role}: {detail}") from None
+
+
+def _rows(conn: Connection, role: str, query, params: dict | None = None) -> list:
+    """A catalog query whose failure, like `_run`'s, reports the server's message only."""
+    try:
+        return conn.execute(query, params or {}).all()
+    except DBAPIError as exc:
+        diag = getattr(exc.orig, "diag", None)
+        detail = getattr(diag, "message_primary", None) or type(exc.orig).__name__
         raise MigrateError(f"could not set up the runtime role {role}: {detail}") from None
 
 
@@ -108,7 +126,7 @@ def reset_runtime_role_in(conn: Connection, role: str) -> None:
     _refuse_owner_as_runtime(conn, role)
     if not _exists(conn, role):
         return
-    owned = conn.execute(_OWNED, {"r": role}).all()
+    owned = _rows(conn, role, _OWNED, {"r": role})
     if owned:
         where = ", ".join(f"{n} in {db}" for db, n in owned)
         raise MigrateError(
@@ -116,10 +134,16 @@ def reset_runtime_role_in(conn: Connection, role: str) -> None:
             f"Connected to each database named (shared objects: any one), run REASSIGN OWNED "
             f"BY {role} TO <owner>, then migrate again."
         )
+    policies = [name for (name,) in _rows(conn, role, _POLICIES, {"r": role})]
+    if policies:
+        raise MigrateError(
+            f"{role} is named in row security policy {', '.join(policies)}; resetting the role "
+            "would drop it silently. Remove the role from the policy, then migrate again."
+        )
     r = sql.Identifier(role)
     _run(conn, role, [sql.SQL("DROP OWNED BY {}").format(r)])
     statements = []
-    for kind, name, column, grantor in conn.execute(_GRANTS_TO, {"r": role}).all():
+    for kind, name, column, grantor in _rows(conn, role, _GRANTS_TO, {"r": role}):
         # `name` comes quoted by the server (regclass, quote_ident...): appended, not formatted.
         columns = sql.SQL(" ({})").format(sql.Identifier(column)) if column else sql.SQL("")
         # PostgreSQL revokes an object privilege only as its grantor: become that role.
@@ -137,7 +161,7 @@ def reset_runtime_role_in(conn: Connection, role: str) -> None:
             sql.SQL("RESET ROLE"),
         ]
     _run(conn, role, statements)
-    left = conn.execute(_GRANTS_TO, {"r": role}).all()
+    left = _rows(conn, role, _GRANTS_TO, {"r": role})
     if left:
         raise MigrateError(
             f"{role} still holds {len(left)} privilege(s) after revoking; revoke them by hand "
@@ -184,7 +208,10 @@ _GRANTS_TO = text(
         SELECT 'TABLESPACE', quote_ident(s.spcname), NULL, a.grantor, a.grantee
           FROM pg_tablespace s, aclexplode(s.spcacl) a
         UNION ALL
-        SELECT 'PARAMETER', p.parname, NULL, a.grantor, a.grantee
+        SELECT 'PARAMETER',
+               array_to_string(ARRAY(SELECT quote_ident(part)
+                                       FROM unnest(string_to_array(p.parname, '.')) part), '.'),
+               NULL, a.grantor, a.grantee
           FROM pg_parameter_acl p, aclexplode(p.paracl) a
     )
     SELECT DISTINCT kind, name, col, pg_get_userbyid(grantor)
@@ -192,6 +219,16 @@ _GRANTS_TO = text(
      ORDER BY 1, 2, 3, 4
     """
 )
+
+
+def keep_connect(conn: Connection, role: str, database_url: str) -> None:
+    if _exists(conn, role):
+        database = sql.Identifier(make_url(database_url).database)
+        _run(
+            conn,
+            role,
+            [sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(database, sql.Identifier(role))],
+        )
 
 
 def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
@@ -208,8 +245,9 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
 
     An existing role is reset first with `reset_runtime_role_in` here (the caller also runs it
     in `postgres`); privileges on objects inside other databases are not reset, but the role
-    cannot connect to any other database. The password is sent as a SCRAM verifier computed
-    here: the plaintext is never part of any statement."""
+    cannot connect to any other database present at this run (PUBLIC's CONNECT is revoked
+    there too). The password is sent as a SCRAM verifier computed here: the plaintext is never
+    part of any statement."""
     me = _refuse_owner_as_runtime(conn, role)
     conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": "farmcore.runtime"})
     existed = _exists(conn, role)
@@ -224,13 +262,13 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
             r, sql.Literal(verifier.decode())
         )
     ]
-    for granted, grantor in conn.execute(_MEMBERSHIPS, {"r": role}).all():
+    for granted, grantor in _rows(conn, role, _MEMBERSHIPS, {"r": role}):
         statements.append(
             sql.SQL("REVOKE {} FROM {} GRANTED BY {}").format(
                 sql.Identifier(granted), r, sql.Identifier(grantor)
             )
         )
-    for db in conn.execute(_SETTINGS, {"r": role}).scalars():
+    for (db,) in _rows(conn, role, _SETTINGS, {"r": role}):
         if db is None:
             statements.append(sql.SQL("ALTER ROLE {} RESET ALL").format(r))
         else:
@@ -239,7 +277,7 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
             )
     statements += [
         sql.SQL("REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(d))
-        for d in conn.execute(_SERVER_DBS, {"names": list(SERVER_DATABASES)}).scalars()
+        for (d,) in _rows(conn, role, _OTHER_DBS)
     ]
     for statement in (
         "REVOKE ALL ON DATABASE {db} FROM PUBLIC",
@@ -254,9 +292,11 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
         "GRANT USAGE, SELECT ON SEQUENCES TO {r}",
     ):
         statements.append(sql.SQL(statement).format(db=database, r=r, owner=owner))
-    for table in ["alembic_version", *conn.execute(_EXTENSION_RELATIONS).scalars()]:
+    for (table,) in [("alembic_version",), *_rows(conn, role, _EXTENSION_RELATIONS)]:
         statements.append(
-            sql.SQL("REVOKE INSERT, UPDATE, DELETE ON {} FROM {}").format(sql.Identifier(table), r)
+            sql.SQL("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON {} FROM {}, PUBLIC").format(
+                sql.Identifier(table), r
+            )
         )
     _run(conn, role, statements)
     left = conn.execute(_MEMBER_COUNT, {"r": role}).scalar_one()
@@ -289,7 +329,17 @@ _SETTINGS = text(
     "SELECT d.datname FROM pg_db_role_setting s LEFT JOIN pg_database d ON d.oid = s.setdatabase "
     "WHERE s.setrole = (SELECT oid FROM pg_roles WHERE rolname = :r)"
 )
-_SERVER_DBS = text("SELECT datname FROM pg_database WHERE datname = ANY(:names)")
+# Every database but this one and template0 (no connections, kept pristine). PUBLIC may
+# connect to a new database and create temporary tables there by default; runtime must not.
+_OTHER_DBS = text(
+    "SELECT datname FROM pg_database WHERE datname NOT IN (current_database(), 'template0') "
+    "ORDER BY 1"
+)
+# Row security policies naming the role (DROP OWNED would remove the role from them).
+_POLICIES = text(
+    "SELECT polname FROM pg_policy "
+    "WHERE (SELECT oid FROM pg_roles WHERE rolname = :r) = ANY(polroles) ORDER BY 1"
+)
 # Tables and views in `public` that belong to an extension (PostGIS): read-only for runtime.
 _EXTENSION_RELATIONS = text(
     "SELECT c.relname FROM pg_depend d JOIN pg_class c ON c.oid = d.objid "
@@ -320,6 +370,9 @@ def register(cli: typer.Typer) -> None:
                 try:
                     with maintenance.begin() as conn:
                         reset_runtime_role_in(conn, settings.runtime_database_role)
+                        # The reset revoked CONNECT on the installation database; give it back
+                        # now, so a failure in the next step never locks out the running app.
+                        keep_connect(conn, settings.runtime_database_role, settings.database_url)
                 finally:
                     maintenance.dispose()
             with engine.begin() as conn:
