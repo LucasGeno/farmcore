@@ -18,6 +18,7 @@ complete. Credentials reach `pg_dump` through its environment, never its command
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -32,6 +33,7 @@ from pathlib import Path
 import typer
 from sqlalchemy import Connection, create_engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from farmcore.core import registry
@@ -69,6 +71,14 @@ def libpq_env(database_url: str) -> dict[str, str]:
         if value is not None:
             env[key] = str(value)
     return env
+
+
+def database_error(exc: DBAPIError) -> str:
+    """The server's or libpq's message, never the statement or the URL (libpq never prints a
+    password)."""
+    diag = getattr(exc.orig, "diag", None)
+    primary = getattr(diag, "message_primary", None)
+    return primary or _last_line(str(exc.orig).encode())
 
 
 def _last_line(stderr: bytes) -> str:
@@ -118,16 +128,18 @@ def create_bundle(database_url: str, recipients: list[str], output: Path) -> dic
     try:
         with tempfile.TemporaryDirectory(prefix="farmcore-backup-") as tmp:
             dump = Path(tmp) / DUMP_NAME
-            with engine.connect() as conn:
-                # One snapshot for the manifest and the dump.
-                snapshot = conn.execute(text("SELECT pg_export_snapshot()")).scalar_one()
-                facts = _manifest_facts(conn)
-                done = subprocess.run(
-                    [pg_dump, "-Fc", "--no-acl", f"--snapshot={snapshot}",
-                     "-f", str(dump)],
-                    env=libpq_env(database_url), capture_output=True,
-                )  # fmt: skip
-                conn.rollback()
+            try:
+                with engine.connect() as conn:
+                    # One snapshot for the manifest and the dump.
+                    snapshot = conn.execute(text("SELECT pg_export_snapshot()")).scalar_one()
+                    facts = _manifest_facts(conn)
+                    done = subprocess.run(
+                        [pg_dump, "-Fc", "--no-acl", f"--snapshot={snapshot}", "-f", str(dump)],
+                        env=libpq_env(database_url), capture_output=True,
+                    )  # fmt: skip
+                    conn.rollback()
+            except DBAPIError as exc:
+                raise BundleError(f"cannot read the database: {database_error(exc)}") from None
             if done.returncode != 0:
                 raise BundleError(f"pg_dump failed: {_last_line(done.stderr)}")
             created = datetime.now(UTC)
@@ -146,13 +158,14 @@ def create_bundle(database_url: str, recipients: list[str], output: Path) -> dic
                 [*args, "-o", str(partial)], stdin=subprocess.PIPE, stderr=subprocess.PIPE
             )
             assert proc.stdin is not None
-            try:
-                with tarfile.open(fileobj=proc.stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar:
-                    _add(tar, MANIFEST_NAME, manifest_path, created.timestamp())
-                    _add(tar, DUMP_NAME, dump, created.timestamp())
-            except BrokenPipeError:
-                pass
-            finally:
+            # age stops reading when it fails (say, a malformed recipient); its error says why.
+            with (
+                contextlib.suppress(BrokenPipeError),
+                tarfile.open(fileobj=proc.stdin, mode="w|", format=tarfile.PAX_FORMAT) as tar,
+            ):
+                _add(tar, MANIFEST_NAME, manifest_path, created.timestamp())
+                _add(tar, DUMP_NAME, dump, created.timestamp())
+            with contextlib.suppress(BrokenPipeError):
                 proc.stdin.close()
             stderr = proc.stderr.read() if proc.stderr else b""
             if proc.wait() != 0:

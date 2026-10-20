@@ -37,6 +37,7 @@ from alembic.script import ScriptDirectory
 from alembic.util import CommandError
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 
 from farmcore.core.commands.backup import (
     DUMP_NAME,
@@ -44,6 +45,7 @@ from farmcore.core.commands.backup import (
     MANIFEST_NAME,
     BundleError,
     _last_line,
+    database_error,
     libpq_env,
     tool,
 )
@@ -141,18 +143,14 @@ def check_manifest(manifest: object, dump: Path) -> dict:
 
 def _dump_heads(dump: Path) -> list[str]:
     """The schema revisions recorded inside the dump itself (its `alembic_version` rows)."""
-    pg_restore = tool("pg_restore")
-    listed = subprocess.run([pg_restore, "--list", str(dump)], capture_output=True)
-    if listed.returncode != 0:
-        raise BundleError(f"the dump is unreadable: {_last_line(listed.stderr)}")
     data = subprocess.run(
-        [pg_restore, "--data-only", "--table=alembic_version", "-f", "-", str(dump)],
+        [tool("pg_restore"), "--data-only", "--table=alembic_version", "-f", "-", str(dump)],
         capture_output=True,
-        text=True,
     )
     if data.returncode != 0:
-        raise BundleError(f"the dump is unreadable: {_last_line(data.stderr.encode())}")
-    rows = re.search(r"^COPY public\.alembic_version .*?;\n(.*?)^\\\.$", data.stdout, re.M | re.S)
+        raise BundleError(f"the dump is unreadable: {_last_line(data.stderr)}")
+    sql = data.stdout.decode(errors="replace")
+    rows = re.search(r"^COPY public\.alembic_version .*?;\n(.*?)^\\\.$", sql, re.M | re.S)
     return sorted(rows.group(1).split()) if rows else []
 
 
@@ -263,6 +261,9 @@ def register(cli: typer.Typer) -> None:
             manifest, new_id = restore_bundle(settings, bundle, identity)
         except (BundleError, MigrateError) as exc:
             typer.echo(f"restore: {exc}", err=True)
+            raise typer.Exit(1) from None
+        except DBAPIError as exc:
+            typer.echo(f"restore: cannot use the database: {database_error(exc)}", err=True)
             raise typer.Exit(1) from None
         typer.echo(
             f"restore: backup of installation {manifest['installation_id']} "

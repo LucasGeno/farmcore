@@ -591,7 +591,15 @@ TAMPERED = {
     "extra member": lambda f: {**f, "extra.sh": b"#!/bin/sh\n"},
     "members reordered": lambda f: {k: f[k] for k in ("farmcore.dump", "manifest.json")},
     "dump replaced": lambda f: {**f, "farmcore.dump": b"PGDMP" + b"\x00" * 64},
+    "dump replaced, manifest to match": lambda f: _replace_dump(f, b"PGDMP" + b"\x00" * 64),
+    "manifest too large": lambda f: {**f, "manifest.json": b" " * (1 << 20) + f["manifest.json"]},
 }
+
+
+def _replace_dump(files: dict[str, bytes], dump: bytes) -> dict[str, bytes]:
+    meta = {"name": "farmcore.dump", "bytes": len(dump), "sha256": hashlib.sha256(dump).hexdigest()}
+    files = edit_manifest(dump=meta)(files)
+    return {**files, "farmcore.dump": dump}
 
 
 class Untouched:
@@ -729,3 +737,236 @@ def test_restore_never_replaces_an_installation_that_holds_data(
     assert "already holds data" in result.output
     assert table_rows(dbs, source["name"]) == before
     assert installation_id(dbs, source["name"]) == a_id
+
+
+def fake_tool(directory: Path, name: str, script: str) -> None:
+    """A stand-in for an external binary (the process boundary), first on PATH."""
+    directory.mkdir(exist_ok=True)
+    exe = directory / name
+    exe.write_text("#!/bin/sh\n" + script)
+    exe.chmod(0o755)
+
+
+def test_a_failed_pg_restore_leaves_a_paused_closed_target_that_a_rerun_restores(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch
+):
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    real = shutil.which("pg_restore")
+    fake = tmp_path / "bin"
+    # pg_restore dies once it writes into the target (say the disk filled up).
+    fake_tool(
+        fake,
+        "pg_restore",
+        f"""case "$*" in
+  *--single-transaction*) echo "pg_restore: error: could not write" >&2; exit 1;;
+  *) exec "{real}" "$@";;
+esac
+""",
+    )
+    monkeypatch.setenv("PATH", f"{fake}{os.pathsep}{os.environ['PATH']}")
+
+    failed = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert failed.exit_code == 1
+    assert "pg_restore failed: pg_restore: error: could not write" in failed.output
+    # Half-restored is never a live copy: effects paused, no tables, the runtime role shut out.
+    assert cli("effects", env=env).output.strip() == "external effects: paused"
+    assert table_rows(dbs, target) == {}
+    shut_out = create_engine(dbs.runtime_url(env))
+    with pytest.raises(Exception, match="permission denied|does not exist|authentication"):
+        with shut_out.connect():
+            pass
+    shut_out.dispose()
+
+    monkeypatch.setenv("PATH", os.environ["PATH"].split(os.pathsep, 1)[1])
+    again = cli("restore", str(bundle), "--identity", str(key), env=env)
+    assert again.exit_code == 0, again.output
+    assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+
+
+def test_restore_runs_only_as_the_servers_superuser(source, dbs, cli, owner_key, tmp_path):
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    assert cli("migrate", env=env).exit_code == 0  # creates the runtime role
+    with dbs.admin.connect() as conn:  # a new database the runtime role may open, empty
+        other = dbs.create()
+        conn.execute(
+            text(f'GRANT CONNECT ON DATABASE "{other}" TO "{env["RUNTIME_DATABASE_ROLE"]}"')
+        )
+    runtime = dbs.server.url(other, env["RUNTIME_DATABASE_ROLE"], env["RUNTIME_DATABASE_PASSWORD"])
+
+    result = cli("restore", str(bundle), "--identity", str(key), env={"DATABASE_URL": runtime})
+
+    assert result.exit_code == 1
+    assert "bootstrap superuser" in result.output
+
+
+def test_backup_refuses_to_overwrite_or_to_write_without_a_recipient(
+    source, cli, owner_key, tmp_path
+):
+    _, recipient = owner_key
+    existing = tmp_path / "a.farmcore-backup"
+    existing.write_bytes(b"an older bundle")
+
+    clash = cli("backup", "--recipient", recipient, "--output", str(existing), env=source)
+    nobody = cli("backup", "--output", str(tmp_path / "b.farmcore-backup"), env=source)
+
+    assert clash.exit_code == 1 and "already exists" in clash.output
+    assert existing.read_bytes() == b"an older bundle"
+    assert nobody.exit_code == 1 and "recipient" in nobody.output
+    assert sorted(p.name for p in tmp_path.iterdir() if p.is_file()) == ["a.farmcore-backup"]
+
+
+def test_backup_reads_the_recipient_from_the_environment(source, cli, owner_key, tmp_path):
+    key, recipient = owner_key
+    out = tmp_path / "a.farmcore-backup"
+
+    result = cli("backup", "--output", str(out), env={**source, "BACKUP_RECIPIENT": recipient})
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(members(decrypt(out, key))["manifest.json"])["format"] == "farmcore-backup/1"
+
+
+@pytest.mark.parametrize(
+    ("tool", "script", "message"),
+    [
+        ("pg_dump", 'echo "pg_dump: error: server version mismatch" >&2; exit 1\n',
+         "pg_dump failed: pg_dump: error: server version mismatch"),
+        ("age", 'cat > /dev/null; echo "age: error: disk full" >&2; exit 1\n',
+         "age failed: age: error: disk full"),
+    ],
+)  # fmt: skip
+def test_a_failed_backup_leaves_no_file_and_no_plaintext(
+    source, cli, owner_key, tmp_path, private_tmp, monkeypatch, tool, script, message
+):
+    _, recipient = owner_key
+    fake_tool(tmp_path / "bin", tool, script)
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    result = cli("backup", "-r", recipient, "-o", str(out_dir / "a.farmcore-backup"), env=source)
+
+    assert result.exit_code == 1
+    assert message in result.output
+    assert list(out_dir.iterdir()) == [] and list(private_tmp.iterdir()) == []
+
+
+def test_backup_rejects_a_malformed_recipient_and_leaves_no_file(source, cli, tmp_path):
+    out = tmp_path / "a.farmcore-backup"
+
+    result = cli("backup", "-r", "age1notakey", "-o", str(out), env=source)
+
+    assert result.exit_code == 1 and "age failed" in result.output
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_backup_and_restore_say_which_tool_is_missing(source, cli, tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    result = cli("backup", "-r", "age1x", "-o", str(tmp_path / "a"), env=source)
+    assert result.exit_code == 1 and "`age` is not installed" in result.output
+
+
+def test_backup_and_restore_report_an_unreachable_database_without_its_password(
+    source, cli, owner_key, tmp_path, pg_server
+):
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    password = secrets.token_hex(12)
+    env = {"DATABASE_URL": pg_server.url("no_such_database", "nobody", password)}
+
+    backed = cli("backup", "-r", recipient, "-o", str(tmp_path / "b"), env=env)
+    restored = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert backed.exit_code == 1 and backed.output.startswith("backup: cannot read the database")
+    assert restored.exit_code == 1
+    assert restored.output.startswith("restore: cannot use the database")
+    assert "authentication failed" in backed.output + restored.output
+    assert password not in backed.output + restored.output
+
+
+# --- Real Compose projects: back up A, restore into a new C, B keeps serving ----------------
+
+
+def _psql(project, sql: str) -> list[str]:
+    out = project.compose("exec", "-T", "db", "psql", "-U", "farmcore", "-d", "farmcore",
+                          "-v", "ON_ERROR_STOP=1", "-Atc", sql).stdout  # fmt: skip
+    return out.splitlines()
+
+
+@pytest.mark.slow
+def test_a_backup_of_project_a_restores_into_a_new_project_c_while_b_keeps_serving(
+    new_project, owner_key, tmp_path
+):
+    import threading
+    import time
+
+    key, recipient = owner_key
+    a, b = new_project(BACKUP_RECIPIENT=recipient), new_project()
+    a.up()
+    b.up()
+    for args in (("seed", "--scene", "B"), ("replay", "--to", "2024-04-10 06:00")):
+        a.compose("exec", "-T", "app", "farmcore", *args)
+    a_id, b_id = a.health()["installation_id"], b.health()["installation_id"]
+
+    # The compose `backup` service (its daily run at start, then this one-off) writes bundles
+    # into A's `backups` volume; the latest holds the seeded farm.
+    a.compose("run", "--rm", "--no-deps", "-e", "BACKUP_ONCE=1", "backup")
+    listed = a.compose("run", "--rm", "--no-deps", "--entrypoint", "ls", "backup", "/backups")
+    names = sorted(listed.stdout.split())
+    assert len(names) == 2, names
+    assert all(re.fullmatch(r"farmcore-\d{8}T\d{6}Z\.age", n) for n in names), names
+    names = names[-1:]
+    restore_dir = tmp_path / "restore"
+    restore_dir.mkdir()
+    a.compose("run", "--rm", "--no-deps", "-v", f"{restore_dir}:/out", "--entrypoint", "cp",
+              "backup", f"/backups/{names[0]}", "/out/a.age")  # fmt: skip
+    bundle = restore_dir / "a.age"
+    manifest = json.loads(members(decrypt(bundle, key))["manifest.json"])
+    assert manifest["installation_id"] == a_id
+    shutil.copy(key, restore_dir / "owner.key")
+
+    # B is probed every half second while C is created and restored.
+    failures: list[str] = []
+    done = threading.Event()
+
+    def probe() -> None:
+        while not done.is_set():
+            try:
+                assert b.health() == {"db": "ok", "installation_id": b_id}
+            except Exception as exc:  # noqa: BLE001 - any failure to serve counts
+                failures.append(type(exc).__name__)
+            time.sleep(0.5)
+
+    watcher = threading.Thread(target=probe)
+    watcher.start()
+    try:
+        c = new_project()
+        c.compose("up", "-d", "--wait", "db")
+        restored = c.compose(
+            "run", "--rm", "--no-deps", "-v", f"{restore_dir}:/restore:ro", "migrate",
+            "farmcore", "restore", "/restore/a.age", "--identity", "/restore/owner.key",
+            check=False,
+        )  # fmt: skip
+        assert restored.returncode == 0, restored.stdout + restored.stderr
+        c.up()
+    finally:
+        done.set()
+        watcher.join()
+    assert failures == []
+
+    c_id = c.health()["installation_id"]
+    assert len({a_id, b_id, c_id}) == 3
+    effects = c.compose("run", "--rm", "--no-deps", "migrate", "farmcore", "effects")
+    assert effects.stdout.strip() == "external effects: paused"
+    for label, sql in SEMANTIC.items():
+        assert _psql(c, sql) == _psql(a, sql), label
+    assert len(_psql(c, SEMANTIC["records"])) == 10
+    assert _psql(c, "SELECT count(*) FROM local_session") == ["0"]
+    assert b.health() == {"db": "ok", "installation_id": b_id}
+    assert a.health() == {"db": "ok", "installation_id": a_id}

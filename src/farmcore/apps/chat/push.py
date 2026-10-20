@@ -17,7 +17,9 @@ A parcel's latest event in the batch wins. Events dated after the clock's now (l
 run before the clock was stepped back) are skipped but still move the cursor.
 
 The job does nothing when `telegram_bot_token` is unset, so replay steps in tests and the CLI
-never call Telegram. Tests inject a sender with `set_sender`.
+never call Telegram, nor while the installation's external effects are paused (a restored copy
+until its owner runs `farmcore effects enable`): then no cursor moves either. Tests inject a
+sender with `set_sender`.
 """
 
 from __future__ import annotations
