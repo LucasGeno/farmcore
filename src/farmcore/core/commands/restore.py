@@ -11,12 +11,14 @@ Order matters; the target database is touched only after step 3:
 3. Check the target: run as the server's superuser, and the database holds no data of its own
    (only extension objects, as a new installation's database does). Restore never replaces an
    installation.
-4. Recreate the target database empty, closed to everyone but the owner, then
-   `pg_restore --no-owner --no-acl --single-transaction` into it as the owner.
-5. Drop every member session, then run the `migrate` steps: upgrade an older schema, give the
-   copy a new installation id (database settings are never part of a dump, so the original's
-   id does not travel) and grant the runtime role, the copy's own, with this installation's
-   password. Only then can the app connect.
+4. Recreate the target database empty, closed to everyone but the owner, with external
+   effects paused, then `pg_restore --no-owner --no-acl --single-transaction` into it as the
+   owner: every entry except the rows of member sessions and sign-in throttling, so no session
+   of the original is ever valid in the copy, even if the restore stops halfway.
+5. Run the `migrate` steps: upgrade an older schema, give the copy a new installation id
+   (database settings are never part of a dump, so the original's id does not travel) and
+   grant the runtime role, the copy's own, with this installation's password. Only then can
+   the app connect.
 
 The source installation and the bundle are only ever read. Temporary plaintext is removed on
 success and failure alike.
@@ -210,25 +212,28 @@ def recreate(settings: Settings, owner: str) -> None:
         engine.dispose()
 
 
+# Rows that never travel into a copy: member sessions (the copy starts with none) and
+# sign-in throttling. Their tables are restored empty.
+_LEFT_BEHIND = re.compile(r"^\d+; \d+ \d+ TABLE DATA public (local_session|login_bucket) ")
+
+
 def pg_restore(settings: Settings, dump: Path) -> None:
+    """Restore every entry of the dump except the rows in `_LEFT_BEHIND`, in one transaction."""
+    pg = tool("pg_restore")
+    listed = subprocess.run([pg, "--list", str(dump)], capture_output=True, text=True)
+    if listed.returncode != 0:
+        raise BundleError(f"the dump is unreadable: {_last_line(listed.stderr.encode())}")
+    entries = dump.with_name("restore.list")
+    entries.write_text(
+        "".join(ln + "\n" for ln in listed.stdout.splitlines() if not _LEFT_BEHIND.match(ln))
+    )
     done = subprocess.run(
-        [tool("pg_restore"), "--no-owner", "--no-acl", "--exit-on-error", "--single-transaction",
-         "-d", make_url(settings.database_url).database, str(dump)],
+        [pg, "--no-owner", "--no-acl", "--exit-on-error", "--single-transaction",
+         "--use-list", str(entries), "-d", make_url(settings.database_url).database, str(dump)],
         env=libpq_env(settings.database_url), capture_output=True,
     )  # fmt: skip
     if done.returncode != 0:
         raise BundleError(f"pg_restore failed: {_last_line(done.stderr)}")
-
-
-def clear_sessions(settings: Settings) -> None:
-    engine = create_engine(settings.database_url)
-    try:
-        with engine.begin() as conn:
-            for table in ("local_session", "login_bucket"):
-                if conn.execute(text("SELECT to_regclass(:t)"), {"t": f"public.{table}"}).scalar():
-                    conn.execute(text(f"DELETE FROM {table}"))
-    finally:
-        engine.dispose()
 
 
 def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[dict, str]:
@@ -243,7 +248,7 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
         owner = check_target(settings)
         recreate(settings, owner)
         pg_restore(settings, dump)
-    new_id = migrate_installation(settings, before_access=lambda: clear_sessions(settings))
+    new_id = migrate_installation(settings)
     return manifest, new_id
 
 

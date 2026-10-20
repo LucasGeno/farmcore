@@ -5,7 +5,6 @@ never migrate."""
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
 from importlib.resources import files
 
 import psycopg
@@ -350,20 +349,15 @@ _EXTENSION_RELATIONS = text(
 )
 
 
-def migrate_installation(
-    settings: Settings, before_access: Callable[[], None] | None = None
-) -> str:
+def migrate_installation(settings: Settings) -> str:
     """Upgrade to head, give the installation its id, set up the runtime role; the id.
 
-    `before_access` runs after the upgrade and before the runtime role is (re)granted access
-    (`farmcore restore` clears sessions there). Raises `MigrateError` on a refusal."""
+    Raises `MigrateError` on a refusal."""
     engine = create_engine(settings.database_url)
     try:
         with engine.connect() as conn:
             check_owner(conn)
         command.upgrade(alembic_config(settings.database_url), "head")
-        if before_access is not None:
-            before_access()
         if settings.runtime_database_password:
             # Objects in `postgres` and shared objects first, in their own transaction.
             maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))

@@ -42,6 +42,7 @@ ALLOWED = {
     ("core/commands/backup.py", "create_bundle", "write_text"): "manifest in the temporary dir",
     ("core/commands/backup.py", "create_bundle", "open"): "tar stream into age: encrypted",
     ("core/commands/restore.py", "unpack", "open"): "dump in the temporary directory",
+    ("core/commands/restore.py", "pg_restore", "write_text"): "entry list, temporary directory",
     ("core/commands/restore.py", "restore_bundle", "TemporaryDirectory"): "plaintext, removed",
 }
 

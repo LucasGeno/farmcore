@@ -776,15 +776,35 @@ esac
     assert cli("effects", env=env).output.strip() == "external effects: paused"
     assert table_rows(dbs, target) == {}
     shut_out = create_engine(dbs.runtime_url(env))
-    with pytest.raises(Exception, match="permission denied|does not exist|authentication"):
-        with shut_out.connect():
-            pass
+    with (
+        pytest.raises(Exception, match="permission denied|does not exist|authentication"),
+        shut_out.connect(),
+    ):
+        pass
     shut_out.dispose()
 
     monkeypatch.setenv("PATH", os.environ["PATH"].split(os.pathsep, 1)[1])
     again = cli("restore", str(bundle), "--identity", str(key), env=env)
     assert again.exit_code == 0, again.output
     assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+
+
+def test_a_restore_that_stops_after_the_data_never_carries_sessions_or_opens_the_copy(
+    source, member, dbs, cli, owner_key, tmp_path
+):
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    assert dbs.query(source["name"], "SELECT count(*) FROM local_session") == [(1,)]
+    target = dbs.create()
+    # The runtime role setup refuses (it names the owner), after the data is in.
+    env = {**dbs.installation(target), "RUNTIME_DATABASE_ROLE": dbs.server.superuser}
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1 and "must differ from the owner" in result.output
+    assert dbs.query(target, "SELECT count(*) FROM log") == [(10,)]
+    assert dbs.query(target, "SELECT count(*) FROM local_session") == [(0,)]
+    assert cli("effects", env=env).output.strip() == "external effects: paused"
 
 
 def test_restore_runs_only_as_the_servers_superuser(source, dbs, cli, owner_key, tmp_path):
