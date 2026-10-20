@@ -16,7 +16,6 @@ Failure model (what these tests are for):
 
 from __future__ import annotations
 
-import contextlib
 import hashlib
 import io
 import json
@@ -922,26 +921,47 @@ def role_exists(dbs: Databases, role: str) -> bool:
     ]
 
 
+def as_superuser(dbs: Databases) -> str:
+    """Shell assignments for a fake tool's psql to act as the server's superuser."""
+    return f"PGUSER={dbs.server.superuser} PGPASSWORD={dbs.server.password}"
+
+
 @pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP], ids=["SIGTERM", "SIGHUP"])
 def test_a_stopped_restore_removes_its_staging_copy_and_loader_role(
-    source, dbs, cli, owner_key, tmp_path, private_tmp, signum
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, signum
 ):
-    """`docker compose stop`, a closed terminal: the staging copy holds every row in clear."""
+    """`docker compose stop`, a closed terminal: the staging copy holds every row in clear.
+    pg_restore notes what exists, then the restore process gets the signal mid-load."""
     key, recipient = owner_key
     bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
     target = dbs.create()
     env = dbs.installation(target)
+    seen = tmp_path / "seen.txt"
+    real, psql = shutil.which("pg_restore"), shutil.which("psql")
+    listing = "SELECT datname FROM pg_database UNION ALL SELECT rolname FROM pg_roles"
+    fake_tool(tmp_path / "bin", "pg_restore", f"""case "$*" in
+  *--single-transaction*)
+    {as_superuser(dbs)} "{psql}" -X -At -d postgres -c "{listing}" > "{seen}"
+    kill -{signum.name.removeprefix("SIG")} $PPID
+    exec sleep 60;;
+  *) exec "{real}" "$@";;
+esac
+""")  # fmt: skip
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
     untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
-    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
-    _, role = held_copy(dbs, target)  # the staging copy and its loader exist now
+    handler = signal.getsignal(signum)
 
-    held.proc.send_signal(signum)
-    code, out = held.result()
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
 
-    assert code != 0
-    assert "restore: stopped" in out and "Traceback" not in out, out
+    assert result.exit_code == 1
+    assert f"restore: stopped by {signum.name}" in result.output, result.output
+    existed = seen.read_text().split()
+    staging = [n for n in existed if n.startswith(f"{target}_restore_")]
+    role = f"farmcore_restore_{staging[0].rsplit('_', 1)[1]}"
+    assert len(staging) == 1 and role in existed  # both were there at the signal
     assert staging_of(dbs, target) == [] and not role_exists(dbs, role)
     untouched.check()
+    assert signal.getsignal(signum) == handler  # the caller's handler is back
 
 
 def test_the_next_restore_removes_what_a_killed_restore_left_behind(
@@ -994,7 +1014,7 @@ def test_a_second_restore_into_the_same_target_is_refused_and_the_target_is_rech
 
 
 def test_a_swap_that_fails_halfway_puts_the_target_back(
-    source, dbs, cli, owner_key, tmp_path, private_tmp
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch
 ):
     """The second rename fails (someone holds the staging copy open): the target keeps its
     name, and nothing is left."""
@@ -1003,19 +1023,21 @@ def test_a_swap_that_fails_halfway_puts_the_target_back(
     target = dbs.create()
     env = dbs.installation(target)
     oid = dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target)
-    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
-    staging, _ = held_copy(dbs, target)
-    holder = create_engine(dbs.server.url(staging))
-    conn = holder.connect()
-    try:
-        held.release()
-        code, out = held.result()
-    finally:
-        with contextlib.suppress(Exception):
-            conn.close()
-        holder.dispose()
+    real, psql = shutil.which("pg_restore"), shutil.which("psql")
+    fake_tool(tmp_path / "bin", "pg_restore", f"""case "$*" in
+  *--single-transaction*)
+    {as_superuser(dbs)} "{psql}" -X -q -c "SELECT pg_sleep(120)" >/dev/null 2>&1 &
+    sleep 1
+    exec "{real}" "$@";;
+  *) exec "{real}" "$@";;
+esac
+""")  # fmt: skip
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
 
-    assert code == 1 and "restore: " in out and "Traceback" not in out, out
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert "restore: cannot use the database:" in result.output, result.output
     assert dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target) == oid
     assert staging_of(dbs, target) == []
 
