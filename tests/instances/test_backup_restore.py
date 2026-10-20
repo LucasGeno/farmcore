@@ -973,6 +973,7 @@ esac
 
     assert result.exit_code == 1
     assert f"restore: stopped by {signum.name}" in result.output, result.output
+    assert "nothing was restored" in result.output
     existed = seen.read_text().split()
     staging = [n for n in existed if n.startswith(f"{target}_restore_")]
     role = f"farmcore_restore_{staging[0].rsplit('_', 1)[1]}"
