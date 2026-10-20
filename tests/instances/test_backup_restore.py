@@ -1047,6 +1047,8 @@ def test_a_backup_of_project_a_restores_into_a_new_project_c_while_b_keeps_servi
     import threading
     import time
 
+    from tests.instances.conftest import inspect
+
     key, recipient = owner_key
     a, b = new_project(BACKUP_RECIPIENT=recipient), new_project()
     a.up()
@@ -1062,15 +1064,29 @@ def test_a_backup_of_project_a_restores_into_a_new_project_c_while_b_keeps_servi
     names = sorted(listed.stdout.split())
     assert len(names) == 2, names
     assert all(re.fullmatch(r"farmcore-\d{8}T\d{6}Z\.age", n) for n in names), names
-    names = names[-1:]
+    # Copied off the server as the docs say, then made private as a user would keep them.
     restore_dir = tmp_path / "restore"
     restore_dir.mkdir()
-    a.compose("run", "--rm", "--no-deps", "-v", f"{restore_dir}:/out", "--entrypoint", "cp",
-              "backup", f"/backups/{names[0]}", "/out/a.age")  # fmt: skip
+    a.compose("cp", f"backup:/backups/{names[-1]}", str(restore_dir / "a.age"))
     bundle = restore_dir / "a.age"
     manifest = json.loads(members(decrypt(bundle, key))["manifest.json"])
     assert manifest["installation_id"] == a_id
     shutil.copy(key, restore_dir / "owner.key")
+    for path in restore_dir.iterdir():
+        path.chmod(0o600)
+
+    # A killed backup's plaintext temp directory is removed when the loop starts again.
+    a.compose("exec", "-T", "backup", "mkdir", "/tmp/farmcore-backup-stale")
+    a.compose("restart", "backup")
+    deadline = time.monotonic() + 60
+    while "farmcore-backup-stale" in a.compose("exec", "-T", "backup", "ls", "/tmp").stdout:
+        assert time.monotonic() < deadline, "stale backup temp dir never removed"
+        time.sleep(1)
+    # B has no BACKUP_RECIPIENT: its backup service keeps running and says why, hourly.
+    b_backup = inspect(b.container("backup"))
+    assert b_backup["State"]["Running"] and b_backup["RestartCount"] == 0
+    b_logs = b.compose("logs", "backup")
+    assert "FAILED: set BACKUP_RECIPIENT" in b_logs.stdout + b_logs.stderr
 
     # B is probed every half second while C is created and restored.
     failures: list[str] = []
@@ -1089,8 +1105,30 @@ def test_a_backup_of_project_a_restores_into_a_new_project_c_while_b_keeps_servi
     try:
         c = new_project()
         c.compose("up", "-d", "--wait", "db")
+        # Files the container's user (uid 10001) may not read: the Linux case. A root-owned
+        # 0600 volume reproduces it on any host.
+        volume = f"{c.name}_restore-probe"
+        subprocess.run(["docker", "volume", "create", volume], check=True, capture_output=True)
+        try:
+            subprocess.run(
+                ["docker", "run", "--rm", "--user", "0", "-v", f"{volume}:/r",
+                 "-v", f"{restore_dir}:/src:ro", "--entrypoint", "sh", c.env["FARMCORE_IMAGE"],
+                 "-c", "cp /src/a.age /src/owner.key /r/ && chmod 600 /r/*"],
+                check=True, capture_output=True,
+            )  # fmt: skip
+            locked = c.compose(
+                "run", "--rm", "--no-deps", "-v", f"{volume}:/restore:ro", "migrate",
+                "farmcore", "restore", "/restore/a.age", "--identity", "/restore/owner.key",
+                check=False,
+            )  # fmt: skip
+        finally:
+            subprocess.run(["docker", "volume", "rm", "-f", volume], capture_output=True)
+        assert locked.returncode == 1
+        assert "cannot read the bundle" in locked.stderr and "--user" in locked.stderr
+        # The documented command: run as the user who owns the files.
         restored = c.compose(
-            "run", "--rm", "--no-deps", "-v", f"{restore_dir}:/restore:ro", "migrate",
+            "run", "--rm", "--no-deps", "--user", f"{os.getuid()}:{os.getgid()}",
+            "-v", f"{restore_dir}:/restore:ro", "migrate",
             "farmcore", "restore", "/restore/a.age", "--identity", "/restore/owner.key",
             check=False,
         )  # fmt: skip

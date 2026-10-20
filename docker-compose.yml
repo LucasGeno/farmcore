@@ -71,7 +71,8 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U farmcore -d farmcore"]
+      # Over TCP: the image's first-start init server listens on the socket only, then restarts.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U farmcore -d farmcore"]
       interval: 10s
       timeout: 5s
       retries: 12
@@ -112,8 +113,8 @@ services:
 
   # Daily `farmcore backup` as the owner: one bundle (pg_dump + manifest, encrypted with age to
   # BACKUP_RECIPIENT, the owner's public key) into this project's `backups` volume (or the host
-  # directory BACKUP_DIR, one per installation), seven-day retention. Without BACKUP_RECIPIENT it
-  # exits and restarts (`docker compose ps` shows it restarting) rather than write plaintext.
+  # directory BACKUP_DIR, one per installation), seven-day retention. Without BACKUP_RECIPIENT
+  # it writes nothing and logs `backup: FAILED` every hour; nothing is deleted then either.
   # One-off backup: docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup
   backup:
     <<: *farmcore
@@ -128,12 +129,14 @@ services:
       - |
         set -u
         umask 077
-        if [ -z "$${BACKUP_RECIPIENT:-}" ]; then
-          echo 'backup: FAILED: set BACKUP_RECIPIENT (age public key, see docs/self-hosting.md)' >&2
-          exit 1
-        fi
         trap 'exit 0' INT TERM
         backup_once() {
+          # Plaintext a killed backup left behind (SIGKILL skips its own cleanup).
+          rm -rf /tmp/farmcore-backup-*
+          if [ -z "$${BACKUP_RECIPIENT:-}" ]; then
+            echo 'backup: FAILED: set BACKUP_RECIPIENT, the owner age public key (docs/self-hosting.md)' >&2
+            return 1
+          fi
           find /backups -maxdepth 1 -name 'farmcore-*.partial' -mmin +60 -delete
           farmcore backup --output "/backups/farmcore-$$(date -u +%Y%m%dT%H%M%SZ).age" || return 1
           # Plaintext `.dump` files from releases before bundles age out with the rest.
