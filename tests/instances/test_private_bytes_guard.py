@@ -1,4 +1,4 @@
-"""Private bytes live in the database (spec D2), so one `pg_dump` is the whole installation.
+"""Private bytes live in the database, so one `pg_dump` is the whole installation.
 
 A static guard over the source: every call that can write a file (open for writing, including
 `os.open`, `aiofiles` and zip archives; write_*; temporary files and directories; copies, moves
@@ -95,7 +95,7 @@ def test_no_route_job_or_command_persists_private_bytes_outside_the_database():
 
     unreviewed = sorted(found - ALLOWED.keys())
     assert not unreviewed, (
-        "These calls can write files. Private bytes belong in the database (spec D2); if this "
+        "These calls can write files. Private bytes belong in the database; if this "
         f"is not private data, list it in ALLOWED with the reason: {unreviewed}"
     )
     assert not sorted(ALLOWED.keys() - found), "stale ALLOWED entries: remove them"
