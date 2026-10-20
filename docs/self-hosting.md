@@ -338,7 +338,9 @@ name, and `migrate`'s steps follow: upgrade an older schema, generate the new
 
 Any refusal or failure before the swap leaves the target, the source installation, the bundle
 and older bundles as they were, and leaves no staging database, loader role or plaintext. That
-includes a restore stopped by `SIGTERM` or `SIGHUP` (`docker compose stop`, a closed terminal).
+includes a restore stopped by `SIGTERM` or `SIGHUP` (`docker compose stop`, a closed terminal):
+a signal that arrives while the staging database or the loader role is being created waits
+for that to finish, so that both can be removed.
 `SIGKILL` (or a power cut) skips that cleanup: the staging database
 `farmcore_restore_<hex>_<hex>`, a full copy of the rows in clear, and its
 `farmcore_restore_<hex>` role may stay, and so may the temporary directory

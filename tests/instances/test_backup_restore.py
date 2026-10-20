@@ -983,6 +983,94 @@ esac
     assert caught_signals == []  # restore took the signal itself
 
 
+def stop_while_waiting(dbs: Databases, statement: str, release) -> threading.Thread:
+    """A thread that sends this process SIGTERM once the server shows `statement` (a prefix)
+    waiting, then calls `release` so the statement can finish after the signal."""
+
+    def run() -> None:
+        deadline = time.monotonic() + 180
+        while time.monotonic() < deadline:
+            waiting = dbs.query(
+                "postgres",
+                "SELECT count(*) FROM pg_stat_activity WHERE state = 'active' "
+                "AND query LIKE :p AND pid <> pg_backend_pid()",
+                p=statement + "%",
+            )
+            if waiting != [(0,)]:
+                break
+            time.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGTERM)
+        time.sleep(1)
+        release()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
+
+
+def test_a_signal_while_the_staging_copy_is_created_still_removes_it(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, caught_signals
+):
+    """SIGTERM while `CREATE DATABASE` runs: the server finishes the create whatever the client
+    does, so restore must wait for it and then drop the copy, not report a copy it left."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    # A session on the target (the template) makes CREATE DATABASE wait for it to leave.
+    holder_engine = create_engine(dbs.server.url(target))
+    holder = holder_engine.connect()
+    holder.execute(text("SELECT 1"))
+    stopper = stop_while_waiting(dbs, "CREATE DATABASE", holder.invalidate)
+
+    try:
+        result = cli("restore", str(bundle), "--identity", str(key), env=env)
+    finally:
+        stopper.join()
+        holder_engine.dispose()
+
+    assert result.exit_code == 1
+    assert "restore: stopped by SIGTERM; nothing was restored" in result.output, result.output
+    assert staging_of(dbs, target) == []
+    untouched.check()
+    assert caught_signals == []
+
+
+def test_a_signal_while_the_loader_role_is_created_still_removes_it(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, caught_signals
+):
+    """SIGTERM while the loader role is being created: restore lets the creation finish, then
+    drops the role and the copy."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    # A lock on the role catalog makes CREATE ROLE wait until it is released.
+    locker_engine = create_engine(dbs.server.url("postgres"))
+    locker = locker_engine.connect()
+    locker.begin()
+    locker.exec_driver_sql("LOCK TABLE pg_catalog.pg_authid IN EXCLUSIVE MODE")
+
+    def release() -> None:
+        locker.rollback()
+        locker.close()
+
+    stopper = stop_while_waiting(dbs, "CREATE ROLE", release)
+    try:
+        result = cli("restore", str(bundle), "--identity", str(key), env=env)
+    finally:
+        stopper.join()
+        locker_engine.dispose()
+
+    assert result.exit_code == 1
+    assert "restore: stopped by SIGTERM; nothing was restored" in result.output, result.output
+    assert staging_of(dbs, target) == []
+    untouched.check()
+    assert caught_signals == []
+
+
 def test_a_signal_during_the_swap_waits_for_it_and_says_the_copy_is_in(
     source, member, dbs, cli, owner_key, tmp_path, monkeypatch, caught_signals
 ):
@@ -1174,6 +1262,35 @@ esac
     assert "restore: cannot use the database:" in result.output, result.output
     assert dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target) == oid
     assert staging_of(dbs, target) == []
+
+
+def test_a_swap_that_fails_while_a_signal_waits_reports_the_swap_error(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, caught_signals
+):
+    """SIGTERM arrives during a swap that then fails: the cause is the swap's error, not the
+    signal, and the copy is still removed."""
+    from sqlalchemy.exc import OperationalError
+
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+
+    def stopped_then_fails(_copy) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        raise OperationalError("ALTER DATABASE", {}, Exception("the rename failed"))
+
+    monkeypatch.setattr(restore.Copy, "swap", stopped_then_fails)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert result.output == "restore: cannot use the database: the rename failed\n"
+    untouched.check()
+    assert caught_signals == []
 
 
 def test_a_bundle_from_an_older_schema_is_restored_and_upgraded_to_this_release(

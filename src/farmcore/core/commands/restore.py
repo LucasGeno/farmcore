@@ -169,7 +169,8 @@ def _stop_on_signals() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _signals_deferred() -> Iterator[None]:
-    """A stop signal that arrives while the block runs raises when it ends, not inside it.
+    """A stop signal that arrives while the block runs raises when it ends, not inside it; a
+    block that fails keeps its own error (the process stops on it all the same).
 
     A flag, not a signal mask: a mask holds a signal back from this thread only, and the
     kernel may hand a process's signal to any other thread, whose handler call Python then
@@ -180,8 +181,8 @@ def _signals_deferred() -> Iterator[None]:
     finally:
         _STOPS.deferring = False
         pending, _STOPS.pending = _STOPS.pending, None
-        if pending:
-            raise Interrupted(pending)
+    if pending:
+        raise Interrupted(pending)
 
 
 def sweep_temp() -> None:
@@ -514,11 +515,14 @@ class Copy:
         try:
             with engine.connect() as conn:
                 q = conn.dialect.identifier_preparer.quote
-                conn.exec_driver_sql(
-                    f"CREATE DATABASE {q(self.name)} OWNER {q(self.owner)} "
-                    f"TEMPLATE {q(self.url.database)}"
-                )
-                self.created = True
+                # The server finishes a create its client gave up on: a stop signal waits for
+                # it, so that the cleanup knows the database is there.
+                with _signals_deferred():
+                    conn.exec_driver_sql(
+                        f"CREATE DATABASE {q(self.name)} OWNER {q(self.owner)} "
+                        f"TEMPLATE {q(self.url.database)}"
+                    )
+                    self.created = True
                 conn.exec_driver_sql(f"REVOKE ALL ON DATABASE {q(self.name)} FROM PUBLIC")
                 # PUBLIC may open, and create temporary tables in, any new database; the loader
                 # must reach only the staging one (`migrate` revokes the same).
@@ -577,7 +581,8 @@ class Copy:
     def create_loader(self) -> None:
         engine = create_engine(self._url(self.staging))
         try:
-            with engine.begin() as conn:
+            # Like `create`: a stop signal waits until the role is committed, or rolled back.
+            with _signals_deferred(), engine.begin() as conn:
                 raw = conn.connection.driver_connection
                 verifier = raw.pgconn.encrypt_password(
                     self.loader_password.encode(), self.loader.encode(), b"scram-sha-256"
