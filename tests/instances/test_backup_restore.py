@@ -1270,6 +1270,30 @@ def test_the_next_restore_removes_plaintext_a_killed_restore_left_in_the_temp_di
     assert left == ["farmcore-restore-running", "unrelated"]
 
 
+def test_the_temp_dir_sweep_skips_an_entry_that_vanishes_under_it(
+    dbs, cli, owner_key, private_tmp, monkeypatch
+):
+    """Another restore removes its own directory between the listing and the look at it."""
+    key, _ = owner_key
+    old = time.time() - 7 * 3600
+    stale = private_tmp / "farmcore-restore-killed"
+    stale.mkdir()
+    os.utime(stale, (old, old))
+    listed = Path.glob
+
+    def glob_then_vanish(self, pattern):
+        yield self / "farmcore-restore-finished"  # listed, then removed by its own restore
+        yield from listed(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", glob_then_vanish)
+    env = dbs.installation(dbs.create())
+
+    result = cli("restore", str(private_tmp / "nothing-here"), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1 and "no bundle" in result.output, result.output
+    assert list(private_tmp.iterdir()) == []
+
+
 def test_the_next_restore_removes_what_a_killed_restore_left_behind(
     source, dbs, cli, owner_key, tmp_path, private_tmp
 ):

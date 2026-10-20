@@ -45,6 +45,7 @@ import re
 import secrets
 import shutil
 import signal
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -192,8 +193,11 @@ def sweep_temp() -> None:
     root = Path(tempfile.gettempdir())
     cutoff = time.time() - STALE_TEMP_SECONDS
     for path in root.glob(f"{TEMP_PREFIX}*"):
-        info = path.lstat()
-        if path.is_dir() and info.st_uid == os.geteuid() and info.st_mtime < cutoff:
+        try:
+            info = path.lstat()
+        except OSError:  # gone since the listing (its own restore removed it)
+            continue
+        if stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid() and info.st_mtime < cutoff:
             shutil.rmtree(path, ignore_errors=True)
 
 
