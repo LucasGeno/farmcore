@@ -518,6 +518,22 @@ def bot_boundaries(monkeypatch):
     return calls
 
 
+def test_effects_name_the_role_that_may_switch_them_and_fail_in_one_line(
+    restored, dbs, cli, pg_server
+):
+    runtime = {"DATABASE_URL": dbs.runtime_url(restored)}
+    refused = cli("effects", "enable", env=runtime)
+
+    assert refused.exit_code == 1
+    assert f"connected as {restored['RUNTIME_DATABASE_ROLE']}" in refused.output
+    down = {"DATABASE_URL": pg_server.url("no_such_database", "nobody", "not-the-password")}
+    for args in (("effects",), ("effects", "pause")):
+        result = cli(*args, env=down)
+        assert result.exit_code == 1, args
+        assert result.output.startswith("effects: cannot read the database"), result.output
+        assert result.output.count("\n") == 1 and "not-the-password" not in result.output
+
+
 def test_a_paused_copy_never_polls_its_bot_token_until_effects_are_enabled(
     restored, dbs, cli, bot_boundaries
 ):
@@ -621,7 +637,10 @@ class Untouched:
             "(SELECT count(*) FROM pg_roles WHERE rolname LIKE 'farmcore_restore%') "
             "FROM pg_database d WHERE datname = current_database()",
         )
-        bundles = [b.exists() and hashlib.sha256(b.read_bytes()).hexdigest() for b in self.bundles]
+        bundles = [
+            os.access(b, os.R_OK) and hashlib.sha256(b.read_bytes()).hexdigest()
+            for b in self.bundles
+        ]
         return target, table_rows(self.dbs, self.source), bundles
 
     def check(self) -> None:
@@ -751,7 +770,7 @@ def fake_tool(directory: Path, name: str, script: str) -> None:
 
 
 def test_a_dump_whose_entry_list_cannot_be_read_is_reported_and_nothing_is_restored(
-    source, dbs, cli, owner_key, tmp_path, monkeypatch
+    source, dbs, cli, owner_key, tmp_path, monkeypatch, private_tmp
 ):
     key, recipient = owner_key
     bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
@@ -764,17 +783,17 @@ def test_a_dump_whose_entry_list_cannot_be_read_is_reported_and_nothing_is_resto
 esac
 """)  # fmt: skip
     monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
 
     result = cli("restore", str(bundle), "--identity", str(key), env=env)
 
     assert result.exit_code == 1
     assert "the dump is unreadable: pg_restore: error: could not read" in result.output
-    assert table_rows(dbs, target) == {}
-    assert cli("effects", env=env).output.strip() == "external effects: paused"
+    untouched.check()
 
 
-def test_a_failed_pg_restore_leaves_a_paused_closed_target_that_a_rerun_restores(
-    source, dbs, cli, owner_key, tmp_path, monkeypatch
+def test_a_failed_load_leaves_the_target_as_it_was_and_a_rerun_restores(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch, private_tmp
 ):
     key, recipient = owner_key
     bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
@@ -793,14 +812,14 @@ esac
 """,
     )
     monkeypatch.setenv("PATH", f"{fake}{os.pathsep}{os.environ['PATH']}")
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
 
     failed = cli("restore", str(bundle), "--identity", str(key), env=env)
 
     assert failed.exit_code == 1
     assert "pg_restore failed: pg_restore: error: could not write" in failed.output
-    # Half-restored is never a live copy: effects paused, no tables, the runtime role shut out.
-    assert cli("effects", env=env).output.strip() == "external effects: paused"
-    assert table_rows(dbs, target) == {}
+    # The staging copy and its loader role are gone; the target is as it was, and closed.
+    untouched.check()
     shut_out = create_engine(dbs.runtime_url(env))
     with (
         pytest.raises(Exception, match="permission denied|does not exist|authentication"),
