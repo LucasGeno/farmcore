@@ -470,8 +470,6 @@ class Copy:
 
     def drop_loader(self) -> None:
         """DROP OWNED (its grants, and anything it created) here, then the role."""
-        if not self.loader_created:
-            return
         engine = create_engine(self._url(self.staging))
         try:
             with engine.begin() as conn:

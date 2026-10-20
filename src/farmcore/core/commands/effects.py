@@ -28,7 +28,7 @@ _MAY_SWITCH = text(
 
 
 def set_external_effects(conn: Connection, value: str) -> None:
-    if value not in (EFFECTS_ENABLED, EFFECTS_PAUSED):
+    if value not in (EFFECTS_ENABLED, EFFECTS_PAUSED):  # pragma: no cover - callers pass these
         raise ValueError(f"external effects are {EFFECTS_ENABLED} or {EFFECTS_PAUSED}")
     database = conn.dialect.identifier_preparer.quote(
         conn.exec_driver_sql("SELECT current_database()").scalar_one()

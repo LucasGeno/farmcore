@@ -214,7 +214,7 @@ def create_bundle(database_url: str, recipients: list[str], output: Path) -> dic
             )
             try:
                 stderr = _encrypt(proc, manifest_path, dump, created.timestamp())
-            except BaseException:
+            except BaseException:  # pragma: no cover - Ctrl-C mid-stream: never leave age running
                 proc.kill()
                 proc.wait()
                 raise

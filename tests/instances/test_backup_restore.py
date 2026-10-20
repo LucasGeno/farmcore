@@ -792,6 +792,24 @@ esac
     untouched.check()
 
 
+def test_a_schema_that_cannot_be_dumped_for_comparison_is_reported_and_nothing_is_restored(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch, private_tmp
+):
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    fake_tool(tmp_path / "bin", "pg_dump", 'echo "pg_dump: error: connection lost" >&2; exit 1\n')
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert "pg_dump of the new schema failed: pg_dump: error: connection lost" in result.output
+    untouched.check()
+
+
 def test_a_failed_load_leaves_the_target_as_it_was_and_a_rerun_restores(
     source, dbs, cli, owner_key, tmp_path, monkeypatch, private_tmp
 ):
