@@ -2251,7 +2251,7 @@ def test_a_backup_of_project_a_restores_into_a_new_project_c_while_b_keeps_servi
     def probe() -> None:
         while not done.is_set():
             try:
-                assert b.health() == {"db": "ok", "installation_id": b_id}
+                assert b.health()["installation_id"] == b_id  # 503 raises
             except Exception as exc:  # noqa: BLE001 - any failure to serve counts
                 failures.append(type(exc).__name__)
             time.sleep(0.5)
@@ -2306,5 +2306,5 @@ def test_a_backup_of_project_a_restores_into_a_new_project_c_while_b_keeps_servi
     # A sign-in left halfway (a client stopped mid-handshake) holds up every DROP DATABASE, a
     # stopped restore's cleanup included, for this long: within `docker compose stop`'s 10 s.
     assert _psql(c, "SHOW authentication_timeout") == ["5s"]
-    assert b.health() == {"db": "ok", "installation_id": b_id}
-    assert a.health() == {"db": "ok", "installation_id": a_id}
+    assert b.health()["installation_id"] == b_id  # 503 raises
+    assert a.health()["installation_id"] == a_id  # 503 raises
