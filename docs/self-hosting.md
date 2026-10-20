@@ -10,21 +10,36 @@
 | `bot` | Telegram long-polling bot; only with `--profile telegram`; also waits for `migrate` |
 | `backup` | Daily `pg_dump` into the `backups` volume, checked with `pg_restore --list`, kept 7 days |
 
-The database has two roles. `farmcore` (password `POSTGRES_PASSWORD`) is the bootstrap
-superuser of this installation's PostgreSQL server (the image's `POSTGRES_USER`); it owns the
-`farmcore` database, its schema and the PostGIS extension. Only `migrate` and `backup` hold its
-password. `farmcore_app` (password `RUNTIME_DATABASE_PASSWORD`) is what the app, the bot and
-`docker compose exec app farmcore ...` use: it reads and writes rows and nothing else. It
-cannot create databases, roles, extensions, schemas, tables or temporary tables, alter or drop
-tables, write `alembic_version`, or become another role. It can connect to the `farmcore`
-database only: as a superuser, `migrate` also revokes the default `CONNECT` and `TEMPORARY`
-rights of every role (`PUBLIC`) on the server's `postgres`, `template1` and `template_postgis`
-databases. That change is server-wide, which suits the dedicated server each Compose project
-runs. On a server shared with other software, make the owner an ordinary role instead (with
-`CREATEROLE`, owning the database and its `public` schema; a superuser creates the PostGIS
-extension): `migrate` then changes only what that role owns and leaves the server's databases
-alone. A superuser must first allow it to store the installation id, once:
-`GRANT SET ON PARAMETER farmcore.installation_id TO <owner>` (`migrate` says so if missing).
+Each installation runs its own PostgreSQL server, and FarmCore expects that: servers shared
+with other software or other installations are not supported for now. The server has two
+roles that matter. `farmcore` (password `POSTGRES_PASSWORD`) is its bootstrap superuser (the
+image's `POSTGRES_USER`); it owns the `farmcore` database, its schema and the PostGIS
+extension. Only `migrate` and `backup` hold its password, and `migrate` refuses to run as any
+role that is not a superuser. `farmcore_app` (password `RUNTIME_DATABASE_PASSWORD`) is what the
+app, the bot and `docker compose exec app farmcore ...` use. After every `migrate` it holds
+exactly:
+
+- `CONNECT` on the `farmcore` database, and `USAGE` on its `public` schema;
+- `SELECT`, `INSERT`, `UPDATE`, `DELETE` on the tables and views there, except read-only
+  `alembic_version` and the PostGIS extension's own (`spatial_ref_sys`, `geometry_columns`,
+  `geography_columns`); `USAGE`, `SELECT` on the sequences;
+- the same, by default, on tables and sequences `farmcore` creates there later.
+
+It is a member of no role, has no role-level settings, and is not a superuser, cannot create
+databases or roles, replicate or bypass row security, has no connection limit and no expiry.
+So it cannot create extensions, schemas, tables or temporary tables, alter, drop or truncate
+tables, write `alembic_version`, or become another role. `migrate` also revokes the default
+`CONNECT` and `TEMPORARY` rights of every role (`PUBLIC`) on the server's `postgres`,
+`template1` and `template_postgis` databases: a server-wide change, fine on a dedicated server.
+
+If `farmcore_app` already exists, `migrate` resets it before granting the above: it refuses
+a role that owns any object; runs `DROP OWNED BY farmcore_app` (which, for a role that owns
+nothing, only revokes) in `farmcore` and in `postgres`, covering those two databases and the
+shared objects (databases, tablespaces, parameters), default privileges included; then
+revokes, as their grantor, any grant another role made there; revokes every role membership,
+whoever granted it; and resets role settings and attributes. It fails if a grant or
+membership is left. Privileges on objects inside `template1` and `template_postgis` are not
+reset, since `migrate` does not connect there; `farmcore_app` cannot connect to them.
 
 One right PostgreSQL gives every role and cannot take away: creating large objects
 (`lo_create`). FarmCore uses none; the runtime role could store data that way, inside this
@@ -32,12 +47,9 @@ installation's database only, which it can already do in rows. A large object it
 the next `migrate` refuse until it is reassigned to the owner.
 
 `migrate` upgrades the schema to head, gives the installation its identity on first run, and
-creates `farmcore_app` every time or resets it: password and attributes; every role
-membership, whoever granted it; role settings; and every privilege granted to it directly,
-which it then grants again as described above. It refuses a `farmcore_app` that owns any
-object, and refuses to run as any role other than the database owner, so
-`docker compose exec app farmcore migrate` (the runtime role) fails with an explanation; use
-`docker compose run --rm migrate`. The password reaches PostgreSQL only as a SCRAM verifier.
+creates or resets `farmcore_app` every time. As the runtime role (`docker compose exec app
+farmcore migrate`) it fails with an explanation; use `docker compose run --rm migrate`. The
+password reaches PostgreSQL only as a SCRAM verifier.
 
 The identity, `installation_id`, is a random UUID the server generates once; nobody chooses
 it. It is stored as a setting of the database (not a table, so no schema change), survives
