@@ -339,22 +339,27 @@ name, and `migrate`'s steps follow: upgrade an older schema, generate the new
 Any refusal or failure before the swap leaves the target, the source installation, the bundle
 and older bundles as they were, and leaves no staging database, loader role or plaintext. That
 includes a restore stopped by `SIGTERM` or `SIGHUP` (`docker compose stop`, a closed terminal).
-`SIGKILL` (or a power cut) skips that cleanup: the staging database `farmcore_restore_<hex>`, a
-full copy of the rows in clear, and its `farmcore_restore_<hex>` role may stay, and so may the
-container's temporary directory (gone with a `run --rm` container). The next restore into the
-same target removes the database and the role first.
+`SIGKILL` (or a power cut) skips that cleanup: the staging database
+`farmcore_restore_<hex>_<hex>`, a full copy of the rows in clear, and its
+`farmcore_restore_<hex>` role may stay, and so may the temporary directory
+`farmcore-restore-*` (with the rows in clear) under `$TMPDIR` or `/tmp`. In a `run --rm`
+container that directory goes with the container; run outside one, delete it by hand or let
+the next restore do it. The next restore into the same target removes the database and the
+role first, and any of your `farmcore-restore-*` directories older than six hours.
 
 One restore runs per target: a second one into the same database is refused while the first
 runs. Just before the swap, restore checks the target again and refuses it if it has gained data
-meanwhile. While it runs, PUBLIC loses `CONNECT` and `TEMP` on every database of the server but
-`template0`, as `migrate` does, so the loader role can open only the staging database.
+meanwhile. Restore also revokes `CONNECT` and `TEMP` from PUBLIC on every database of the
+server but `template0`, permanently, as `migrate` does, so the loader role can open only the
+staging database.
 
 If restore stops after the swap (say, the runtime role cannot be set up), the data is in,
 paused, with no sessions: fix the cause and run
 `docker compose -p farm-c --env-file farm-c.env up -d`, whose `migrate` finishes the job. A swap
-that fails halfway renames the target back. Only if the process is killed between its two
-renames is there no `farmcore` database: rename `farmcore_restore_<hex>` to `farmcore` with
-`ALTER DATABASE`, and drop the empty `farmcore_old_<hex>`.
+that fails halfway renames the target back, and `SIGTERM` or `SIGHUP` during the swap waits
+for it to finish, then says the copy is in. Only if the process is killed with `SIGKILL`
+between the two renames is there no `farmcore` database: rename `farmcore_restore_<hex>_<hex>`
+to `farmcore` with `ALTER DATABASE`, and drop the empty `farmcore_old_<hex>_<hex>`.
 
 The restored installation is independent of the original: restoring into C never changes A
 or any other project, and both may keep running.

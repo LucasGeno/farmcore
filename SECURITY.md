@@ -114,9 +114,11 @@ bundle is data only, never code:
   and the copy starts with a new `installation_id` and external effects paused.
 - The archive is read strictly: two plain files, no links, devices or sparse files, nothing
   larger than the archive itself. Strings from the bundle reach the terminal escaped.
-- While a restore runs, PUBLIC loses `CONNECT` and `TEMP` on every database of the server but
-  `template0`, so the loader role opens only the staging database. One restore runs per
-  target; SIGTERM and SIGHUP still clean up, and the next restore removes what a SIGKILL left.
+- Restore revokes `CONNECT` and `TEMP` from PUBLIC on every database of the server but
+  `template0`, permanently (as `migrate` does), so the loader role opens only the staging
+  database. One restore runs per target; SIGTERM and SIGHUP still clean up, a signal during
+  the swap waits for its end, and the next restore removes what a SIGKILL left (its staging
+  database and loader role, and its temporary directory once six hours old).
 
 What restore cannot prove is that the rows are the ones you backed up, and the rows are what
 grants access: members and their password hashes, farm roles and memberships, sharing grants,
