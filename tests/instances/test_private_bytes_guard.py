@@ -1,8 +1,9 @@
 """Private bytes live in the database (spec D2), so one `pg_dump` is the whole installation.
 
-A static guard over the source: every call that can write a file (open for writing, write_*,
-temporary files and directories, copies, moves, downloads to disk, saves, exports) must be a
-known site with a reason it is not persisted private data. A new route, job or command that
+A static guard over the source: every call that can write a file (open for writing, including
+`os.open`, `aiofiles` and zip archives; write_*; temporary files and directories; copies, moves
+and links; downloads to disk; exports) must be a known kind of write in a known file, with a
+reason it is not persisted private data. A new route, job or command that
 writes a file fails here until it either stores its bytes in the database or is reviewed and
 listed below with its reason.
 """
@@ -14,36 +15,39 @@ from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "farmcore"
 
+# Calls that write a file whatever object they are called on.
 WRITERS = {
     "write_bytes", "write_text", "mkstemp", "mkdtemp", "NamedTemporaryFile", "TemporaryFile",
-    "SpooledTemporaryFile", "TemporaryDirectory", "copy", "copy2", "copyfile", "copytree",
-    "move", "rename", "link", "symlink_to", "hardlink_to", "touch", "mkdir", "makedirs",
-    "download_to_drive", "save", "savez", "tofile", "to_csv", "to_parquet", "to_excel",
+    "SpooledTemporaryFile", "TemporaryDirectory", "symlink_to", "hardlink_to", "touch", "mkdir",
+    "makedirs", "download_to_drive", "savez", "tofile", "to_parquet", "to_excel",
 }  # fmt: skip
+# Calls that write only on these modules (`props.copy()` and `session.save()` do not).
+MODULE_WRITERS = {
+    "shutil": {"copy", "copy2", "copyfile", "copytree", "move"},
+    "os": {"open", "rename", "replace", "link", "symlink", "mkfifo", "makedirs", "mkdir"},
+}
 WRITE_MODE = set("wax+")
 
 TEMPORARY = "request-scoped temporary directory, removed when the request or command ends"
-# (file under src/farmcore, enclosing function, call) -> why it is not persisted private data.
+# (file under src/farmcore, call) -> why it is not persisted private data. Keyed by file, not
+# function, so renaming a function never needs this list touched; a new kind of write in a file
+# does.
 ALLOWED = {
-    ("apps/assistant/routes.py", "ask", "save"): "in-memory conversation (app.state)",
-    ("apps/assistant/routes.py", "message", "save"): "in-memory conversation (app.state)",
-    ("apps/assistant/routes.py", "_transcribe", "TemporaryDirectory"): TEMPORARY,
-    ("apps/assistant/routes.py", "_transcribe", "write_bytes"): TEMPORARY,
-    ("apps/chat/bot.py", "BotRuntime.on_voice", "TemporaryDirectory"): TEMPORARY,
-    ("apps/chat/bot.py", "BotRuntime.on_voice", "download_to_drive"): TEMPORARY,
-    ("apps/chat/handlers.py", "_on_message", "save"): "conversation row in the database",
-    ("apps/forecast/sources.py", "fetch_single_runs", "mkdir"): "open-data cache (DATA_DIR)",
-    ("apps/forecast/sources.py", "fetch_single_runs", "write_text"): "open-data cache (DATA_DIR)",
-    ("apps/operations/commands.py", "register.isoxml_demo_", "mkdir"): "synthetic demo file",
-    ("apps/operations/commands.py", "register.isoxml_demo_", "write_bytes"): "synthetic demo file",
-    ("apps/operations/routes.py", "register_page", "to_csv"): "returns text, writes no file",
-    ("apps/operations/routes.py", "register_csv", "to_csv"): "returns text, writes no file",
-    ("core/commands/backup.py", "create_bundle", "TemporaryDirectory"): "plaintext, removed",
-    ("core/commands/backup.py", "create_bundle", "write_text"): "manifest in the temporary dir",
-    ("core/commands/backup.py", "create_bundle", "open"): "tar stream into age: encrypted",
-    ("core/commands/restore.py", "unpack", "open"): "dump in the temporary directory",
-    ("core/commands/restore.py", "pg_restore", "write_text"): "entry list, temporary directory",
-    ("core/commands/restore.py", "restore_bundle", "TemporaryDirectory"): "plaintext, removed",
+    ("apps/assistant/routes.py", "TemporaryDirectory"): TEMPORARY,
+    ("apps/assistant/routes.py", "write_bytes"): TEMPORARY,
+    ("apps/chat/bot.py", "TemporaryDirectory"): TEMPORARY,
+    ("apps/chat/bot.py", "download_to_drive"): TEMPORARY,
+    ("apps/forecast/sources.py", "mkdir"): "open-data cache (DATA_DIR)",
+    ("apps/forecast/sources.py", "write_text"): "open-data cache (DATA_DIR)",
+    ("apps/operations/commands.py", "mkdir"): "synthetic demo file (`isoxml-demo` CLI)",
+    ("apps/operations/commands.py", "write_bytes"): "synthetic demo file (`isoxml-demo` CLI)",
+    ("core/commands/backup.py", "TemporaryDirectory"): "plaintext dump, removed afterwards",
+    ("core/commands/backup.py", "write_text"): "manifest in the temporary directory",
+    ("core/commands/backup.py", "open"): "the tar streamed into age: encrypted",
+    ("core/commands/backup.py", "os.replace"): "the finished encrypted bundle takes its name",
+    ("core/commands/restore.py", "open"): "dump in the temporary directory",
+    ("core/commands/restore.py", "write_text"): "entry list in the temporary directory",
+    ("core/commands/restore.py", "TemporaryDirectory"): "plaintext dump, removed afterwards",
 }
 
 
@@ -51,7 +55,11 @@ def _writes_mode(call: ast.Call) -> bool:
     """`open(path, "w")`, `path.open("wb")`, `open(..., mode=...)`: a write mode, or a mode
     that is not a literal (it could be one)."""
     modes = [k.value for k in call.keywords if k.arg == "mode"]
-    if isinstance(call.func, ast.Name):
+    if isinstance(call.func, ast.Name) or (
+        isinstance(call.func, ast.Attribute)
+        and isinstance(call.func.value, ast.Name)
+        and call.func.value.id in {"aiofiles", "io", "codecs", "gzip", "bz2", "lzma", "zipfile"}
+    ):
         modes += call.args[1:2]
     else:
         modes += [a for a in call.args if isinstance(a, ast.Constant) and isinstance(a.value, str)]
@@ -62,32 +70,26 @@ def _writes_mode(call: ast.Call) -> bool:
     )
 
 
-def file_writes(source: str, name: str) -> set[tuple[str, str, str]]:
-    """Every call in `source` that can write a file: (name, enclosing function, call)."""
-    found: set[tuple[str, str, str]] = set()
-    scope: list[str] = []
-
-    class Visitor(ast.NodeVisitor):
-        def _scoped(self, node) -> None:
-            scope.append(node.name)
-            self.generic_visit(node)
-            scope.pop()
-
-        visit_FunctionDef = visit_AsyncFunctionDef = visit_ClassDef = _scoped
-
-        def visit_Call(self, node: ast.Call) -> None:
-            func = node.func
-            call = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
-            if call in WRITERS or (call == "open" and _writes_mode(node)):
-                found.add((name, ".".join(scope) or "<module>", call))
-            self.generic_visit(node)
-
-    Visitor().visit(ast.parse(source))
+def file_writes(source: str, name: str) -> set[tuple[str, str]]:
+    """Every kind of call in `source` that can write a file: (name, call)."""
+    found: set[tuple[str, str]] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        call = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", "")
+        owner = func.value.id if isinstance(func, ast.Attribute) and isinstance(
+            func.value, ast.Name
+        ) else None  # fmt: skip
+        if owner in MODULE_WRITERS and call in MODULE_WRITERS[owner]:
+            found.add((name, f"{owner}.{call}"))
+        elif call in WRITERS or (call in {"open", "ZipFile"} and _writes_mode(node)):
+            found.add((name, call))
     return found
 
 
 def test_no_route_job_or_command_persists_private_bytes_outside_the_database():
-    found: set[tuple[str, str, str]] = set()
+    found: set[tuple[str, str]] = set()
     for path in sorted(SRC.rglob("*.py")):
         found |= file_writes(path.read_text(), path.relative_to(SRC).as_posix())
 
@@ -112,9 +114,24 @@ def job(ctx):
 (root / "y").open(mode="ab")
 """
     assert file_writes(planted, "apps/x/routes.py") == {
-        ("apps/x/routes.py", "upload", "open"),
-        ("apps/x/routes.py", "job", "write_bytes"),
-        ("apps/x/routes.py", "<module>", "open"),
+        ("apps/x/routes.py", "open"),
+        ("apps/x/routes.py", "write_bytes"),
     }
-    assert file_writes("def f():\n    open(path, mode)\n", "m.py") == {("m.py", "f", "open")}
+    assert file_writes("def f():\n    open(path, mode)\n", "m.py") == {("m.py", "open")}
     assert file_writes("open(p)\nopen(p, 'rb')\nzf.open(name)\np.open('r')\n", "m.py") == set()
+
+
+def test_the_guard_sees_archives_low_level_and_async_writes():
+    planted = """
+zipfile.ZipFile(path, "w")
+ZipFile(path, mode="a")
+os.open(path, os.O_WRONLY | os.O_CREAT)
+async with aiofiles.open(path, "wb") as f: ...
+shutil.copy(a, b)
+shutil.move(a, b)
+"""
+    assert {call for _, call in file_writes(planted, "m.py")} == {
+        "ZipFile", "os.open", "open", "shutil.copy", "shutil.move",
+    }  # fmt: skip
+    harmless = "zipfile.ZipFile(path)\nprops.copy()\nconversation.save(session)\nd.move(1)\n"
+    assert file_writes(harmless, "m.py") == set()
