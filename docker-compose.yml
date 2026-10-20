@@ -84,6 +84,9 @@ services:
 
   # One-shot, as the owner: upgrade the schema, set the installation id once, create or update
   # the runtime role. App and bot start only after it exits 0, and never migrate themselves.
+  # One migrator at a time (an advisory lock): a second `migrate` waits, then finds nothing to
+  # do. `farmcore upgrade` runs here too: it writes its pre-upgrade bundle into /backups
+  # (docs/self-hosting.md, "Upgrading").
   migrate:
     <<: *farmcore
     restart: "no"
@@ -95,7 +98,9 @@ services:
       DATABASE_URL: postgresql+psycopg://farmcore:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/farmcore
       RUNTIME_DATABASE_ROLE: farmcore_app
       RUNTIME_DATABASE_PASSWORD: ${RUNTIME_DATABASE_PASSWORD:?set RUNTIME_DATABASE_PASSWORD in .env}
-    volumes: []
+      BACKUP_RECIPIENT: ${BACKUP_RECIPIENT:-}
+    volumes:
+      - ${BACKUP_DIR:-backups}:/backups
 
   app:
     <<: *farmcore

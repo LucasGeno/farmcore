@@ -101,7 +101,8 @@ On arm64 hosts set `POSTGIS_IMAGE=imresamu/postgis:17-3.5`.
 ```sh
 docker compose up -d --build
 docker compose ps                                   # app healthy; db, backup up
-curl -fsS http://127.0.0.1:8000/health              # {"db":"ok","installation_id":"…"}
+curl -fsS http://127.0.0.1:8000/health              # {"db":"ok","installation_id":"…",
+                                                    #  "release":"…","alembic_heads":[…],"state":"ok"}
 ```
 
 A new installation is empty: no farm, no member, no demo data. Set it up from the CLI:
@@ -422,15 +423,91 @@ installation's env file before enabling effects:
 
 ## Upgrading
 
+**Reverting the image does not revert the schema.** Migrations form one linear chain and run
+forward only; there is no automatic downgrade. Once a release has migrated the database, the
+previous release refuses it (its `migrate` says `incompatible release` and names the revision
+it does not know, and its `/health` says `failed`). The way back is the pre-upgrade backup
+that `farmcore upgrade` takes: see "Recovering from a failed upgrade" below.
+
+An upgrade needs `BACKUP_RECIPIENT` (see "The owner's key"): no backup, no upgrade.
+
 ```sh
-git pull
-docker compose up -d --build     # `migrate` runs once; app and bot start after it
+git pull                 # or point FARMCORE_IMAGE at the new release tag
+docker compose build     # the new image; nothing restarts yet
+docker compose run --rm --no-deps migrate farmcore upgrade --check
+docker compose stop app bot
+docker compose run --rm --no-deps migrate farmcore upgrade --backup-dir /backups
+docker compose up -d --wait --wait-timeout 180
+curl -fsS http://127.0.0.1:8000/health
 ```
 
-With `FARMCORE_IMAGE` set, do not `--build`: tag the new release and point `FARMCORE_IMAGE` at
-it (see "Running several installations"), then `docker compose up -d`.
+With `FARMCORE_IMAGE` set, skip `docker compose build`: point `FARMCORE_IMAGE` at the new tag
+in the env file (see "Running several installations") instead.
 
-Take a backup first. Migrations form one linear chain and run forward only.
+1. `farmcore upgrade --check` (with the new image) reports the database's schema, what this
+   release expects, and whether the release is compatible. It changes nothing. An incompatible
+   database (one a newer release migrated) is refused here, and again by the upgrade itself
+   before anything is written.
+2. Stop the app and bot: an old app must not serve while its schema changes.
+3. `farmcore upgrade --backup-dir /backups` takes the installation's migration lock (a second
+   upgrade exits at once with `another upgrade or migrate is running`; `migrate`, as run by
+   `up`, waits for it and then finds nothing to do), checks compatibility, writes a bundle
+   `pre-upgrade-<UTC time>.age` into the `backups` volume (or `BACKUP_DIR`), then migrates
+   once and reports `release …, alembic heads …, state ok`. If the bundle cannot be written,
+   nothing is migrated. Pre-upgrade bundles are kept: the daily rotation never deletes them.
+   Copy the bundle off the server like any other backup.
+4. `up -d --wait` starts the new release; `migrate` runs again under the lock and has nothing
+   to do. `--wait` fails if the app does not become healthy.
+5. `/health` must say the new release, its Alembic heads and `"state": "ok"`.
+
+`/health` is public and says only this: `db`, `installation_id`, `release`, `alembic_heads`
+(the schema revisions in the database) and `state`. It answers 503 unless `state` is `ok`:
+`maintenance` while a migration runs or is still pending for this release, `failed` when the
+last migrate or upgrade failed or was stopped, or when the database's schema is unknown to
+this release. A failed migration (or one stopped with `SIGTERM`) is cancelled on the server
+and rolled back as a whole; the installation stays `failed` until a migrate or upgrade
+succeeds.
+
+Without `farmcore upgrade` (say, a scripted deploy), take a bundle first
+(`docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup`) and run `docker compose up -d`:
+the `migrate` service checks compatibility and migrates once, but takes no backup.
+
+### Recovering from a failed upgrade
+
+**The migration failed** (`upgrade: migration failed: …; the schema is still at <old
+revision>`). Nothing was applied. Fix the cause or go back: set the previous image again and
+`docker compose up -d --wait`; its `migrate` clears the `failed` state. If the message does
+not say the schema is still at the old revision, restore as below.
+
+**The new release migrated but does not work** (`up --wait` fails, `/health` is not `ok`), or
+you are not sure what state the database is in: restore the pre-upgrade bundle with the
+previous release. The failed database is kept aside under another name, so nothing is lost:
+
+```sh
+docker compose stop app bot backup
+# Previous image again: `git checkout <previous tag> && docker compose build`, or set
+# FARMCORE_IMAGE back to the previous tag.
+mkdir -m 700 ~/farmcore-restore
+docker compose cp backup:/backups/pre-upgrade-20261021T101500Z.age ~/farmcore-restore/bundle.age
+cp ~/keys/farmcore-backup.key ~/farmcore-restore/owner.key
+docker compose exec -T db psql -U farmcore -d postgres -v ON_ERROR_STOP=1 \
+  -c 'ALTER DATABASE farmcore RENAME TO farmcore_failed_upgrade' \
+  -c 'CREATE DATABASE farmcore TEMPLATE template_postgis'
+docker compose run --rm --no-deps --user "$(id -u):$(id -g)" \
+  -v ~/farmcore-restore:/restore:ro migrate \
+  farmcore restore /restore/bundle.age --identity /restore/owner.key
+rm -P ~/farmcore-restore/owner.key 2>/dev/null || shred -u ~/farmcore-restore/owner.key
+docker compose up -d --wait --wait-timeout 180
+docker compose run --rm --no-deps migrate farmcore effects enable
+```
+
+`docker compose cp` needs the `backup` container to exist (stopped is fine). The restored
+installation is what the bundle held at the upgrade, with what a restore always changes (see
+"Restore into a new installation"): a new `installation_id`, so everyone signs in again, and
+external effects paused, which the last line turns back on since the original no longer runs.
+Drop `farmcore_failed_upgrade` once you no longer need it
+(`DROP DATABASE farmcore_failed_upgrade` in `psql`). Other installations on the host are never
+involved: each has its own database server.
 
 From a release whose compose file had `name: farmcore` (app and bot connected as the owner and
 migrated on start):

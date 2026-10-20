@@ -7,9 +7,8 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import RedirectResponse
-from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
 from farmcore import __version__
@@ -19,7 +18,12 @@ from farmcore.core.cookie_scope import InstallationCookies
 from farmcore.core.identity import require_csrf
 from farmcore.core.manifest import Manifest
 from farmcore.core.privacy import PrivacyMiddleware
-from farmcore.core.startup import check_public_settings, read_installation_id
+from farmcore.core.startup import (
+    STATE_OK,
+    check_public_settings,
+    read_installation_id,
+    read_schema_state,
+)
 from farmcore.core.tour import TourMiddleware
 from farmcore.db import get_session, make_engine, make_session_factory
 from farmcore.settings import Settings, get_settings
@@ -92,9 +96,19 @@ def create_app(
     app.state.spray_weather_reader = compose_spray_weather_reader(app.state.all_manifests)
 
     @app.get("/health")
-    def health(session: Session = Depends(get_session)) -> dict[str, str | None]:
-        session.execute(text("SELECT 1"))
-        return {"db": "ok", "installation_id": installation_id}
+    def health(response: Response, session: Session = Depends(get_session)) -> dict:
+        """Public: the release and Alembic heads in use and the schema state, nothing more.
+        503 unless the state is `ok` (a migration running or pending, or a failed upgrade)."""
+        state = read_schema_state(session)
+        if state.state != STATE_OK:
+            response.status_code = 503
+        return {
+            "db": "ok",
+            "installation_id": installation_id,
+            "release": __version__,
+            "alembic_heads": list(state.heads),
+            "state": state.state,
+        }
 
     @app.get("/", include_in_schema=False)
     def index(request: Request) -> RedirectResponse:

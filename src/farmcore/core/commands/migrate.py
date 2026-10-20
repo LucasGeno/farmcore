@@ -1,11 +1,20 @@
 """`farmcore migrate`: upgrade the database to the latest revision and give the installation
 its identity. Run as the database owner (the server's bootstrap superuser); the app and bot
-never migrate."""
+never migrate.
+
+One migrator at a time: the migrations run on a connection that holds the installation's
+migration lock (`MIGRATION_LOCK`), so a second `migrate` waits and then finds nothing to do,
+and the lock lives exactly as long as the backend that runs them. A database whose schema
+this release does not know (a newer release migrated it) is refused before anything runs.
+While migrating, the database carries `farmcore.upgrade = failed`; it is reset only once
+every step succeeded, so a failed or stopped migrate leaves `/health` saying `failed`."""
 
 from __future__ import annotations
 
+import contextlib
+import signal
 import uuid
-from importlib.resources import files
+from collections.abc import Iterator
 
 import psycopg
 import psycopg.errors
@@ -13,18 +22,29 @@ import typer
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
-from sqlalchemy import Connection, create_engine, text
+from sqlalchemy import Connection, create_engine, pool, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
-from farmcore.core.startup import INSTALLATION_SETTING, read_installation_id
+from farmcore import __version__
+from farmcore.core import startup
+from farmcore.core.startup import (
+    INSTALLATION_SETTING,
+    MIGRATION_LOCK,
+    UPGRADE_FAILED,
+    UPGRADE_SETTING,
+    SchemaState,
+    read_heads,
+    read_installation_id,
+    read_schema_state,
+)
 from farmcore.settings import Settings, get_settings
 
 
 def alembic_config(url: str | None = None) -> Config:
     """Alembic config built in code (works without `alembic.ini`, e.g. in the container)."""
     cfg = Config()
-    cfg.set_main_option("script_location", str(files("farmcore") / "migrations"))
+    cfg.set_main_option("script_location", str(startup.MIGRATIONS))
     if url:
         cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
     return cfg
@@ -393,38 +413,151 @@ _EXTENSION_RELATIONS = text(
 )
 
 
-def migrate_installation(settings: Settings) -> str:
-    """Upgrade to head, give the installation its id, set up the runtime role; the id.
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
 
-    Raises `MigrateError` on a refusal."""
-    engine = create_engine(settings.database_url)
+
+class Stopped(KeyboardInterrupt):
+    """SIGTERM or SIGHUP during migrate or upgrade. A `KeyboardInterrupt`, so psycopg cancels
+    the statement running on the server before it unwinds (the transaction then rolls back)."""
+
+    def __init__(self, name: str, *, migrating: bool = False) -> None:
+        super().__init__(name)
+        self.name = name
+        self.migrating = migrating
+
+
+@contextlib.contextmanager
+def stop_on_signals() -> Iterator[None]:
+    """Turn the first SIGTERM or SIGHUP into `Stopped` (main thread only, as in the CLI)."""
+
+    def stop(signum, _frame) -> None:
+        for s in STOP_SIGNALS:  # one is enough; let the unwinding finish
+            signal.signal(s, signal.SIG_IGN)
+        raise Stopped(signal.Signals(signum).name)
+
+    previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS}
+    try:
+        yield
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
+@contextlib.contextmanager
+def migration_lock(settings: Settings, *, wait: bool) -> Iterator[Connection]:
+    """An owner connection holding this installation's migration lock until the block ends.
+
+    `wait=False` refuses at once when another migrator holds it."""
+    engine = create_engine(settings.database_url, poolclass=pool.NullPool)
     try:
         with engine.connect() as conn:
             check_owner(conn)
-        command.upgrade(alembic_config(settings.database_url), "head")
-        if settings.runtime_database_password:
-            # Objects in `postgres` and shared objects first, in their own transaction.
-            maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))
-            try:
-                with maintenance.begin() as conn:
-                    lock_databases(conn)
-                    reset_runtime_role_in(conn, settings.runtime_database_role)
-                    # The reset revoked CONNECT on the installation database; give it back
-                    # now, so a failure in the next step never locks out the running app.
-                    keep_connect(conn, settings.runtime_database_role, settings.database_url)
-            finally:
-                maintenance.dispose()
-        with engine.begin() as conn:
-            installation_id = ensure_installation_id(conn)
-            if settings.runtime_database_password:
-                ensure_runtime_role(
-                    conn,
-                    settings.runtime_database_role,
-                    settings.runtime_database_password.get_secret_value(),
+            keys = dict(zip(("k1", "k2"), MIGRATION_LOCK, strict=True))
+            if wait:
+                conn.execute(text("SELECT pg_advisory_lock(:k1, :k2)"), keys)
+            elif not conn.execute(text("SELECT pg_try_advisory_lock(:k1, :k2)"), keys).scalar():
+                raise MigrateError(
+                    "another upgrade or migrate is running on this installation; nothing was "
+                    "done. Wait for it to finish, then try again"
                 )
-        return installation_id
+            conn.commit()  # a session lock: it outlives the transaction, not the connection
+            yield conn
     finally:
         engine.dispose()
+
+
+def check_compatible(conn: Connection) -> SchemaState:
+    """This database as this release sees it; refuse one whose schema this release does not
+    know (a newer release, or another chain, migrated it). Reads only."""
+    state = read_schema_state(conn)
+    conn.rollback()
+    if state.unknown:
+        raise MigrateError(
+            f"incompatible release: this database is at schema {', '.join(state.heads)}, and "
+            f"FarmCore {__version__} does not know {', '.join(state.unknown)} (a newer release "
+            "migrated it). Nothing was changed. Reverting the image does not revert the schema: "
+            "run that release or a later one, or restore the backup taken before the upgrade "
+            '(docs/self-hosting.md, "Upgrading")'
+        )
+    return state
+
+
+def _mark(conn: Connection, value: str | None) -> None:
+    database = conn.dialect.identifier_preparer.quote(
+        conn.execute(text("SELECT current_database()")).scalar_one()
+    )
+    # A constant, never data: ALTER DATABASE takes no bind parameters.
+    action = f"SET {UPGRADE_SETTING} = '{value}'" if value else f"RESET {UPGRADE_SETTING}"
+    conn.exec_driver_sql(f"ALTER DATABASE {database} {action}")
+
+
+def _failure(exc: Exception) -> str:
+    """The server's message for a failed migration, never its SQL or parameters."""
+    orig = getattr(exc, "orig", None)
+    detail = getattr(getattr(orig, "diag", None), "message_primary", None)
+    return detail or type(orig or exc).__name__
+
+
+def migrate_locked(conn: Connection, settings: Settings) -> str:
+    """Every `migrate` step, on `conn`, which holds the migration lock; the installation id."""
+    with conn.begin():
+        _mark(conn, UPGRADE_FAILED)  # until every step below succeeded
+    cfg = alembic_config(settings.database_url)
+    cfg.attributes["connection"] = conn
+    try:
+        command.upgrade(cfg, "head")
+    except Stopped as exc:
+        raise Stopped(exc.name, migrating=True) from None
+    except Exception as exc:  # noqa: BLE001 - a migration may raise anything; report it in one line
+        try:  # alembic's transaction was rolled back as the error left it
+            now = ", ".join(read_heads(conn)) or "no revision"
+            conn.rollback()
+        except DBAPIError:  # pragma: no cover - the connection itself was lost
+            now = "unknown (the connection was lost)"
+        raise MigrateError(
+            f"migration failed: {_failure(exc)}; the schema is still at {now}"
+        ) from None
+    if settings.runtime_database_password:
+        # Objects in `postgres` and shared objects first, in their own transaction.
+        maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))
+        try:
+            with maintenance.begin() as admin:
+                lock_databases(admin)
+                reset_runtime_role_in(admin, settings.runtime_database_role)
+                # The reset revoked CONNECT on the installation database; give it back
+                # now, so a failure in the next step never locks out the running app.
+                keep_connect(admin, settings.runtime_database_role, settings.database_url)
+        finally:
+            maintenance.dispose()
+    with conn.begin():
+        installation_id = ensure_installation_id(conn)
+        if settings.runtime_database_password:
+            ensure_runtime_role(
+                conn,
+                settings.runtime_database_role,
+                settings.runtime_database_password.get_secret_value(),
+            )
+        _mark(conn, None)
+    return installation_id
+
+
+def migrate_installation(settings: Settings) -> str:
+    """Upgrade to head, give the installation its id, set up the runtime role; the id.
+
+    Waits for another migrator to finish first. Raises `MigrateError` on a refusal or a
+    failure, and `Stopped` on SIGTERM/SIGHUP (under `stop_on_signals`)."""
+    with migration_lock(settings, wait=True) as conn:
+        check_compatible(conn)
+        return migrate_locked(conn, settings)
+
+
+def stopped_message(exc: Stopped) -> str:
+    if exc.migrating:
+        return (
+            f"stopped by {exc.name}: the running migration was cancelled and rolled back; the "
+            "installation stays marked failed until a migrate or upgrade succeeds"
+        )
+    return f"stopped by {exc.name} before migrating; nothing was migrated"
 
 
 def register(cli: typer.Typer) -> None:
@@ -433,12 +566,16 @@ def register(cli: typer.Typer) -> None:
         """Upgrade the database schema to head and set up the installation (DATABASE_URL).
 
         Run as this server's bootstrap superuser (the database owner); anything else is
-        refused."""
+        refused. One migrator at a time: a second one waits, then finds nothing to do."""
         try:
-            installation_id = migrate_installation(get_settings())
+            with stop_on_signals():
+                installation_id = migrate_installation(get_settings())
         except MigrateError as exc:
             again = "; run migrate again" if isinstance(exc, ServerBusy) else ""
             typer.echo(f"{exc}{again}", err=True)
+            raise typer.Exit(1) from None
+        except Stopped as exc:
+            typer.echo(f"migrate: {stopped_message(exc)}", err=True)
             raise typer.Exit(1) from None
         typer.echo("migrated to head")
         typer.echo(f"installation {installation_id}")

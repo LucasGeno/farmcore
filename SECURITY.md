@@ -66,6 +66,10 @@ nonce (hidden `csrf_token` field or `X-CSRF-Token` header). Plain forms and HTMX
 same checks. Operator-cookie mutations require same-origin proof; explicit `X-Admin-Token`
 requests remain available for trusted scripts. Never put credentials or tokens in a URL.
 
+- `/health` is public by design (monitoring and the container healthcheck use it). It reports
+  the installation id, the running release, the database's Alembic heads and the upgrade state,
+  and nothing else: no hostname, connection string or secret. If you would rather not disclose
+  the release, have the reverse proxy answer `/health` only to your monitoring.
 - Set `ADMIN_TOKEN` with `openssl rand -hex 24`. `FARMCORE_PUBLIC=1` requires at least
   32 characters without whitespace and disables interactive API docs. Missing tokens never
   grant operator privileges; provisioned member accounts remain independent.
