@@ -434,6 +434,37 @@ def test_an_existing_runtime_role_is_reset_to_exactly_the_intended_rights(
         admin.dispose()
 
 
+def test_a_third_party_grant_on_a_parameter_needing_quotes_is_revoked(
+    install, monkeypatch, pg_server
+) -> None:
+    """`foo.select`: `select` is a keyword, so the revoke must quote the name part."""
+    inst = install()
+    granter = f"g_{uuid.uuid4().hex[:8]}"
+    admin = create_engine(pg_server.url("farmcore"), isolation_level="AUTOCOMMIT")
+    held = text(
+        "SELECT count(*) FROM pg_parameter_acl p, aclexplode(p.paracl) a "
+        "WHERE p.parname = 'foo.select' AND a.grantee = CAST(:r AS regrole)"
+    )
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f"CREATE ROLE {granter}"))
+            conn.execute(
+                text(f'GRANT SET ON PARAMETER foo."select" TO {granter} WITH GRANT OPTION')
+            )
+            conn.execute(text(f"SET ROLE {granter}"))
+            conn.execute(text(f'GRANT SET ON PARAMETER foo."select" TO "{inst.role}"'))
+            conn.execute(text("RESET ROLE"))
+            assert conn.execute(held, {"r": inst.role}).scalar_one() == 1
+        _remigrate(monkeypatch, inst)
+        with admin.connect() as conn:
+            assert conn.execute(held, {"r": inst.role}).scalar_one() == 0
+    finally:
+        with admin.connect() as conn:
+            conn.execute(text(f'REVOKE SET ON PARAMETER foo."select" FROM {granter} CASCADE'))
+            conn.execute(text(f"DROP ROLE IF EXISTS {granter}"))
+        admin.dispose()
+
+
 def test_postgis_objects_are_read_only_for_the_runtime(install, pg_server) -> None:
     inst = install()
     admin = create_engine(pg_server.url(inst.database))

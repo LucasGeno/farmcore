@@ -27,13 +27,16 @@ exactly:
 
 It is a member of no role, has no role-level settings, and is not a superuser, cannot create
 databases or roles, replicate or bypass row security, has no connection limit and no expiry.
-So it cannot create extensions, schemas, tables or temporary tables, alter, drop or truncate
-tables, write `alembic_version`, or become another role. `migrate` also takes away from every
-role (`PUBLIC`): writes and `TRUNCATE` on the read-only tables above, and the default
-`CONNECT` and `TEMPORARY` rights on every other database on the server except `template0`
-(which allows no connections). That is a server-wide change, fine on a dedicated server. A
-database created on the server after `migrate` gets PostgreSQL's default `PUBLIC` rights until
-the next `migrate`.
+So, unless an operator grants rights to `PUBLIC` (every role) by hand, it cannot create
+extensions, schemas, tables or temporary tables, alter, drop or truncate tables, write
+`alembic_version`, or become another role. `migrate` resets `PUBLIC` only in these places:
+all rights on the `farmcore` database; `CREATE` on the `public` schema; writes and `TRUNCATE`
+on the read-only tables above; and the default `CONNECT` and `TEMPORARY` rights on every other
+database on the server except `template0` (which allows no connections). That is a
+server-wide change, fine on a dedicated server. Anything else granted to `PUBLIC` (say
+`TRUNCATE` on an ordinary table, or `CREATE` on another schema) also reaches `farmcore_app`
+and survives `migrate`: do not grant to `PUBLIC`. A database created on the server after
+`migrate` gets PostgreSQL's default `PUBLIC` rights until the next `migrate`.
 
 If `farmcore_app` already exists, `migrate` resets it before granting the above: it refuses
 a role that owns any object or is named in a row security policy (the reset would drop it
