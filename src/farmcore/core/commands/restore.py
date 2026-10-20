@@ -137,13 +137,28 @@ class Interrupted(BaseException):
     """SIGTERM or SIGHUP during a restore: unwinds like Ctrl-C, through every cleanup."""
 
 
+class _Stops:
+    """What the stop-signal handler does: raise at once, or note the signal for later."""
+
+    deferring = False
+    pending: str | None = None
+
+
+_STOPS = _Stops()
+
+
 @contextlib.contextmanager
 def _stop_on_signals() -> Iterator[None]:
     def stop(signum, _frame) -> None:
         for s in STOP_SIGNALS:  # one is enough; let the cleanup finish
             signal.signal(s, signal.SIG_IGN)
-        raise Interrupted(signal.Signals(signum).name)
+        name = signal.Signals(signum).name
+        if _STOPS.deferring:
+            _STOPS.pending = name
+            return
+        raise Interrupted(name)
 
+    _STOPS.deferring, _STOPS.pending = False, None
     previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS}
     try:
         yield
@@ -154,13 +169,19 @@ def _stop_on_signals() -> Iterator[None]:
 
 @contextlib.contextmanager
 def _signals_deferred() -> Iterator[None]:
-    """Hold the stop signals while the block runs; one that arrived meanwhile is delivered
-    when it ends (and so raises after the block, not inside it)."""
-    previous = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    """A stop signal that arrives while the block runs raises when it ends, not inside it.
+
+    A flag, not a signal mask: a mask holds a signal back from this thread only, and the
+    kernel may hand a process's signal to any other thread, whose handler call Python then
+    runs here at once."""
+    _STOPS.deferring = True
     try:
         yield
     finally:
-        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+        _STOPS.deferring = False
+        pending, _STOPS.pending = _STOPS.pending, None
+        if pending:
+            raise Interrupted(pending)
 
 
 def sweep_temp() -> None:

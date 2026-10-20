@@ -27,6 +27,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -1000,8 +1001,15 @@ def test_a_signal_during_the_swap_waits_for_it_and_says_the_copy_is_in(
         swap(copy)
 
     monkeypatch.setattr(restore.Copy, "swap", stopped_during)
-
-    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+    # Another thread in the process (libraries start them), which may receive the signal.
+    idle = threading.Event()
+    helper = threading.Thread(target=idle.wait, daemon=True)
+    helper.start()
+    try:
+        result = cli("restore", str(bundle), "--identity", str(key), env=env)
+    finally:
+        idle.set()
+        helper.join()
 
     assert result.exit_code == 1
     assert "stopped by SIGTERM after the copy was swapped in" in result.output, result.output
