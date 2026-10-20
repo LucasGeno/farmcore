@@ -28,18 +28,25 @@ exactly:
 It is a member of no role, has no role-level settings, and is not a superuser, cannot create
 databases or roles, replicate or bypass row security, has no connection limit and no expiry.
 So it cannot create extensions, schemas, tables or temporary tables, alter, drop or truncate
-tables, write `alembic_version`, or become another role. `migrate` also revokes the default
-`CONNECT` and `TEMPORARY` rights of every role (`PUBLIC`) on the server's `postgres`,
-`template1` and `template_postgis` databases: a server-wide change, fine on a dedicated server.
+tables, write `alembic_version`, or become another role. `migrate` also takes away from every
+role (`PUBLIC`): writes and `TRUNCATE` on the read-only tables above, and the default
+`CONNECT` and `TEMPORARY` rights on every other database on the server except `template0`
+(which allows no connections). That is a server-wide change, fine on a dedicated server. A
+database created on the server after `migrate` gets PostgreSQL's default `PUBLIC` rights until
+the next `migrate`.
 
 If `farmcore_app` already exists, `migrate` resets it before granting the above: it refuses
-a role that owns any object; runs `DROP OWNED BY farmcore_app` (which, for a role that owns
-nothing, only revokes) in `farmcore` and in `postgres`, covering those two databases and the
+a role that owns any object or is named in a row security policy (the reset would drop it
+from the policy silently); runs `DROP OWNED BY farmcore_app` (which, for a role that owns
+nothing, only revokes) in `postgres` and in `farmcore`, covering those two databases and the
 shared objects (databases, tablespaces, parameters), default privileges included; then
 revokes, as their grantor, any grant another role made there; revokes every role membership,
 whoever granted it; and resets role settings and attributes. It fails if a grant or
-membership is left. Privileges on objects inside `template1` and `template_postgis` are not
-reset, since `migrate` does not connect there; `farmcore_app` cannot connect to them.
+membership is left. The `postgres` pass commits first and gives `CONNECT` on `farmcore` back
+at once, so a failure later in `migrate` never locks out the running app. Privileges on
+objects inside other databases (`template1`, `template_postgis`) are not reset, since
+`migrate` does not connect there; `farmcore_app` cannot connect to them. `migrate` needs
+PostgreSQL 16 or later (the compose file runs 17).
 
 One right PostgreSQL gives every role and cannot take away: creating large objects
 (`lo_create`). FarmCore uses none; the runtime role could store data that way, inside this
@@ -297,7 +304,8 @@ What keeps them apart:
 
 - **Database.** Each project has its own PostgreSQL server on its own network with no
   published port; a project's app cannot even resolve another project's `db`. Its runtime role
-  can open only its own database and change rows only (see above).
+  can open no other database that existed at the last `migrate`, and change rows only (see
+  above).
 - **Cookies.** Browsers share cookies between ports of one host, so every cookie name carries
   the installation (`fc-<first 12 hex of installation_id>-<name>`, also for the notification
   read-state cookie the browser writes itself) and an installation ignores cookies that are
