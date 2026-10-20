@@ -43,10 +43,12 @@ import json
 import os
 import re
 import secrets
+import shutil
 import signal
 import subprocess
 import tarfile
 import tempfile
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
@@ -121,6 +123,14 @@ LOADER_PREFIX = "farmcore_restore_"
 # Emptied again after the load (an older revision may not have them yet).
 SESSION_TABLES = ("local_session", "login_bucket")
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+# What `farmcore backup` writes (`datetime.isoformat()` in UTC): nothing else is printed.
+_CREATED_AT = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})", re.A
+)
+TEMP_PREFIX = "farmcore-restore-"
+# A restore's temporary directory older than this was left by a killed one (the loader role,
+# which every load needs, is valid for six hours).
+STALE_TEMP_SECONDS = 6 * 3600
 
 
 class Interrupted(BaseException):
@@ -140,6 +150,28 @@ def _stop_on_signals() -> Iterator[None]:
     finally:
         for s, handler in previous.items():
             signal.signal(s, handler)
+
+
+@contextlib.contextmanager
+def _signals_deferred() -> Iterator[None]:
+    """Hold the stop signals while the block runs; one that arrived meanwhile is delivered
+    when it ends (and so raises after the block, not inside it)."""
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, STOP_SIGNALS)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def sweep_temp() -> None:
+    """Remove this user's restore temporary directories that a killed restore left (they hold
+    the bundle's rows in clear)."""
+    root = Path(tempfile.gettempdir())
+    cutoff = time.time() - STALE_TEMP_SECONDS
+    for path in root.glob(f"{TEMP_PREFIX}*"):
+        info = path.lstat()
+        if path.is_dir() and info.st_uid == os.geteuid() and info.st_mtime < cutoff:
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _printable(value: str) -> str:
@@ -259,10 +291,14 @@ def check_manifest(manifest: object, dump: Path) -> dict:
         canonical = False
     if not canonical:
         raise BundleError("manifest field 'installation_id' is missing or invalid")
+    # `datetime.fromisoformat` alone takes any one character between date and time.
     try:
+        valid = bool(_CREATED_AT.fullmatch(manifest["created_at"]))
         datetime.fromisoformat(manifest["created_at"])
     except ValueError:
-        raise BundleError("manifest field 'created_at' is missing or invalid") from None
+        valid = False
+    if not valid:
+        raise BundleError("manifest field 'created_at' is missing or invalid")
     meta = manifest["dump"]
     digest = hashlib.sha256()
     with dump.open("rb") as f:
@@ -382,8 +418,11 @@ class Copy:
         self.owner = owner
         self.url = make_url(settings.database_url)
         suffix = uuid.uuid4().hex[:8]
-        self.prefix = self.url.database[:40]
-        self.name = f"{self.prefix}_restore_{suffix}"
+        database = self.url.database
+        # Names fit PostgreSQL's 63 bytes and still tell targets apart that share a prefix.
+        self.short = f"{database[:32]}_{hashlib.sha256(database.encode()).hexdigest()[:6]}"
+        self.stem = f"{database[:32]}_restore_{self.short[-6:]}_"
+        self.name = self.stem + suffix
         self.staging = self.url.set(database=self.name)
         self.loader = f"{LOADER_PREFIX}{suffix}"
         self.loader_password = secrets.token_urlsafe(32)
@@ -400,7 +439,7 @@ class Copy:
             with engine.connect() as conn:
                 got = conn.execute(
                     text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
-                    {"k": f"farmcore.restore:{self.prefix}"},
+                    {"k": f"farmcore.restore:{self.url.database}"},
                 ).scalar_one()
                 if not got:
                     raise BundleError(
@@ -412,9 +451,9 @@ class Copy:
             engine.dispose()
 
     def sweep(self) -> None:
-        """Drop what a killed restore into this target left: its staging databases and their
-        loader roles, and loader roles whose staging database is gone."""
-        stale = re.compile(re.escape(self.prefix) + r"_restore_([0-9a-f]{8})")
+        """Drop what a killed restore into this target left: its staging databases (made by
+        this owner) and their loader roles, and loader roles whose staging database is gone."""
+        stale = re.compile(re.escape(self.stem) + r"([0-9a-f]{8})")
         loader = re.compile(re.escape(LOADER_PREFIX) + r"([0-9a-f]{8})")
         engine = self._admin()
         try:
@@ -424,8 +463,14 @@ class Copy:
                 roles = conn.execute(text("SELECT rolname FROM pg_roles")).scalars().all()
                 loaders = {m.group(1): r for r in roles if (m := loader.fullmatch(r))}
                 names = conn.execute(text("SELECT datname FROM pg_database")).scalars().all()
-                alive = {m.group(1) for n in names if (m := re.search(r"_restore_(\w{8})$", n))}
-                for name in names:
+                alive = {m.group(1) for n in names if (m := _STAGING_SUFFIX.search(n))}
+                mine = conn.execute(
+                    text(
+                        "SELECT datname FROM pg_database "
+                        "WHERE datdba = (SELECT oid FROM pg_roles WHERE rolname = current_user)"
+                    )
+                ).scalars()
+                for name in mine.all():
                     if match := stale.fullmatch(name):
                         conn.exec_driver_sql(
                             f"DROP DATABASE IF EXISTS {_q(conn, name)} WITH (FORCE)"
@@ -604,7 +649,7 @@ class Copy:
 
     def swap(self) -> None:
         """The staging database takes the target's name; the empty target is dropped."""
-        old = f"{self.url.database[:40]}_old_{uuid.uuid4().hex[:8]}"
+        old = f"{self.url.database[:32]}_old_{self.short[-6:]}_{uuid.uuid4().hex[:8]}"
         engine = self._admin()
         try:
             with engine.connect() as conn:
@@ -638,6 +683,9 @@ class Copy:
             engine.dispose()
 
 
+_STAGING_SUFFIX = re.compile(r"_restore_[0-9a-f]{6}_([0-9a-f]{8})$")
+
+
 def _q(conn, name: str) -> str:
     return conn.dialect.identifier_preparer.quote(name)
 
@@ -645,10 +693,11 @@ def _q(conn, name: str) -> str:
 def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[dict, str]:
     """Verify `bundle` completely, then restore its rows into the empty target as a new
     installation; (manifest, new installation id)."""
+    sweep_temp()
     preflight(bundle, identity)
     with (
         _stop_on_signals(),
-        tempfile.TemporaryDirectory(prefix="farmcore-restore-") as name,
+        tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as name,
     ):
         tmp = Path(name)
         plain = tmp / "bundle.tar"
@@ -660,21 +709,29 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
         copy = Copy(settings, check_target(settings))
         with copy.exclusive():
             copy.sweep()
+            swapped = False
             try:
-                copy.create()
-                copy.build_schema(heads)
-                lines = copy.check_contents(dump, tmp)
-                copy.create_loader()
-                copy.load(dump, lines, tmp)
-                copy.drop_loader()
-                check_target(settings)  # still empty: nobody started using it meanwhile
-                copy.swap()
-            except BaseException:
-                copy.discard()
-                raise
-            try:
+                # Never stopped between the two renames: a signal that arrives during the swap
+                # is held, and delivered once this block is left (outside the cleanup below).
+                with contextlib.ExitStack() as deferred:
+                    try:
+                        copy.create()
+                        copy.build_schema(heads)
+                        lines = copy.check_contents(dump, tmp)
+                        copy.create_loader()
+                        copy.load(dump, lines, tmp)
+                        copy.drop_loader()
+                        check_target(settings)  # still empty: nobody started using it meanwhile
+                        deferred.enter_context(_signals_deferred())
+                        copy.swap()
+                        swapped = True
+                    except BaseException:
+                        copy.discard()
+                        raise
                 new_id = migrate_installation(settings)
-            except Interrupted as exc:  # pragma: no cover - a signal in migrate's few seconds
+            except Interrupted as exc:
+                if not swapped:
+                    raise
                 raise BundleError(
                     f"stopped by {exc} after the copy was swapped in: the data is in, paused; "
                     "run migrate to finish"
@@ -715,7 +772,7 @@ def register(cli: typer.Typer) -> None:
             typer.echo(f"restore: cannot use the database: {database_error(exc)}", err=True)
             raise typer.Exit(1) from None
         typer.echo(
-            f"restore: backup of installation {manifest['installation_id']} "
-            f"({manifest['created_at']}) restored"
+            f"restore: backup of installation {_printable(manifest['installation_id'])} "
+            f"({_printable(manifest['created_at'])}) restored"
         )
         typer.echo(f"installation {new_id}")

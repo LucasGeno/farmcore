@@ -125,8 +125,8 @@ class Databases:
         self.names: list[str] = []
         self.roles: list[str] = []
 
-    def create(self, *, postgis: bool = True) -> str:
-        name = f"br_{uuid.uuid4().hex[:10]}"
+    def create(self, *, postgis: bool = True, name: str | None = None) -> str:
+        name = name or f"br_{uuid.uuid4().hex[:10]}"
         with self.admin.connect() as conn:
             conn.execute(text(f'CREATE DATABASE "{name}"'))
         self.names.append(name)
@@ -900,10 +900,11 @@ esac
 
 
 def staging_of(dbs: Databases, target: str) -> list[str]:
-    """The staging databases of `target` (`<target>_restore_<hex>`, `<target>_old_<hex>`)."""
+    """The staging databases of `target` (`<its first 32 characters>_restore_...` or
+    `..._old_...`; targets sharing those 32 characters share this list)."""
     return [
         d for (d,) in dbs.query("postgres", "SELECT datname FROM pg_database ORDER BY 1")
-        if d.startswith(f"{target}_")
+        if re.match(re.escape(target[:32]) + r"_(restore|old)_", d)
     ]  # fmt: skip
 
 
@@ -921,6 +922,22 @@ def role_exists(dbs: Databases, role: str) -> bool:
     ]
 
 
+@pytest.fixture
+def caught_signals() -> Iterator[list[int]]:
+    """Stop signals this test process receives land here, never on pytest's default handler
+    (which would end the whole run): a restore that fails to handle one fails the test."""
+    caught: list[int] = []
+    previous = {s: signal.signal(s, lambda n, _f: caught.append(n)) for s in STOP_SIGNALS}
+    try:
+        yield caught
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
 def as_superuser(dbs: Databases) -> str:
     """Shell assignments for a fake tool's psql to act as the server's superuser."""
     return f"PGUSER={dbs.server.superuser} PGPASSWORD={dbs.server.password}"
@@ -928,7 +945,7 @@ def as_superuser(dbs: Databases) -> str:
 
 @pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP], ids=["SIGTERM", "SIGHUP"])
 def test_a_stopped_restore_removes_its_staging_copy_and_loader_role(
-    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, signum
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, caught_signals, signum
 ):
     """`docker compose stop`, a closed terminal: the staging copy holds every row in clear.
     pg_restore notes what exists, then the restore process gets the signal mid-load."""
@@ -962,6 +979,115 @@ esac
     assert staging_of(dbs, target) == [] and not role_exists(dbs, role)
     untouched.check()
     assert signal.getsignal(signum) == handler  # the caller's handler is back
+    assert caught_signals == []  # restore took the signal itself
+
+
+def test_a_signal_during_the_swap_waits_for_it_and_says_the_copy_is_in(
+    source, member, dbs, cli, owner_key, tmp_path, monkeypatch, caught_signals
+):
+    """Stopped between the two renames, restore must neither drop the copy that now holds the
+    rows nor say nothing was restored: the signal waits until the swap is done."""
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    swap = restore.Copy.swap
+
+    def stopped_during(copy) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)  # `docker compose stop` at this very moment
+        swap(copy)
+
+    monkeypatch.setattr(restore.Copy, "swap", stopped_during)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert "stopped by SIGTERM after the copy was swapped in" in result.output, result.output
+    assert "nothing was restored" not in result.output
+    assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+    assert dbs.query(target, "SELECT count(*) FROM local_session") == [(0,)]
+    assert cli("effects", env=env).output.strip() == "external effects: paused"
+    assert staging_of(dbs, target) == []
+    assert caught_signals == []
+    # `migrate` finishes the job, as the message says.
+    assert cli("migrate", env=env).exit_code == 0
+
+
+def test_restores_into_targets_with_a_common_prefix_never_meet(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    """Two targets whose names share their first 40 characters: neither restore blocks the
+    other or sweeps away the other's staging copy."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    common = f"br_{uuid.uuid4().hex[:10]}_" + "x" * 30
+    first = dbs.create(name=common + "_one")
+    second = dbs.create(name=common + "_two")
+    first_env, second_env = dbs.installation(first), dbs.installation(second)
+    held = HeldLoad(tmp_path, bundle, key, first_env, private_tmp)
+    staging, role = held_copy(dbs, first)
+    try:
+        other = cli("restore", str(bundle), "--identity", str(key), env=second_env)
+        still_there = staging in staging_of(dbs, first) and role_exists(dbs, role)
+    finally:
+        held.release()
+    code, out = held.result()
+
+    assert other.exit_code == 0, other.output
+    assert still_there
+    assert code == 0, out
+    records = dbs.query(source["name"], SEMANTIC["records"])
+    assert [dbs.query(n, SEMANTIC["records"]) for n in (first, second)] == [records, records]
+
+
+def test_the_sweep_drops_only_staging_copies_its_owner_made(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    """A database that looks like a stale staging copy but belongs to another role stays."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
+    held.proc.kill()
+    held.result()
+    staging, _ = held_copy(dbs, target)
+    stranger = f"rt_{uuid.uuid4().hex[:10]}"
+    dbs.roles.append(stranger)
+    dbs.names.append(staging)
+    with dbs.admin.connect() as conn:
+        conn.execute(text(f'CREATE ROLE "{stranger}" NOLOGIN'))
+        conn.execute(text(f'ALTER DATABASE "{staging}" OWNER TO "{stranger}"'))
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 0, result.output
+    assert staging_of(dbs, target) == [staging]
+
+
+def test_the_next_restore_removes_plaintext_a_killed_restore_left_in_the_temp_dir(
+    dbs, cli, owner_key, private_tmp
+):
+    """SIGKILL skips the temporary directory's cleanup; the next restore removes it once it is
+    older than any restore runs. A recent one (a restore running now) and others stay."""
+    key, _ = owner_key
+    old = time.time() - 7 * 3600
+    stale = private_tmp / "farmcore-restore-killed"
+    stale.mkdir()
+    (stale / "farmcore.dump").write_bytes(b"PGDMP plaintext rows")
+    (private_tmp / "farmcore-restore-running").mkdir()
+    (private_tmp / "unrelated").mkdir()
+    for path in (stale / "farmcore.dump", stale, private_tmp / "unrelated"):
+        os.utime(path, (old, old))
+    env = dbs.installation(dbs.create())
+
+    result = cli("restore", str(private_tmp / "nothing-here"), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1 and "no bundle" in result.output
+    left = sorted(p.name for p in private_tmp.iterdir())
+    assert left == ["farmcore-restore-running", "unrelated"]
 
 
 def test_the_next_restore_removes_what_a_killed_restore_left_behind(

@@ -557,6 +557,11 @@ def test_restore_says_what_age_reports_not_its_footer(refusal, tmp_path):
         ({"installation_id": "\x1b[2J00000000-0000-4000-8000-000000000000"},
          "manifest field 'installation_id' is missing or invalid"),
         ({"created_at": "\x1b[2Jyesterday"}, "manifest field 'created_at' is missing or invalid"),
+        # `datetime.fromisoformat` takes any one character between date and time.
+        ({"created_at": "2026-10-20\x1b12:00:00+00:00"},
+         "manifest field 'created_at' is missing or invalid"),
+        ({"created_at": "2026-10-20\x9b12:00:00+00:00"},
+         "manifest field 'created_at' is missing or invalid"),
     ],
 )  # fmt: skip
 def test_restore_refuses_a_manifest_it_cannot_trust(refusal, change, message):
@@ -570,7 +575,7 @@ def test_restore_refuses_a_manifest_it_cannot_trust(refusal, change, message):
     bundle = encrypt(plain, recipient, tmp_path / "newer.age")
 
     output = run(bundle).output
-    assert message in output and "\x1b" not in output
+    assert message in output and "\x1b" not in output and "\x9b" not in output
 
 
 def test_a_failed_load_reports_no_row_data(attack, source, dbs, cli, tmp_path, private_tmp):
