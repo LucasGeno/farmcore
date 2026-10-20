@@ -14,9 +14,16 @@ ENV UV_COMPILE_BYTECODE=1 \
     HF_HOME=/home/farmcore/.cache/huggingface \
     DATA_DIR=/app/sample-data
 
+# `farmcore backup` / `restore`: pg_dump and pg_restore (Debian's PostgreSQL 17, the server's
+# major) and age for the bundle's encryption. /backups is where the compose `backup` service
+# writes; a new volume mounted there inherits its owner.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends age postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 farmcore \
     && mkdir -p "$HF_HOME" \
-    && chown -R farmcore:farmcore /home/farmcore/.cache
+    && chown -R farmcore:farmcore /home/farmcore/.cache \
+    && install -d -o farmcore -g farmcore -m 700 /backups
 
 WORKDIR /app
 

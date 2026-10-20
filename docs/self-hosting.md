@@ -8,7 +8,7 @@
 | `migrate` | One-shot `farmcore migrate` as the database owner, then exits; see below |
 | `app` | The web app on `127.0.0.1:8000`; starts after `migrate` exits 0, never migrates |
 | `bot` | Telegram long-polling bot; only with `--profile telegram`; also waits for `migrate` |
-| `backup` | Daily `pg_dump` into the `backups` volume, checked with `pg_restore --list`, kept 7 days |
+| `backup` | Daily `farmcore backup`: one encrypted bundle into the `backups` volume, kept 7 days |
 
 Each installation runs its own PostgreSQL server, and FarmCore expects that: servers shared
 with other software or other installations are not supported for now. The server has two
@@ -67,9 +67,11 @@ restarts and upgrades, and is reported by `/health`. It names the installation, 
 one installation holds many farms. Whatever carries database settings keeps it: a copy of the
 `pgdata` volume, `pg_dumpall`, or `pg_dump --create` restored with `pg_restore --create`.
 Whatever does not gets a new one at the next `migrate`: `CREATE DATABASE ... TEMPLATE`, or a
-plain `pg_dump` restored into a new database (the procedure under "Backups and restore").
-A copy that keeps the id is the same installation: never run it next to the original on one
-host, or the two share cookie names.
+plain `pg_dump` restored into a new database. `farmcore backup` dumps without database settings
+and `farmcore restore` always gives the copy a new id (see "Backups and restore"): a restored
+bundle is a new installation, never the original moved. A copy that keeps the id (a copied
+volume, `pg_dumpall`, `--create`) is the same installation: never run it next to the original
+on one host, or the two share cookie names.
 
 Read [SECURITY.md](../SECURITY.md) before exposing an installation to a network.
 
@@ -221,27 +223,120 @@ call is logged with its payload on `/chat/`.
 
 ## Backups and restore
 
+A backup is one file, a **bundle**: a `pg_dump` of the installation database (custom format,
+without privileges) and a `manifest.json` (installation id, release, app versions and states,
+schema revision, creation time, the dump's size and SHA-256), in one tar archive encrypted with
+[age](https://age-encryption.org) to the owner's public key. Everything private is in the
+database (FarmCore keeps no private files; `DATA_DIR` holds open-data caches only), so the
+bundle is the whole installation. It never contains `POSTGRES_PASSWORD`,
+`RUNTIME_DATABASE_PASSWORD`, `ADMIN_TOKEN`, connector tokens or keys, or any database role:
+those are this installation's environment, not its data.
+
+### The owner's key
+
+Create the key pair once, on your own computer or password manager, not on the server:
+
 ```sh
-docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup     # one backup now
+age-keygen -o farmcore-backup.key        # private: keep it safe and offline; it decrypts
+age-keygen -y farmcore-backup.key        # prints the public key, age1...
+```
+
+Put the public key in the installation's env file as `BACKUP_RECIPIENT=age1...`. The server
+then only ever holds the public key: it can write bundles but not read them, so a compromised
+server cannot read old backups. Lose the private key and every bundle is lost with it. Without
+`BACKUP_RECIPIENT` the `backup` service writes nothing and keeps restarting
+(`docker compose ps` shows it), rather than write plaintext. Anyone holding the public key can
+encrypt a file of their own: age proves a bundle was not changed after it was written, not who
+wrote it, so only restore bundles from your own backup storage.
+
+### Back up
+
+The `backup` service writes `farmcore-<UTC time>.age` daily into this project's `backups`
+volume, or into `BACKUP_DIR` when set (one directory per installation, writable by uid 10001),
+and deletes bundles older than seven days. Copy them off the server: a backup on the same disk
+does not survive that disk.
+
+```sh
+docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup     # one bundle now
 docker compose run --rm --no-deps --entrypoint ls backup -l /backups
+# Or anywhere with the owner's DATABASE_URL, pg_dump 17 and age:
+farmcore backup --recipient age1... --output farm-a.age
 ```
 
-Dumps live in this project's `backups` volume, or in `BACKUP_DIR` when set (give every
-installation its own directory). Restore a dump into a fresh database:
+To look inside one: `age -d -i farmcore-backup.key farm-a.age | tar -xO manifest.json`.
+
+### Restore into a new installation
+
+A restore always creates a new installation: same farms, members, records, sources and
+provenance, app evidence and settings, but a new `installation_id` (so new cookie names), the
+new project's own secrets, no signed-in sessions (members sign in again with their passwords),
+and **external effects paused**. Restore never overwrites an installation: the target database
+must hold no data of its own, so start only the new project's `db`:
 
 ```sh
-docker compose stop app bot
-docker compose exec -T db psql -U farmcore -d postgres -v ON_ERROR_STOP=1 \
-  -c 'DROP DATABASE farmcore WITH (FORCE)' -c 'CREATE DATABASE farmcore OWNER farmcore'
-docker compose run --rm --no-deps --entrypoint pg_restore backup \
-  -h db -U farmcore -d farmcore --no-owner /backups/<file>.dump
-docker compose up -d             # `migrate` re-grants the runtime role
+cp .env.example farm-c.env      # new POSTGRES_PASSWORD, RUNTIME_DATABASE_PASSWORD, ADMIN_TOKEN,
+                                # PUBLIC_BASE_URL, FARMCORE_PORT; BACKUP_RECIPIENT
+docker compose -p farm-c --env-file farm-c.env up -d --wait db
+mkdir restore && cp farmcore-20261020T020000Z.age restore/bundle.age
+cp ~/keys/farmcore-backup.key restore/owner.key
+docker compose -p farm-c --env-file farm-c.env run --rm --no-deps \
+  -v "$PWD/restore:/restore:ro" migrate \
+  farmcore restore /restore/bundle.age --identity /restore/owner.key
+rm -P restore/owner.key 2>/dev/null || shred -u restore/owner.key   # the key again leaves the server
+docker compose -p farm-c --env-file farm-c.env up -d
 ```
 
-The restored database gets a new `installation_id`, so members sign in again.
+`farmcore restore` first decrypts the whole bundle into a private temporary directory and
+checks it: the key, every encrypted chunk (a modified or truncated file fails), exactly the
+two expected members, the manifest's fields, the dump's size and SHA-256, that the schema
+revision inside the dump is the one the manifest names, and that this release knows that
+revision (a bundle from a newer release is refused: restore it with that release or later).
+Only then does it touch the target: it checks that it runs as the server's superuser and that
+the database holds no data, recreates it closed to every other role with external effects
+already paused, runs `pg_restore --no-owner --no-acl --single-transaction` as the owner,
+deletes every member session, and then does what `migrate` does: upgrades an older schema,
+generates the new `installation_id` and grants the runtime role. The app can connect only
+after that last step. Any refusal or failure leaves the source installation, the bundle and
+older bundles untouched, and removes the temporary plaintext.
 
-Never run `docker compose down -v` on an installation with data: it deletes the database
-volume.
+The restored installation is independent of the original: restoring into C never changes A
+or any other project, and both may keep running.
+
+### External effects
+
+An installation's **external effects** are what it does outside itself on its own: today the
+Telegram advice push (`chat.push_advice`) and the bot's polling of its token. A restored copy
+starts with them paused, so two copies never both message the same farmers, and a second
+poller on one bot token never breaks the original's bot. While paused, the advice push sends
+nothing (pending changes go out in one digest once enabled), and the bot waits without polling
+until effects are enabled, then starts by itself.
+
+```sh
+docker compose -p farm-c --env-file farm-c.env run --rm --no-deps migrate farmcore effects
+docker compose -p farm-c --env-file farm-c.env run --rm --no-deps migrate farmcore effects enable
+docker compose -p farm-a --env-file farm-a.env run --rm --no-deps migrate farmcore effects pause
+```
+
+Only the database owner can switch them (the `migrate` service holds its password); the app's
+runtime role cannot. Pausing stops the advice push at once; a bot that is already polling
+stops at its next start (`docker compose restart bot`). An installation that was never
+restored has effects enabled.
+
+### Connectors after a restore
+
+Connector credentials live in the env file, never in a bundle, so enter them again in the new
+installation's env file before enabling effects:
+
+1. **Telegram.** If C replaces A (a move), first stop A's bot and pause A
+   (`docker compose -p farm-a stop bot`, then `farmcore effects pause` on A), then put the same
+   `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` and `TELEGRAM_ALLOWED_USER_IDS` in C's env
+   file. If both keep running, give C its own bot from @BotFather and its own `TELEGRAM_*`
+   values; farmers send `/start` to the new bot. The farms' chat links come with the data,
+   so check them before enabling: the advice push writes to every linked chat.
+2. **Gemini on Vertex AI.** Set `EXTRACTOR` and `VERTEX_*` again and provide the service
+   account key file (a new key for C is better than a copy).
+3. **Voice.** `WHISPER_MODEL`; the model downloads again into C's `whisper-cache`.
+4. Enable effects on C, then start the bot: `docker compose --profile telegram up -d`.
 
 ## Upgrading
 
@@ -267,6 +362,16 @@ migrated on start):
    that volume over into the new container.
 5. `docker compose up -d --build`. Cookie names now carry the installation, so everyone signs in
    once more.
+
+From a release whose `backup` service wrote plain `.dump` files:
+
+1. Create the owner's key and set `BACKUP_RECIPIENT` (see "The owner's key").
+2. The service now runs as uid 10001, not root. Give it the existing directory once:
+   `docker compose run --rm --no-deps --user root --entrypoint chown backup -R 10001:10001 /backups`.
+3. The old `.dump` files are not encrypted. They are deleted with the bundles after seven days;
+   move or delete them sooner if the server is not the place to keep them. They restore only
+   by hand (`pg_restore --no-owner` into an empty database, then `migrate`), with a new
+   `installation_id` and external effects enabled.
 
 ## Running several installations
 

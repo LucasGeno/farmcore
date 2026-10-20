@@ -110,55 +110,43 @@ services:
     profiles: ["telegram"]
     command: ["farmcore", "bot"]
 
-  # Daily pg_dump (custom format, checked with pg_restore --list), seven-day retention, into this
-  # project's `backups` volume (or the host directory BACKUP_DIR, one per installation).
+  # Daily `farmcore backup` as the owner: one bundle (pg_dump + manifest, encrypted with age to
+  # BACKUP_RECIPIENT, the owner's public key) into this project's `backups` volume (or the host
+  # directory BACKUP_DIR, one per installation), seven-day retention. Without BACKUP_RECIPIENT it
+  # exits and restarts (`docker compose ps` shows it restarting) rather than write plaintext.
   # One-off backup: docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup
   backup:
-    image: ${POSTGIS_IMAGE:-postgis/postgis:17-3.5}
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
+    <<: *farmcore
     environment:
-      PGHOST: db
-      PGUSER: farmcore
-      PGDATABASE: farmcore
-      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      DATABASE_URL: postgresql+psycopg://farmcore:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/farmcore
+      BACKUP_RECIPIENT: ${BACKUP_RECIPIENT:-}
     volumes:
       - ${BACKUP_DIR:-backups}:/backups
-    # The PostGIS image declares VOLUME /var/lib/postgresql/data; this container runs no server,
-    # so a tmpfs stops Compose leaving an anonymous volume behind.
-    tmpfs:
-      - /var/lib/postgresql/data
     stop_grace_period: 2m
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -u
         umask 077
-        tmp=""
-        cleanup() { [ -z "$$tmp" ] || rm -f "$$tmp"; }
-        trap 'cleanup; exit 0' INT TERM
+        if [ -z "$${BACKUP_RECIPIENT:-}" ]; then
+          echo 'backup: FAILED: set BACKUP_RECIPIENT (age public key, see docs/self-hosting.md)' >&2
+          exit 1
+        fi
+        trap 'exit 0' INT TERM
         backup_once() {
-          dump="/backups/farmcore-$$(date -u +%Y%m%dT%H%M%SZ).dump"
-          tmp="$$dump.tmp"
-          find /backups -maxdepth 1 -name 'farmcore-*.tmp' -mmin +60 -delete
-          pg_dump -Fc -f "$$tmp" || return 1
-          pg_restore --list "$$tmp" > /dev/null || return 1
-          mv "$$tmp" "$$dump" || return 1
-          tmp=""
-          find /backups -maxdepth 1 -name 'farmcore-*.dump' -mtime +6 -delete
-          echo "backup: wrote $$dump"
+          find /backups -maxdepth 1 -name 'farmcore-*.partial' -mmin +60 -delete
+          farmcore backup --output "/backups/farmcore-$$(date -u +%Y%m%dT%H%M%SZ).age" || return 1
+          # Plaintext `.dump` files from releases before bundles age out with the rest.
+          find /backups -maxdepth 1 \( -name 'farmcore-*.age' -o -name 'farmcore-*.dump' \) \
+            -mtime +6 -delete
         }
         if [ -n "$${BACKUP_ONCE:-}" ]; then
-          if backup_once; then exit 0; fi
-          cleanup; exit 1
+          backup_once; exit $$?
         fi
         while true; do
-          if backup_once; then delay=86400; else cleanup; echo 'backup: FAILED' >&2; delay=3600; fi
+          if backup_once; then delay=86400; else echo 'backup: FAILED' >&2; delay=3600; fi
           sleep "$$delay" & wait $$!
         done
-    logging: *logging
 
 volumes:
   pgdata:
