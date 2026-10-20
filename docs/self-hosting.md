@@ -17,15 +17,25 @@ password. `farmcore_app` (password `RUNTIME_DATABASE_PASSWORD`) is what the app,
 `docker compose exec app farmcore ...` use: it reads and writes rows and nothing else. It
 cannot create databases, roles, extensions, schemas, tables or temporary tables, alter or drop
 tables, write `alembic_version`, or become another role. It can connect to the `farmcore`
-database only: `migrate` also revokes the default `CONNECT` and `TEMPORARY` rights of every
-role on the server's `postgres`, `template1` and `template_postgis` databases. One right
-PostgreSQL gives every role and cannot take away: creating large objects (`lo_create`).
-FarmCore uses none; the runtime role could store data that way, inside this installation's
-database only, which it can already do in rows.
+database only: as a superuser, `migrate` also revokes the default `CONNECT` and `TEMPORARY`
+rights of every role (`PUBLIC`) on the server's `postgres`, `template1` and `template_postgis`
+databases. That change is server-wide, which suits the dedicated server each Compose project
+runs. On a server shared with other software, make the owner an ordinary role instead (with
+`CREATEROLE`, owning the database and its `public` schema; a superuser creates the PostGIS
+extension): `migrate` then changes only what that role owns and leaves the server's databases
+alone. A superuser must first allow it to store the installation id, once:
+`GRANT SET ON PARAMETER farmcore.installation_id TO <owner>` (`migrate` says so if missing).
+
+One right PostgreSQL gives every role and cannot take away: creating large objects
+(`lo_create`). FarmCore uses none; the runtime role could store data that way, inside this
+installation's database only, which it can already do in rows. A large object it owns makes
+the next `migrate` refuse until it is reassigned to the owner.
 
 `migrate` upgrades the schema to head, gives the installation its identity on first run, and
-creates `farmcore_app` every time or resets it: password, attributes, grants, role memberships
-and role settings. It refuses to run as any role other than the database owner, so
+creates `farmcore_app` every time or resets it: password and attributes; every role
+membership, whoever granted it; role settings; and every privilege granted to it directly,
+which it then grants again as described above. It refuses a `farmcore_app` that owns any
+object, and refuses to run as any role other than the database owner, so
 `docker compose exec app farmcore migrate` (the runtime role) fails with an explanation; use
 `docker compose run --rm migrate`. The password reaches PostgreSQL only as a SCRAM verifier.
 
@@ -36,6 +46,8 @@ one installation holds many farms. Whatever carries database settings keeps it: 
 `pgdata` volume, `pg_dumpall`, or `pg_dump --create` restored with `pg_restore --create`.
 Whatever does not gets a new one at the next `migrate`: `CREATE DATABASE ... TEMPLATE`, or a
 plain `pg_dump` restored into a new database (the procedure under "Backups and restore").
+A copy that keeps the id is the same installation: never run it next to the original on one
+host, or the two share cookie names.
 
 Read [SECURITY.md](../SECURITY.md) before exposing an installation to a network.
 
@@ -78,6 +90,10 @@ docker compose exec app farmcore apps --uninstall assistant --uninstall kpi
 docker compose restart app                 # app switches apply at start
 docker compose --profile telegram restart bot  # if the bot runs
 ```
+
+`restart` keeps a container's environment. After changing `.env`, run
+`docker compose up -d` (with `--profile telegram` if the bot runs): Compose recreates the
+containers whose settings changed.
 
 `farmcore apps` refuses to switch off a required app or an app another installed app needs, as
 the `/apps` page does. Everything else is environment, read at start (`.env`, see
@@ -224,7 +240,10 @@ migrated on start):
    `farmcore_pgdata` and `farmcore_whisper-cache`).
 2. Add `RUNTIME_DATABASE_PASSWORD` to `.env`.
 3. Dumps now go to the `backups` volume; set `BACKUP_DIR=./backups` to keep the old directory.
-4. `docker compose up -d --build`. Cookie names now carry the installation, so everyone signs in
+4. Remove the old `backup` container with its anonymous volume (the PostGIS image's data
+   directory; it holds nothing): `docker compose rm -sfv backup`. A plain `up` would carry
+   that volume over into the new container.
+5. `docker compose up -d --build`. Cookie names now carry the installation, so everyone signs in
    once more.
 
 ## Running several installations
