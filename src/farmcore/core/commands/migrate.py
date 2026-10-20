@@ -52,6 +52,14 @@ RUNTIME_ATTRIBUTES = (
 MIN_SERVER_VERSION = 160000
 
 
+# Taken before revoking PUBLIC's access on every database. GRANT and REVOKE rewrite a
+# database's catalog row without a lock of their own, so two such loops at once (restores, a
+# migrate) fail with "tuple concurrently updated", as does one whose database is renamed or
+# dropped under it. This lock waits for those and holds them off until the transaction ends;
+# `pg_database` is shared, so it is one lock for the whole server.
+LOCK_DATABASES = "LOCK TABLE pg_catalog.pg_database IN SHARE ROW EXCLUSIVE MODE"
+
+
 class MigrateError(RuntimeError):
     """A refusal or failure `farmcore migrate` reports in one line (never with SQL text)."""
 
@@ -275,6 +283,7 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
             statements.append(
                 sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(r, sql.Identifier(db))
             )
+    _run(conn, role, [sql.SQL(LOCK_DATABASES)])
     statements += [
         sql.SQL("REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(d))
         for (d,) in _rows(conn, role, _OTHER_DBS)

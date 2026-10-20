@@ -78,6 +78,7 @@ from farmcore.core.commands.backup import (
 )
 from farmcore.core.commands.effects import set_external_effects
 from farmcore.core.commands.migrate import (
+    LOCK_DATABASES,
     MigrateError,
     alembic_config,
     check_owner,
@@ -523,6 +524,13 @@ class Copy:
                         f"TEMPLATE {q(self.url.database)}"
                     )
                     self.created = True
+        finally:
+            engine.dispose()
+        engine = create_engine(self.url.set(database="postgres"))
+        try:
+            with engine.begin() as conn:
+                q = conn.dialect.identifier_preparer.quote
+                conn.exec_driver_sql(LOCK_DATABASES)
                 conn.exec_driver_sql(f"REVOKE ALL ON DATABASE {q(self.name)} FROM PUBLIC")
                 # PUBLIC may open, and create temporary tables in, any new database; the loader
                 # must reach only the staging one (`migrate` revokes the same).
@@ -709,6 +717,7 @@ class Copy:
             engine.dispose()
 
 
+_DATA_IN = "the data is in, paused; run migrate to finish"
 _STAGING_SUFFIX = re.compile(r"_restore_[0-9a-f]{6}_([0-9a-f]{8})$")
 
 
@@ -759,9 +768,13 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                 if not swapped:
                     raise
                 raise BundleError(
-                    f"stopped by {exc} after the copy was swapped in: the data is in, paused; "
-                    "run migrate to finish"
+                    f"stopped by {exc} after the copy was swapped in: {_DATA_IN}"
                 ) from None
+            except (MigrateError, CommandError, DBAPIError) as exc:
+                if not swapped:
+                    raise
+                detail = database_error(exc) if isinstance(exc, DBAPIError) else str(exc)
+                raise BundleError(f"{detail}, after the copy was swapped in: {_DATA_IN}") from None
     return manifest, new_id
 
 

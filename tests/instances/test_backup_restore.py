@@ -1111,6 +1111,90 @@ def test_a_signal_during_the_swap_waits_for_it_and_says_the_copy_is_in(
     assert cli("migrate", env=env).exit_code == 0
 
 
+@pytest.mark.parametrize("failure", ["refusal", "database"])
+def test_a_setup_failure_after_the_swap_says_the_data_is_in_and_to_run_migrate(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch, failure
+):
+    """The runtime role cannot be set up (say, a concurrent change to the catalog): the rows
+    are already in, so the message must not read as a failed restore."""
+    from sqlalchemy.exc import OperationalError
+
+    from farmcore.core.commands import migrate
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    errors = {
+        "refusal": migrate.MigrateError(
+            f"could not set up the runtime role {env['RUNTIME_DATABASE_ROLE']}: "
+            "tuple concurrently updated"
+        ),
+        "database": OperationalError("GRANT", {}, Exception("tuple concurrently updated")),
+    }
+
+    def fails(*_args) -> None:
+        raise errors[failure]
+
+    monkeypatch.setattr(migrate, "ensure_runtime_role", fails)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert "tuple concurrently updated" in result.output, result.output
+    assert "the data is in, paused; run migrate to finish" in result.output, result.output
+    assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+    monkeypatch.undo()
+    assert cli("migrate", env=env).exit_code == 0
+
+
+def test_restores_and_a_migrate_started_together_all_finish(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    """Each one revokes PUBLIC's access on every database of the server, and creates, renames
+    and drops databases: run at the same moment, none may fail on another's catalog change."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    common = f"br_{uuid.uuid4().hex[:10]}_" + "x" * 30  # 44 characters
+    targets = [dbs.create(name=f"{common}_{n}") for n in ("one", "two", "three")]
+    envs = [dbs.installation(t) for t in targets]
+    # Every restore waits at its last check of the bundle, then all go at once.
+    gate = tmp_path / "gate"
+    gate.mkdir()
+    real = shutil.which("pg_restore")
+    fake_tool(tmp_path / "bin", "pg_restore", f"""case "$*" in
+  *--table=alembic_version*)
+    touch "{gate}/ready.$$"
+    i=0
+    while [ ! -e "{gate}/go" ] && [ $i -lt 1800 ]; do sleep 0.05; i=$((i+1)); done
+    exec "{real}" "$@";;
+  *) exec "{real}" "$@";;
+esac
+""")  # fmt: skip
+    path = f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}"
+
+    def start(*args: str, env: dict[str, str]) -> subprocess.Popen:
+        full = {**os.environ, **env, "PATH": path, "TMPDIR": str(private_tmp)}
+        return subprocess.Popen(
+            [FARMCORE, *args], env=full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True,
+        )  # fmt: skip
+
+    restores = [start("restore", str(bundle), "--identity", str(key), env=e) for e in envs]
+    deadline = time.monotonic() + 180
+    while len(list(gate.glob("ready.*"))) < len(restores):
+        assert time.monotonic() < deadline, "the restores never reached the gate"
+        time.sleep(0.05)
+    (gate / "go").touch()
+    migrating = start("migrate", env={k: v for k, v in source.items() if k != "name"})
+    done = [p.communicate(timeout=300)[0] for p in [*restores, migrating]]
+
+    assert [p.returncode for p in [*restores, migrating]] == [0] * 4, done
+    records = dbs.query(source["name"], SEMANTIC["records"])
+    assert [dbs.query(t, SEMANTIC["records"]) for t in targets] == [records] * 3
+    assert staging_of(dbs, targets[0]) == []
+
+
 def test_restores_into_targets_with_a_common_prefix_never_meet(
     source, dbs, cli, owner_key, tmp_path, private_tmp
 ):

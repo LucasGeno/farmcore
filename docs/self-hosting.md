@@ -353,10 +353,11 @@ One restore runs per target: a second one into the same database is refused whil
 runs. Just before the swap, restore checks the target again and refuses it if it has gained data
 meanwhile. Restore also revokes `CONNECT` and `TEMP` from PUBLIC on every database of the
 server but `template0`, permanently, as `migrate` does, so the loader role can open only the
-staging database.
+staging database. Restores and migrations on one server take turns for that step, and a
+database cannot be created, renamed or dropped while it runs.
 
-If restore stops after the swap (say, the runtime role cannot be set up), the data is in,
-paused, with no sessions: fix the cause and run
+If restore stops after the swap (say, the runtime role cannot be set up), it says so: the
+data is in, paused, with no sessions. Fix the cause and run
 `docker compose -p farm-c --env-file farm-c.env up -d`, whose `migrate` finishes the job. A swap
 that fails halfway renames the target back, and `SIGTERM` or `SIGHUP` during the swap waits
 for it to finish, then says the copy is in. Only if the process is killed with `SIGKILL`
