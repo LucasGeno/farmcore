@@ -140,6 +140,7 @@ HOSTILE = {
     ],
     "view": lambda m: ["CREATE VIEW public.fc_v AS SELECT 1 AS x"],
     "extra table": lambda m: ["CREATE TABLE public.fc_extra (id int)"],
+    "table named with a terminal escape": lambda m: ['CREATE TABLE public."fc\x1b[2Jx" (id int)'],
     "extra index": lambda m: ["CREATE INDEX fc_extra_ix ON public.farm (name)"],
     "extra schema": lambda m: ["CREATE SCHEMA fc_side", "CREATE TABLE fc_side.t (id int)"],
     "extra column": lambda m: ["ALTER TABLE public.farm ADD COLUMN fc_extra int DEFAULT 1"],
@@ -181,6 +182,7 @@ def test_a_forged_bundle_with_objects_outside_farmcores_schema_is_refused_before
 
     assert result.exit_code == 1, result.output
     assert result.output.startswith("restore: ")
+    assert "\x1b" not in result.output
     assert not marker.exists()
     untouched.check()
 
@@ -290,6 +292,13 @@ def test_the_loader_role_can_do_nothing_but_load_rows(
         echo "refused" >> "{log}"
       fi
     done < "{sql}"
+    for other in postgres template1 "{target}"; do
+      if "{psql}" -X -q -d "$other" -c "SELECT 1" >/dev/null 2>&1; then
+        echo "ALLOWED connect $other" >> "{log}"
+      else
+        echo "refused" >> "{log}"
+      fi
+    done
     echo "loader=$PGUSER" >> "{log}"
     exec "{real}" "$@";;
   *) exec "{real}" "$@";;
@@ -306,7 +315,7 @@ esac
 
     lines = log.read_text().splitlines()
     assert [ln for ln in lines if ln.startswith("ALLOWED")] == []
-    assert lines.count("refused") == len(payloads)
+    assert lines.count("refused") == len(payloads) + 3  # and no other database opens
     loader = lines[-1].removeprefix("loader=")
     assert loader.startswith("farmcore_restore_") and loader != dbs.server.superuser
     assert result.exit_code == 0, result.output
@@ -495,6 +504,24 @@ def test_restore_names_an_unreadable_key_or_bundle_instead_of_a_decryption_failu
     assert "cannot decrypt" not in key_result.output + bundle_result.output
 
 
+def test_restore_names_a_file_in_a_directory_it_cannot_search(refusal, tmp_path):
+    """The operator's 0700 restore directory, with restore run as another user."""
+    run, good, key, _, _ = refusal
+    closed = tmp_path / "closed"
+    closed.mkdir()
+    shutil.copy(good, closed / "a.age")
+    shutil.copy(key, closed / "owner.key")
+    closed.chmod(0)
+    try:
+        bundle_result = run(closed / "a.age", key)
+        key_result = run(good, closed / "owner.key")
+    finally:
+        closed.chmod(0o700)
+
+    assert "cannot read the bundle" in bundle_result.output and "--user" in bundle_result.output
+    assert "cannot read the key file" in key_result.output and "--user" in key_result.output
+
+
 def test_restore_explains_a_plain_dump_from_an_older_release(refusal, tmp_path):
     run, good, key, _, _ = refusal
     old = tmp_path / "farmcore-20261001T020000Z.dump"
@@ -524,9 +551,15 @@ def test_restore_says_what_age_reports_not_its_footer(refusal, tmp_path):
         ({"release": "1.0; DROP"}, "manifest field 'release' is missing or invalid"),
         ({"modules": {"fc_unknown_app": {"version": "1.0.0", "state": "installed"}}},
          "fc_unknown_app"),
+        # Strings a forger controls never reach the terminal raw.
+        ({"modules": {"fc\x1b[2Japp": {"version": "1.0.0", "state": "installed"}}},
+         "fc\\x1b[2Japp"),
+        ({"installation_id": "\x1b[2J00000000-0000-4000-8000-000000000000"},
+         "manifest field 'installation_id' is missing or invalid"),
+        ({"created_at": "\x1b[2Jyesterday"}, "manifest field 'created_at' is missing or invalid"),
     ],
 )  # fmt: skip
-def test_restore_refuses_a_newer_release_or_an_app_this_release_lacks(refusal, change, message):
+def test_restore_refuses_a_manifest_it_cannot_trust(refusal, change, message):
     run, good, key, recipient, tmp_path = refusal
     files = members(decrypt(good, key))
     manifest = json.loads(files["manifest.json"])
@@ -536,7 +569,8 @@ def test_restore_refuses_a_newer_release_or_an_app_this_release_lacks(refusal, c
     plain = repack({**files, "manifest.json": json.dumps(manifest).encode()})
     bundle = encrypt(plain, recipient, tmp_path / "newer.age")
 
-    assert message in run(bundle).output
+    output = run(bundle).output
+    assert message in output and "\x1b" not in output
 
 
 def test_a_failed_load_reports_no_row_data(attack, source, dbs, cli, tmp_path, private_tmp):
@@ -562,9 +596,10 @@ def test_a_failed_load_reports_no_row_data(attack, source, dbs, cli, tmp_path, p
 def test_a_row_the_load_cannot_parse_is_not_quoted_back(
     attack, source, dbs, cli, tmp_path, private_tmp
 ):
-    """PostgreSQL quotes the value it cannot parse (`invalid input syntax ...: "<value>"`)."""
+    """PostgreSQL quotes the value it cannot parse (`invalid input syntax ...: "<value>"`), and
+    the value may itself hold quotes."""
     key, recipient, good, files, target, env = attack
-    secret = f"fc-row-secret-{uuid.uuid4().hex[:8]}"
+    secret = f'fc-row-"{uuid.uuid4().hex[:8]}"-secret'
     dump = forge_dump(dbs, files, tmp_path, [
         "ALTER TABLE public.log ALTER COLUMN ts_start TYPE text",
         "INSERT INTO public.log (farm_id, type, status, name, ts_start) "
@@ -577,5 +612,5 @@ def test_a_row_the_load_cannot_parse_is_not_quoted_back(
 
     assert result.exit_code == 1
     assert "restore: pg_restore failed" in result.output, result.output
-    assert secret not in result.output
+    assert "fc-row-" not in result.output and "-secret" not in result.output
     untouched.check()

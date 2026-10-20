@@ -16,6 +16,7 @@ Failure model (what these tests are for):
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
@@ -23,8 +24,11 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import subprocess
+import sys
 import tarfile
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -850,6 +854,242 @@ esac
     again = cli("restore", str(bundle), "--identity", str(key), env=env)
     assert again.exit_code == 0, again.output
     assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+
+
+FARMCORE = Path(sys.executable).with_name("farmcore")
+
+
+class HeldLoad:
+    """A real `farmcore restore` process whose pg_restore stands still when it would load rows,
+    until released: the moment a signal, a second restore or another writer can hit it."""
+
+    def __init__(self, tmp_path: Path, bundle: Path, key: Path, env: dict[str, str], tmp: Path):
+        self.gate = tmp_path / "gate"
+        self.gate.mkdir()
+        real = shutil.which("pg_restore")
+        fake_tool(tmp_path / "held-bin", "pg_restore", f"""case "$*" in
+  *--single-transaction*)
+    touch "{self.gate}/loading"
+    i=0
+    while [ ! -e "{self.gate}/release" ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i+1)); done
+    exec "{real}" "$@";;
+  *) exec "{real}" "$@";;
+esac
+""")  # fmt: skip
+        full = {
+            **os.environ,
+            **env,
+            "PATH": f"{tmp_path / 'held-bin'}{os.pathsep}{os.environ['PATH']}",
+            "TMPDIR": str(tmp),
+        }
+        self.proc = subprocess.Popen(
+            [FARMCORE, "restore", str(bundle), "--identity", str(key)],
+            env=full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )  # fmt: skip
+        deadline = time.monotonic() + 180
+        while not (self.gate / "loading").exists():
+            assert self.proc.poll() is None, self.proc.communicate()[0]
+            assert time.monotonic() < deadline, "restore never reached the load"
+            time.sleep(0.1)
+
+    def release(self) -> None:
+        (self.gate / "release").touch()
+
+    def result(self) -> tuple[int, str]:
+        out, _ = self.proc.communicate(timeout=180)
+        return self.proc.returncode, out
+
+
+def staging_of(dbs: Databases, target: str) -> list[str]:
+    """The staging databases of `target` (`<target>_restore_<hex>`, `<target>_old_<hex>`)."""
+    return [
+        d for (d,) in dbs.query("postgres", "SELECT datname FROM pg_database ORDER BY 1")
+        if d.startswith(f"{target}_")
+    ]  # fmt: skip
+
+
+def held_copy(dbs: Databases, target: str) -> tuple[str, str]:
+    """The one staging database of `target` and its loader role, both present."""
+    (staging,) = staging_of(dbs, target)
+    role = f"farmcore_restore_{staging.rsplit('_', 1)[1]}"
+    assert role_exists(dbs, role)
+    return staging, role
+
+
+def role_exists(dbs: Databases, role: str) -> bool:
+    return dbs.query("postgres", "SELECT count(*) FROM pg_roles WHERE rolname = :r", r=role) == [
+        (1,)
+    ]
+
+
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGHUP], ids=["SIGTERM", "SIGHUP"])
+def test_a_stopped_restore_removes_its_staging_copy_and_loader_role(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, signum
+):
+    """`docker compose stop`, a closed terminal: the staging copy holds every row in clear."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
+    _, role = held_copy(dbs, target)  # the staging copy and its loader exist now
+
+    held.proc.send_signal(signum)
+    code, out = held.result()
+
+    assert code != 0
+    assert "restore: stopped" in out and "Traceback" not in out, out
+    assert staging_of(dbs, target) == [] and not role_exists(dbs, role)
+    untouched.check()
+
+
+def test_the_next_restore_removes_what_a_killed_restore_left_behind(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    """SIGKILL (or a power cut) skips every cleanup; the next restore into the target does it."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
+    held.proc.kill()
+    held.result()
+    _, role = held_copy(dbs, target)  # both left behind
+    for d in os.listdir(private_tmp):  # a killed process leaves its own temp dir too
+        shutil.rmtree(private_tmp / d)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 0, result.output
+    assert staging_of(dbs, target) == [] and not role_exists(dbs, role)
+    assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+
+
+def test_a_second_restore_into_the_same_target_is_refused_and_the_target_is_rechecked(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
+    _, role = held_copy(dbs, target)
+    try:
+        second = cli("restore", str(bundle), "--identity", str(key), env=env)
+        # Meanwhile someone starts using the target (say its app came up and wrote a table).
+        writer = create_engine(dbs.server.url(target))
+        with writer.begin() as conn:
+            conn.exec_driver_sql("CREATE TABLE public.meanwhile (id int)")
+        writer.dispose()
+    finally:
+        held.release()
+    code, out = held.result()
+
+    assert second.exit_code == 1
+    assert f"another restore into {target} is running" in second.output
+    assert code == 1 and "already holds data" in out, out
+    assert dbs.query(target, "SELECT count(*) FROM public.meanwhile") == [(0,)]
+    assert staging_of(dbs, target) == [] and not role_exists(dbs, role)
+
+
+def test_a_swap_that_fails_halfway_puts_the_target_back(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    """The second rename fails (someone holds the staging copy open): the target keeps its
+    name, and nothing is left."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    oid = dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target)
+    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
+    staging, _ = held_copy(dbs, target)
+    holder = create_engine(dbs.server.url(staging))
+    conn = holder.connect()
+    try:
+        held.release()
+        code, out = held.result()
+    finally:
+        with contextlib.suppress(Exception):
+            conn.close()
+        holder.dispose()
+
+    assert code == 1 and "restore: " in out and "Traceback" not in out, out
+    assert dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target) == oid
+    assert staging_of(dbs, target) == []
+
+
+def test_a_bundle_from_an_older_schema_is_restored_and_upgraded_to_this_release(
+    dbs, cli, owner_key, tmp_path
+):
+    """A bundle written before the identity tables existed: its rows load at its own revision,
+    then the copy is upgraded to head."""
+    key, recipient = owner_key
+    old = dbs.create()
+    env = dbs.installation(old)
+    from alembic import command
+
+    from farmcore.core.commands.migrate import alembic_config
+
+    command.upgrade(alembic_config(env["DATABASE_URL"]), "inventory_0001")
+    old_id = str(uuid.uuid4())
+    setter = create_engine(dbs.server.url(old), isolation_level="AUTOCOMMIT")
+    with setter.connect() as conn:  # what that release's `migrate` did
+        conn.exec_driver_sql(f"ALTER DATABASE \"{old}\" SET farmcore.installation_id = '{old_id}'")
+    setter.dispose()
+    dbs.query(old, "INSERT INTO farm (name) VALUES ('Old farm') RETURNING id")
+    dbs.query(
+        old,
+        "INSERT INTO log (farm_id, type, status, name, ts_start) "
+        "SELECT id, 'spray', 'done', 'Copper', now() FROM farm RETURNING id",
+    )
+    bundle = backup(cli, {**env, "name": old}, recipient, tmp_path / "old.farmcore-backup")
+    assert json.loads(members(decrypt(bundle, key))["manifest.json"])["alembic_heads"] == [
+        "inventory_0001"
+    ]
+    target = dbs.create()
+    target_env = dbs.installation(target)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=target_env)
+
+    assert result.exit_code == 0, result.output
+    assert dbs.query(target, "SELECT version_num FROM alembic_version") == [(HEAD,)]
+    joined = "SELECT f.name, l.name FROM log l JOIN farm f ON f.id = l.farm_id"
+    assert dbs.query(target, joined) == [("Old farm", "Copper")]
+    assert dbs.query(target, "SELECT count(*) FROM local_session") == [(0,)]
+
+
+def test_pg_dump_reads_the_snapshot_the_manifest_was_read_in(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch
+):
+    """Between the manifest's read and pg_dump's start, another writer switches an app on: the
+    dump still shows the moment the manifest describes."""
+    key, recipient = owner_key
+    real, psql = shutil.which("pg_dump"), shutil.which("psql")
+    update = "UPDATE app_module SET state = 'installed' WHERE name = 'kpi'"
+    fake_tool(tmp_path / "bin", "pg_dump", f"""case "$*" in
+  *--version*) exec "{real}" "$@";;
+  *) "{psql}" -X -q -v ON_ERROR_STOP=1 -c "{update}" >/dev/null || exit 1
+     exec "{real}" "$@";;
+esac
+""")  # fmt: skip
+    monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+
+    assert dbs.query(source["name"], "SELECT state FROM app_module WHERE name = 'kpi'") == [
+        ("installed",)
+    ]
+    files = members(decrypt(bundle, key))
+    dump = tmp_path / "a.dump"
+    dump.write_bytes(files["farmcore.dump"])
+    data = subprocess.run(
+        ["pg_restore", "--data-only", "--table=app_module", "-f", "-", dump],
+        check=True, capture_output=True, text=True,
+    ).stdout  # fmt: skip
+    assert re.search(r"^kpi\t(\w+)\t", data, re.M).group(1) == "uninstalled"
+    assert json.loads(files["manifest.json"])["modules"]["kpi"]["state"] == "uninstalled"
 
 
 def test_a_restore_that_stops_after_the_data_never_carries_sessions_or_opens_the_copy(

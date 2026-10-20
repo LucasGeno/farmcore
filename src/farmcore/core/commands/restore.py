@@ -24,25 +24,32 @@ its rows are loaded by a role that can do nothing else.
    not a superuser, no membership, no CREATE or TEMP anywhere. Foreign keys are dropped for the
    load and added back as the owner, which checks every row.
 6. As the owner: empty the session tables again, pause effects again, drop the loader role,
-   then swap the staging database in under the target's name and run the `migrate` steps
-   (upgrade to this release's schema, a new installation id, the copy's own runtime role).
+   check the target again, then swap the staging database in under the target's name and run
+   the `migrate` steps (upgrade to this release's schema, a new installation id, the copy's
+   own runtime role). Those migrations run as the superuser over restored rows, which are as
+   untrusted as the bundle: a migration must never put a row's value into SQL text.
 
-Any failure before the swap drops the staging database and the loader role: the target, the
-source installation and every bundle are left as they were, and no plaintext is left behind.
+One restore runs per target at a time (an advisory lock in `postgres`); it first removes what a
+killed restore into the same target left behind. Any failure before the swap, SIGTERM and
+SIGHUP included, drops the staging database and the loader role: the target, the source
+installation and every bundle are left as they were, and no plaintext is left behind.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import re
 import secrets
+import signal
 import subprocess
 import tarfile
 import tempfile
 import uuid
-from datetime import UTC, datetime, timedelta
+from collections.abc import Iterator
+from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 
@@ -111,6 +118,33 @@ _FOREIGN_KEYS = text(
 NOT_LOADED = frozenset({"local_session", "login_bucket", "alembic_version"})
 PLAIN_FILES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 LOADER_PREFIX = "farmcore_restore_"
+# Emptied again after the load (an older revision may not have them yet).
+SESSION_TABLES = ("local_session", "login_bucket")
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+
+
+class Interrupted(BaseException):
+    """SIGTERM or SIGHUP during a restore: unwinds like Ctrl-C, through every cleanup."""
+
+
+@contextlib.contextmanager
+def _stop_on_signals() -> Iterator[None]:
+    def stop(signum, _frame) -> None:
+        for s in STOP_SIGNALS:  # one is enough; let the cleanup finish
+            signal.signal(s, signal.SIG_IGN)
+        raise Interrupted(signal.Signals(signum).name)
+
+    previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS}
+    try:
+        yield
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
+def _printable(value: str) -> str:
+    """A bundle's string for the terminal: control characters escaped, never sent raw."""
+    return "".join(c if c.isprintable() else c.encode("unicode_escape").decode() for c in value)
 
 
 # --- 1. The files ---------------------------------------------------------------------------
@@ -118,12 +152,20 @@ LOADER_PREFIX = "farmcore_restore_"
 
 def preflight(bundle: Path, identity: Path) -> None:
     """Fail early, and say which file, when the files cannot be read."""
-    if not bundle.is_file():
-        raise BundleError(f"no bundle at {bundle}")
     hint = 'run restore as a user who can read it (Compose: --user "$(id -u):$(id -g)")'
-    if not os.access(bundle, os.R_OK):
+    try:
+        found = bundle.is_file()
+    except PermissionError:  # a directory on the way that this user cannot search
+        found = None
+    if found is False:
+        raise BundleError(f"no bundle at {bundle}")
+    if not found or not os.access(bundle, os.R_OK):
         raise BundleError(f"cannot read the bundle {bundle}: {hint}")
-    if not identity.is_file() or not os.access(identity, os.R_OK):
+    try:
+        readable = identity.is_file() and os.access(identity, os.R_OK)
+    except PermissionError:
+        readable = False
+    if not readable:
         raise BundleError(f"cannot read the key file {identity}: {hint}")
     with bundle.open("rb") as f:
         if f.read(5) == b"PGDMP":
@@ -210,6 +252,17 @@ def check_manifest(manifest: object, dump: Path) -> dict:
     for key, kind in _REQUIRED.items():
         if not isinstance(manifest.get(key), kind):
             raise BundleError(f"manifest field {key!r} is missing or invalid")
+    # Both are printed after the restore: only what they claim to be.
+    try:
+        canonical = str(uuid.UUID(manifest["installation_id"])) == manifest["installation_id"]
+    except ValueError:
+        canonical = False
+    if not canonical:
+        raise BundleError("manifest field 'installation_id' is missing or invalid")
+    try:
+        datetime.fromisoformat(manifest["created_at"])
+    except ValueError:
+        raise BundleError("manifest field 'created_at' is missing or invalid") from None
     meta = manifest["dump"]
     digest = hashlib.sha256()
     with dump.open("rb") as f:
@@ -233,7 +286,8 @@ def check_manifest(manifest: object, dump: Path) -> dict:
     known = {m.name for m in registry.discover(packages=APP_PACKAGES)}
     unknown = sorted(set(manifest["modules"]) - known)
     if unknown:
-        raise BundleError(f"the bundle has apps this release does not ship: {', '.join(unknown)}")
+        shown = ", ".join(_printable(name) for name in unknown)
+        raise BundleError(f"the bundle has apps this release does not ship: {shown}")
     return manifest
 
 
@@ -265,7 +319,8 @@ def check_compatible(manifest: dict, dump: Path) -> list[str]:
         if known is None:
             raise BundleError(
                 f"incompatible release: the bundle comes from FarmCore {manifest['release']} "
-                f"(schema {', '.join(heads)}), which this release does not know; restore it "
+                f"(schema {', '.join(map(_printable, heads))}), which this release does not "
+                "know; restore it "
                 "with that release or a later one"
             )
     return heads
@@ -313,10 +368,10 @@ def _list(dump: Path) -> list[tuple[str, str]]:
 
 
 def _safe_load_error(stderr: bytes) -> str:
-    """pg_restore's error without the values it quotes (`...: "<row value>"`), so a failed
-    load never prints a row of farm data."""
+    """pg_restore's error without the value it quotes (`...: "<row value>"`, quotes inside
+    included: everything from the first quoted part on), so a failed load never prints a row."""
     line = tool_error(stderr)
-    return re.sub(r':\s*"[^"]*"\s*$', "", line)
+    return re.sub(r':\s*".*$', "", line, flags=re.S)
 
 
 class Copy:
@@ -327,11 +382,60 @@ class Copy:
         self.owner = owner
         self.url = make_url(settings.database_url)
         suffix = uuid.uuid4().hex[:8]
-        self.name = f"{self.url.database[:40]}_restore_{suffix}"
+        self.prefix = self.url.database[:40]
+        self.name = f"{self.prefix}_restore_{suffix}"
         self.staging = self.url.set(database=self.name)
         self.loader = f"{LOADER_PREFIX}{suffix}"
         self.loader_password = secrets.token_urlsafe(32)
         self.created = self.loader_created = False
+        self.present: set[str] = set()
+        self.tables: list[str] = []
+        self.sequences: list[str] = []
+
+    @contextlib.contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Hold this target's restore lock (a session lock in `postgres`) while the block runs."""
+        engine = self._admin()
+        try:
+            with engine.connect() as conn:
+                got = conn.execute(
+                    text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"),
+                    {"k": f"farmcore.restore:{self.prefix}"},
+                ).scalar_one()
+                if not got:
+                    raise BundleError(
+                        f"another restore into {self.url.database} is running on this server; "
+                        "wait for it to finish, then try again"
+                    )
+                yield  # closing the connection releases the lock
+        finally:
+            engine.dispose()
+
+    def sweep(self) -> None:
+        """Drop what a killed restore into this target left: its staging databases and their
+        loader roles, and loader roles whose staging database is gone."""
+        stale = re.compile(re.escape(self.prefix) + r"_restore_([0-9a-f]{8})")
+        loader = re.compile(re.escape(LOADER_PREFIX) + r"([0-9a-f]{8})")
+        engine = self._admin()
+        try:
+            with engine.connect() as conn:
+                # Roles first: a loader role is created after its database, so a role listed
+                # here whose database is missing from the next list has lost it.
+                roles = conn.execute(text("SELECT rolname FROM pg_roles")).scalars().all()
+                loaders = {m.group(1): r for r in roles if (m := loader.fullmatch(r))}
+                names = conn.execute(text("SELECT datname FROM pg_database")).scalars().all()
+                alive = {m.group(1) for n in names if (m := re.search(r"_restore_(\w{8})$", n))}
+                for name in names:
+                    if match := stale.fullmatch(name):
+                        conn.exec_driver_sql(
+                            f"DROP DATABASE IF EXISTS {_q(conn, name)} WITH (FORCE)"
+                        )
+                        alive.discard(match.group(1))
+                for suffix, role in loaders.items():
+                    if suffix not in alive:
+                        conn.exec_driver_sql(f"DROP ROLE IF EXISTS {_q(conn, role)}")
+        finally:
+            engine.dispose()
 
     def _admin(self):
         return create_engine(self.url.set(database="postgres"), isolation_level="AUTOCOMMIT")
@@ -350,6 +454,16 @@ class Copy:
                 )
                 self.created = True
                 conn.exec_driver_sql(f"REVOKE ALL ON DATABASE {q(self.name)} FROM PUBLIC")
+                # PUBLIC may open, and create temporary tables in, any new database; the loader
+                # must reach only the staging one (`migrate` revokes the same).
+                others = conn.execute(
+                    text("SELECT datname FROM pg_database WHERE datname NOT IN ('template0', :s)"),
+                    {"s": self.name},
+                ).scalars()
+                for other in others.all():
+                    conn.exec_driver_sql(
+                        f"REVOKE CONNECT, TEMPORARY ON DATABASE {q(other)} FROM PUBLIC"
+                    )
         finally:
             engine.dispose()
         engine = create_engine(self._url(self.staging))
@@ -379,7 +493,7 @@ class Copy:
         extra = sorted({key for _, key in entries} - expected)
         if extra:
             more = f"; and {len(extra) - 5} more" if len(extra) > 5 else ""
-            shown = "; ".join(extra[:5]) + more
+            shown = "; ".join(map(_printable, extra[:5])) + more
             raise BundleError(f"the dump holds objects that are not part of FarmCore: {shown}")
         engine = create_engine(self._url(self.staging))
         try:
@@ -387,6 +501,7 @@ class Copy:
                 relations = conn.execute(_FARMCORE_RELATIONS).all()
         finally:
             engine.dispose()
+        self.present = {n for n, _ in relations}
         self.tables = sorted(n for n, kind in relations if kind == "r" and n not in NOT_LOADED)
         self.sequences = sorted(n for n, kind in relations if kind == "S")
         loadable = {f"TABLE DATA public {t}" for t in self.tables}
@@ -401,7 +516,8 @@ class Copy:
                 verifier = raw.pgconn.encrypt_password(
                     self.loader_password.encode(), self.loader.encode(), b"scram-sha-256"
                 ).decode()
-                until = (datetime.now(UTC) + timedelta(hours=6)).isoformat()
+                # The server's clock, not this machine's.
+                until = conn.execute(text("SELECT (now() + interval '6 hours')::text")).scalar_one()
                 r = sql.Identifier(self.loader)
                 statements = [
                     sql.SQL(
@@ -463,7 +579,9 @@ class Copy:
                             f"the bundle's rows break FarmCore's constraint {name}"
                         ) from None
                 with conn.begin():
-                    conn.exec_driver_sql("TRUNCATE local_session, login_bucket")
+                    sessions = [t for t in SESSION_TABLES if t in self.present]
+                    if sessions:
+                        conn.exec_driver_sql(f"TRUNCATE {', '.join(sessions)}")
                     set_external_effects(conn, EFFECTS_PAUSED)
         finally:
             engine.dispose()
@@ -492,9 +610,15 @@ class Copy:
             with engine.connect() as conn:
                 q = conn.dialect.identifier_preparer.quote
                 conn.exec_driver_sql(f"ALTER DATABASE {q(self.url.database)} RENAME TO {q(old)}")
-                conn.exec_driver_sql(
-                    f"ALTER DATABASE {q(self.name)} RENAME TO {q(self.url.database)}"
-                )
+                try:
+                    conn.exec_driver_sql(
+                        f"ALTER DATABASE {q(self.name)} RENAME TO {q(self.url.database)}"
+                    )
+                except BaseException:
+                    conn.exec_driver_sql(
+                        f"ALTER DATABASE {q(old)} RENAME TO {q(self.url.database)}"
+                    )
+                    raise
                 self.created = False
                 conn.exec_driver_sql(f"DROP DATABASE {q(old)} WITH (FORCE)")
         finally:
@@ -522,7 +646,10 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
     """Verify `bundle` completely, then restore its rows into the empty target as a new
     installation; (manifest, new installation id)."""
     preflight(bundle, identity)
-    with tempfile.TemporaryDirectory(prefix="farmcore-restore-") as name:
+    with (
+        _stop_on_signals(),
+        tempfile.TemporaryDirectory(prefix="farmcore-restore-") as name,
+    ):
         tmp = Path(name)
         plain = tmp / "bundle.tar"
         decrypt(bundle, identity, plain)
@@ -531,18 +658,27 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
         check_manifest(manifest, dump)
         heads = check_compatible(manifest, dump)
         copy = Copy(settings, check_target(settings))
-        try:
-            copy.create()
-            copy.build_schema(heads)
-            lines = copy.check_contents(dump, tmp)
-            copy.create_loader()
-            copy.load(dump, lines, tmp)
-            copy.drop_loader()
-            copy.swap()
-        except BaseException:
-            copy.discard()
-            raise
-    new_id = migrate_installation(settings)
+        with copy.exclusive():
+            copy.sweep()
+            try:
+                copy.create()
+                copy.build_schema(heads)
+                lines = copy.check_contents(dump, tmp)
+                copy.create_loader()
+                copy.load(dump, lines, tmp)
+                copy.drop_loader()
+                check_target(settings)  # still empty: nobody started using it meanwhile
+                copy.swap()
+            except BaseException:
+                copy.discard()
+                raise
+            try:
+                new_id = migrate_installation(settings)
+            except Interrupted as exc:  # pragma: no cover - a signal in migrate's few seconds
+                raise BundleError(
+                    f"stopped by {exc} after the copy was swapped in: the data is in, paused; "
+                    "run migrate to finish"
+                ) from None
     return manifest, new_id
 
 
@@ -567,6 +703,13 @@ def register(cli: typer.Typer) -> None:
             manifest, new_id = restore_bundle(settings, bundle, identity)
         except (BundleError, MigrateError) as exc:
             typer.echo(f"restore: {exc}", err=True)
+            raise typer.Exit(1) from None
+        except Interrupted as exc:
+            typer.echo(
+                f"restore: stopped by {exc}; nothing was restored, and the staging copy and its "
+                "loader role were removed",
+                err=True,
+            )
             raise typer.Exit(1) from None
         except DBAPIError as exc:
             typer.echo(f"restore: cannot use the database: {database_error(exc)}", err=True)
