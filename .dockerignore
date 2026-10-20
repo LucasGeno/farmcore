@@ -6,7 +6,9 @@ secrets/
 .env.*
 # Per-installation env files (docs/self-hosting.md): farm-a.env, ...
 *.env
+*.env.*
 **/*.env
+**/*.env.*
 !.env.example
 .venv/
 .git/

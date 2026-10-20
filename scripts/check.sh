@@ -4,9 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Data guard: raw datasets, spreadsheets, archives and credentials are never tracked or staged.
-# Env files: `.env`, `.env.<anything>` and per-installation `<name>.env`; only `.env.example`
+# Env files: `.env`, `.env.*`, per-installation `<name>.env` and `<name>.env.*`; only `.env.example`
 # is committed.
-if leaked=$(git ls-files | grep -E '^(data|secrets|backups)/|\.(xlsx|zip|gz|dump)$|(^|/)\.env(\.[^/]*)?$|\.env$' \
+if leaked=$(git ls-files | grep -E '^(data|secrets|backups)/|\.(xlsx|zip|gz|dump)$|\.env(\.[^/]*)?$' \
   | grep -vE '(^|/)\.env\.example$'); then
   echo "data guard: these tracked/staged files must not be committed:" >&2
   echo "$leaked" >&2

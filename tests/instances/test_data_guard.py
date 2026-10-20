@@ -41,7 +41,18 @@ def _check(repo: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize("name", ["farm-a.env", "installations/farm-b.env", ".env", ".env.prod"])
+@pytest.mark.parametrize(
+    "name",
+    [
+        "farm-a.env",
+        "installations/farm-b.env",
+        ".env",
+        ".env.prod",
+        "farm-a.env.bak",
+        "farm-a.env.local",
+        "installations/farm-b.env.old",
+    ],
+)
 def test_the_data_guard_rejects_a_staged_env_file(scratch: Path, name: str) -> None:
     path = scratch / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -60,7 +71,10 @@ def test_the_data_guard_allows_the_env_example(scratch: Path) -> None:
     assert "uv-stub" in result.stdout
 
 
-@pytest.mark.parametrize("name", ["farm-a.env", "installations/farm-b.env", ".env.local"])
+@pytest.mark.parametrize(
+    "name",
+    ["farm-a.env", "installations/farm-b.env", ".env.local", "farm-a.env.bak", "farm-a.env.local"],
+)
 def test_git_ignores_env_files_but_not_the_example(name: str) -> None:
     assert _git(REPO, "check-ignore", "-q", "--no-index", name).returncode == 0
     assert _git(REPO, "check-ignore", "-q", "--no-index", ".env.example").returncode == 1
