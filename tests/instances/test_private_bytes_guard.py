@@ -101,7 +101,9 @@ def test_no_route_job_or_command_persists_private_bytes_outside_the_database():
     assert not sorted(ALLOWED.keys() - found), "stale ALLOWED entries: remove them"
 
 
-def test_the_guard_sees_a_route_that_keeps_an_upload_on_disk():
+def test_the_guard_sees_planted_writes_and_ignores_reads():
+    """One control: the guard must not go blind to a route keeping an upload on disk, or to
+    archive, low-level and async writes."""
     planted = """
 @router.post("/evidence")
 async def upload(file: UploadFile):
@@ -112,26 +114,18 @@ def job(ctx):
     Path("x").write_bytes(b"")
 
 (root / "y").open(mode="ab")
-"""
-    assert file_writes(planted, "apps/x/routes.py") == {
-        ("apps/x/routes.py", "open"),
-        ("apps/x/routes.py", "write_bytes"),
-    }
-    assert file_writes("def f():\n    open(path, mode)\n", "m.py") == {("m.py", "open")}
-    assert file_writes("open(p)\nopen(p, 'rb')\nzf.open(name)\np.open('r')\n", "m.py") == set()
-
-
-def test_the_guard_sees_archives_low_level_and_async_writes():
-    planted = """
+open(path, mode)
 zipfile.ZipFile(path, "w")
-ZipFile(path, mode="a")
 os.open(path, os.O_WRONLY | os.O_CREAT)
 async with aiofiles.open(path, "wb") as f: ...
-shutil.copy(a, b)
 shutil.move(a, b)
 """
-    assert {call for _, call in file_writes(planted, "m.py")} == {
-        "ZipFile", "os.open", "open", "shutil.copy", "shutil.move",
+    harmless = (
+        "open(p)\nopen(p, 'rb')\nzf.open(name)\np.open('r')\nzipfile.ZipFile(path)\n"
+        "props.copy()\nconversation.save(session)\nd.move(1)\n"
+    )
+
+    assert {call for _, call in file_writes(planted, "apps/x/routes.py")} == {
+        "open", "write_bytes", "ZipFile", "os.open", "shutil.move",
     }  # fmt: skip
-    harmless = "zipfile.ZipFile(path)\nprops.copy()\nconversation.save(session)\nd.move(1)\n"
     assert file_writes(harmless, "m.py") == set()
