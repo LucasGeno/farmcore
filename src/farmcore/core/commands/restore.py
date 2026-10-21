@@ -158,7 +158,8 @@ _STOPS = _Stops()
 @contextlib.contextmanager
 def _stop_on_signals() -> Iterator[None]:
     def stop(signum, _frame) -> None:
-        for s in STOP_SIGNALS:  # one is enough; let the cleanup finish
+        # One is enough: ignored from now until the command has said what this one left.
+        for s in STOP_SIGNALS:
             signal.signal(s, signal.SIG_IGN)
         _STOPS.pending = signal.Signals(signum).name  # first: the raise below may be lost
         if not _STOPS.deferring:
@@ -792,13 +793,10 @@ def _q(conn, name: str) -> str:
 
 def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[dict, str]:
     """Verify `bundle` completely, then restore its rows into the empty target as a new
-    installation; (manifest, new installation id)."""
+    installation; (manifest, new installation id). Run inside `_stop_on_signals`."""
     sweep_temp()
     preflight(bundle, identity)
-    with (
-        _stop_on_signals(),
-        tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as name,
-    ):
+    with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as name:
         tmp = Path(name)
         plain = tmp / "bundle.tar"
         decrypt(bundle, identity, plain)
@@ -833,6 +831,7 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                         copy.discard()
                         raise
                 new_id = migrate_installation(settings)
+                _STOPS.deferring = True  # done: a stop now only waits for the report
             except Interrupted as exc:
                 if not swapped:
                     raise
@@ -866,23 +865,26 @@ def register(cli: typer.Typer) -> None:
     ) -> None:
         """Restore a backup into this new installation's empty database (DATABASE_URL, owner)."""
         settings = get_settings()
-        try:
-            manifest, new_id = restore_bundle(settings, bundle, identity)
-        except (BundleError, MigrateError) as exc:
-            typer.echo(f"restore: {exc}", err=True)
-            raise typer.Exit(1) from None
-        except Interrupted as exc:
+        # Around the messages too: a second stop signal must not end the command before it
+        # says what the first one left.
+        with _stop_on_signals():
+            try:
+                manifest, new_id = restore_bundle(settings, bundle, identity)
+            except (BundleError, MigrateError) as exc:
+                typer.echo(f"restore: {exc}", err=True)
+                raise typer.Exit(1) from None
+            except Interrupted as exc:
+                typer.echo(
+                    f"restore: stopped by {exc}; nothing was restored, and the staging copy and "
+                    "its loader role were removed",
+                    err=True,
+                )
+                raise typer.Exit(1) from None
+            except DBAPIError as exc:
+                typer.echo(f"restore: cannot use the database: {database_error(exc)}", err=True)
+                raise typer.Exit(1) from None
             typer.echo(
-                f"restore: stopped by {exc}; nothing was restored, and the staging copy and its "
-                "loader role were removed",
-                err=True,
+                f"restore: backup of installation {_printable(manifest['installation_id'])} "
+                f"({_printable(manifest['created_at'])}) restored"
             )
-            raise typer.Exit(1) from None
-        except DBAPIError as exc:
-            typer.echo(f"restore: cannot use the database: {database_error(exc)}", err=True)
-            raise typer.Exit(1) from None
-        typer.echo(
-            f"restore: backup of installation {_printable(manifest['installation_id'])} "
-            f"({_printable(manifest['created_at'])}) restored"
-        )
-        typer.echo(f"installation {new_id}")
+            typer.echo(f"installation {new_id}")

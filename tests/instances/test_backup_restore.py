@@ -1554,6 +1554,42 @@ def test_a_stop_while_the_emptied_target_waits_to_be_dropped_ends_after_the_lock
     assert cli("migrate", env=env).exit_code == 0
 
 
+def test_a_second_stop_signal_never_cuts_the_first_ones_message_short(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, caught_signals
+):
+    """`docker compose stop` sends SIGTERM again, a closed terminal SIGHUP after it: until the
+    command has said what the first stop left, further stop signals are ignored."""
+    import typer
+
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    decrypt, echo = restore.decrypt, typer.echo
+
+    def then_stopped(*args) -> None:
+        decrypt(*args)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    def stopped_again(message, *args, **kwargs) -> None:
+        os.kill(os.getpid(), signal.SIGTERM)
+        os.kill(os.getpid(), signal.SIGHUP)
+        echo(message, *args, **kwargs)
+
+    monkeypatch.setattr(restore, "decrypt", then_stopped)
+    monkeypatch.setattr(typer, "echo", stopped_again)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1
+    assert "restore: stopped by SIGTERM; nothing was restored" in result.output, result.output
+    assert caught_signals == []
+    untouched.check()
+
+
 def test_restores_into_targets_with_a_common_prefix_never_meet(
     source, dbs, cli, owner_key, tmp_path, private_tmp
 ):
