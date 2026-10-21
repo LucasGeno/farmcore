@@ -14,7 +14,8 @@ from farmcore.settings import Settings
 
 # A request transaction left idle this long is ended by Postgres, releasing its locks: a stuck
 # request then fails alone instead of holding farm locks until every pooled connection waits.
-# Far above any legitimate request (the longest waits on a 60 s recording's transcription).
+# Far above any legitimate request transaction: slow external calls (a recording's
+# transcription, the model) run after the request ends its transaction.
 REQUEST_IDLE_IN_TRANSACTION_TIMEOUT = "5min"
 
 

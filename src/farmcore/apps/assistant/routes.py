@@ -144,6 +144,7 @@ def ask(
     no_model = bool(((repo.session.get(Farm, repo.farm_id).props) or {}).get("no_model"))
     chooser = chooser_for(request.app) if is_admin(request) and not no_model else None
     if chooser is not None and tools:
+        _end_request_transaction(repo)  # no farm locks held while the model answers
         choice = None
         try:
             with audit_ref(f"web:assistant:{repo.farm_id}"):
@@ -282,12 +283,15 @@ def _conversation_key(request: Request, repo: Repo, token: str, conversation: st
 
 
 def _end_request_transaction(repo: ScopedRepository) -> None:
-    """Commit the request's transaction before the chat handlers open their own sessions.
+    """Commit the request's transaction before the chat handlers open their own sessions, and
+    before any slow external call (transcription, the model).
 
     `get_repo` takes the farm's operations advisory lock and its row lock (`FOR UPDATE`) on a
-    POST. The chat handlers write `access_log`, grants and logs on other pooled connections;
-    those writes wait for both locks, while this request waits for the handlers: an in-process
-    deadlock Postgres cannot see. The handlers take the same locks themselves when they write.
+    POST, and every read's `access_log` row holds a key-share lock on the farm row. The chat
+    handlers write `access_log`, grants and logs on other pooled connections; those writes wait
+    for these locks, while this request waits for the handlers: an in-process deadlock Postgres
+    cannot see. The handlers take the same locks themselves when they write. A slow external
+    call made while holding them blocks every write to the farm for as long as it takes.
     Reads after this run in a fresh transaction that `get_repo` commits as usual."""
     repo.session.commit()
 
@@ -489,11 +493,13 @@ async def transcribe(request: Request, repo: Repo):
     token, allowed = _take_quota(request)
     if not allowed:
         return response(request, token, {"detail": "Too many requests. Try again soon."}, 429)
+    # The upload and the transcription (up to a minute) run without the farm's locks.
+    hints = await run_in_threadpool(_hints, repo)
     form = await _capped_form(request)
     audio = form.get("audio")
     if not isinstance(audio, UploadFile):
         raise HTTPException(422, "Send the recording as `audio`.")
-    text = await run_in_threadpool(_transcribe, request, repo, audio)
+    text = await run_in_threadpool(_transcribe, request, hints, audio)
     return response(request, token, {"text": text})
 
 
@@ -518,14 +524,9 @@ async def _capped_form(request: Request):
     return await Request(request.scope, replay).form(max_files=1, max_fields=1)
 
 
-def _transcribe(request: Request, repo: ScopedRepository, audio: UploadFile) -> str:
-    if not (audio.content_type or "").startswith("audio/"):
-        raise HTTPException(415, "Send an audio recording.")
-    data = audio.file.read(MAX_AUDIO_BYTES + 1)
-    if len(data) > MAX_AUDIO_BYTES:
-        raise HTTPException(413, "Recording too large.")
-    if not data:
-        raise HTTPException(422, "Empty recording.")
+def _hints(repo: ScopedRepository) -> list[str]:
+    """The farm's parcel and product names for the transcriber, then the request transaction
+    ends."""
     scoped = ScopedRepository(
         repo.session,
         repo.farm_id,
@@ -537,6 +538,18 @@ def _transcribe(request: Request, repo: ScopedRepository, audio: UploadFile) -> 
     hints = [p.name for p in parcels(scoped)] + [
         p.name for p in products_for_farm(scoped, scope="fields:read")
     ]
+    _end_request_transaction(repo)
+    return hints
+
+
+def _transcribe(request: Request, hints: list[str], audio: UploadFile) -> str:
+    if not (audio.content_type or "").startswith("audio/"):
+        raise HTTPException(415, "Send an audio recording.")
+    data = audio.file.read(MAX_AUDIO_BYTES + 1)
+    if len(data) > MAX_AUDIO_BYTES:
+        raise HTTPException(413, "Recording too large.")
+    if not data:
+        raise HTTPException(422, "Empty recording.")
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "question.audio"
         path.write_bytes(data)
