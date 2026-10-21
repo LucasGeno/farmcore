@@ -1,4 +1,5 @@
-"""Per-installation env files (`farm-a.env`, as docs/self-hosting.md names them) never reach git.
+"""Env files (`.env*` and per-installation `farm-a.env*`, as docs/self-hosting.md names them)
+never reach git; only `.env.example` is committed.
 
 The data guard in scripts/check.sh runs in a scratch git repository with the real script; `uv`
 is a stub on PATH, so nothing after the guard runs.
@@ -14,6 +15,17 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
+
+# One name per class the guard and .gitignore must cover: `.env`, `.env.<x>`, `<name>.env`,
+# `<name>.env.<x>`, the last two also below a directory.
+ENV_FILES = [
+    ".env",
+    ".env.prod",
+    "farm-a.env",
+    "installations/farm-b.env",
+    "farm-a.env.bak",
+    "installations/farm-b.env.old",
+]
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -34,6 +46,13 @@ def scratch(tmp_path: Path) -> Path:
     return repo
 
 
+def _stage(repo: Path, name: str, text: str) -> None:
+    path = repo / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    assert _git(repo, "add", "-f", name).returncode == 0
+
+
 def _check(repo: Path) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "PATH": f"{repo.parent / 'bin'}:{os.environ['PATH']}"}
     return subprocess.run(
@@ -41,40 +60,26 @@ def _check(repo: Path) -> subprocess.CompletedProcess[str]:
     )
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        "farm-a.env",
-        "installations/farm-b.env",
-        ".env",
-        ".env.prod",
-        "farm-a.env.bak",
-        "farm-a.env.local",
-        "installations/farm-b.env.old",
-    ],
-)
-def test_the_data_guard_rejects_a_staged_env_file(scratch: Path, name: str) -> None:
-    path = scratch / name
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("POSTGRES_PASSWORD=secret\n")
-    assert _git(scratch, "add", "-f", name).returncode == 0
+def test_the_data_guard_rejects_every_staged_env_file(scratch: Path) -> None:
+    for name in ENV_FILES:
+        _stage(scratch, name, "POSTGRES_PASSWORD=secret\n")
     result = _check(scratch)
     assert result.returncode == 1
-    assert "data guard" in result.stderr and name in result.stderr
+    assert "uv-stub" not in result.stdout
+    listed = result.stderr.splitlines()
+    assert [name for name in ENV_FILES if name not in listed] == []
 
 
 def test_the_data_guard_allows_the_env_example(scratch: Path) -> None:
-    (scratch / ".env.example").write_text("POSTGRES_PASSWORD=\n")
-    _git(scratch, "add", ".env.example")
+    _stage(scratch, ".env.example", "POSTGRES_PASSWORD=\n")
     result = _check(scratch)
     assert "data guard" not in result.stderr
     assert "uv-stub" in result.stdout
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["farm-a.env", "installations/farm-b.env", ".env.local", "farm-a.env.bak", "farm-a.env.local"],
-)
-def test_git_ignores_env_files_but_not_the_example(name: str) -> None:
-    assert _git(REPO, "check-ignore", "-q", "--no-index", name).returncode == 0
+def test_git_ignores_env_files_but_not_the_example() -> None:
+    not_ignored = [
+        n for n in ENV_FILES if _git(REPO, "check-ignore", "-q", "--no-index", n).returncode
+    ]
+    assert not_ignored == []
     assert _git(REPO, "check-ignore", "-q", "--no-index", ".env.example").returncode == 1
