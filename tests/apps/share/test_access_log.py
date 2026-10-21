@@ -89,7 +89,7 @@ def test_access_rows_newest_first_capped_and_this_farm_only(
     assert rows[0]["scope"] == "audit:read"
     by_id = {r["id"]: r for r in rows}
     assert by_id[newest.id]["grant"] == f"#{adviser.id} Co-op adviser"
-    assert by_id[newest.id]["actor"] == f"grant:{adviser.id}"
+    assert by_id[newest.id]["actor"] == f"Co-op adviser (grant #{adviser.id})"
     assert by_id[ids[-1]]["grant"] == "owner"
 
 
@@ -125,7 +125,7 @@ def test_page_masks_chat_ids_and_toggles_third_parties(
     only = admin.get("/share/", params={"who": "grantees"}).text
     log_html = only.split("Access log", 1)[1]
     assert "chat …8777" not in log_html
-    assert f"grant:{adviser.id}" in log_html and "spray advice" in log_html
+    assert f"Co-op adviser (grant #{adviser.id})" in log_html and "spray advice" in log_html
     assert 'href="/share/?who=grantees"' in only or "who=grantees" in only
 
 
@@ -138,3 +138,18 @@ def test_pages_use_data_act_framing_and_never_intermediary_words(
         text = response.text
         assert "Data Act" in text, path
         assert not re.search(r"intermediation|intermediary|\bDGA\b", text, re.IGNORECASE), path
+
+
+def test_access_log_names_a_member_not_their_user_id(
+    admin, session, demo, grantee_identity
+) -> None:
+    owner = ensure_owner_grant(session, demo.farm)
+    _log(session, demo.farm.id, owner.id, f"user:{grantee_identity.id}")
+    _log(session, demo.farm.id, owner.id, "user:987654")  # an identity that no longer exists
+    session.commit()
+
+    log_html = admin.get("/share/").text.split("Access log", 1)[1]
+
+    assert grantee_identity.login in log_html
+    assert "deleted user" in log_html
+    assert "user:" not in log_html

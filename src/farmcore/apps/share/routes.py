@@ -6,8 +6,8 @@
 - `POST /share/grants`, `POST /share/grants/{id}/revoke`: admin only (`require_admin`), 303 to
   `/share/`; invalid input is a plain-words 422.
 
-Never renders a raw chat id, a `tg:` ref, a cookie or the admin token (actors go through
-`service.mask_actor`).
+Never renders a raw chat id, a `tg:` ref, a cookie or the admin token (actors are named or
+masked by `service.access_rows`).
 """
 
 from __future__ import annotations
