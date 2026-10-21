@@ -656,9 +656,11 @@ def _waiting(pg_server, seen: list[str], done: threading.Event) -> threading.Thr
 def test_a_migrate_kept_from_the_database_list_says_so_and_to_run_it_again(
     install, monkeypatch, pg_server
 ) -> None:
-    """Another restore or migrate holds `pg_database` locked: migrate waits only so long, and
-    waits on the lock itself, never after a change of its own to `pg_database` (two such
-    waits, crossed, deadlock)."""
+    """Another restore or migrate holds `pg_database` locked. Migrate's first transaction that
+    changes it (the runtime role's reset in `postgres`) waits on the lock statement and on
+    nothing else, so on no change of its own made before it; it gives up after the lock
+    timeout and says to run it again. Its later transaction, in the installation database, is
+    never reached here (see the installation id test below for its order)."""
     from farmcore.core.commands import migrate
 
     inst = install()
