@@ -34,13 +34,23 @@ import io
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from farmcore.apps.operations import bbch, checks, isoxml, register
+from farmcore.apps.operations import bbch, checks, corrections, isoxml, register
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
-from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel
+from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel, Product
 from farmcore.core.navigation import return_destination
 from farmcore.web import context_url, render
 
@@ -65,6 +75,7 @@ KIND_LABELS: dict[str, str] = {
     "log.confirmed": "Confirmed",
     "log.merged": "Records merged",
     "log.cancelled": "Cancelled",
+    "log.corrected": "Corrected",
     "advice.evaluated": "Advice",
     "advice.changed": "Advice changed",
 }
@@ -410,3 +421,196 @@ def set_production(
     farm = repo.get(Farm, repo.farm_id, scope="logs:write")
     farm.props = {**(farm.props or {}), "production": mode}
     return RedirectResponse(context_url(request, "/advisor/"), status_code=303)
+
+
+# Correction writes share the canonical farm lock and the request's commit boundary.
+
+
+@router.post("/logs/{log_id}/corrections", dependencies=[Depends(require_farm_owner)])
+def correction_preview(log_id: int, body: corrections.Preview, request: Request, repo: Repo):
+    actor = corrections.authority(request, repo)
+    return corrections.view(corrections.preview(repo, actor, log_id, body))
+
+
+@router.post("/corrections/{correction_id}/confirm", dependencies=[Depends(require_farm_owner)])
+def correction_confirm(correction_id: int, request: Request, repo: Repo, tasks: BackgroundTasks):
+    actor = corrections.authority(request, repo)
+    correction, changed = corrections.finalize(
+        repo, actor, correction_id, "confirm", _now(request, repo)
+    )
+    if changed:
+        # Function-scoped Repo commits before response/background work. A rollback cannot run it.
+        from farmcore.core import jobs
+
+        tasks.add_task(
+            jobs.run_now,
+            request.app.state.session_factory,
+            request.app.state.manifests,
+            "advisor.evaluate",
+            request.app.state.settings,
+            farm_ids=(repo.farm_id,),
+        )
+    if request.headers.get("content-type", "").startswith("application/x-www-form-urlencoded"):
+        return RedirectResponse(
+            context_url(request, f"/operations/corrections/{correction.id}"), status_code=303
+        )
+    return corrections.view(correction)
+
+
+@router.post("/corrections/{correction_id}/cancel", dependencies=[Depends(require_farm_owner)])
+def correction_cancel(correction_id: int, request: Request, repo: Repo):
+    actor = corrections.authority(request, repo)
+    correction, _ = corrections.finalize(repo, actor, correction_id, "cancel", _now(request, repo))
+    if request.headers.get("content-type", "").startswith("application/x-www-form-urlencoded"):
+        return RedirectResponse(
+            context_url(request, f"/operations/corrections/{correction.id}"), status_code=303
+        )
+    return corrections.view(correction)
+
+
+def _correction_actor(request: Request) -> str:
+    from farmcore.core.identity import principal_for
+    from farmcore.web import is_admin
+
+    principal = principal_for(request)
+    if is_admin(request):
+        return "operator"
+    if principal is None:
+        raise HTTPException(403, "Farm member required.")
+    return f"identity:{principal.identity_id}"
+
+
+def _correction_context(request, repo, log_id):
+    import secrets
+    from zoneinfo import ZoneInfo
+
+    from sqlalchemy import or_
+
+    from farmcore.apps.operations.catalogue import products_for_farm
+    from farmcore.core.models.corrections import OperationCorrection
+
+    corrections.target_id(log_id)
+    _correction_actor(request)
+    repo.check("corrections:read", "operation_correction")
+    log = repo.get(Log, log_id, scope="logs:read")
+    history = repo.list(
+        OperationCorrection,
+        OperationCorrection.original_log_id == log_id,
+        or_(
+            OperationCorrection.status != "pending",
+            OperationCorrection.actor_key == _correction_actor(request),
+        ),
+        scope="corrections:read",
+        order_by=OperationCorrection.id.desc(),
+    )
+    if (log is None or log.type != "spray" or log.status != "done") and not history:
+        raise HTTPException(404, "Confirmed spray not found.")
+    products = products_for_farm(repo, scope="logs:read")
+    historical_ids = (
+        {q.product_id for q in log.quantities if q.product_id is not None} if log else set()
+    )
+    historical_ids -= {p.id for p in products}
+    historical_products = {
+        p.id: p for p in repo.list(Product, Product.id.in_(historical_ids), scope="logs:read")
+    }
+    return {
+        "log_id": log_id,
+        "record": corrections.snapshot(log) if log is not None else None,
+        "local_start": log.ts_start.astimezone(ZoneInfo(request.app.state.settings.display_tz))
+        .replace(tzinfo=None)
+        .isoformat()
+        if log
+        else None,
+        "timezone": request.app.state.settings.display_tz,
+        "history": [corrections.view(item) for item in history],
+        "parcels": repo.list(Parcel, scope="fields:read", order_by=Parcel.id),
+        "products": products,
+        "historical_products": historical_products,
+        "request_key": secrets.token_urlsafe(24),
+    }
+
+
+@router.get("/logs/{log_id}/corrections", response_class=HTMLResponse)
+def correction_history(log_id: int, request: Request, repo: Repo):
+    return render(
+        request, "operations/corrections.html", **_correction_context(request, repo, log_id)
+    )
+
+
+@router.get("/corrections/{correction_id}", response_class=HTMLResponse)
+def correction_receipt(correction_id: int, request: Request, repo: Repo):
+    from farmcore.core.models.corrections import OperationCorrection
+
+    corrections.target_id(correction_id)
+    _correction_actor(request)
+    item = repo.get(OperationCorrection, correction_id, scope="corrections:read")
+    if item is None or (item.status == "pending" and item.actor_key != _correction_actor(request)):
+        raise HTTPException(404, "Correction not found.")
+    return render(
+        request,
+        "operations/correction_receipt.html",
+        correction=corrections.view(item),
+        can_finalize=item.status == "pending" and item.actor_key == _correction_actor(request),
+        parcel_names={p.id: f"{p.alias} {p.name}" for p in repo.list(Parcel, scope="fields:read")},
+        product_names={p.id: p.name for p in repo.list(Product, scope="logs:read")},
+    )
+
+
+@router.post("/logs/{log_id}/corrections/preview", dependencies=[Depends(require_farm_owner)])
+async def correction_form_preview(log_id: int, request: Request, repo: Repo):
+    from pydantic import ValidationError
+
+    from farmcore.core.clock import parse_local
+
+    corrections.target_id(log_id)
+    form = await request.form()
+    try:
+        product_ids, values, units = (
+            form.getlist(k) for k in ("product_id", "dose_value", "dose_unit")
+        )
+        doses = [
+            {"product_id": product_id, "value": value, "unit": unit}
+            for product_id, value, unit in zip(product_ids, values, units, strict=True)
+            if product_id
+        ]
+        from zoneinfo import ZoneInfo
+
+        entered = datetime.fromisoformat(str(form.get("ts_start", "")).strip())
+        start = parse_local(entered.isoformat(), request.app.state.settings.display_tz)
+        current = repo.get(Log, log_id, scope="logs:write")
+        if current is not None and entered.tzinfo is None:
+            shown = current.ts_start.astimezone(ZoneInfo(request.app.state.settings.display_tz))
+            if entered == shown.replace(tzinfo=None):
+                start = current.ts_start  # unchanged local input retains the original DST fold
+        changes = {
+            "quantities": doses,
+            "parcel_ids": form.getlist("parcel_ids"),
+            "ts_start": start,
+            "notes": str(form.get("notes", "")),
+        }
+        body = corrections.Preview.model_validate(
+            {
+                "request_key": form.get("request_key"),
+                "reason": form.get("reason"),
+                "changes": changes,
+            }
+        )
+        item = corrections.preview(repo, corrections.authority(request, repo), log_id, body)
+    except (ValidationError, ValueError, HTTPException) as exc:
+        if isinstance(exc, HTTPException) and exc.status_code not in {409, 422}:
+            raise
+        response = render(
+            request,
+            "operations/corrections.html",
+            **_correction_context(request, repo, log_id),
+            correction_error=(
+                str(exc.detail)
+                if isinstance(exc, HTTPException)
+                else "Check parcels, products, positive doses, units, date and reason."
+            ),
+        )
+        response.status_code = exc.status_code if isinstance(exc, HTTPException) else 422
+        return response
+    return RedirectResponse(
+        context_url(request, f"/operations/corrections/{item.id}"), status_code=303
+    )

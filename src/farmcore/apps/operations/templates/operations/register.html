@@ -65,6 +65,9 @@
       {% endfor %}
     </ul>
     {% endif %}
+    {% if is_farm_owner or principal_login %}
+    <a href="{{ resolved_farm_url('/operations/logs/' ~ first.log_id ~ '/corrections') }}" class="mt-3 inline-flex min-h-[44px] items-center text-[14px] underline">{{ "Correct or view history" if is_farm_owner else "Correction history" }}</a>
+    {% endif %}
   </li>
   {% endfor %}
 </ul>

@@ -165,6 +165,8 @@ def run_now(
     manifests: Sequence[Manifest],
     name: str,
     settings: Settings,
+    *,
+    farm_ids: tuple[int, ...] | None = None,
 ) -> JobRun | None:
     """Run job `name` once at the current clock; None when no manifest declares it."""
     spec = next((s for m in manifests for s in m.jobs if s.name == name), None)
@@ -174,7 +176,7 @@ def run_now(
         coordinator.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": STEP_LOCK_KEY})
         with session_factory() as session:
             now = get_clock(session, settings).now()
-        return _execute(session_factory, spec, now, settings)
+        return _execute(session_factory, spec, now, settings, farm_ids=farm_ids)
 
 
 def _run_live(session_factory: sessionmaker[Session], spec: JobSpec, settings: Settings) -> None:

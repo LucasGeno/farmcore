@@ -1,0 +1,38 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, card %}
+{% block title %}Spray correction · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Spray correction", "Preview the corrected facts before saving. Original source evidence stays in the history.") %}{% endcall %}
+<a href="{{ resolved_farm_url('/operations/') }}" class="inline-flex min-h-[44px] items-center underline">Back to operations</a>
+{% if correction_error %}<p role="alert" class="my-3 rounded-xl border border-line bg-spray-soft p-4 text-spray">{{ correction_error }}</p>{% endif %}
+{% if record and is_farm_owner %}
+{% call card("mt-4") %}
+<form action="{{ resolved_farm_url('/operations/logs/' ~ log_id ~ '/corrections/preview') }}" method="post" class="space-y-4">
+  <input type="hidden" name="request_key" value="{{ request_key }}">
+  {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+  <fieldset><legend class="font-semibold">Parcels</legend>
+    {% for parcel in parcels %}<label class="flex min-h-[44px] items-center gap-2"><input type="checkbox" name="parcel_ids" value="{{ parcel.id }}"{% if parcel.id in record.parcel_ids %} checked{% endif %}>{{ parcel.alias }} {{ parcel.name }}</label>{% endfor %}
+  </fieldset>
+  <fieldset class="space-y-3"><legend class="font-semibold">Products and doses</legend>
+    {% for q in record.quantities + [none] %}
+    <div class="grid gap-2 sm:grid-cols-3">
+      <label class="text-sm">Product{% if not q %} (optional addition){% endif %}
+        <select name="product_id" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-base text-ink"><option value="">No product</option>{% if q and q.product_id in historical_products %}<option value="{{ q.product_id }}" selected>{{ historical_products[q.product_id].name }} · Recorded product (unchanged dose only)</option>{% endif %}{% for product in products %}<option value="{{ product.id }}"{% if q and product.id == q.product_id %} selected{% endif %}>{{ product.name }}</option>{% endfor %}</select>
+      </label>
+      <label class="text-sm">Dose<input name="dose_value" inputmode="decimal" value="{{ q.value if q else '' }}" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-base text-ink"></label>
+      <label class="text-sm">Unit<select name="dose_unit" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-base text-ink">{% for unit in ['kg/ha', 'L/ha', 'l/ha', 'g/ha', 'ml/ha'] %}<option{% if q and q.unit == unit %} selected{% endif %}>{{ unit }}</option>{% endfor %}</select></label>
+    </div>
+    {% endfor %}
+  </fieldset>
+  <label class="block text-sm">Treatment date and time ({{ timezone }})<input type="datetime-local" step="any" name="ts_start" value="{{ local_start }}" required class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-base text-ink"></label>
+  <label class="block text-sm">Notes<textarea name="notes" maxlength="10000" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface p-3 text-base text-ink">{{ record.notes }}</textarea></label>
+  <label class="block text-sm">Reason for correction<textarea name="reason" required maxlength="4000" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface p-3 text-base text-ink"></textarea></label>
+  <button class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white hover:bg-brand-700" type="submit">Preview correction</button>
+</form>
+{% endcall %}
+{% elif not record %}<p class="my-3 text-muted">The original record was removed by a demo reset. Its correction history remains available.</p>{% endif %}
+<section class="mt-6"><h2 class="text-lg font-semibold">Correction history</h2>
+{% for item in history %}<article class="mt-3 rounded-xl border border-line bg-surface p-4"><h3 class="font-semibold">{{ item.status|capitalize }}</h3><p>{{ item.reason }}</p><p class="mt-1 text-sm text-muted">{{ item.actor }} · {{ item.created_at }}</p><a class="inline-flex min-h-[44px] items-center underline" href="{{ resolved_farm_url('/operations/corrections/' ~ item.id) }}">View before and after</a></article>
+{% else %}<p class="mt-2 text-muted">No corrections recorded.</p>{% endfor %}
+</section>
+{% endblock %}
