@@ -87,6 +87,27 @@ def items(repo, now, tz, visible, *, busy_days=()):
                     with_farm("/advisor/", farm.id),
                 )
             )
+        uncertain = [
+            (p, latest[p.id])
+            for p in parcels
+            if p.id in latest
+            and advisor.state_label(latest[p.id].decision, latest[p.id].props).startswith(
+                "assessment "
+            )
+        ]
+        if uncertain:
+            out.append(
+                item(
+                    "limited",
+                    farm.id,
+                    "info",
+                    "Assessment limited",
+                    "Infection risk unknown for "
+                    + ", ".join(f"{p.alias} {p.name}" for p, _ in uncertain)
+                    + ": required weather inputs are missing.",
+                    with_farm("/advisor/", farm.id),
+                )
+            )
         advice_items = []  # (priority, item): listed highest priority first, then by alias
         for parcel in parcels:
             advice = latest.get(parcel.id)

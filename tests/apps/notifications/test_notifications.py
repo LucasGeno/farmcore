@@ -52,6 +52,28 @@ def test_bell_shows_only_current_risky_parcels_with_safe_wait_wording(client, se
     assert "t.me/" not in response.text
 
 
+def test_bell_names_limited_parcels_while_the_farm_is_available(client, session, settings):
+    farm = ensure_default_farm(session, settings)
+    complete_station(session, farm.id, NOW)
+    for n, (decision, status) in enumerate((("none", "limited"), ("protected", "evaluable")), 1):
+        parcel = make_parcel(session, farm, n)
+        session.add(
+            Advice(
+                farm_id=farm.id,
+                parcel_id=parcel.id,
+                evaluated_at=NOW,
+                decision=decision,
+                props={"assessment_status": status, "headline": f"Stored {status}"},
+            )
+        )
+    set_replay(session, NOW, settings)
+    session.commit()
+    text = client.get(f"/notifications?farm={farm.id}").text
+    assert "Assessment limited" in text
+    assert "Infection risk unknown for P1 " in text
+    assert "P2 " not in text.split("Infection risk unknown for", 1)[1].split(":", 1)[0]
+
+
 def test_station_health_is_replay_bounded_and_archive_is_information(client, session, settings):
     from farmcore.core.models.canonical import Asset, Observation
 
