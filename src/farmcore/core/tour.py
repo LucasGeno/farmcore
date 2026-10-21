@@ -5,7 +5,6 @@ Normal read auditing is retained. Removing the cookie leaves the existing admin 
 """
 
 from fastapi import Request
-from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 COOKIE = "farmcore_tour"
@@ -24,7 +23,8 @@ class TourMiddleware:
         if scope["type"] == "http":
             request = Request(scope)
             if is_tour(request) and request.method not in SAFE_METHODS:
-                response = JSONResponse({"detail": "Tour mode is read-only."}, status_code=403)
-                await response(scope, receive, send)
+                from farmcore.core.errors import refusal  # errors -> web -> tour
+
+                await refusal(request, 403, "Tour mode is read-only.")(scope, receive, send)
                 return
         await self.app(scope, receive, send)

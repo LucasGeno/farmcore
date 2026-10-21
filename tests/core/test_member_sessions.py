@@ -83,14 +83,17 @@ def _account(factory, *, login="farmer", role="owner", farm_id=None):
         return identity.id, farm_id
 
 
-def _login(browser, *, login="farmer", password=PASSWORD):
+def _login(browser, *, login="farmer", password=PASSWORD, next=None):
     import re
 
     page = browser.get("/login")
     nonce = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+    data = {"login": login, "password": password, "csrf_token": nonce}
+    if next is not None:
+        data["next"] = next
     return browser.post(
         "/login",
-        data={"login": login, "password": password, "csrf_token": nonce},
+        data=data,
         headers={"Origin": "https://testserver"},
         follow_redirects=False,
     )
@@ -1719,3 +1722,81 @@ def test_farm_removed_between_session_resolution_and_read_denies_without_metadat
             assert response.status_code == 403
             assert "farmer private farm" not in response.text
         assert browser.get("/fields/").status_code == 403
+
+
+HTML = {"Accept": "text/html,application/xhtml+xml"}
+
+
+def test_signed_out_browser_is_sent_to_login_and_returned_to_the_page(
+    settings, committed_session_factory
+):
+    from fastapi.testclient import TestClient
+
+    from farmcore.main import create_app
+
+    _account(committed_session_factory)
+    with TestClient(
+        create_app(settings, session_factory=committed_session_factory),
+        base_url="https://testserver",
+    ) as browser:
+        page = browser.get("/today/?view=week", headers=HTML, follow_redirects=False)
+        assert page.status_code == 303
+        assert page.headers["location"] == "/login?next=%2Ftoday%2F%3Fview%3Dweek"
+        api = browser.get("/today/", follow_redirects=False)
+        assert api.status_code == 403
+        assert api.json() == {"detail": "Authentication required."}
+
+        login = browser.get(page.headers["location"])
+        assert 'name="next" value="/today/?view=week"' in login.text
+        signed_in = _login(browser, next="/today/?view=week")
+        assert signed_in.status_code == 303
+        assert signed_in.headers["location"] == "/today/?view=week"
+
+
+@pytest.mark.parametrize(
+    "next_value",
+    ["//evil.example/today/", "https://evil.example/", "/\\evil.example", "/\t/evil.example"],
+)
+def test_login_next_never_leaves_this_site(settings, committed_session_factory, next_value):
+    from fastapi.testclient import TestClient
+
+    from farmcore.main import create_app
+
+    _account(committed_session_factory)
+    with TestClient(
+        create_app(settings, session_factory=committed_session_factory),
+        base_url="https://testserver",
+    ) as browser:
+        assert 'name="next"' not in browser.get("/login", params={"next": next_value}).text
+        response = _login(browser, next=next_value)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/"
+
+
+@pytest.mark.parametrize(
+    ("path", "detail", "phrase"),
+    [
+        ("/today/?farm=999999", "Farm access denied.", "no access to that farm"),
+        ("/apps", "Installation operator required.", "Only the installation operator"),
+    ],
+)
+def test_member_refusal_is_a_page_for_a_browser_and_json_for_a_client(
+    settings, committed_session_factory, path, detail, phrase
+):
+    from fastapi.testclient import TestClient
+
+    from farmcore.main import create_app
+
+    _account(committed_session_factory, role="advisor")
+    with TestClient(
+        create_app(settings, session_factory=committed_session_factory),
+        base_url="https://testserver",
+    ) as browser:
+        assert _login(browser).status_code == 303
+        page = browser.get(path, headers=HTML, follow_redirects=False)
+        assert page.status_code == 403
+        assert phrase in page.text
+        assert 'href="/"' in page.text  # home, without the refused farm
+        api = browser.get(path, follow_redirects=False)
+        assert api.status_code == 403
+        assert api.json() == {"detail": detail}
