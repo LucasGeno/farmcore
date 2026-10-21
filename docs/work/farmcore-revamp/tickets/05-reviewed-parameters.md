@@ -286,3 +286,31 @@ Measured alternatives on the same rows, no migration needed for either:
 
 Storing one series per farm run instead of per parcel needs a new table, so a core
 migration.
+
+### Advice storage: option A implemented — 2026-10-22
+
+Each new advice row keeps the exact hourly series the engine read (`hourly_inputs`,
+rejected values kept raw) and names its immutable parameter version by id and hash.
+Station observation rows and the configuration copy are no longer stored per row.
+Rows saved in the earlier shape keep reading their own configuration copy; the exact
+assessment read resolves the version row otherwise. No migration.
+`test_stored_series_and_version_reproduce_the_assessment` re-evaluates a saved row from
+its stored series and version (hash checked) after a later station correction and
+gets the same decision and reasons.
+
+Re-measured on a fresh scene B database, replayed daily 10–14 Apr plus one step at
+8 Jul: stored `props` 16,732–18,093 bytes per row in April (previously about 70 KB)
+and 49,247 bytes at season end (previously up to 190 KB). That is roughly 30 MB per
+10-parcel season at one evaluation a day, and about 0.7 GB at the hourly live cadence.
+
+Follow-ups, not in this ticket:
+
+- Option B: keep references only (station, evaluated window, observation count and
+  highest id, a SHA-256 digest of the series, rejected or missing hours) for about
+  2 KB per row. Station upserts can change an observation later, so the digest would
+  detect a changed input but not rebuild it; decide whether that is acceptable.
+- Store the hourly series once per farm evaluation instead of once per parcel. This
+  needs a new table, so **it needs a core migration** from the integration coordinator.
+
+`scripts/check.sh` after this change: ruff clean; **2774 passed, 3 skipped, 281 deselected
+in 456.04s**. Focused advisor/review: 504 passed, 118 deselected.
