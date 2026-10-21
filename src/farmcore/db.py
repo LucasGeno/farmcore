@@ -6,11 +6,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 
 from fastapi import Request
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from farmcore.core.tour import is_tour
 from farmcore.settings import Settings
+
+# A request transaction left idle this long is ended by Postgres, releasing its locks: a stuck
+# request then fails alone instead of holding farm locks until every pooled connection waits.
+# Far above any legitimate request (the longest waits on a 60 s recording's transcription).
+REQUEST_IDLE_IN_TRANSACTION_TIMEOUT = "5min"
 
 
 def make_engine(settings: Settings) -> Engine:
@@ -25,7 +30,15 @@ def get_session(request: Request) -> Iterator[Session]:
     """FastAPI dependency: one session per request from `app.state.session_factory`."""
     with request.app.state.session_factory() as session:
         session.info["tour"] = is_tour(request)
+        event.listen(session, "after_begin", _bound_idle_transaction)
         yield session
+
+
+def _bound_idle_transaction(session: Session, transaction, connection) -> None:
+    connection.execute(
+        text("SELECT set_config('idle_in_transaction_session_timeout', :t, true)"),
+        {"t": REQUEST_IDLE_IN_TRANSACTION_TIMEOUT},
+    )
 
 
 @contextmanager
