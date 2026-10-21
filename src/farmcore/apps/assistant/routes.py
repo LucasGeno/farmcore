@@ -23,6 +23,7 @@ import re
 import shutil
 import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -45,7 +46,7 @@ from farmcore.apps.chat.transcribe import WhisperTranscriber
 from farmcore.apps.fields.tools import mentioned_parcel, parcels
 from farmcore.apps.forecast import availability
 from farmcore.apps.operations.catalogue import products_for_farm
-from farmcore.core.access import Repo, ScopedRepository, default_farm
+from farmcore.core.access import Repo, ScopedRepository, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import Farm
 from farmcore.core.registry import visible_manifests
@@ -88,7 +89,7 @@ def ask(
     manifests = visible_manifests(request)
     if "assistant" not in {m.name for m in manifests}:
         raise HTTPException(404)
-    token, allowed = limits.take(request.app, request.cookies.get(limits.COOKIE))
+    token, allowed = _take_quota(request)
     if not allowed:
         return response(
             request, token, {"text": "Too many questions. Try again in a minute.", "links": []}, 429
@@ -233,7 +234,7 @@ def ask(
     )
 
 
-@router.post("/message", dependencies=[Depends(require_admin)])
+@router.post("/message", dependencies=[Depends(require_farm_owner)])
 def message(
     request: Request,
     repo: Repo,
@@ -248,16 +249,13 @@ def message(
     text = q.strip()
     if "chat" not in names or not _spray_turn(request, repo, text):
         return ask(request, repo, q, conversation)
-    token, allowed = limits.take(request.app, request.cookies.get(limits.COOKIE))
+    token, allowed = _take_quota(request)
     if not allowed:
         return response(request, token, {"text": "Too many messages. Try again in a minute."}, 429)
-    if repo.farm_id != default_farm(repo.session, request.app.state.settings).id:
-        return response(request, token, {"kind": "reply", "text": LOG_OTHER_FARM, "actions": []})
     message_id = time.time_ns() // 1000  # unique per message: the draft's idempotency key
+    deps = bound_chat_deps(request, repo)
     _end_request_transaction(repo)
-    out = chat.on_message(
-        chat_deps(request.app), Incoming(chat.WEB_CHAT_ID, text, None, message_id)
-    )
+    out = chat.on_message(deps, Incoming(chat.WEB_CHAT_ID, text, None, message_id))
     # The panel keeps one conversation: a spray turn counts, so the next question is not "fresh".
     key = _conversation_key(request, repo, token, conversation)
     generation = epoch(repo.session)
@@ -294,15 +292,16 @@ def _end_request_transaction(repo: ScopedRepository) -> None:
     repo.session.commit()
 
 
-@router.post("/confirm", dependencies=[Depends(require_admin)])
+@router.post("/confirm", dependencies=[Depends(require_farm_owner)])
 def confirm(
     request: Request, repo: Repo, action: str = Form(pattern=r"^(confirm|cancel):\d{1,12}$")
 ):
     """✅ / ❌ on a web draft; the chat app's ownership, replay and merge checks apply."""
     if "chat" not in {m.name for m in visible_manifests(request)}:
         raise HTTPException(404)
+    deps = bound_chat_deps(request, repo)
     _end_request_transaction(repo)
-    out = chat.on_callback(chat_deps(request.app), Callback(chat.WEB_CHAT_ID, action))
+    out = chat.on_callback(deps, Callback(chat.WEB_CHAT_ID, action))
     token = request.cookies.get(limits.COOKIE) or ""
     return response(request, token, _web_reply(request, repo, out))
 
@@ -315,20 +314,29 @@ def _spray_turn(request: Request, repo: Repo, text: str) -> bool:
     if said == intent.QUESTION:
         return False
     now = get_clock(repo.session, request.app.state.settings).now()
-    open_draft = clarification.load(repo.session, repo.farm_id, chat.WEB_CHAT_ID, now)
+    open_draft = clarification.load(
+        repo.session, repo.farm_id, _capture_binding(request, repo).state_key, now
+    )
     return open_draft is not None or (
-        text.casefold() in CANCEL_WORDS and _has_pending(repo.session, request)
+        text.casefold() in CANCEL_WORDS and _has_pending(repo, request)
     )
 
 
-def _has_pending(session, request) -> bool:
+def _has_pending(repo, request) -> bool:
+    from sqlalchemy import or_
+
     from farmcore.core.models.canonical import Log, LogSource
 
-    prefix = chat._chat_key(chat.WEB_CHAT_ID)
+    session = repo.session
+    prefixes = _capture_binding(request, repo).prefixes
     return (
         session.query(LogSource.id)
         .join(Log, Log.id == LogSource.log_id)
-        .filter(Log.status == "pending", LogSource.external_key.startswith(prefix))
+        .filter(
+            Log.farm_id == repo.farm_id,
+            Log.status == "pending",
+            or_(*(LogSource.external_key.startswith(prefix) for prefix in prefixes)),
+        )
         .first()
         is not None
     )
@@ -355,9 +363,30 @@ def _web_reply(request: Request, repo: Repo, out: Outgoing) -> dict:
     else:
         now = get_clock(repo.session, request.app.state.settings).now()
         repo.session.expire_all()
-        open_draft = clarification.load(repo.session, repo.farm_id, chat.WEB_CHAT_ID, now)
+        open_draft = clarification.load(
+            repo.session, repo.farm_id, _capture_binding(request, repo).state_key, now
+        )
         kind = "clarify" if open_draft is not None else "reply"
     return {"kind": kind, "text": "\n".join(lines), "actions": actions, "links": links}
+
+
+def _capture_binding(request, repo):
+    from farmcore.core.access import FarmNotSeeded, default_farm
+    from farmcore.core.identity import principal_for
+
+    operator = is_admin(request)
+    legacy = False
+    if operator:
+        # Private-only installations have no shared demo draft namespace.
+        with suppress(FarmNotSeeded):
+            legacy = default_farm(repo.session, request.app.state.settings).id == repo.farm_id
+    return chat.CaptureBinding(repo.farm_id, principal_for(request), operator, legacy)
+
+
+def bound_chat_deps(request, repo):
+    from dataclasses import replace
+
+    return replace(chat_deps(request.app), capture_binding=_capture_binding(request, repo))
 
 
 def chat_deps(app) -> chat.ChatDeps:
@@ -457,7 +486,7 @@ def voice(request: Request):
 
 @router.post("/transcribe", dependencies=[Depends(require_admin)])
 async def transcribe(request: Request, repo: Repo):
-    token, allowed = limits.take(request.app, request.cookies.get(limits.COOKIE))
+    token, allowed = _take_quota(request)
     if not allowed:
         return response(request, token, {"detail": "Too many requests. Try again soon."}, 429)
     form = await _capped_form(request)
@@ -521,6 +550,14 @@ def _transcribe(request: Request, repo: ScopedRepository, audio: UploadFile) -> 
     if transcript.seconds > MAX_AUDIO_SECONDS:
         raise HTTPException(413, f"Recording longer than {MAX_AUDIO_SECONDS} seconds.")
     return transcript.text[:500]
+
+
+def _take_quota(request: Request) -> tuple[str, bool]:
+    from farmcore.core.identity import principal_for
+
+    principal = principal_for(request)
+    member = principal.identity_id if principal is not None and not is_admin(request) else None
+    return limits.take(request.app, request.cookies.get(limits.COOKIE), member)
 
 
 def response(request, token, body, status=200):

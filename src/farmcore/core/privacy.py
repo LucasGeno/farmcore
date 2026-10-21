@@ -35,7 +35,13 @@ class PrivacyMiddleware:
                     or path.startswith(("/demo", "/debug", "/chat"))
                     or (
                         path.startswith("/assistant/")
-                        and path not in {"/assistant/ask", "/assistant/voice"}
+                        and path
+                        not in {
+                            "/assistant/ask",
+                            "/assistant/voice",
+                            "/assistant/message",
+                            "/assistant/confirm",
+                        }
                     )
                 )
                 if restricted and not operator_authenticated(request):

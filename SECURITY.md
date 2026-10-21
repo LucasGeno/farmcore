@@ -20,8 +20,8 @@ explicitly bound to the grant. This also applies to intentionally public demo fa
 | Who | Can |
 |---|---|
 | Installation operator (`ADMIN_TOKEN`) | Installation controls, all configured farms, global model-call audit and legacy capture |
-| Farm owner | Read/export assigned farms, import machine operations, set production/inventory thresholds, assign/revoke existing local identities and recipient-bound grants |
-| Farm advisor | Read/export assigned farms; no arbitrary operation writes, membership administration or installation controls |
+| Farm owner | Read/export assigned farms, import machine operations, log and confirm sprays from the assistant panel on the selected farm, preview/confirm/cancel corrections of confirmed sprays, set production/inventory thresholds, assign/revoke existing local identities and recipient-bound grants |
+| Farm advisor | Read/export assigned farms and finalized correction history; no spray capture, corrections, arbitrary operation writes, membership administration or installation controls |
 | Anonymous visitor | Health, static files and sign-in; no private farm reads or writes |
 | Explicit demo visitor | Read only explicitly designated demo farms; no model-call audit |
 | Tour visitor | Same farm authority as the underlying identity; every mutation refused |
@@ -78,9 +78,20 @@ requests remain available for trusted scripts. Never put credentials or tokens i
 - Public showcases require both `DEMO_MODE=true` and `DEMO_FARM_IDS=[1,2]` (actual IDs of
   intentionally public farms). Seeding alone does not publish a farm. Use a dedicated showcase
   database. A forged selector or tour cookie cannot publish other farms.
-- Global model-call audit, legacy shared web capture and its pending/history/draft paths remain
-  operator-only. Member activity/history excludes unbound pending draft metadata. The safe
-  read-only assistant uses the authenticated principal and selected farm for tools and history.
+- Global model-call audit and the legacy shared web drafts (written before capture was bound)
+  remain operator-only, and only on the default farm. Member activity/history excludes unbound
+  pending draft metadata. The safe read-only assistant uses the authenticated principal and
+  selected farm for tools and history.
+- Web spray capture is open to farm owners and bound to the selected farm and the signed-in
+  identity: drafts, clarifications and confirmations are keyed by both, another owner, farm or
+  advisor cannot see or confirm them, and the owner's session and membership are rechecked under
+  the farm lock before every write. Mutations need the CSRF token.
+- Model policy differs by path on purpose. Spray capture uses the configured extractor (Gemini
+  when set up) for owners too, because drafting a spray from free text needs it; the read-only
+  assistant's model tool chooser serves only the operator, and members get the keyword router.
+  Farms flagged `no_model` never reach a model on either path. The assistant's per-minute quota
+  counts a signed-in member by identity (clearing the cookie does not reset it) and anonymous
+  browsers by cookie.
 
 ## Deployment checklist
 
@@ -155,8 +166,12 @@ status; it never exports parameter snapshots, reviewer identity/notes or raw wea
 consent does not imply logs, stations or private parameter/correction history. Grant repositories
 fail closed for unlisted app resources, audit and writes even when legacy scope arrays are broad.
 There is no generic grant model-table export endpoint.
-The shared `WEB_CHAT_ID` capture/confirmation workflow remains operator-only until drafts and
-confirmations are bound to a principal and farm; ordinary membership login does not unlock it.
+Spray corrections keep the original record, its source receipts and saved weather in an audit
+snapshot with the reason, actor and time. Correction pages and JSON show only the corrected
+facts and each source's type and time, never transcripts, chat ids or machine files. A pending
+correction is visible only to its author; finalized ones to the farm's members. Once confirmed or
+cancelled, a correction is immutable by application rule only: the database role can still
+update the row.
 Advisor recommendation-review writes arrive with the review feature; advisors currently read.
 The operator-token sign-in limiter remains per-process and in memory; ordinary member login
 uses the persisted budgets above. No independent validation of the agronomic rules is claimed.

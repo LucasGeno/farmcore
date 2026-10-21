@@ -93,6 +93,15 @@
     block.append(row);
     row.querySelector('button').focus();
   }
+  function mutate(path, body) {
+    const url = new URL(path, location.origin);
+    if (url.origin !== location.origin) throw new Error('Foreign mutation URL');
+    const headers = {'Accept': 'application/json'};
+    const nonce = document.querySelector('meta[name="csrf-token"]')?.content;
+    if (nonce) headers['X-CSRF-Token'] = nonce;
+    return fetch(url, {method: 'POST', body, headers, credentials: 'same-origin',
+      cache: 'no-store', signal: request.signal});
+  }
   async function decide(row, action) {
     if (busy) return;
     const current = generation;
@@ -103,7 +112,7 @@
     try {
       const body = new FormData();
       body.append('action', action);
-      const response = await fetch(new URL(confirmUrl, location.origin), {method: 'POST', body, signal: request.signal});
+      const response = await mutate(confirmUrl, body);
       const answer = await response.json().catch(() => ({}));
       if (current !== generation) return;
       if (!response.ok) { row.querySelectorAll('button').forEach(b => { b.disabled = false; }); say(answer.text || 'Could not save. Please try again.'); return; }
@@ -135,7 +144,7 @@
         const body = new FormData();
         body.append('q', question);
         body.append('conversation', conversation);
-        response = await fetch(new URL(messageUrl, location.origin), {method: 'POST', body, headers: {'Accept': 'application/json'}, cache: 'no-store', signal: request.signal});
+        response = await mutate(messageUrl, body);
       } else {
         const url = new URL(dialog.dataset.askUrl, location.origin);
         url.searchParams.set('q', question);

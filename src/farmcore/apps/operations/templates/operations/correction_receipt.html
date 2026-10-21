@@ -1,0 +1,26 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% block title %}Correction preview · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Correction " ~ correction.status, "Original evidence is retained. Only confirmation changes the spray and computed stock.") %}{% endcall %}
+<p class="font-semibold">{{ correction.reason }}</p>
+<p class="mt-1 text-sm text-muted">{{ correction.actor }} · {{ correction.created_at }}{% if correction.finalized_at %} · Finalized {{ correction.finalized_at }}{% endif %}</p>
+<div class="mt-4 grid gap-4 sm:grid-cols-2">
+{% for label, facts in [('Before', correction.before), ('After', correction.after)] %}
+<section class="min-w-0 rounded-xl border border-line bg-surface p-4"><h2 class="text-lg font-semibold">{{ label }}</h2>
+<p class="mt-2 break-words">{{ facts.ts_start }}</p><p class="mt-1">Parcels: {% for parcel_id in facts.parcel_ids %}{{ parcel_names.get(parcel_id, 'Parcel ' ~ parcel_id) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+<ul class="mt-2 space-y-1">{% for q in facts.quantities %}<li class="break-words">{{ product_names.get(q.product_id, q.label or 'Product ' ~ q.product_id) }} · {{ q.value }} {{ q.unit }}</li>{% endfor %}</ul>
+<p class="mt-2 break-words">{{ facts.notes or 'No notes' }}</p>
+<p class="mt-3 text-sm text-muted">Sources kept unchanged: {% for source in facts.sources %}{{ source.source_type }} · {{ source.received_at }}{% if not loop.last %}; {% endif %}{% else %}none{% endfor %}</p>
+</section>
+{% endfor %}
+</div>
+{% if can_finalize and is_farm_owner %}<div class="mt-4 flex flex-wrap gap-3">
+{% for action, label in [('confirm', 'Confirm correction'), ('cancel', 'Cancel correction')] %}
+<form method="post" action="{{ resolved_farm_url('/operations/corrections/' ~ correction.id ~ '/' ~ action) }}">
+{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+<input type="hidden" name="confirm" value="yes"><button type="submit" class="min-h-[44px] rounded-lg border border-line bg-surface px-4 font-semibold hover:bg-ground">{{ label }}</button></form>
+{% endfor %}
+</div>{% endif %}
+<a class="mt-4 inline-flex min-h-[44px] items-center underline" href="{{ resolved_farm_url('/operations/logs/' ~ correction.log_id ~ '/corrections') }}">Back to correction history</a>
+{% endblock %}

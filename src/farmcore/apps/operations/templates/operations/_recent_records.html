@@ -24,6 +24,9 @@
       <p class="mt-1 min-w-0 break-words text-sm">
         {% for p in log.parcels %}<a href="{{ farm_url('/operations/parcels/' ~ p.id) }}" class="mr-2 inline-flex min-h-[44px] max-w-full items-center gap-1 py-1 underline decoration-line hover:decoration-ink">{{ parcel_shape(p.id) }}<span class="min-w-0 break-words">{{ p.alias }} {{ p.name }}</span></a>{% endfor %}
       </p>
+      {% if log.type == "spray" and (is_farm_owner or principal_login) %}
+      <a href="{{ resolved_farm_url('/operations/logs/' ~ log.id ~ '/corrections') }}" class="inline-flex min-h-[44px] items-center py-2 text-sm underline">{{ "Correct or view history" if is_farm_owner else "Correction history" }}</a>
+      {% endif %}
     </li>
     {% else %}
     <li class="rounded-xl border border-dashed border-line p-4 text-sm text-muted">No records yet. Send a voice note to the bot{% if is_admin %}, or run <code>farmcore seed --scene B</code>{% endif %}.</li>
