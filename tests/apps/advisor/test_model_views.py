@@ -71,7 +71,7 @@ def test_tour_can_read_models_and_app_off_removes_entry(client, seeded, step):
     assert "Spray copper" in page and "Log a spray" not in page
     assert "https://t.me/" not in page
     client.cookies.clear()
-    for name in ("kpi", "chat", "forecast", "advisor"):
+    for name in ("kpi", "chat", "forecast", "review", "advisor"):
         assert client.post(f"/apps/{name}/uninstall").status_code == 200
     home = client.get("/today/").text
     assert 'hx-get="/advisor/today' not in home
