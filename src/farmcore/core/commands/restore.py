@@ -53,7 +53,7 @@ import tempfile
 import time
 import traceback
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -800,6 +800,9 @@ class Copy:
 
 
 _DATA_IN = "the data is in, paused; run migrate to finish"
+# The steps of a restore after the checks, in order; `restore_bundle` calls `on_step` with each
+# name just before that step, under the same signal handling as the step itself.
+STEPS = ("create", "create_loader", "load", "drop_loader", "swap", "drop_old", "migrate")
 _STAGING_SUFFIX = re.compile(r"_restore_[0-9a-f]{6}_([0-9a-f]{8})$")
 
 
@@ -807,9 +810,17 @@ def _q(conn, name: str) -> str:
     return conn.dialect.identifier_preparer.quote(name)
 
 
-def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[dict, str]:
+def restore_bundle(
+    settings: Settings,
+    bundle: Path,
+    identity: Path,
+    on_step: Callable[[str], None] | None = None,
+) -> tuple[dict, str]:
     """Verify `bundle` completely, then restore its rows into the empty target as a new
-    installation; (manifest, new installation id). Run inside `_stop_on_signals`."""
+    installation; (manifest, new installation id). Run inside `_stop_on_signals`.
+
+    `on_step(name)` runs just before each of `STEPS` (a stop or a lock at that moment)."""
+    step = on_step or (lambda _name: None)
     sweep_temp()
     preflight(bundle, identity)
     with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as name:
@@ -828,16 +839,22 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                 # delivered once this block is left (outside the cleanup below).
                 with contextlib.ExitStack() as deferred:
                     try:
+                        step("create")
                         copy.create()
                         copy.build_schema(heads)
                         lines = copy.check_contents(dump, tmp)
+                        step("create_loader")
                         copy.create_loader()
+                        step("load")
                         copy.load(dump, lines, tmp)
+                        step("drop_loader")
                         copy.drop_loader()
                         check_target(settings)  # still empty: nobody started using it meanwhile
                         deferred.enter_context(_signals_deferred())
+                        step("swap")
                         old = copy.swap()
                         swapped = True
+                        step("drop_old")
                         left = copy.drop_old(old)
                         if left:
                             typer.echo(f"restore: warning: the data is in, but {left}", err=True)
@@ -845,6 +862,7 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                         _close_what_failed(exc)
                         copy.discard()
                         raise
+                step("migrate")
                 new_id = migrate_installation(settings)
                 _STOPS.deferring = True  # done: a stop now only waits for the report
             except Interrupted as exc:
@@ -866,6 +884,7 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
 def register(cli: typer.Typer) -> None:
     @cli.command()
     def restore(
+        ctx: typer.Context,
         # Readability is checked by restore itself, with a hint for containers.
         bundle: Path = typer.Argument(
             ..., help="Bundle written by `farmcore backup`.", readable=False
@@ -880,11 +899,13 @@ def register(cli: typer.Typer) -> None:
     ) -> None:
         """Restore a backup into this new installation's empty database (DATABASE_URL, owner)."""
         settings = get_settings()
+        # A caller that runs the command in process may pass `obj={"on_step": ...}`.
+        on_step = ctx.obj.get("on_step") if isinstance(ctx.obj, dict) else None
         # Around the messages too: a second stop signal must not end the command before it
         # says what the first one left.
         with _stop_on_signals():
             try:
-                manifest, new_id = restore_bundle(settings, bundle, identity)
+                manifest, new_id = restore_bundle(settings, bundle, identity, on_step)
             except (BundleError, MigrateError) as exc:
                 typer.echo(f"restore: {exc}", err=True)
                 raise typer.Exit(1) from None
