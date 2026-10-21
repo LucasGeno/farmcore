@@ -51,7 +51,9 @@ class Effective:
     def identity(self):
         return {
             "id": self.version.id if self.version else None,
-            "hash": self.version.config_hash if self.version else digest(self.config),
+            # The digest of the configuration that actually ran; a read verifies the named
+            # version row against it.
+            "hash": digest(self.config),
             "status": self.status,
             "baseline": self.version.baseline if self.version else True,
             "scope": self.scope,

@@ -589,16 +589,31 @@ def current_availability(repo, now, tz):
     return assessment.assessment_status, headline(assessment, series, config, now, tz)
 
 
-def saved_config(repo: ScopedRepository, row: Advice) -> dict | None:
-    """The configuration a saved assessment used: its own copy (rows saved before configs were
-    stored by version) or the immutable parameter version it names."""
+def saved_config(repo: ScopedRepository, row: Advice) -> tuple[dict | None, str]:
+    """(configuration, verification) of a saved assessment.
+
+    Rows saved before configurations were stored by version carry their own copy
+    (`"saved copy"`). Otherwise the row names an immutable parameter version and the digest
+    of the configuration that ran: the version row is used only when its configuration has
+    that digest (`"verified"`); a missing version or a different digest is `"unverifiable"`
+    and no configuration is returned.
+    """
     props = row.props or {}
     if "effective_config" in props:
-        return props["effective_config"]
-    version_id = (props.get("config_version") or {}).get("id")
-    if version_id is None:
-        return None
+        return props["effective_config"], "saved copy"
+    named = props.get("config_version") or {}
+    if named.get("id") is None or not named.get("hash"):
+        return None, "unverifiable"
     from farmcore.apps.review.models import ParameterVersion
+    from farmcore.apps.review.service import digest
 
-    version = repo.get(ParameterVersion, version_id, scope="parameters:read")
-    return version.effective_config if version else None
+    version = repo.get(ParameterVersion, named["id"], scope="parameters:read")
+    if version is None:
+        return None, "unverifiable"
+    try:
+        ran = digest(AdvisorConfig.model_validate(version.effective_config))
+    except ValueError:
+        return None, "unverifiable"
+    if ran != named["hash"]:
+        return None, "unverifiable"
+    return version.effective_config, "verified"

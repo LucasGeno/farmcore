@@ -95,3 +95,19 @@ def test_as_dict_is_the_json_contract():
         "priority_why": None,
         "priority_assumption": False,
     }
+
+
+@pytest.mark.parametrize(
+    "pct,window,level",
+    [(55.0, None, 3), (1.2, T, 2)],  # observed lower bound past the alert; still before it
+)
+def test_limited_incubation_states_unknown_timing_and_invents_no_window(pct, window, level):
+    reasons = _reasons(pct=pct, symptoms=T)
+    reasons[2]["inputs"] |= {"coverage": "limited", "expected_symptoms": None}
+
+    p = _p("wait", reasons=reasons, window=window)
+
+    assert p.level == level
+    assert "Incubation timing is not evaluable" in p.why
+    assert "before the alert stage" not in p.why
+    assert "opens before it ends" not in p.why
