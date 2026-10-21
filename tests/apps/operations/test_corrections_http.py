@@ -326,13 +326,10 @@ def test_retried_request_key_returns_the_same_correction_and_never_rewrites_it(
 
 
 def test_postcommit_advice_runs_once_for_selected_farm_only(
-    settings, correction_case, committed_session_factory
+    settings, correction_case, committed_session_factory, pooled_session_factory
 ):
     """On a pooled engine whose lock waits give up after 1 s: an advisor run that waited on the
     request's farm lock would fail (or hang the installation) instead of writing advice."""
-    from sqlalchemy import create_engine
-    from sqlalchemy.orm import sessionmaker
-
     from farmcore.core.models.canonical import Advice, Farm
     from tests.apps.chat.test_handlers import SQUARE
     from tests.apps.operations.test_spray_weather_capture import add_station, hours
@@ -357,25 +354,21 @@ def test_postcommit_advice_runs_once_for_selected_farm_only(
                 for farm_id in (c.farm_id, other_id)
             ]
 
-    engine = create_engine(settings.database_url, connect_args={"options": "-c lock_timeout=1000"})
-    app = create_app(settings, session_factory=sessionmaker(bind=engine, expire_on_commit=False))
-    try:
-        with TestClient(app, base_url="https://testserver", headers=dict(c.browser.headers)) as b:
-            correction_id = b.post(c.endpoint, json=c.body).json()["id"]
-            assert advice_counts() == [0, 0]
-            confirm = f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
-            assert b.post(confirm).status_code == 200
-            assert advice_counts() == [3, 0]
-            assert b.post(confirm).status_code == 200
-            assert advice_counts() == [3, 0]
-            c.body["request_key"] = "cancel-no-advice"
-            c.body["changes"]["quantities"][0]["value"] = "0.5"
-            correction_id = b.post(c.endpoint, json=c.body).json()["id"]
-            cancel = f"/operations/corrections/{correction_id}/cancel?farm={c.farm_id}"
-            assert b.post(cancel).status_code == 200
-            assert advice_counts() == [3, 0]
-    finally:
-        engine.dispose()
+    app = create_app(settings, session_factory=pooled_session_factory)
+    with TestClient(app, base_url="https://testserver", headers=dict(c.browser.headers)) as b:
+        correction_id = b.post(c.endpoint, json=c.body).json()["id"]
+        assert advice_counts() == [0, 0]
+        confirm = f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
+        assert b.post(confirm).status_code == 200
+        assert advice_counts() == [3, 0]
+        assert b.post(confirm).status_code == 200
+        assert advice_counts() == [3, 0]
+        c.body["request_key"] = "cancel-no-advice"
+        c.body["changes"]["quantities"][0]["value"] = "0.5"
+        correction_id = b.post(c.endpoint, json=c.body).json()["id"]
+        cancel = f"/operations/corrections/{correction_id}/cancel?farm={c.farm_id}"
+        assert b.post(cancel).status_code == 200
+        assert advice_counts() == [3, 0]
 
 
 def test_real_constraint_failure_rolls_back_canonical_audit_and_postcommit(

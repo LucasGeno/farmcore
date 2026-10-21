@@ -174,6 +174,22 @@ def committed_session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]
 
 
 @pytest.fixture
+def pooled_session_factory(
+    settings: Settings, committed_session_factory: sessionmaker[Session]
+) -> Iterator[sessionmaker[Session]]:
+    """Opt-in: real commits on a pooled engine (the deployed shape) whose lock waits give up
+    after 1 s instead of hanging.
+
+    `client` runs every session on one connection, so it cannot see one request's sessions, or
+    two requests, blocking each other on farm locks. Pass this to `create_app(session_factory=)`
+    (and to `ChatDeps`) for that. Rows are truncated after, as with `committed_session_factory`.
+    """
+    engine = create_engine(settings.database_url, connect_args={"options": "-c lock_timeout=1000"})
+    yield sessionmaker(bind=engine, expire_on_commit=False)
+    engine.dispose()
+
+
+@pytest.fixture
 def data_dir() -> Path:
     """The demo datasets (`sample-data`, or a local `data/raw`); skips when absent."""
     if not DATA_DIR.is_dir():

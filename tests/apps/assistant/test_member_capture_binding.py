@@ -21,19 +21,19 @@ def member_browser(app, login):
 
 
 def test_owners_cancel_and_confirm_only_their_own_drafts_and_a_double_confirm_logs_once(
-    settings, committed_session_factory
+    settings, pooled_session_factory
 ):
     from concurrent.futures import ThreadPoolExecutor
 
     from farmcore.core.models.canonical import Event
 
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         ids = seed_farm(session, settings)
         farm_id = session.get(Parcel, ids["P1"]).farm_id
-    _account(committed_session_factory, login="alice", farm_id=farm_id)
-    bob_id, _ = _account(committed_session_factory, login="bob", farm_id=farm_id)
-    app = create_app(settings, session_factory=committed_session_factory)
-    app.state.assistant_chat_deps = ChatDeps(committed_session_factory, fake(), settings)
+    _account(pooled_session_factory, login="alice", farm_id=farm_id)
+    bob_id, _ = _account(pooled_session_factory, login="bob", farm_id=farm_id)
+    app = create_app(settings, session_factory=pooled_session_factory)
+    app.state.assistant_chat_deps = ChatDeps(pooled_session_factory, fake(), settings)
     with member_browser(app, "alice") as alice, member_browser(app, "bob") as bob:
         actions = {}
         for name, browser in (("alice", alice), ("bob", bob)):
@@ -57,27 +57,25 @@ def test_owners_cancel_and_confirm_only_their_own_drafts_and_a_double_confirm_lo
                 )
             )
         assert [r.status_code for r in replies] == [200, 200]
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         [saved] = session.scalars(select(Log)).all()  # alice's draft is gone, bob's is logged
         assert saved.status == "done" and saved.farm_id == farm_id
         assert saved.sources[0].external_key.startswith(f"web:farm:{farm_id}:identity:{bob_id}:")
         assert len(session.scalars(select(Event).where(Event.kind == "log.confirmed")).all()) == 1
 
 
-def test_selected_private_farm_and_clarification_are_not_shared(
-    settings, committed_session_factory
-):
+def test_selected_private_farm_and_clarification_are_not_shared(settings, pooled_session_factory):
     from farmcore.apps.chat.extractor import RegexExtractor
     from farmcore.core.models.canonical import Farm
     from farmcore.core.models.identity import FarmMembership
     from tests.apps.chat.test_handlers import SQUARE
 
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         ids = seed_farm(session, settings)
         default_id = session.get(Parcel, ids["P1"]).farm_id
-    alice_id, _ = _account(committed_session_factory, login="alice", farm_id=default_id)
-    _account(committed_session_factory, login="bob", farm_id=default_id)
-    with committed_session_factory() as session:
+    alice_id, _ = _account(pooled_session_factory, login="alice", farm_id=default_id)
+    _account(pooled_session_factory, login="bob", farm_id=default_id)
+    with pooled_session_factory() as session:
         private = Farm(name="Alice second farm")
         session.add(private)
         session.flush()
@@ -89,8 +87,8 @@ def test_selected_private_farm_and_clarification_are_not_shared(
             ]
         )
         session.commit()
-    app = create_app(settings, session_factory=committed_session_factory)
-    app.state.assistant_chat_deps = ChatDeps(committed_session_factory, RegexExtractor(), settings)
+    app = create_app(settings, session_factory=pooled_session_factory)
+    app.state.assistant_chat_deps = ChatDeps(pooled_session_factory, RegexExtractor(), settings)
     with member_browser(app, "alice") as alice, member_browser(app, "bob") as bob:
         first = alice.post(
             f"/assistant/message?farm={private_id}",
@@ -121,7 +119,7 @@ def test_selected_private_farm_and_clarification_are_not_shared(
             ]
             == "done"
         )
-        with committed_session_factory() as session:
+        with pooled_session_factory() as session:
             [saved] = session.scalars(select(Log)).all()
             assert saved.farm_id == private_id and saved.status == "done"
 
@@ -132,31 +130,31 @@ def test_selected_private_farm_and_clarification_are_not_shared(
     "deny",
     ["advisor", "missing-csrf", "session", "foreign", "tour"],
 )
-def test_member_capture_and_confirmation_fail_closed(settings, committed_session_factory, deny):
+def test_member_capture_and_confirmation_fail_closed(settings, pooled_session_factory, deny):
     from datetime import UTC, datetime
 
     from sqlalchemy import update
 
     from farmcore.core.models.identity import LocalSession
 
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         ids = seed_farm(session, settings)
         farm_id = session.get(Parcel, ids["P1"]).farm_id
     identity_id, _ = _account(
-        committed_session_factory,
+        pooled_session_factory,
         login="alice",
         farm_id=None if deny == "foreign" else farm_id,
         role="advisor" if deny == "advisor" else "owner",
     )
-    app = create_app(settings, session_factory=committed_session_factory)
-    app.state.assistant_chat_deps = ChatDeps(committed_session_factory, fake(), settings)
+    app = create_app(settings, session_factory=pooled_session_factory)
+    app.state.assistant_chat_deps = ChatDeps(pooled_session_factory, fake(), settings)
     with member_browser(app, "alice") as browser:
         if deny == "missing-csrf":
             del browser.headers["X-CSRF-Token"]
         elif deny == "tour":
             browser.cookies.set("farmcore_tour", "1")
         elif deny == "session":
-            with committed_session_factory() as session:
+            with pooled_session_factory() as session:
                 session.execute(
                     update(LocalSession)
                     .where(LocalSession.identity_id == identity_id)
@@ -177,13 +175,13 @@ def test_member_capture_and_confirmation_fail_closed(settings, committed_session
             == 403
         )
         assert browser.post(f"/assistant/transcribe?farm={farm_id}").status_code == 403
-        with committed_session_factory() as session:
+        with pooled_session_factory() as session:
             assert session.scalars(select(Log)).all() == []
 
 
 @pytest.mark.parametrize("race", ["session-revoked", "session-revoked-on-clarify", "farm-deleted"])
 def test_authority_lost_during_external_extraction_writes_nothing(
-    settings, committed_session_factory, race
+    settings, pooled_session_factory, race
 ):
     """The handler closes its read transaction before the model call; whatever changes while
     the model runs is rechecked under the farm lock before anything is written."""
@@ -195,7 +193,7 @@ def test_authority_lost_during_external_extraction_writes_nothing(
     from farmcore.core.models.identity import LocalSession
     from tests.apps.chat.test_handlers import SQUARE
 
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         seed_farm(session, settings)
         private = Farm(name="Alice's farm")
         session.add(private)
@@ -203,12 +201,12 @@ def test_authority_lost_during_external_extraction_writes_nothing(
         farm_id = private.id
         session.add(Parcel(farm_id=farm_id, alias="P1", name="Private P1", area_ha=1, geom=SQUARE))
         session.commit()
-    identity_id, _ = _account(committed_session_factory, login="alice", farm_id=farm_id)
+    identity_id, _ = _account(pooled_session_factory, login="alice", farm_id=farm_id)
     reader = fake(dose_value=None, dose_unit=None) if race.endswith("clarify") else fake()
 
     class ExternalReader:
         def extract(self, request):
-            with committed_session_factory.begin() as session:
+            with pooled_session_factory.begin() as session:
                 if race == "farm-deleted":
                     for table in ("access_log", "data_grant", "parcel", "farm_membership", "farm"):
                         column = "id" if table == "farm" else "farm_id"
@@ -223,14 +221,14 @@ def test_authority_lost_during_external_extraction_writes_nothing(
                     )
             return reader.extract(request)
 
-    app = create_app(settings, session_factory=committed_session_factory)
-    app.state.assistant_chat_deps = ChatDeps(committed_session_factory, ExternalReader(), settings)
+    app = create_app(settings, session_factory=pooled_session_factory)
+    app.state.assistant_chat_deps = ChatDeps(pooled_session_factory, ExternalReader(), settings)
     with member_browser(app, "alice") as browser:
         reply = browser.post(
             f"/assistant/message?farm={farm_id}", data={"q": "I sprayed P1 copper this morning"}
         )
         assert reply.status_code == 403
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         assert session.scalars(select(Log)).all() == []
         assert session.scalars(select(LogSource)).all() == []
 
@@ -246,24 +244,24 @@ def test_authority_lost_during_external_extraction_writes_nothing(
     ],
 )
 def test_capture_controls_appear_only_for_an_owner_on_the_selected_farm(
-    settings, committed_session_factory, viewer, path, capture
+    settings, pooled_session_factory, viewer, path, capture
 ):
     from farmcore.core.models.canonical import Farm
     from farmcore.core.models.identity import FarmMembership
 
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         ids = seed_farm(session, settings)
         farm_id = session.get(Parcel, ids["P1"]).farm_id
     role = "advisor" if viewer == "advisor" else "owner"
-    identity_id, _ = _account(committed_session_factory, login="alice", farm_id=farm_id, role=role)
-    with committed_session_factory() as session:
+    identity_id, _ = _account(pooled_session_factory, login="alice", farm_id=farm_id, role=role)
+    with pooled_session_factory() as session:
         other = Farm(name="Second owned farm")
         session.add(other)
         session.flush()
         other_id = other.id
         session.add(FarmMembership(identity_id=identity_id, farm_id=other_id, role="owner"))
         session.commit()
-    app = create_app(settings, session_factory=committed_session_factory)
+    app = create_app(settings, session_factory=pooled_session_factory)
     if viewer == "operator":
         browser = TestClient(
             app,
@@ -295,31 +293,31 @@ def test_capture_controls_appear_only_for_an_owner_on_the_selected_farm(
     ],
 )
 def test_original_shared_web_draft_is_claimable_only_by_the_default_farm_operator(
-    settings, committed_session_factory, claimant, via, claimed
+    settings, pooled_session_factory, claimant, via, claimed
 ):
     from farmcore.apps.chat.dto import Incoming
     from farmcore.apps.chat.handlers import WEB_CHAT_ID, on_message
     from farmcore.core.models.canonical import Farm
 
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         ids = seed_farm(session, settings)
         farm_id = session.get(Parcel, ids["P1"]).farm_id
-    deps = ChatDeps(committed_session_factory, fake(), settings)
+    deps = ChatDeps(pooled_session_factory, fake(), settings)
     old = on_message(
         deps, Incoming(WEB_CHAT_ID, "I sprayed P1 copper 2 kg this morning", None, 123)
     )
     if claimant == "operator-on-other-farm":
-        with committed_session_factory() as session:
+        with pooled_session_factory() as session:
             other = Farm(name="Other farm")
             session.add(other)
             session.flush()
             [pending] = session.scalars(select(Log)).all()
             pending.farm_id = farm_id = other.id
             session.commit()
-    app = create_app(settings, session_factory=committed_session_factory)
+    app = create_app(settings, session_factory=pooled_session_factory)
     app.state.assistant_chat_deps = deps
     if claimant == "member":
-        _account(committed_session_factory, login="alice", farm_id=farm_id)
+        _account(pooled_session_factory, login="alice", farm_id=farm_id)
         browser = member_browser(app, "alice")
     else:
         token = settings.admin_token.get_secret_value()
@@ -332,14 +330,14 @@ def test_original_shared_web_draft_is_claimable_only_by_the_default_farm_operato
             reply = browser.post(f"/assistant/confirm?farm={farm_id}", data={"action": action})
         assert reply.status_code == 200, reply.text
         assert reply.json()["kind"] == ("done" if claimed else "reply")
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         [draft] = session.scalars(select(Log)).all()
         assert draft.status == ("done" if claimed else "pending") and draft.farm_id == farm_id
         assert draft.sources[0].external_key == "web:farmer:123"
 
 
 def test_no_model_selected_farm_uses_local_capture_without_mutating_enabled_extractor(
-    settings, committed_session_factory, monkeypatch
+    settings, pooled_session_factory, monkeypatch
 ):
     import httpx
     from pydantic import SecretStr
@@ -347,7 +345,7 @@ def test_no_model_selected_farm_uses_local_capture_without_mutating_enabled_extr
     from farmcore.core.models.canonical import Farm
     from tests.apps.chat.test_handlers import SQUARE
 
-    factory = committed_session_factory
+    factory = pooled_session_factory
     with factory() as s:
         ids = seed_farm(s, settings)
         default = s.get(Parcel, ids["P1"]).farm_id
@@ -423,15 +421,15 @@ def test_no_model_selected_farm_uses_local_capture_without_mutating_enabled_extr
 
 
 def test_signed_in_quota_follows_the_identity_not_the_browser_cookie(
-    settings, committed_session_factory
+    settings, pooled_session_factory
 ):
     """Members' questions and captures can reach the external extractor: clearing the cookie
     must not reset their quota."""
-    with committed_session_factory() as session:
+    with pooled_session_factory() as session:
         ids = seed_farm(session, settings)
         farm_id = session.get(Parcel, ids["P1"]).farm_id
-    _account(committed_session_factory, login="alice", farm_id=farm_id)
-    app = create_app(settings, session_factory=committed_session_factory)
+    _account(pooled_session_factory, login="alice", farm_id=farm_id)
+    app = create_app(settings, session_factory=pooled_session_factory)
     with member_browser(app, "alice") as browser:
         for _ in range(10):
             assert browser.get(f"/assistant/ask?q=hello&farm={farm_id}").status_code == 200
