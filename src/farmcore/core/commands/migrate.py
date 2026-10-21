@@ -86,7 +86,8 @@ class ServerBusy(MigrateError):
 
 def lock_databases(conn: Connection) -> None:
     """`LOCK_DATABASES`, waiting at most `LOCK_TIMEOUT`. The timeout is `SET LOCAL`: it ends
-    with this transaction, and a wait before it (an advisory lock) is never cut short."""
+    with this transaction and leaves a wait before it (an advisory lock) alone, but every lock
+    wait after it in the same transaction gives up after `LOCK_TIMEOUT` too."""
     try:
         conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
         conn.exec_driver_sql(LOCK_DATABASES)
