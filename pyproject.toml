@@ -19,7 +19,7 @@ dependencies = [
     "python-multipart",
     "httpx",
     "apscheduler>=3,<4",
-    "python-telegram-bot>=21,<22",
+    "python-telegram-bot>=21,<23",
     "faster-whisper",
     "typer",
     "google-auth[requests]>=2.62.0",
