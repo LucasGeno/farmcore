@@ -154,19 +154,28 @@ def register(cli: typer.Typer) -> None:
                 return
             if backup_dir is None:
                 raise MigrateError("give --backup-dir for the pre-upgrade backup; nothing was done")
-            with stop_on_signals():
-                before, after, installation_id = upgrade_installation(
-                    settings, backup_dir, recipient, typer.echo
-                )
         except MigrateError as exc:
             typer.echo(f"upgrade: {exc}", err=True)
             raise typer.Exit(1) from None
-        except Stopped as exc:
-            typer.echo(f"upgrade: {stopped_message(exc)}", err=True)
-            raise typer.Exit(1) from None
-        if before.heads == after.heads:
-            typer.echo(f"upgrade: already at {', '.join(after.heads)}")
-        else:
-            typer.echo(f"upgrade: migrated {', '.join(before.heads)} -> {', '.join(after.heads)}")
-        typer.echo(describe(after))
-        typer.echo(f"installation {installation_id}")
+        # Around the report too: a second stop must not end the command before it is printed.
+        with stop_on_signals() as reporting:
+            try:
+                before, after, installation_id = upgrade_installation(
+                    settings, backup_dir, recipient, typer.echo
+                )
+                reporting()
+            except MigrateError as exc:
+                reporting()
+                typer.echo(f"upgrade: {exc}", err=True)
+                raise typer.Exit(1) from None
+            except Stopped as exc:
+                typer.echo(f"upgrade: {stopped_message(exc)}", err=True)
+                raise typer.Exit(1) from None
+            if before.heads == after.heads:
+                typer.echo(f"upgrade: already at {', '.join(after.heads)}")
+            else:
+                typer.echo(
+                    f"upgrade: migrated {', '.join(before.heads)} -> {', '.join(after.heads)}"
+                )
+            typer.echo(describe(after))
+            typer.echo(f"installation {installation_id}")

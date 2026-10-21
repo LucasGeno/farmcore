@@ -14,7 +14,7 @@ from __future__ import annotations
 import contextlib
 import signal
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import psycopg
 import psycopg.errors
@@ -417,14 +417,16 @@ _EXTENSION_RELATIONS = text(
 )
 
 
-STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+# Compose's stop, a closed terminal, and Ctrl-C: each one ends the command with its report.
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
 # The advisory lock `ensure_runtime_role` takes; `_set_up` takes it first, with no timeout.
 RUNTIME_LOCK = "farmcore.runtime"
 
 
 class Stopped(KeyboardInterrupt):
-    """SIGTERM or SIGHUP during migrate or upgrade. A `KeyboardInterrupt`, so psycopg cancels
-    the statement running on the server before it unwinds (the transaction then rolls back)."""
+    """SIGTERM, SIGHUP or SIGINT during migrate or upgrade. A `KeyboardInterrupt`, so psycopg
+    cancels the statement running on the server before it unwinds (the transaction then rolls
+    back)."""
 
     def __init__(
         self, name: str, *, migrating: bool = False, migrated: tuple[str, ...] | None = None
@@ -436,20 +438,44 @@ class Stopped(KeyboardInterrupt):
 
 
 @contextlib.contextmanager
-def stop_on_signals() -> Iterator[None]:
-    """Turn the first SIGTERM or SIGHUP into `Stopped` (main thread only, as in the CLI)."""
+def stop_on_signals() -> Iterator[Callable[[], None]]:
+    """Turn the first stop signal into `Stopped` (main thread only, as in the CLI). Until the
+    block ends, every later one is ignored, and so is every one once the block has called
+    what it is given (`reporting()`, when the outcome is known): the command says what
+    happened before another stop could end it, and a finished one is never turned into a
+    stopped one."""
+
+    def ignore() -> None:
+        for s in STOP_SIGNALS:
+            signal.signal(s, signal.SIG_IGN)
 
     def stop(signum, _frame) -> None:
-        for s in STOP_SIGNALS:  # one is enough; let the unwinding finish
-            signal.signal(s, signal.SIG_IGN)
+        ignore()  # one is enough; let the unwinding finish
         raise Stopped(signal.Signals(signum).name)
 
     previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS}
+    outer, _REPORTING.ignore = _REPORTING.ignore, ignore
     try:
-        yield
+        yield ignore
     finally:
+        _REPORTING.ignore = outer
         for s, handler in previous.items():
             signal.signal(s, handler)
+
+
+class _Reporting:
+    ignore: Callable[[], None] | None = None  # set inside `stop_on_signals`
+
+
+_REPORTING = _Reporting()
+
+
+def outcome_known() -> None:
+    """What the command will report is settled: from now on, under `stop_on_signals`, stop
+    signals are ignored, so a stop can no longer turn a finished or failed migration into a
+    "stopped before migrating" one. Outside it (as inside `restore`) this does nothing."""
+    if _REPORTING.ignore is not None:
+        _REPORTING.ignore()
 
 
 @contextlib.contextmanager
@@ -523,6 +549,7 @@ def migrate_locked(conn: Connection, settings: Settings) -> str:
             conn.rollback()
         except DBAPIError:  # pragma: no cover - the connection itself was lost
             now = "unknown (the connection was lost)"
+        outcome_known()
         raise MigrationFailed(
             f"migration failed: {_failure(exc)}; the schema is still at {now}"
         ) from None
@@ -532,6 +559,9 @@ def migrate_locked(conn: Connection, settings: Settings) -> str:
         return _set_up(conn, settings)
     except Stopped as exc:
         raise Stopped(exc.name, migrated=migrated) from None
+    except MigrateError:
+        outcome_known()
+        raise
 
 
 def _set_up(conn: Connection, settings: Settings) -> str:
@@ -561,6 +591,7 @@ def _set_up(conn: Connection, settings: Settings) -> str:
                 settings.runtime_database_password.get_secret_value(),
             )
         _mark(conn, None)
+        outcome_known()  # done once this commits: a stop now only waits for the report
     return installation_id
 
 
@@ -596,15 +627,17 @@ def register(cli: typer.Typer) -> None:
 
         Run as this server's bootstrap superuser (the database owner); anything else is
         refused. One migrator at a time: a second one waits, then finds nothing to do."""
-        try:
-            with stop_on_signals():
+        with stop_on_signals() as reporting:
+            try:
                 installation_id = migrate_installation(get_settings())
-        except MigrateError as exc:
-            again = "; run migrate again" if isinstance(exc, ServerBusy) else ""
-            typer.echo(f"{exc}{again}", err=True)
-            raise typer.Exit(1) from None
-        except Stopped as exc:
-            typer.echo(f"migrate: {stopped_message(exc)}", err=True)
-            raise typer.Exit(1) from None
-        typer.echo("migrated to head")
-        typer.echo(f"installation {installation_id}")
+                reporting()
+            except MigrateError as exc:
+                reporting()
+                again = "; run migrate again" if isinstance(exc, ServerBusy) else ""
+                typer.echo(f"{exc}{again}", err=True)
+                raise typer.Exit(1) from None
+            except Stopped as exc:
+                typer.echo(f"migrate: {stopped_message(exc)}", err=True)
+                raise typer.Exit(1) from None
+            typer.echo("migrated to head")
+            typer.echo(f"installation {installation_id}")

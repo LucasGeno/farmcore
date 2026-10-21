@@ -128,7 +128,7 @@ PLAIN_FILES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 LOADER_PREFIX = "farmcore_restore_"
 # Emptied again after the load (an older revision may not have them yet).
 SESSION_TABLES = ("local_session", "login_bucket")
-STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)  # as `migrate`: Ctrl-C too
 # What `farmcore backup` writes (`datetime.isoformat()` in UTC): nothing else is printed.
 _CREATED_AT = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})", re.A
@@ -140,7 +140,7 @@ STALE_TEMP_SECONDS = 6 * 3600
 
 
 class Interrupted(BaseException):
-    """SIGTERM or SIGHUP during a restore: unwinds like Ctrl-C, through every cleanup."""
+    """SIGTERM, SIGHUP or SIGINT (Ctrl-C) during a restore: unwinds through every cleanup."""
 
 
 class _Stops:
