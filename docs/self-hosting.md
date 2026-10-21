@@ -101,7 +101,8 @@ On arm64 hosts set `POSTGIS_IMAGE=imresamu/postgis:17-3.5`.
 ```sh
 docker compose up -d --build
 docker compose ps                                   # app healthy; db, backup up
-curl -fsS http://127.0.0.1:8000/health              # {"db":"ok","installation_id":"…"}
+curl -fsS http://127.0.0.1:8000/health              # {"db":"ok","installation_id":"…",
+                                                    #  "release":"…","alembic_heads":[…],"state":"ok"}
 ```
 
 A new installation is empty: no farm, no member, no demo data. Set it up from the CLI:
@@ -324,10 +325,12 @@ docker compose -p farm-c --env-file farm-c.env up -d
 read is named, with the `--user` hint), decrypts the whole bundle into a private temporary
 directory and checks it: the key, every encrypted chunk (a modified or truncated file fails),
 exactly two plain files no larger than the archive (no links, devices or sparse files), the
-manifest's fields, the dump's size and SHA-256, the release (a bundle from a newer release,
-or with an app this release does not ship, is refused: restore it with that release or later),
-and that the schema revision inside the dump is the one the manifest names and is known to
-this release. Only then does it touch the server: it checks that it runs as the superuser and
+manifest's fields, the dump's size and SHA-256, the apps (a bundle with an app this release
+does not ship is refused), and that the schema revision inside the dump is the one the
+manifest names and is known to this release. Compatibility is the schema, not the release
+number: a release restores any bundle whose schema revision it knows, so the previous release
+restores the bundle `farmcore upgrade` wrote just before migrating; a bundle at a revision this
+release does not know is refused (restore it with that release or a later one). Only then does it touch the server: it checks that it runs as the superuser and
 that the target holds no data, builds the copy in a staging database closed to every other
 role with external effects already paused, creates the schema from this release's migrations,
 refuses any dump entry that schema lacks, loads the rows as the temporary loader role, adds
@@ -422,15 +425,106 @@ installation's env file before enabling effects:
 
 ## Upgrading
 
+**Reverting the image does not revert the schema.** Migrations form one linear chain and run
+forward only; there is no automatic downgrade. Once a release has migrated the database, the
+previous release refuses it (its `migrate` says `incompatible release` and names the revision
+it does not know, and its `/health` says `failed`). The way back is the pre-upgrade backup
+that `farmcore upgrade` takes: see "Recovering from a failed upgrade" below.
+
+An upgrade needs `BACKUP_RECIPIENT` (see "The owner's key"): no backup, no upgrade. As
+everywhere with Compose, pass the installation's project name and env file (here `farm-a`; see
+"Running several installations"):
+
 ```sh
-git pull
-docker compose up -d --build     # `migrate` runs once; app and bot start after it
+git pull                 # or point FARMCORE_IMAGE in farm-a.env at the new release tag
+docker compose -p farm-a --env-file farm-a.env build    # the new image; nothing restarts yet
+docker compose -p farm-a --env-file farm-a.env run --rm --no-deps migrate \
+  farmcore upgrade --check
+docker compose -p farm-a --env-file farm-a.env stop app bot
+docker compose -p farm-a --env-file farm-a.env run --rm --no-deps migrate \
+  farmcore upgrade --backup-dir /backups
+docker compose -p farm-a --env-file farm-a.env up -d --wait --wait-timeout 180
+curl -fsS http://127.0.0.1:8000/health    # this installation's FARMCORE_PORT
 ```
 
-With `FARMCORE_IMAGE` set, do not `--build`: tag the new release and point `FARMCORE_IMAGE` at
-it (see "Running several installations"), then `docker compose up -d`.
+With `FARMCORE_IMAGE` set, skip `build`: point `FARMCORE_IMAGE` at the new tag in the env file
+instead.
 
-Take a backup first. Migrations form one linear chain and run forward only.
+1. `farmcore upgrade --check` (with the new image) reports the database's schema, what this
+   release expects, and says `compatible` or `incompatible`. It changes nothing. An incompatible
+   database (one a newer release migrated) is refused here, and again by the upgrade itself
+   before anything is written.
+2. Stop the app and bot: an old app must not serve while its schema changes.
+3. `farmcore upgrade --backup-dir /backups` takes the installation's migration lock (a second
+   upgrade exits at once with `another upgrade or migrate is running`; `migrate`, as run by
+   `up`, waits for it and then finds nothing to do), checks compatibility, writes a bundle
+   `pre-upgrade-<UTC time>.age` into the `backups` volume (or `BACKUP_DIR`), then migrates
+   once and reports `release …, alembic heads …, state ok`. If the bundle cannot be written,
+   nothing is migrated. Pre-upgrade bundles are kept: the daily rotation never deletes them.
+   Copy the bundle off the server like any other backup. To list them:
+   `docker compose -p farm-a --env-file farm-a.env run --rm --no-deps --entrypoint ls backup
+   -l /backups` (the `pre-upgrade-*.age` files).
+4. `up -d --wait` starts the new release; `migrate` runs again under the lock and has nothing
+   to do. `--wait` fails if the app does not become healthy.
+5. `/health` must say the new release, its Alembic heads and `"state": "ok"`.
+
+`/health` is public and says only this: `db`, `installation_id`, `release`, `alembic_heads`
+(the schema revisions in the database) and `state`. It answers 503 unless `state` is `ok`:
+`maintenance` while a migration runs or is still pending for this release, `failed` when the
+last migrate or upgrade failed or was stopped, or when the database's schema is unknown to
+this release. A failed migration (or one stopped with `SIGTERM`) is cancelled on the server
+and rolled back as a whole; the installation stays `failed` until a migrate or upgrade
+succeeds.
+
+Without `farmcore upgrade` (say, a scripted deploy), take a bundle first
+(`docker compose -p farm-a --env-file farm-a.env run --rm --no-deps -e BACKUP_ONCE=1 backup`)
+and run `up -d`: the `migrate` service checks compatibility and migrates once, but takes no
+backup.
+
+### Recovering from a failed upgrade
+
+**The migration failed** (`upgrade: migration failed: …; the schema is still at <old
+revision>`). Nothing was applied. Fix the cause or go back: set the previous image again and
+`docker compose -p farm-a --env-file farm-a.env up -d --wait`. The installation stays marked
+failed until a `migrate` that knows the mark succeeds: the next upgrade's, or this one if the
+previous release already has `farmcore upgrade`. A release from before it neither reads nor
+clears the mark, so it does not matter while that release runs; to clear it by hand:
+`docker compose -p farm-a --env-file farm-a.env exec -T db psql -U farmcore -d postgres -c
+'ALTER DATABASE farmcore RESET farmcore.upgrade'`. If the message does not say the schema is
+still at the old revision, restore as below.
+
+**The new release migrated but does not work** (`up --wait` fails, `/health` is not `ok`), or
+you are not sure what state the database is in: restore the pre-upgrade bundle with the
+previous release. A release restores any bundle whose schema revision it knows, so the
+previous release restores the bundle the new one wrote just before migrating. The failed
+database is kept aside under another name, so nothing is lost:
+
+```sh
+dc="docker compose -p farm-a --env-file farm-a.env"
+$dc stop app bot backup
+# Previous image again: `git checkout <previous tag> && $dc build`, or set FARMCORE_IMAGE in
+# farm-a.env back to the previous tag.
+$dc run --rm --no-deps --entrypoint ls backup -l /backups    # the pre-upgrade-*.age bundles
+mkdir -m 700 ~/farmcore-restore
+$dc cp backup:/backups/pre-upgrade-20261021T101500Z.age ~/farmcore-restore/bundle.age
+cp ~/keys/farmcore-backup.key ~/farmcore-restore/owner.key
+$dc exec -T db psql -U farmcore -d postgres -v ON_ERROR_STOP=1 \
+  -c 'ALTER DATABASE farmcore RENAME TO farmcore_failed_upgrade' \
+  -c 'CREATE DATABASE farmcore TEMPLATE template_postgis'
+$dc run --rm --no-deps --user "$(id -u):$(id -g)" -v ~/farmcore-restore:/restore:ro migrate \
+  farmcore restore /restore/bundle.age --identity /restore/owner.key
+rm -P ~/farmcore-restore/owner.key 2>/dev/null || shred -u ~/farmcore-restore/owner.key
+$dc up -d --wait --wait-timeout 180
+$dc run --rm --no-deps migrate farmcore effects enable
+```
+
+`cp` needs the `backup` container to exist (stopped is fine). The restored
+installation is what the bundle held at the upgrade, with what a restore always changes (see
+"Restore into a new installation"): a new `installation_id`, so everyone signs in again, and
+external effects paused, which the last line turns back on since the original no longer runs.
+Drop `farmcore_failed_upgrade` once you no longer need it
+(`DROP DATABASE farmcore_failed_upgrade` in `psql`). Other installations on the host are never
+involved: each has its own database server.
 
 From a release whose compose file had `name: farmcore` (app and bot connected as the owner and
 migrated on start):

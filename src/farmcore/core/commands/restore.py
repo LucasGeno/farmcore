@@ -8,7 +8,7 @@ its rows are loaded by a role that can do nothing else.
 1. Check the files can be read, decrypt the whole bundle into a private temporary directory
    (age authenticates every chunk: a wrong key, a modified byte or a truncated file fails
    here), and read exactly two plain members, never writing more than their headers declare.
-2. Check the manifest (format, fields, dump size and SHA-256, release, apps), that the schema
+2. Check the manifest (format, fields, dump size and SHA-256, apps), that the schema
    revision inside the dump is the one the manifest names, and that this release knows it.
 3. Check the target: run as the server's superuser, and the database holds no data of its own
    (only extension objects, as a new installation's database does). Restore never replaces an
@@ -55,7 +55,6 @@ import traceback
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
-from importlib.metadata import version
 from pathlib import Path
 
 import typer
@@ -370,12 +369,10 @@ def check_manifest(manifest: object, dump: Path) -> dict:
     heads = manifest["alembic_heads"]
     if not heads or not all(isinstance(h, str) for h in heads):
         raise BundleError("manifest field 'alembic_heads' is missing or invalid")
-    ours = version("farmcore")
-    if _release(manifest["release"]) > _release(ours):
-        raise BundleError(
-            f"the bundle comes from a newer FarmCore release ({manifest['release']}) than this "
-            f"one ({ours}); restore it with that release or a later one"
-        )
+    # Printed in messages, so only what it claims to be. Compatibility is decided by the schema
+    # (`check_compatible`), never by this number: an upgrade's pre-upgrade bundle is written by
+    # the new release, and the previous one must restore it.
+    _release(manifest["release"])
     known = {m.name for m in registry.discover(packages=APP_PACKAGES)}
     unknown = sorted(set(manifest["modules"]) - known)
     if unknown:

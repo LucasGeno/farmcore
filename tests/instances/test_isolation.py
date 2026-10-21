@@ -1080,7 +1080,7 @@ def test_stopping_one_project_leaves_the_other_healthy(two_installations) -> Non
     before = b.health()["installation_id"]
     a.compose("stop")
     try:
-        assert b.health() == {"db": "ok", "installation_id": before}
+        assert b.health()["installation_id"] == before  # 503 raises
         state = inspect(b.container("app"))["State"]
         assert state["Running"] and state["Health"]["Status"] == "healthy"
     finally:

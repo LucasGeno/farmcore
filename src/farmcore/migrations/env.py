@@ -96,6 +96,14 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    connection = config.attributes.get("connection")
+    if connection is not None:
+        # `farmcore migrate`'s own connection: it holds the migration lock, so the lock lives
+        # exactly as long as the backend that runs the migrations.
+        context.configure(connection=connection, **_configure_kwargs())
+        with context.begin_transaction():
+            context.run_migrations()
+        return
     engine = create_engine(_url(), poolclass=pool.NullPool)
     with engine.connect() as connection:
         context.configure(connection=connection, **_configure_kwargs())
