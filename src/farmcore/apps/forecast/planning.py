@@ -179,7 +179,7 @@ def plan_days(
     undated = []
     rescheduled = []
     if not unavailable:
-        current = advice.latest_advice(repo, now)
+        current = advice.latest_advice(repo, now, tz=tz)
         by_day = {d["day"]: d for d in days}
         for parcel in repo.list(Parcel, scope="fields:read", order_by=Parcel.id):
             a = current.get(parcel.id)

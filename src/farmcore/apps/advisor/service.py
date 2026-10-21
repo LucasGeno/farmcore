@@ -165,7 +165,7 @@ def previous_decisions(repo: ScopedRepository, now: datetime) -> dict[int, str]:
 
 
 def latest_advice(
-    repo: ScopedRepository, now: datetime, *, parcel_id: int | None = None
+    repo: ScopedRepository, now: datetime, *, tz: str, parcel_id: int | None = None
 ) -> dict[int, Advice]:
     """parcel id -> its latest advice row with `evaluated_at <= now` (one parcel if given)."""
     where = [Advice.farm_id == repo.farm_id, Advice.evaluated_at <= now]
@@ -190,7 +190,7 @@ def latest_advice(
         resource="advice",
     ).mappings()
     result = {row["parcel_id"]: Advice(**row) for row in rows}
-    status, reason = current_availability(repo, now)
+    status, reason = current_availability(repo, now, tz)
     if reason:
         # Transient read projection: saved historical evidence is never modified.
         projected = {}
@@ -554,7 +554,7 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
     }
 
 
-def current_availability(repo, now, tz="Europe/Paris"):
+def current_availability(repo, now, tz):
     reason = unavailable_reason(repo)
     if reason:
         return ("limited" if "not authorized" in reason else "unavailable"), reason

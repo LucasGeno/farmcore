@@ -78,7 +78,7 @@ def parcels_feature_collection(
     rows = repo.execute(stmt, scope="fields:read", resource="parcel").all()
     from farmcore.apps.advisor.service import latest_advice
 
-    assessments = latest_advice(repo, now)
+    assessments = latest_advice(repo, now, tz=tz)
     decisions = {pid: row.decision for pid, row in assessments.items()}
     sprays = _last_sprays(repo, now)
     zone = ZoneInfo(tz)

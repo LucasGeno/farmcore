@@ -37,7 +37,7 @@ def advice_layer(request: Request, repo: Repo) -> JSONResponse:
     now = get_clock(repo.session, settings).now()
     zone = ZoneInfo(settings.display_tz)
     collection = parcels_feature_collection(repo, now, tz=settings.display_tz)
-    latest = service.latest_advice(repo, now)
+    latest = service.latest_advice(repo, now, tz=settings.display_tz)
     for feature in collection["features"]:
         props = feature["properties"]
         label, colour = styles_for(request)[props["decision"]]

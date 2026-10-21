@@ -70,7 +70,7 @@ def items(repo, now, tz, visible, *, busy_days=()):
             )
         )
     if "advisor" in visible and not unavailable:
-        latest = advisor.latest_advice(repo, now)
+        latest = advisor.latest_advice(repo, now, tz=tz)
         parcels = sorted(
             repo.list(Parcel, scope="fields:read"), key=lambda p: alias_number(p.alias)
         )

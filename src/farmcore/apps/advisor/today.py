@@ -48,7 +48,7 @@ def today_fragment(
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
-    latest = service.latest_advice(repo, now)
+    latest = service.latest_advice(repo, now, tz=tz)
     rows = [parcel_row(p, latest.get(p.id), tz) for p in parcels]
     return render(
         request,

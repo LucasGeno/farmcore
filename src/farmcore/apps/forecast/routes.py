@@ -175,7 +175,9 @@ def parcel_window(parcel_id: int, request: Request, repo: Repo) -> HTMLResponse:
     if repo.get(Parcel, parcel_id, scope=PARCEL_SCOPE) is None:
         raise HTTPException(status_code=404, detail=f"parcel {parcel_id} not found")
     now = get_clock(repo.session, request.app.state.settings).now()
-    latest = advice.latest_advice(repo, now, parcel_id=parcel_id).get(parcel_id)
+    latest = advice.latest_advice(
+        repo, now, tz=request.app.state.settings.display_tz, parcel_id=parcel_id
+    ).get(parcel_id)
     products = (latest.products or []) if latest else []
     view = _window(
         request,

@@ -203,7 +203,7 @@ def today(ctx: ToolContext) -> ToolResult:
     `advised: false` and "awaiting advice", never counted as nothing to spray: "Nothing to
     spray today" only when every parcel is evaluated and none is at risk."""
     parcels = fields_tools.parcels(ctx.repo)
-    advice = service.latest_advice(ctx.repo, ctx.now)
+    advice = service.latest_advice(ctx.repo, ctx.now, tz=ctx.tz.key)
     rows: list[tuple[Any, Advice | None]] = [(p, advice.get(p.id)) for p in parcels]
     facts = {
         "parcels": [
@@ -295,7 +295,7 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
     label = fields_tools.label(found)
     fr = ctx.lang == "fr"
     links = ((f"Open card {found.alias}", _card(found.id)),)
-    row = service.latest_advice(ctx.repo, ctx.now, parcel_id=found.id).get(found.id)
+    row = service.latest_advice(ctx.repo, ctx.now, tz=ctx.tz.key, parcel_id=found.id).get(found.id)
     if row is None:
         text = f"{label} : pas encore de conseil." if fr else f"{label}: no advice yet."
         facts = {"parcel": label, "decision": service.NO_ADVICE, "headline": None}

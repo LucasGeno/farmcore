@@ -219,8 +219,8 @@ def _parcel_json(parcel: Parcel) -> dict[str, Any]:
     }
 
 
-def _advice_json(repo: Repo, parcel: Parcel, now: datetime) -> dict[str, Any]:
-    row = service.latest_advice(repo, now, parcel_id=parcel.id).get(parcel.id)
+def _advice_json(repo: Repo, parcel: Parcel, now: datetime, tz: str) -> dict[str, Any]:
+    row = service.latest_advice(repo, now, tz=tz, parcel_id=parcel.id).get(parcel.id)
     if row is None:
         body = service.empty_advice_json(
             parcel.id, service.unavailable_reason(repo) or NO_ADVICE_HEADLINE
@@ -555,7 +555,7 @@ def index(
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
-    latest = service.latest_advice(repo, now)
+    latest = service.latest_advice(repo, now, tz=tz)
     rows = [parcel_row(p, latest.get(p.id), tz) for p in parcels]
     model_views = {
         p.id: tuple(
@@ -588,7 +588,9 @@ def index(
 @router.get("/parcels/{parcel_id}.json")
 def card_json(parcel_id: int, request: Request, repo: Repo) -> JSONResponse:
     parcel = _parcel(repo, parcel_id)
-    return JSONResponse(_advice_json(repo, parcel, _now(request, repo)))
+    return JSONResponse(
+        _advice_json(repo, parcel, _now(request, repo), request.app.state.settings.display_tz)
+    )
 
 
 def _next_window(advice: dict[str, Any], tz: str) -> str:
@@ -632,7 +634,7 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
     """One detailed stored presentation for canonical advice and parcel Protection."""
     tz = request.app.state.settings.display_tz
     now = _now(request, repo)
-    advice = _advice_json(repo, parcel, now)
+    advice = _advice_json(repo, parcel, now, tz)
     reasons = advice["reasons"]
     debug = debug_enabled(request)
     flags = [f for f in advice["flags"] if debug or f != REPLAY_FLAG]

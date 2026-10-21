@@ -77,7 +77,7 @@ def farm_section(request: Request, repo: Repo) -> HTMLResponse:
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
-    latest = service.latest_advice(repo, now)
+    latest = service.latest_advice(repo, now, tz=tz)
     rows = [parcel_row(p, latest.get(p.id), tz) for p in parcels]
     evaluated = [r for r in rows if r.has_advice]
     counts = [
@@ -147,7 +147,7 @@ def parcel_section(parcel_id: ParcelId, request: Request, repo: Repo) -> HTMLRes
         return unavailable
     tz = request.app.state.settings.display_tz
     now = _now(request, repo)
-    advice = service.latest_advice(repo, now, parcel_id=parcel.id).get(parcel.id)
+    advice = service.latest_advice(repo, now, tz=tz, parcel_id=parcel.id).get(parcel.id)
     row = parcel_row(parcel, advice, tz)
     view: dict[str, Any] = {"row": row, "card": row.card_path}
     if advice is not None:
