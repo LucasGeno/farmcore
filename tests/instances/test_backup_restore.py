@@ -2170,5 +2170,8 @@ def test_a_backup_of_project_a_restores_into_a_new_project_c_while_b_keeps_servi
         assert _psql(c, sql) == _psql(a, sql), label
     assert len(_psql(c, SEMANTIC["records"])) == 10
     assert _psql(c, "SELECT count(*) FROM local_session") == ["0"]
+    # A sign-in left halfway (a client stopped mid-handshake) holds up every DROP DATABASE, a
+    # stopped restore's cleanup included, for this long: within `docker compose stop`'s 10 s.
+    assert _psql(c, "SHOW authentication_timeout") == ["5s"]
     assert b.health() == {"db": "ok", "installation_id": b_id}
     assert a.health() == {"db": "ok", "installation_id": a_id}

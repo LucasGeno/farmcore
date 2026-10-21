@@ -67,6 +67,9 @@ services:
       # and the PostGIS extension. Only `migrate` and `backup` hold its password.
       POSTGRES_USER: farmcore
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # A sign-in left halfway holds up every DROP DATABASE (a stopped restore's cleanup too)
+    # until it times out: 5 s, not the default 60, fits in `docker compose stop`'s 10 s.
+    command: ["postgres", "-c", "authentication_timeout=5s"]
     # No published port: only this project's services reach the database.
     volumes:
       - pgdata:/var/lib/postgresql/data
