@@ -90,15 +90,18 @@ def test_activation_only_changes_future_assessments_and_later_opinion_is_explici
     assert changed["source"].startswith("3-10 rule (Baldacci 1947)")
     assert proposed.json()["status"] == "unreviewed"
     assert client.post(f"/review/versions/{version}/activate", params=params).status_code == 409
-    assert (
-        client.post(
-            f"/review/versions/{version}/reviews",
-            params=params,
-            json={"verdict": "approved", "note": "Trial only", "evidence": "Desk"},
-        ).status_code
-        == 201
+    opinion = client.post(
+        f"/review/versions/{version}/reviews",
+        params=params,
+        json={"verdict": "approved", "note": "Trial only", "evidence": "Desk"},
     )
-    assert client.post(f"/review/versions/{version}/activate", params=params).status_code == 201
+    assert opinion.status_code == 201
+    activation = client.post(f"/review/versions/{version}/activate", params=params)
+    assert activation.status_code == 201
+    # Every step records who did it, at the farm's (replay) clock, not the wall clock.
+    for step, who in ((proposed, "created_by"), (opinion, "reviewer"), (activation, "actor")):
+        assert step.json()[who]
+        assert datetime.fromisoformat(step.json()["created_at"]) == now
     evaluate(JobContext(session, now, settings, (parcel.farm_id,)))
     latest = session.scalar(
         select(Advice).where(Advice.parcel_id == parcel.id).order_by(Advice.id.desc())

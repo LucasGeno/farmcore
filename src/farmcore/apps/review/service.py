@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from hashlib import sha256
 from zoneinfo import ZoneInfo
 
@@ -119,7 +119,7 @@ def resolve(repo: ScopedRepository, now: datetime, tz: str, *, seed=False) -> Ef
             .values(
                 **scope,
                 created_by=repo.actor,
-                created_at=datetime.now(UTC),
+                created_at=now,
                 evidence="Unchanged typed defaults; explicitly unreviewed baseline",
                 overrides={},
                 parameter_catalog=catalog(config),
@@ -160,7 +160,7 @@ def propose(repo, now, tz, overrides, evidence, parent_version_id=None):
         **current.scope,
         parent_version_id=parent.id,
         created_by=repo.actor,
-        created_at=datetime.now(UTC),
+        created_at=now,
         evidence=evidence,
         overrides=overrides,
         parameter_catalog=catalog(config),

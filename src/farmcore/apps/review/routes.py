@@ -1,7 +1,5 @@
 """Explicit parameter version/review actions bound to a currently assigned farm member."""
 
-from datetime import UTC, datetime
-
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -167,7 +165,7 @@ def review(request: Request, repo: Repo, version_id: int, body: Opinion):
         **scope,
         version_id=version.id,
         reviewer=repo.actor,
-        created_at=datetime.now(UTC),
+        created_at=get_clock(repo.session, request.app.state.settings).now(),
         verdict=body.verdict,
         note=body.note.strip(),
         evidence=body.evidence.strip(),
@@ -192,7 +190,7 @@ def activate(request: Request, repo: Repo, version_id: int):
         version_id=version.id,
         review_id=opinion.id,
         actor=repo.actor,
-        created_at=datetime.now(UTC),
+        created_at=get_clock(repo.session, request.app.state.settings).now(),
     )
     repo.session.add(event)
     repo.session.flush()
