@@ -515,7 +515,7 @@ def _correction_context(request, repo, log_id):
     }
     return {
         "log_id": log_id,
-        "record": corrections.snapshot(log) if log is not None else None,
+        "record": corrections.visible(corrections.snapshot(log)) if log is not None else None,
         "local_start": log.ts_start.astimezone(ZoneInfo(request.app.state.settings.display_tz))
         .replace(tzinfo=None)
         .isoformat()
@@ -557,25 +557,36 @@ def correction_receipt(correction_id: int, request: Request, repo: Repo):
 
 
 @router.post("/logs/{log_id}/corrections/preview", dependencies=[Depends(require_farm_owner)])
-async def correction_form_preview(log_id: int, request: Request, repo: Repo):
+def correction_form_preview(
+    log_id: int,
+    request: Request,
+    repo: Repo,
+    request_key: Annotated[str, Form()] = "",
+    reason: Annotated[str, Form()] = "",
+    product_id: Annotated[list[str] | None, Form()] = None,
+    dose_value: Annotated[list[str] | None, Form()] = None,
+    dose_unit: Annotated[list[str] | None, Form()] = None,
+    parcel_ids: Annotated[list[str] | None, Form()] = None,
+    ts_start: Annotated[str, Form()] = "",
+    notes: Annotated[str, Form()] = "",
+):
+    """Sync on purpose: the preview locks the farm and its rows, so it runs in the threadpool."""
+    from zoneinfo import ZoneInfo
+
     from pydantic import ValidationError
 
     from farmcore.core.clock import parse_local
 
     corrections.target_id(log_id)
-    form = await request.form()
     try:
-        product_ids, values, units = (
-            form.getlist(k) for k in ("product_id", "dose_value", "dose_unit")
-        )
         doses = [
-            {"product_id": product_id, "value": value, "unit": unit}
-            for product_id, value, unit in zip(product_ids, values, units, strict=True)
-            if product_id
+            {"product_id": product, "value": value, "unit": unit}
+            for product, value, unit in zip(
+                product_id or [], dose_value or [], dose_unit or [], strict=True
+            )
+            if product
         ]
-        from zoneinfo import ZoneInfo
-
-        entered = datetime.fromisoformat(str(form.get("ts_start", "")).strip())
+        entered = datetime.fromisoformat(ts_start.strip())
         start = parse_local(entered.isoformat(), request.app.state.settings.display_tz)
         current = repo.get(Log, log_id, scope="logs:write")
         if current is not None and entered.tzinfo is None:
@@ -584,16 +595,12 @@ async def correction_form_preview(log_id: int, request: Request, repo: Repo):
                 start = current.ts_start  # unchanged local input retains the original DST fold
         changes = {
             "quantities": doses,
-            "parcel_ids": form.getlist("parcel_ids"),
+            "parcel_ids": parcel_ids or [],
             "ts_start": start,
-            "notes": str(form.get("notes", "")),
+            "notes": notes,
         }
         body = corrections.Preview.model_validate(
-            {
-                "request_key": form.get("request_key"),
-                "reason": form.get("reason"),
-                "changes": changes,
-            }
+            {"request_key": request_key, "reason": reason, "changes": changes}
         )
         item = corrections.preview(repo, corrections.authority(request, repo), log_id, body)
     except (ValidationError, ValueError, HTTPException) as exc:

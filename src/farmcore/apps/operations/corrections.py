@@ -281,6 +281,21 @@ def _after(repo, before, changes, *, replay=False):
     return result
 
 
+# The corrected facts a reader may see. Source receipts can hold chat transcripts, Telegram chat
+# ids and machine files: the snapshot keeps them, views show only each source's type and time.
+VISIBLE_FACTS = ("ts_start", "ts_end", "bbch", "notes", "parcel_ids", "quantities")
+
+
+def visible(facts):
+    return {
+        **{key: facts[key] for key in VISIBLE_FACTS},
+        "sources": [
+            {"source_type": s["source_type"], "received_at": s["received_at"]}
+            for s in facts["sources"]
+        ],
+    }
+
+
 def view(correction):
     return {
         "id": correction.id,
@@ -290,8 +305,8 @@ def view(correction):
         "actor": correction.actor_label,
         "created_at": correction.created_at.isoformat(),
         "finalized_at": correction.finalized_at.isoformat() if correction.finalized_at else None,
-        "before": correction.before_snapshot,
-        "after": correction.after_snapshot,
+        "before": visible(correction.before_snapshot),
+        "after": visible(correction.after_snapshot),
     }
 
 
@@ -414,7 +429,7 @@ def finalize(repo, actor, correction_id, action, now):
                 occurred_at=now,
             )
     correction.status = desired
-    correction.finalized_at = datetime.now(UTC)
+    correction.finalized_at = now
     correction.finalized_actor_key, correction.finalized_actor_label = actor.key, actor.label
     repo.session.flush()
     return correction, action == "confirm"

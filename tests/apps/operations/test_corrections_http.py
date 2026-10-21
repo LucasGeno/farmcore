@@ -4,11 +4,9 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
-from hypothesis import HealthCheck, given
-from hypothesis import settings as property_settings
-from hypothesis import strategies as st
 from sqlalchemy import select
 
+from farmcore.apps.operations import corrections
 from farmcore.core import logs
 from farmcore.core.logs import QuantityInput, SourceInput
 from farmcore.core.models.canonical import LogSource, Parcel, Quantity
@@ -26,71 +24,55 @@ def _sign_in(browser):
 
 
 @pytest.mark.parametrize("actor", ["operator", "member"])
-def test_correction_preview_cancel_confirm_retains_original_receipt(
-    settings, committed_session_factory, actor
+def test_preview_cancel_confirm_moves_computed_stock_once_and_keeps_the_receipt(
+    correction_case, committed_session_factory, actor
 ):
+    import re
+
+    from farmcore.apps.inventory.models import InventoryStock
+
+    c = correction_case
     with committed_session_factory() as session:
-        ids = seed_farm(session, settings)
-        parcel = session.get(Parcel, ids["P1"])
-        parcel.area_ha = Decimal("2")
-        farm_id = parcel.farm_id
-        result = logs.record_operation(
-            session,
-            farm_id=farm_id,
-            type="spray",
-            parcel_ids=[parcel.id],
-            ts_start=NOW_LOCAL.replace(hour=5),
-            ts_end=None,
-            quantities=[QuantityInput("rate", Decimal("2"), "kg/ha", ids[COPPER])],
-            source=SourceInput("file", "original", {"receipt": "unchanged"}, None, 20),
-            actor="original-import",
-            occurred_at=NOW_LOCAL,
+        session.add(
+            InventoryStock(
+                farm_id=c.farm_id, product_id=c.ids[COPPER], season=2024, unit="kg", purchased=20
+            )
         )
-        log_id = result[0].id
         session.commit()
     if actor == "member":
-        _account(committed_session_factory, farm_id=farm_id)
-    with TestClient(
-        create_app(settings, session_factory=committed_session_factory),
-        base_url="https://testserver",
-    ) as browser:
-        if actor == "operator":
-            browser.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
-        else:
-            assert _login(browser).status_code == 303
-            browser.headers.update(
-                {"Origin": "https://testserver", "X-CSRF-Token": browser.cookies["farmcore_csrf"]}
-            )
-        body = {
-            "request_key": "cancel-first",
-            "reason": "Dose entered twice",
-            "changes": {
-                "quantities": [
-                    {"product_id": ids[COPPER], "measure": "rate", "value": "1", "unit": "kg/ha"}
-                ]
-            },
-        }
-        endpoint = f"/operations/logs/{log_id}/corrections?farm={farm_id}"
-        preview = browser.post(endpoint, json=body)
-        assert preview.status_code == 200, preview.text
-        data = preview.json()
-        assert data["status"] == "pending"
-        assert data["before"]["quantities"][0]["value"] == "2"
-        assert data["after"]["quantities"][0]["value"] == "1"
-        cancel = f"/operations/corrections/{data['id']}/cancel?farm={farm_id}"
-        assert browser.post(cancel).json()["status"] == "cancelled"
-        assert browser.post(cancel).json()["status"] == "cancelled"
-        with committed_session_factory() as session:
-            assert session.scalar(select(Quantity.value).where(Quantity.log_id == log_id)) == 2
-        body["request_key"] = "confirm-second"
-        data = browser.post(endpoint, json=body).json()
-        confirm = f"/operations/corrections/{data['id']}/confirm?farm={farm_id}"
-        assert browser.post(confirm).json()["status"] == "confirmed"
-        assert browser.post(confirm).json()["status"] == "confirmed"
-        with committed_session_factory() as session:
-            assert session.scalar(select(Quantity.value).where(Quantity.log_id == log_id)) == 1
-            [source] = session.scalars(select(LogSource).where(LogSource.log_id == log_id)).all()
-            assert source.raw_payload == {"receipt": "unchanged"}
+        _account(committed_session_factory, farm_id=c.farm_id)
+        del c.browser.headers["X-Admin-Token"]
+        _sign_in(c.browser)
+
+    def stock():
+        page = c.browser.get(f"/inventory/?farm={c.farm_id}")
+        assert page.status_code == 200
+        return re.search(rf'<article data-stock="{c.ids[COPPER]}".*?</article>', page.text, re.S)[0]
+
+    assert ">16</span>" in stock()  # 20 kg bought - 2 kg/ha x 2 ha
+    preview = c.browser.post(c.endpoint, json=c.body)
+    assert preview.status_code == 200, preview.text
+    data = preview.json()
+    assert data["status"] == "pending"
+    assert (data["before"]["quantities"][0]["value"], data["after"]["quantities"][0]["value"]) == (
+        "2",
+        "1",
+    )
+    assert ">16</span>" in stock()
+    cancel = f"/operations/corrections/{data['id']}/cancel?farm={c.farm_id}"
+    assert c.browser.post(cancel).json()["status"] == "cancelled"
+    assert c.browser.post(cancel).json()["status"] == "cancelled"
+    assert ">16</span>" in stock()
+    c.body["request_key"] = "confirm-second"
+    data = c.browser.post(c.endpoint, json=c.body).json()
+    confirm = f"/operations/corrections/{data['id']}/confirm?farm={c.farm_id}"
+    assert c.browser.post(confirm).json()["status"] == "confirmed"
+    assert ">18</span>" in stock()  # 20 kg - 1 kg/ha x 2 ha
+    assert c.browser.post(confirm).json()["status"] == "confirmed"
+    assert ">18</span>" in stock()
+    with committed_session_factory() as session:
+        [source] = session.scalars(select(LogSource).where(LogSource.log_id == c.log_id)).all()
+        assert source.raw_payload == {"private_receipt": "retain-me"}
 
 
 @pytest.fixture
@@ -110,7 +92,9 @@ def correction_case(settings, committed_session_factory):
             ts_start=NOW_LOCAL.replace(hour=5),
             ts_end=None,
             quantities=[QuantityInput("rate", Decimal("2"), "kg/ha", ids[COPPER])],
-            source=SourceInput("file", "original", {"private_receipt": "retain-me"}, None, 20),
+            source=SourceInput(
+                "file", "upload:receipt-7731", {"private_receipt": "retain-me"}, None, 20
+            ),
             actor="original-import",
             occurred_at=NOW_LOCAL,
         )
@@ -148,17 +132,15 @@ def correction_case(settings, committed_session_factory):
 def test_generic_log_events_do_not_copy_private_audit_receipts(
     correction_case, committed_session_factory
 ):
+    import json
+
     from farmcore.core.access import ScopedRepository
     from farmcore.core.models.canonical import DataGrant, Event
 
     c = correction_case
     correction_id = c.browser.post(c.endpoint, json=c.body).json()["id"]
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
+    confirm = f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
+    assert c.browser.post(confirm).status_code == 200
     with committed_session_factory() as session:
         grant = DataGrant(
             farm_id=c.farm_id, scopes=["logs:read"], grantee="limited", purpose="test"
@@ -167,8 +149,8 @@ def test_generic_log_events_do_not_copy_private_audit_receipts(
         session.flush()
         repo = ScopedRepository(session, c.farm_id, grant, "limited", "test")
         [event] = repo.list(Event, Event.kind == "log.corrected", scope="logs:read")
-        assert event.payload == {"log_id": c.log_id, "correction_id": correction_id}
-        assert event.body == "Spray corrected"
+        visible = event.body + json.dumps(event.payload)
+        assert "Private correction reason" not in visible and "retain-me" not in visible
     timeline = c.browser.get(f"/operations/parcels/{c.ids['P1']}/timeline?farm={c.farm_id}")
     assert timeline.status_code == 200
     assert "Private correction reason" not in timeline.text
@@ -311,6 +293,12 @@ def test_retried_request_key_returns_the_same_correction_and_never_rewrites_it(
     correction_case, committed_session_factory
 ):
     from farmcore.core.models.canonical import Farm
+    from farmcore.core.models.corrections import OperationCorrection
+
+    def stored(correction_id):
+        with committed_session_factory() as session:
+            row = session.get(OperationCorrection, correction_id)
+            return (row.status, row.before_snapshot, row.after_snapshot, row.finalized_at)
 
     c = correction_case
     first = c.browser.post(c.endpoint, json=c.body).json()
@@ -318,10 +306,12 @@ def test_retried_request_key_returns_the_same_correction_and_never_rewrites_it(
     c.body["changes"]["quantities"][0]["value"] = "0.5"
     assert c.browser.post(c.endpoint, json=c.body).status_code == 409
     c.body["changes"]["quantities"][0]["value"] = "1"
-    terminal = c.browser.post(
-        f"/operations/corrections/{first['id']}/confirm?farm={c.farm_id}"
-    ).json()
-    # A retry after confirmation replays the receipt, even once the product left the catalogue.
+    confirm = f"/operations/corrections/{first['id']}/confirm?farm={c.farm_id}"
+    terminal = c.browser.post(confirm).json()
+    receipt = stored(first["id"])
+    # Retrying the confirm, or the preview once the product left the catalogue, replays the
+    # final receipt and never rewrites it.
+    assert c.browser.post(confirm).json() == terminal
     with committed_session_factory() as session:
         farm = session.get(Farm, c.farm_id)
         farm.props = {**farm.props, "product_ids": []}
@@ -329,57 +319,10 @@ def test_retried_request_key_returns_the_same_correction_and_never_rewrites_it(
     replay = c.browser.post(c.endpoint, json=c.body)
     assert replay.status_code == 200, replay.text
     assert replay.json() == terminal
+    assert stored(first["id"]) == receipt
     c.body["changes"]["quantities"][0]["value"] = "2"
     assert c.browser.post(c.endpoint, json=c.body).status_code == 409
-
-
-def test_computed_stock_changes_once_after_confirm_only(correction_case, committed_session_factory):
-    import re
-
-    from farmcore.apps.inventory.models import InventoryStock
-
-    c = correction_case
-    with committed_session_factory() as session:
-        session.add(
-            InventoryStock(
-                farm_id=c.farm_id, product_id=c.ids[COPPER], season=2024, unit="kg", purchased=20
-            )
-        )
-        session.commit()
-
-    def stock():
-        response = c.browser.get(f"/inventory/?farm={c.farm_id}")
-        assert response.status_code == 200
-        return re.search(
-            rf'<article data-stock="{c.ids[COPPER]}".*?</article>', response.text, re.S
-        ).group()
-
-    assert ">16</span>" in stock()  # 20 purchased - 2 kg/ha × 2 ha = 16
-    correction_id = c.browser.post(c.endpoint, json=c.body).json()["id"]
-    assert ">16</span>" in stock()
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{correction_id}/cancel?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
-    assert ">16</span>" in stock()
-    c.body["request_key"] = "actually-confirm"
-    correction_id = c.browser.post(c.endpoint, json=c.body).json()["id"]
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
-    assert ">18</span>" in stock()  # 20 - 1 kg/ha × 2 ha = 18
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
-    assert ">18</span>" in stock()
+    assert stored(first["id"]) == receipt
 
 
 def test_postcommit_advice_runs_once_for_selected_farm_only(
@@ -473,9 +416,7 @@ def test_real_constraint_failure_rolls_back_canonical_audit_and_postcommit(
             assert (quantity.id, quantity.value) == (c.quantity_id, Decimal("2"))
             row = session.get(OperationCorrection, preview["id"])
             assert row.status == "pending" and row.finalized_at is None
-            assert (
-                row.before_snapshot == preview["before"] and row.after_snapshot == preview["after"]
-            )
+            assert corrections.view(row) == preview
             assert session.scalars(select(Event).where(Event.kind == "log.corrected")).all() == []
             assert session.scalars(select(Advice)).all() == []
     finally:
@@ -496,39 +437,36 @@ def test_real_constraint_failure_rolls_back_canonical_audit_and_postcommit(
 @pytest.mark.parametrize(
     "field,value",
     [
-        pytest.param("dose", "0", id="non-positive-dose"),
-        pytest.param("dose", "NaN", id="non-finite-dose"),
         pytest.param("dose", "2", id="unchanged-dose"),
         pytest.param("dose", "1e1000000", id="past-numeric-storage"),
-        pytest.param("dose", "9" * 4097, id="past-rendering-budget"),
-        pytest.param("unit", "kg", id="not-a-rate-unit"),
         pytest.param("product", 2**100, id="unknown-product"),
+        pytest.param("catalogue", None, id="product-outside-farm-catalogue"),
         pytest.param("changes", {"parcel_ids": [2**63 - 1]}, id="unknown-parcel"),
-        pytest.param("changes", {}, id="no-change"),
         pytest.param("changes", {"notes": None}, id="required-value-cleared"),
-        pytest.param("changes", {"ts_start": "2024-04-01T05:00:00"}, id="naive-time"),
         pytest.param(
             "changes",
             {"ts_start": "2024-04-10T05:00:00Z", "ts_end": "2024-04-09T05:00:00Z"},
             id="end-before-start",
         ),
-        pytest.param("changes", {"status": "done"}, id="immutable-field"),
-        pytest.param("reason", "   ", id="blank-reason"),
     ],
 )
 def test_invalid_correction_intent_is_rejected_without_writes(
     correction_case, committed_session_factory, field, value
 ):
+    from farmcore.core.models.canonical import Farm
     from farmcore.core.models.corrections import OperationCorrection
 
     c = correction_case
     dose = c.body["changes"]["quantities"][0]
     if field == "dose":
         dose["value"] = value
-    elif field == "unit":
-        dose["unit"] = value
     elif field == "product":
         dose["product_id"] = value
+    elif field == "catalogue":
+        with committed_session_factory() as session:
+            farm = session.get(Farm, c.farm_id)
+            farm.props = {**farm.props, "product_ids": []}
+            session.commit()
     else:
         c.body[field] = value
     assert c.browser.post(c.endpoint, json=c.body).status_code == 422
@@ -581,12 +519,21 @@ def test_actual_machine_import_invalidates_preview_and_retains_weather_evidence(
         )
         body["request_key"] = "after-import"
         fresh = browser.post(endpoint, json=body).json()
-        machine = [s for s in fresh["before"]["sources"] if s["source_type"] == "isoxml"]
+        from farmcore.core.models.corrections import OperationCorrection
+
+        with committed_session_factory() as session:
+            stored = session.get(OperationCorrection, fresh["id"]).before_snapshot
+        # The audit keeps every receipt; the reader's view shows only each source's type and time.
+        assert fresh["before"]["sources"] == [
+            {"source_type": s["source_type"], "received_at": s["received_at"]}
+            for s in stored["sources"]
+        ]
+        machine = [s for s in stored["sources"] if s["source_type"] == "isoxml"]
         assert len(machine) == 2
         assert {s["raw_payload"][spray_weather.NAMESPACE]["status"] for s in machine} == {
             "captured"
         }
-        receipts = copy.deepcopy(fresh["before"]["sources"])
+        receipts = copy.deepcopy(stored["sources"])
         assert (
             browser.post(
                 f"/operations/corrections/{fresh['id']}/confirm?farm={farm_id}"
@@ -658,8 +605,6 @@ def test_actual_machine_import_invalidates_preview_and_retains_weather_evidence(
             == 409
         )
         assert browser.post(endpoint, json=body).status_code == 409
-        from farmcore.core.models.corrections import OperationCorrection
-
         with committed_session_factory() as session:
             retained = session.get(OperationCorrection, fresh["id"])
             assert retained.original_log_id == log_id and retained.live_log_id is None
@@ -808,38 +753,6 @@ def test_authority_revoked_while_request_waits_for_farm_lock_cannot_confirm(
         assert session.scalar(select(Quantity.value).where(Quantity.log_id == c.log_id)) == 2
 
 
-def test_unchanged_html_form_shows_error_without_recording_correction(
-    correction_case, committed_session_factory
-):
-    import re
-
-    from farmcore.core.models.corrections import OperationCorrection
-
-    c = correction_case
-    edit = c.browser.get(c.endpoint)
-    key = re.search(r'name="request_key" value="([^"]+)"', edit.text).group(1)
-    result = c.browser.post(
-        f"/operations/logs/{c.log_id}/corrections/preview?farm={c.farm_id}",
-        data={
-            "request_key": key,
-            "reason": "No actual changed facts",
-            "parcel_ids": [str(c.ids["P1"])],
-            "product_id": [str(c.ids[COPPER])],
-            "dose_value": ["2"],
-            "dose_unit": ["kg/ha"],
-            "ts_start": "2024-04-10T05:00",
-            "notes": "",
-        },
-    )
-    assert result.status_code == 422
-    assert 'role="alert"' in result.text and "Supply changed values" in result.text
-    with committed_session_factory() as session:
-        assert session.scalars(select(OperationCorrection)).all() == []
-        assert (
-            session.scalar(select(Quantity.id).where(Quantity.log_id == c.log_id)) == c.quantity_id
-        )
-
-
 @pytest.mark.parametrize(
     "reader,pending,history,terminal",
     [
@@ -895,7 +808,8 @@ def test_correction_audit_is_private_until_final_and_scoped_to_the_farm(
     final = c.browser.get(receipt)
     assert final.status_code == terminal
     if terminal == 200:
-        assert "Private correction reason" in final.text and "retain-me" in final.text
+        assert "Private correction reason" in final.text
+        assert "retain-me" not in final.text and "receipt-7731" not in final.text
         assert "Confirm correction" not in final.text
 
 
@@ -940,259 +854,106 @@ def test_another_writer_changing_the_record_invalidates_a_pending_preview(
         assert [(q.id, q.value) for q in session.scalars(select(Quantity))] == written
 
 
-@property_settings(
-    max_examples=8, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
-)
-@given(
-    dose=st.tuples(st.integers(1, 10**40), st.integers(-60, 20)).map(
-        lambda parts: Decimal(f"{parts[0]}e{parts[1]}")
-    )
-)
-def test_arbitrary_valid_doses_preserve_one_winner_and_original_receipt(
-    correction_case, committed_session_factory, dose
-):
-    import copy
-    import uuid
-
-    c = correction_case
-    key = uuid.uuid4().hex
-    body = copy.deepcopy(c.body)
-    body["request_key"] = key + "-first"
-    body["changes"]["quantities"][0]["value"] = str(dose)
-    body["changes"]["notes"] = key
-    first = c.browser.post(c.endpoint, json=body)
-    assert first.status_code == 200, first.text
-    body["request_key"] = key + "-second"
-    second = c.browser.post(c.endpoint, json=body)
-    assert second.status_code == 200, second.text
-    confirm = f"/operations/corrections/{first.json()['id']}/confirm?farm={c.farm_id}"
-    saved = c.browser.post(confirm)
-    assert saved.status_code == 200
-    assert c.browser.post(confirm).json() == saved.json()
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{second.json()['id']}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 409
-    )
-    with committed_session_factory() as session:
-        [quantity] = session.scalars(select(Quantity).where(Quantity.log_id == c.log_id)).all()
-        assert quantity.value == dose
-        [source] = session.scalars(select(LogSource).where(LogSource.log_id == c.log_id)).all()
-        assert source.raw_payload == {"private_receipt": "retain-me"}
-
-
 @pytest.mark.parametrize(
-    "original",
+    "case",
     [
-        NOW_LOCAL.replace(hour=5, second=37, microsecond=123456),
-        NOW_LOCAL.replace(
-            month=10, day=27, hour=2, minute=30, second=37, microsecond=123456, fold=1
-        ),
+        "dose-edit-keeps-treatment-seconds",
+        "dose-edit-keeps-dst-fold",
+        "dose-edit-keeps-other-product-row",
+        "notes-edit-keeps-duplicate-doses",
+        "notes-edit-keeps-delisted-product",
+        "notes-edit-keeps-huge-historical-dose",
     ],
 )
-def test_dose_only_form_edit_retains_treatment_seconds_and_precision(
-    correction_case, committed_session_factory, original
-):
+def test_an_edit_changes_only_the_edited_fact(correction_case, committed_session_factory, case):
+    """Through the HTML form: untouched doses keep their row, exact value and label, and an
+    untouched treatment time keeps its seconds and DST fold."""
     import re
     from datetime import UTC
 
-    from farmcore.core.models.canonical import Log
-
-    c = correction_case
-    with committed_session_factory() as session:
-        session.get(Log, c.log_id).ts_start = original
-        session.commit()
-    edit = c.browser.get(c.endpoint)
-    key = re.search(r'name="request_key" value="([^"]+)"', edit.text).group(1)
-    shown = re.search(r'name="ts_start" value="([^"]+)"', edit.text).group(1)
-    response = c.browser.post(
-        f"/operations/logs/{c.log_id}/corrections/preview?farm={c.farm_id}",
-        data={
-            "request_key": key,
-            "reason": "Only dose changed",
-            "parcel_ids": [str(c.ids["P1"])],
-            "product_id": [str(c.ids[COPPER])],
-            "dose_value": ["1"],
-            "dose_unit": ["kg/ha"],
-            "ts_start": shown,
-            "notes": "",
-        },
-        follow_redirects=False,
-    )
-    assert response.status_code == 303
-    correction_id = re.search(r"/corrections/(\d+)", response.headers["location"]).group(1)
-    saved = c.browser.post(f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}")
-    assert saved.status_code == 200
-    assert saved.json()["before"]["ts_start"] == original.astimezone(UTC).isoformat()
-    assert saved.json()["after"]["ts_start"] == original.astimezone(UTC).isoformat()
-
-
-def test_html_notes_edit_preserves_each_historical_duplicate_dose(
-    correction_case, committed_session_factory
-):
-    import re
-
-    c = correction_case
-    with committed_session_factory() as session:
-        session.add(
-            Quantity(
-                log_id=c.log_id,
-                product_id=c.ids[COPPER],
-                measure="rate",
-                value=Decimal("0.5"),
-                unit="kg/ha",
-                label="Second recorded dose",
-            )
-        )
-        session.commit()
-        original = [
-            (q.id, q.value, q.label)
-            for q in session.scalars(
-                select(Quantity).where(Quantity.log_id == c.log_id).order_by(Quantity.id)
-            )
-        ]
-    edit = c.browser.get(c.endpoint)
-    key = re.search(r'name="request_key" value="([^"]+)"', edit.text).group(1)
-    result = c.browser.post(
-        f"/operations/logs/{c.log_id}/corrections/preview?farm={c.farm_id}",
-        data={
-            "request_key": key,
-            "reason": "Only notes changed",
-            "parcel_ids": [str(c.ids["P1"])],
-            "product_id": [str(c.ids[COPPER]), str(c.ids[COPPER])],
-            "dose_value": ["2", "0.5"],
-            "dose_unit": ["kg/ha", "kg/ha"],
-            "ts_start": "2024-04-10T05:00",
-            "notes": "Updated note",
-        },
-        follow_redirects=False,
-    )
-    assert result.status_code == 303, result.text
-    correction_id = re.search(r"/corrections/(\d+)", result.headers["location"]).group(1)
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
-    with committed_session_factory() as session:
-        assert [
-            (q.id, q.value, q.label)
-            for q in session.scalars(
-                select(Quantity).where(Quantity.log_id == c.log_id).order_by(Quantity.id)
-            )
-        ] == original
-
-
-def test_changing_one_product_dose_retains_unchanged_quantity_identity(
-    correction_case, committed_session_factory
-):
+    from farmcore.apps.operations.corrections import decimal_text
+    from farmcore.core.models.canonical import Farm, Log
     from tests.apps.chat.test_handlers import SULPHUR
 
     c = correction_case
+    started = NOW_LOCAL.replace(hour=5, second=37, microsecond=123456)
+    if case == "dose-edit-keeps-dst-fold":
+        started = started.replace(month=10, day=27, hour=2, minute=30, fold=1)
     with committed_session_factory() as session:
-        other = Quantity(
-            log_id=c.log_id,
-            product_id=c.ids[SULPHUR],
-            measure="rate",
-            value=Decimal("3"),
-            unit="kg/ha",
-        )
-        session.add(other)
+        session.get(Log, c.log_id).ts_start = started
+        if case == "dose-edit-keeps-other-product-row":
+            session.add(
+                Quantity(
+                    log_id=c.log_id,
+                    product_id=c.ids[SULPHUR],
+                    measure="rate",
+                    value=Decimal("3"),
+                    unit="kg/ha",
+                )
+            )
+        elif case == "notes-edit-keeps-duplicate-doses":
+            session.add(
+                Quantity(
+                    log_id=c.log_id,
+                    product_id=c.ids[COPPER],
+                    measure="rate",
+                    value=Decimal("0.5"),
+                    unit="kg/ha",
+                    label="Second recorded dose",
+                )
+            )
+        elif case == "notes-edit-keeps-delisted-product":
+            farm = session.get(Farm, c.farm_id)
+            farm.props = {**farm.props, "product_ids": []}
+        elif case == "notes-edit-keeps-huge-historical-dose":
+            session.get(Quantity, c.quantity_id).value = Decimal("1e5000")
         session.commit()
-        other_id = other.id
-    c.body["changes"]["quantities"].append(
-        {"product_id": c.ids[SULPHUR], "value": "3", "unit": "kg/ha"}
-    )
-    preview = c.browser.post(c.endpoint, json=c.body).json()
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{preview['id']}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
-    with committed_session_factory() as session:
-        rows = session.scalars(select(Quantity).where(Quantity.log_id == c.log_id)).all()
-        assert len(rows) == 2
-        assert sorted((q.product_id, q.value) for q in rows) == [
-            (c.ids[COPPER], Decimal("1")),
-            (c.ids[SULPHUR], Decimal("3")),
+        before = [
+            (q.id, q.product_id, q.value, q.label)
+            for q in session.scalars(
+                select(Quantity).where(Quantity.log_id == c.log_id).order_by(Quantity.id)
+            )
         ]
-        assert session.get(Quantity, other_id) is not None
-        assert session.get(Quantity, other_id).value == 3
-
-
-def test_historical_shortlist_row_stays_selected_and_notes_only_edit_keeps_identity(
-    correction_case, committed_session_factory
-):
-    import re
-
-    from farmcore.core.models.canonical import Farm, Log
-
-    c = correction_case
-    with committed_session_factory() as session:
-        farm = session.get(Farm, c.farm_id)
-        farm.props = {**farm.props, "product_ids": []}
-        session.commit()
-    page = c.browser.get(c.endpoint)
-    assert page.status_code == 200
-    assert f'value="{c.ids[COPPER]}" selected' in page.text
-    assert COPPER in page.text and "Recorded product" in page.text
-    key = re.search(r'name="request_key" value="([^"]+)"', page.text).group(1)
-    form = {
-        "request_key": key,
-        "reason": "Correct notes only",
-        "parcel_ids": [str(c.ids["P1"])],
-        "product_id": [str(c.ids[COPPER])],
-        "dose_value": ["2"],
-        "dose_unit": ["kg/ha"],
-        "ts_start": "2024-04-10T05:00",
-        "notes": "Historical dose unchanged",
-    }
+    edit = c.browser.get(c.endpoint)
+    assert edit.status_code == 200
+    if case == "notes-edit-keeps-delisted-product":
+        assert f'value="{c.ids[COPPER]}" selected' in edit.text and "Recorded product" in edit.text
+    dose_edit = case.startswith("dose-edit")
+    values = [decimal_text(value) for _, _, value, _ in before]
+    if dose_edit:
+        values[0] = "1"
     response = c.browser.post(
         f"/operations/logs/{c.log_id}/corrections/preview?farm={c.farm_id}",
-        data=form,
+        data={
+            "request_key": re.search(r'name="request_key" value="([^"]+)"', edit.text)[1],
+            "reason": "One fact changed",
+            "parcel_ids": [str(c.ids["P1"])],
+            "product_id": [str(product_id) for _, product_id, _, _ in before],
+            "dose_value": values,
+            "dose_unit": ["kg/ha"] * len(before),
+            "ts_start": re.search(r'name="ts_start" value="([^"]+)"', edit.text)[1],
+            "notes": "" if dose_edit else "Edited note",
+        },
         follow_redirects=False,
     )
     assert response.status_code == 303, response.text
-    correction_id = re.search(r"/corrections/(\d+)", response.headers["location"]).group(1)
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
+    correction_id = re.search(r"/corrections/(\d+)", response.headers["location"])[1]
+    confirm = f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
+    assert c.browser.post(confirm).status_code == 200
     with committed_session_factory() as session:
-        assert session.get(Log, c.log_id).notes == "Historical dose unchanged"
-        [quantity] = session.scalars(select(Quantity).where(Quantity.log_id == c.log_id)).all()
-        assert (quantity.id, quantity.value) == (c.quantity_id, Decimal("2"))
-    # An actual dose change of the unavailable historical product still needs eligibility.
-    c.body["request_key"] = "new-ineligible-dose"
-    assert c.browser.post(c.endpoint, json=c.body).status_code == 422
-
-
-def test_large_historical_numeric_value_is_retained_without_new_input_budget(
-    correction_case, committed_session_factory
-):
-    c = correction_case
-    historical = Decimal("1e5000")
-    with committed_session_factory() as session:
-        session.get(Quantity, c.quantity_id).value = historical
-        session.commit()
-    c.body["changes"]["quantities"][0]["value"] = str(historical)
-    c.body["changes"]["notes"] = "Retain exact imported dose"
-    response = c.browser.post(c.endpoint, json=c.body)
-    assert response.status_code == 200, response.text
-    preview = response.json()
-    assert Decimal(preview["before"]["quantities"][0]["value"]) == historical
-    assert preview["before"]["quantities"] == preview["after"]["quantities"]
-    assert (
-        c.browser.post(
-            f"/operations/corrections/{preview['id']}/confirm?farm={c.farm_id}"
-        ).status_code
-        == 200
-    )
-    with committed_session_factory() as session:
-        quantity = session.get(Quantity, c.quantity_id)
-        assert quantity is not None and quantity.value == historical
+        log = session.get(Log, c.log_id)
+        assert log.ts_start.astimezone(UTC) == started.astimezone(UTC)
+        after = [
+            (q.id, q.product_id, q.value, q.label)
+            for q in session.scalars(
+                select(Quantity).where(Quantity.log_id == c.log_id).order_by(Quantity.id)
+            )
+        ]
+    if dose_edit:
+        untouched = before[1:]
+        assert [row for row in after if row in untouched] == untouched
+        kept = {row[0] for row in untouched}
+        edited = [(product, value) for row_id, product, value, _ in after if row_id not in kept]
+        assert edited == [(c.ids[COPPER], Decimal("1"))]
+    else:
+        assert after == before

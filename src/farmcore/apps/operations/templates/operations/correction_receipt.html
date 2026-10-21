@@ -11,7 +11,7 @@
 <p class="mt-2 break-words">{{ facts.ts_start }}</p><p class="mt-1">Parcels: {% for parcel_id in facts.parcel_ids %}{{ parcel_names.get(parcel_id, 'Parcel ' ~ parcel_id) }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
 <ul class="mt-2 space-y-1">{% for q in facts.quantities %}<li class="break-words">{{ product_names.get(q.product_id, q.label or 'Product ' ~ q.product_id) }} · {{ q.value }} {{ q.unit }}</li>{% endfor %}</ul>
 <p class="mt-2 break-words">{{ facts.notes or 'No notes' }}</p>
-<details class="mt-3"><summary class="min-h-[44px] cursor-pointer py-2 text-sm underline">Retained record and source evidence</summary><pre class="overflow-x-auto whitespace-pre-wrap break-words text-xs">{{ facts|tojson(indent=2) }}</pre></details>
+<p class="mt-3 text-sm text-muted">Sources kept unchanged: {% for source in facts.sources %}{{ source.source_type }} · {{ source.received_at }}{% if not loop.last %}; {% endif %}{% else %}none{% endfor %}</p>
 </section>
 {% endfor %}
 </div>
