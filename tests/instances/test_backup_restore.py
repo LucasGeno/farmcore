@@ -1238,6 +1238,99 @@ def test_migrates_of_running_installations_during_restores_never_deadlock(
     assert min(rounds) >= 2, rounds  # the migrates did overlap each restore
 
 
+@pytest.fixture
+def short_lock_timeout(monkeypatch) -> str:
+    from farmcore.core.commands import migrate, restore
+
+    monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "1s")
+    monkeypatch.setattr(restore, "LOCK_TIMEOUT", "1s")
+    return "1s"
+
+
+@pytest.fixture
+def database_list_locker(dbs) -> Iterator:
+    """`lock()` holds `pg_database` locked, as a long restore or migrate step would, until the
+    test ends or `unlock()`."""
+    from farmcore.core.commands.migrate import LOCK_DATABASES
+
+    engine = create_engine(dbs.server.url("postgres"))
+    conn = engine.connect()
+
+    class Locker:
+        def lock(self) -> None:
+            conn.begin()
+            conn.exec_driver_sql(LOCK_DATABASES)
+
+        def unlock(self) -> None:
+            conn.rollback()
+
+    try:
+        yield Locker()
+    finally:
+        conn.close()
+        engine.dispose()
+
+
+def test_a_restore_kept_from_creating_its_copy_says_nothing_was_restored(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, short_lock_timeout, database_list_locker
+):
+    """CREATE DATABASE waits for `pg_database`, and cannot be stopped while it does (a signal
+    waits for it): it gives up after the lock timeout, well within `docker compose stop`'s 10
+    seconds, so a stop never has to end in SIGKILL and a left staging copy."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    database_list_locker.lock()
+    started = time.monotonic()
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    waited = time.monotonic() - started
+    database_list_locker.unlock()
+    assert result.exit_code == 1
+    assert "restore: the server is busy: another restore or migrate kept its list of " in (
+        result.output
+    )
+    assert "locked for over 1s; nothing was restored, try again" in result.output, result.output
+    assert waited < 10
+    assert staging_of(dbs, target) == []
+    untouched.check()
+    again = cli("restore", str(bundle), "--identity", str(key), env=env)
+    assert again.exit_code == 0, again.output
+
+
+def test_a_restore_kept_from_the_database_list_after_the_swap_says_the_data_is_in(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch, short_lock_timeout, database_list_locker
+):
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    swap = restore.Copy.swap
+
+    def then_busy(copy) -> None:
+        swap(copy)
+        database_list_locker.lock()
+
+    monkeypatch.setattr(restore.Copy, "swap", then_busy)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    database_list_locker.unlock()
+    assert result.exit_code == 1
+    assert "the server is busy" in result.output, result.output
+    assert "after the copy was swapped in: the data is in, paused; run migrate to finish" in (
+        result.output
+    )
+    assert "nothing was restored" not in result.output
+    assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+    assert cli("migrate", env=env).exit_code == 0
+
+
 def test_restores_into_targets_with_a_common_prefix_never_meet(
     source, dbs, cli, owner_key, tmp_path, private_tmp
 ):

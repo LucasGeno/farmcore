@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import secrets
 import subprocess
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -622,6 +624,120 @@ def test_a_failing_second_step_leaves_the_runtime_role_able_to_connect(
     try:
         with engine.connect() as conn:
             assert conn.execute(text("SELECT count(*) FROM farm")).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+def _waiting(pg_server, seen: list[str], done: threading.Event) -> threading.Thread:
+    """A thread noting the statement of every session waiting for a lock until `done`."""
+
+    def run() -> None:
+        engine = create_engine(pg_server.url("postgres"))
+        try:
+            with engine.connect() as conn:
+                while not done.is_set():
+                    rows = conn.execute(
+                        text(
+                            "SELECT query FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                            "AND pid <> pg_backend_pid()"
+                        )
+                    ).scalars()
+                    seen.extend(rows.all())
+                    conn.rollback()
+                    time.sleep(0.05)
+        finally:
+            engine.dispose()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
+
+
+def test_a_migrate_kept_from_the_database_list_says_so_and_to_run_it_again(
+    install, monkeypatch, pg_server
+) -> None:
+    """Another restore or migrate holds `pg_database` locked: migrate waits only so long, and
+    waits on the lock itself, never after a change of its own to `pg_database` (two such
+    waits, crossed, deadlock)."""
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "1s")
+    holder = create_engine(pg_server.url("postgres"))
+    seen: list[str] = []
+    done = threading.Event()
+    try:
+        with holder.begin() as conn:
+            conn.exec_driver_sql(migrate.LOCK_DATABASES)
+            watcher = _waiting(pg_server, seen, done)
+            started = time.monotonic()
+            out = _migrate_fails(monkeypatch, _env(inst))
+            waited = time.monotonic() - started
+            done.set()
+            watcher.join()
+    finally:
+        holder.dispose()
+
+    assert "the server is busy: another restore or migrate kept its list of databases " in out
+    assert "locked for over 1s; run migrate again" in out, out
+    assert waited < 10
+    assert seen and all(q.startswith(migrate.LOCK_DATABASES) for q in seen), seen
+    _migrate(monkeypatch, _env(inst))  # nothing holds it now
+
+
+def test_a_migrate_waiting_on_its_advisory_locks_past_the_lock_timeout_still_succeeds(
+    install, monkeypatch, pg_server
+) -> None:
+    """The timeout is for `pg_database` only: a migrate queued behind another one on this
+    installation's own locks (the installation id, the runtime role) waits as long as it takes."""
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "1s")
+    holder = create_engine(inst.owner_url)
+    conn = holder.connect()
+    conn.begin()
+    conn.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:a)), pg_advisory_xact_lock(hashtext(:b))"),
+        {"a": "farmcore.installation_id", "b": "farmcore.runtime"},
+    )
+
+    def release() -> None:
+        time.sleep(3)
+        conn.rollback()
+        conn.close()
+
+    releaser = threading.Thread(target=release, daemon=True)
+    releaser.start()
+    started = time.monotonic()
+    try:
+        _migrate(monkeypatch, _env(inst))
+    finally:
+        releaser.join()
+        holder.dispose()
+
+    assert time.monotonic() - started >= 2.5  # it did wait behind the other one
+
+
+def test_the_lock_timeout_ends_with_its_transaction_and_other_errors_pass_through(
+    install,
+) -> None:
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    engine = create_engine(inst.owner_url)
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                migrate.lock_databases(conn)
+                assert conn.exec_driver_sql("SHOW lock_timeout").scalar_one() == "5s"
+            assert conn.exec_driver_sql("SHOW lock_timeout").scalar_one() == "0"
+            conn.rollback()
+            with pytest.raises(DBAPIError) as exc, conn.begin():
+                with pytest.raises(DBAPIError):
+                    conn.exec_driver_sql("SELECT no_such_column")
+                migrate.lock_databases(conn)  # in a failed transaction: not a busy server
+            assert isinstance(exc.value.orig, psycopg.errors.InFailedSqlTransaction)
     finally:
         engine.dispose()
 

@@ -79,10 +79,13 @@ from farmcore.core.commands.backup import (
 )
 from farmcore.core.commands.effects import set_external_effects
 from farmcore.core.commands.migrate import (
-    LOCK_DATABASES,
+    LOCK_TIMEOUT,
     MigrateError,
+    ServerBusy,
     alembic_config,
     check_owner,
+    lock_databases,
+    lock_timed_out,
     migrate_installation,
 )
 from farmcore.core.startup import EFFECTS_PAUSED
@@ -521,12 +524,18 @@ class Copy:
             with engine.connect() as conn:
                 q = conn.dialect.identifier_preparer.quote
                 # The server finishes a create its client gave up on: a stop signal waits for
-                # it, so that the cleanup knows the database is there.
+                # it, so that the cleanup knows the database is there. So it waits for locks
+                # only so long. CREATE DATABASE refuses a transaction block, so this one
+                # statement on this connection of its own is the only one with the timeout.
                 with _signals_deferred():
-                    conn.exec_driver_sql(
-                        f"CREATE DATABASE {q(self.name)} OWNER {q(self.owner)} "
-                        f"TEMPLATE {q(self.url.database)}"
-                    )
+                    conn.exec_driver_sql(f"SET lock_timeout = '{LOCK_TIMEOUT}'")
+                    try:
+                        conn.exec_driver_sql(
+                            f"CREATE DATABASE {q(self.name)} OWNER {q(self.owner)} "
+                            f"TEMPLATE {q(self.url.database)}"
+                        )
+                    except DBAPIError as exc:
+                        raise ServerBusy() if lock_timed_out(exc) else exc from None
                     self.created = True
         finally:
             engine.dispose()
@@ -534,7 +543,7 @@ class Copy:
         try:
             with engine.begin() as conn:
                 q = conn.dialect.identifier_preparer.quote
-                conn.exec_driver_sql(LOCK_DATABASES)
+                lock_databases(conn)
                 conn.exec_driver_sql(f"REVOKE ALL ON DATABASE {q(self.name)} FROM PUBLIC")
                 # PUBLIC may open, and create temporary tables in, any new database; the loader
                 # must reach only the staging one (`migrate` revokes the same).
@@ -595,7 +604,7 @@ class Copy:
         try:
             # Like `create`: a stop signal waits until the role is committed, or rolled back.
             with _signals_deferred(), engine.begin() as conn:
-                conn.exec_driver_sql(LOCK_DATABASES)  # GRANT CONNECT below changes pg_database
+                lock_databases(conn)  # GRANT CONNECT below changes pg_database
                 raw = conn.connection.driver_connection
                 verifier = raw.pgconn.encrypt_password(
                     self.loader_password.encode(), self.loader.encode(), b"scram-sha-256"
@@ -675,7 +684,7 @@ class Copy:
         engine = create_engine(self._url(self.staging))
         try:
             with engine.begin() as conn:
-                conn.exec_driver_sql(LOCK_DATABASES)  # DROP OWNED revokes its CONNECT
+                lock_databases(conn)  # DROP OWNED revokes its CONNECT
                 conn.exec_driver_sql(f"DROP OWNED BY {_q(conn, self.loader)}")
         finally:
             engine.dispose()
@@ -777,6 +786,8 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                     f"stopped by {exc} after the copy was swapped in: {_DATA_IN}"
                 ) from None
             except (MigrateError, CommandError, DBAPIError) as exc:
+                if not swapped and isinstance(exc, ServerBusy):
+                    raise BundleError(f"{exc}; nothing was restored, try again") from None
                 if not swapped:
                     raise
                 detail = database_error(exc) if isinstance(exc, DBAPIError) else str(exc)

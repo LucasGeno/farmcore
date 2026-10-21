@@ -353,8 +353,14 @@ One restore runs per target: a second one into the same database is refused whil
 runs. Just before the swap, restore checks the target again and refuses it if it has gained data
 meanwhile. Restore also revokes `CONNECT` and `TEMP` from PUBLIC on every database of the
 server but `template0`, permanently, as `migrate` does, so the loader role can open only the
-staging database. Restores and migrations on one server take turns for that step, and a
-database cannot be created, renamed or dropped while it runs.
+staging database. Restores and migrations on one server take turns for that step, and every
+other change to the server's list of databases (their access rights, a database created,
+renamed or dropped) waits for it. Each waits at most 5 seconds for another's turn to end, less
+than the 10 seconds `docker compose stop` gives before `SIGKILL`; one that waits longer
+stops with "the server is busy" and changes nothing. Before the swap restore then says nothing
+was restored: run it again. After the swap it says the data is in: run `migrate`. A
+`migrate` that stops this way says to run it again. A migrate queued behind another migrate of
+the same installation is not cut short: it waits for it to finish.
 
 If restore stops after the swap (say, the runtime role cannot be set up), it says so: the
 data is in, paused, with no sessions. Fix the cause and run

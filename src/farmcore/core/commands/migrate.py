@@ -8,6 +8,7 @@ import uuid
 from importlib.resources import files
 
 import psycopg
+import psycopg.errors
 import typer
 from alembic import command
 from alembic.config import Config
@@ -61,10 +62,39 @@ MIN_SERVER_VERSION = 160000
 # that change holds the table in a mode the lock conflicts with, so two such transactions each
 # wait for the other.
 LOCK_DATABASES = "LOCK TABLE pg_catalog.pg_database IN SHARE ROW EXCLUSIVE MODE"
+# How long a change to `pg_database` waits for another restore's or migrate's to end. Less than
+# the 10 seconds `docker compose stop` waits before SIGKILL: a restore creating its staging
+# database cannot be stopped while it waits, and SIGKILL would leave that database behind.
+LOCK_TIMEOUT = "5s"
 
 
 class MigrateError(RuntimeError):
     """A refusal or failure `farmcore migrate` reports in one line (never with SQL text)."""
+
+
+class ServerBusy(MigrateError):
+    """Another restore or migrate kept `pg_database` locked for longer than `LOCK_TIMEOUT`;
+    the transaction that waited changed nothing."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the server is busy: another restore or migrate kept its list of databases locked "
+            f"for over {LOCK_TIMEOUT}"
+        )
+
+
+def lock_databases(conn: Connection) -> None:
+    """`LOCK_DATABASES`, waiting at most `LOCK_TIMEOUT`. The timeout is `SET LOCAL`: it ends
+    with this transaction, and a wait before it (an advisory lock) is never cut short."""
+    try:
+        conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
+        conn.exec_driver_sql(LOCK_DATABASES)
+    except DBAPIError as exc:
+        raise ServerBusy() if lock_timed_out(exc) else exc from None
+
+
+def lock_timed_out(exc: DBAPIError) -> bool:
+    return isinstance(exc.orig, psycopg.errors.LockNotAvailable)
 
 
 def check_owner(conn: Connection) -> str:
@@ -261,7 +291,7 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
     part of any statement."""
     me = _refuse_owner_as_runtime(conn, role)
     conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": "farmcore.runtime"})
-    _run(conn, role, [sql.SQL(LOCK_DATABASES)])  # before the reset below changes pg_database
+    lock_databases(conn)  # before the reset below changes pg_database
     existed = _exists(conn, role)
     reset_runtime_role_in(conn, role)
     raw = conn.connection.driver_connection
@@ -375,7 +405,7 @@ def migrate_installation(settings: Settings) -> str:
             maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))
             try:
                 with maintenance.begin() as conn:
-                    _run(conn, settings.runtime_database_role, [sql.SQL(LOCK_DATABASES)])
+                    lock_databases(conn)
                     reset_runtime_role_in(conn, settings.runtime_database_role)
                     # The reset revoked CONNECT on the installation database; give it back
                     # now, so a failure in the next step never locks out the running app.
@@ -405,7 +435,8 @@ def register(cli: typer.Typer) -> None:
         try:
             installation_id = migrate_installation(get_settings())
         except MigrateError as exc:
-            typer.echo(str(exc), err=True)
+            again = "; run migrate again" if isinstance(exc, ServerBusy) else ""
+            typer.echo(f"{exc}{again}", err=True)
             raise typer.Exit(1) from None
         typer.echo("migrated to head")
         typer.echo(f"installation {installation_id}")
