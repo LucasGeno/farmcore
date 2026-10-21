@@ -49,7 +49,14 @@ CHATS_KEY = "telegram_chat_ids"
 CURSOR_KEY = "push_cursor"
 ACTION = "spray"  # the decision that needs the farmer to act
 # Summary order: the decisions a farmer acts on first. Others follow alphabetically.
-DECISION_ORDER = ("spray", "wait", "protected", "none")
+DECISION_ORDER = (
+    "spray",
+    "wait",
+    "assessment unavailable",
+    "assessment limited",
+    "protected",
+    "none",
+)
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0", ""})
 
 logger = logging.getLogger(__name__)
@@ -118,7 +125,7 @@ def digest(
     summary = ", ".join(f"{_plural(counts[d])} → {d}" for d in sorted(counts, key=_decision_key))
     # Priority first (from the stored advice; `advisor.priority`), then alias.
     action = sorted(
-        (c for c in changes if c["new"] == ACTION),
+        (c for c in changes if c["new"] == ACTION or c["new"].startswith("assessment ")),
         key=lambda c: (-(c.get("priority") or 0), _alias_key(c["alias"])),
     )
     lines = [summary]

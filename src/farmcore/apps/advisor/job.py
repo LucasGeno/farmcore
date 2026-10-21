@@ -112,14 +112,15 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
         }
         _post(repo, parcel.id, "advice.evaluated", head, {**base, "decision": row.decision}, now)
         old = previous.get(parcel.id, service.NO_ADVICE)
-        if old != row.decision:
-            body = f"{parcel.alias}: {old} → {row.decision}. {head}"
+        new = service.state_label(row.decision, row.props)
+        if old != new:
+            body = f"{parcel.alias}: {old} → {new}. {head}"
             _post(
                 repo,
                 parcel.id,
                 "advice.changed",
                 body,
-                {**base, "old": old, "new": row.decision},
+                {**base, "old": old, "new": new},
                 now,
             )
     return len(parcels)

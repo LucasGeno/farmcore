@@ -132,20 +132,41 @@ def load_sprays(repo: ScopedRepository, parcel_id: int, now: datetime) -> tuple[
 # --- previous advice -----------------------------------------------------------------------
 
 
+UNCERTAIN = ("limited", "unavailable")
+
+
+def state_label(decision: str, props: dict | None) -> str:
+    """What a change notice says about one advice row: its decision, except that a limited or
+    unavailable assessment with no action is never reported as "none" or "protected"."""
+    status = (props or {}).get("assessment_status")
+    if status in UNCERTAIN and decision in (NO_ADVICE, "protected"):
+        return f"assessment {status}"
+    return decision
+
+
 def previous_decisions(repo: ScopedRepository, now: datetime) -> dict[int, str]:
-    """parcel id -> decision of its latest advice before this evaluation at `now` (module doc)."""
+    """parcel id -> state label (`state_label`) of its latest advice before this evaluation at
+    `now` (module doc)."""
 
     def latest(*where: Any) -> dict[int, tuple[int, str]]:
-        """parcel id -> (id, decision) of its latest advice matching `where`."""
+        """parcel id -> (id, state label) of its latest advice matching `where`."""
         rows = repo.execute(
-            select(Advice.parcel_id, Advice.id, Advice.decision)
+            select(
+                Advice.parcel_id,
+                Advice.id,
+                Advice.decision,
+                Advice.props["assessment_status"].astext,
+            )
             .where(Advice.farm_id == repo.farm_id, *where)
             .ext(distinct_on(Advice.parcel_id))
             .order_by(Advice.parcel_id, Advice.evaluated_at.desc(), Advice.id.desc()),
             scope=SCOPE,
             resource="advice",
         )
-        return {parcel_id: (advice_id, decision) for parcel_id, advice_id, decision in rows}
+        return {
+            parcel_id: (advice_id, state_label(decision, {"assessment_status": status}))
+            for parcel_id, advice_id, decision, status in rows
+        }
 
     others = dict(
         repo.execute(
