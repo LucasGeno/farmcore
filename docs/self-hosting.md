@@ -505,23 +505,27 @@ previous release restores the bundle the new one wrote just before migrating. Th
 database is kept aside under another name, so nothing is lost:
 
 ```sh
-dc="docker compose -p farm-a --env-file farm-a.env"
-$dc stop app bot backup
-# Previous image again: `git checkout <previous tag> && $dc build`, or set FARMCORE_IMAGE in
-# farm-a.env back to the previous tag.
-$dc run --rm --no-deps --entrypoint ls backup -l /backups    # the pre-upgrade-*.age bundles
+dc() { docker compose -p farm-a --env-file farm-a.env "$@"; }   # works in sh, bash and zsh
+dc stop app bot backup
+# The previous image again: `git checkout` the previous release's tag, then `dc build`; or,
+# with FARMCORE_IMAGE, set it back to the previous tag in farm-a.env (no build).
+dc run --rm --no-deps --entrypoint ls backup -l /backups    # the pre-upgrade-*.age bundles
 mkdir -m 700 ~/farmcore-restore
-$dc cp backup:/backups/pre-upgrade-20261021T101500Z.age ~/farmcore-restore/bundle.age
+# The newest pre-upgrade bundle: names sort by UTC time, so the last one listed.
+dc cp backup:/backups/pre-upgrade-20261021T101500Z.age ~/farmcore-restore/bundle.age
 cp ~/keys/farmcore-backup.key ~/farmcore-restore/owner.key
-$dc exec -T db psql -U farmcore -d postgres -v ON_ERROR_STOP=1 \
+dc exec -T db psql -U farmcore -d postgres -v ON_ERROR_STOP=1 \
   -c 'ALTER DATABASE farmcore RENAME TO farmcore_failed_upgrade' \
   -c 'CREATE DATABASE farmcore TEMPLATE template_postgis'
-$dc run --rm --no-deps --user "$(id -u):$(id -g)" -v ~/farmcore-restore:/restore:ro migrate \
+dc run --rm --no-deps --user "$(id -u):$(id -g)" -v ~/farmcore-restore:/restore:ro migrate \
   farmcore restore /restore/bundle.age --identity /restore/owner.key
 rm -P ~/farmcore-restore/owner.key 2>/dev/null || shred -u ~/farmcore-restore/owner.key
-$dc up -d --wait --wait-timeout 180
-$dc run --rm --no-deps migrate farmcore effects enable
+dc up -d --wait --wait-timeout 180
+dc run --rm --no-deps migrate farmcore effects enable
 ```
+
+Pick the newest `pre-upgrade-*.age`: it is the one this upgrade wrote just before migrating.
+An older one brings back an older state of the data.
 
 `cp` needs the `backup` container to exist (stopped is fine). The restored
 installation is what the bundle held at the upgrade, with what a restore always changes (see
