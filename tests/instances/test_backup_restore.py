@@ -30,6 +30,7 @@ import tarfile
 import threading
 import time
 import uuid
+import weakref
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from importlib.metadata import version
@@ -1110,6 +1111,58 @@ def test_a_signal_during_the_swap_waits_for_it_and_says_the_copy_is_in(
     assert caught_signals == []
     # `migrate` finishes the job, as the message says.
     assert cli("migrate", env=env).exit_code == 0
+
+
+def stop_inside_a_weakref_callback(monkeypatch) -> list[str]:
+    """SIGTERM handled while Python runs a weakref callback, as it may at any moment: Python
+    drops whatever the handler raises there ("Exception ignored in ..."). The dropped
+    exceptions' names land in the returned list."""
+    dropped: list[str] = []
+    monkeypatch.setattr(sys, "unraisablehook", lambda u: dropped.append(type(u.exc_value).__name__))
+    handler = signal.getsignal(signal.SIGTERM)
+
+    class Collected:
+        pass
+
+    gone = Collected()
+    ref = weakref.ref(gone, lambda _ref: handler(signal.SIGTERM, None))
+    del gone  # the callback runs here
+    assert ref() is None
+    return dropped
+
+
+@pytest.mark.parametrize("step", ["decrypt", "drop_loader"])
+def test_a_stop_the_handler_could_not_raise_still_stops_the_restore_before_the_swap(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, caught_signals, step
+):
+    """The handler ignores further stop signals once it has run, so a stop it raised into a
+    callback, where it is lost, must still stop the restore: at the next step, and at the
+    latest before the swap (after the last step, `drop_loader`)."""
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    dropped: list[str] = []
+    owner = restore if step == "decrypt" else restore.Copy
+    real = getattr(owner, step)
+
+    def then_stopped(*args) -> None:
+        real(*args)
+        dropped.extend(stop_inside_a_weakref_callback(monkeypatch))
+
+    monkeypatch.setattr(owner, step, then_stopped)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert dropped == ["Interrupted"]  # the handler's raise was lost
+    assert result.exit_code == 1
+    assert "restore: stopped by SIGTERM; nothing was restored" in result.output, result.output
+    assert staging_of(dbs, target) == []
+    untouched.check()
+    assert caught_signals == []
 
 
 @pytest.mark.parametrize("failure", ["refusal", "database"])

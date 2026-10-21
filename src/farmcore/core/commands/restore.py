@@ -143,7 +143,8 @@ class Interrupted(BaseException):
 
 
 class _Stops:
-    """What the stop-signal handler does: raise at once, or note the signal for later."""
+    """What the stop-signal handler does: raise at once, or note the signal for later. It
+    notes the signal either way (`pending`), and `_stop_point` raises a noted one."""
 
     deferring = False
     pending: str | None = None
@@ -157,11 +158,9 @@ def _stop_on_signals() -> Iterator[None]:
     def stop(signum, _frame) -> None:
         for s in STOP_SIGNALS:  # one is enough; let the cleanup finish
             signal.signal(s, signal.SIG_IGN)
-        name = signal.Signals(signum).name
-        if _STOPS.deferring:
-            _STOPS.pending = name
-            return
-        raise Interrupted(name)
+        _STOPS.pending = signal.Signals(signum).name  # first: the raise below may be lost
+        if not _STOPS.deferring:
+            raise Interrupted(_STOPS.pending)
 
     _STOPS.deferring, _STOPS.pending = False, None
     previous = {s: signal.signal(s, stop) for s in STOP_SIGNALS}
@@ -172,6 +171,16 @@ def _stop_on_signals() -> Iterator[None]:
             signal.signal(s, handler)
 
 
+def _stop_point() -> None:
+    """Raise a stop signal that was noted but has not stopped the restore. Python drops what a
+    signal handler raises while it runs a weakref or garbage-collection callback ("Exception
+    ignored in ..."), and the handler has ignored further signals by then: without this,
+    such a restore would carry on to the end and say nothing of the stop. It runs before and
+    after each block that defers signals, so a noted stop ends the restore before the swap."""
+    if _STOPS.pending:
+        raise Interrupted(_STOPS.pending)
+
+
 @contextlib.contextmanager
 def _signals_deferred() -> Iterator[None]:
     """A stop signal that arrives while the block runs raises when it ends, not inside it; a
@@ -179,15 +188,14 @@ def _signals_deferred() -> Iterator[None]:
 
     A flag, not a signal mask: a mask holds a signal back from this thread only, and the
     kernel may hand a process's signal to any other thread, whose handler call Python then
-    runs here at once."""
+    runs here at once. A stop noted before the block starts raises before it runs."""
+    _stop_point()
     _STOPS.deferring = True
     try:
         yield
     finally:
         _STOPS.deferring = False
-        pending, _STOPS.pending = _STOPS.pending, None
-    if pending:
-        raise Interrupted(pending)
+    _stop_point()
 
 
 def sweep_temp() -> None:
