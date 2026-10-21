@@ -254,6 +254,7 @@ def message(
     if repo.farm_id != default_farm(repo.session, request.app.state.settings).id:
         return response(request, token, {"kind": "reply", "text": LOG_OTHER_FARM, "actions": []})
     message_id = time.time_ns() // 1000  # unique per message: the draft's idempotency key
+    _end_request_transaction(repo)
     out = chat.on_message(
         chat_deps(request.app), Incoming(chat.WEB_CHAT_ID, text, None, message_id)
     )
@@ -282,6 +283,17 @@ def _conversation_key(request: Request, repo: Repo, token: str, conversation: st
     )
 
 
+def _end_request_transaction(repo: ScopedRepository) -> None:
+    """Commit the request's transaction before the chat handlers open their own sessions.
+
+    `get_repo` takes the farm's operations advisory lock and its row lock (`FOR UPDATE`) on a
+    POST. The chat handlers write `access_log`, grants and logs on other pooled connections;
+    those writes wait for both locks, while this request waits for the handlers: an in-process
+    deadlock Postgres cannot see. The handlers take the same locks themselves when they write.
+    Reads after this run in a fresh transaction that `get_repo` commits as usual."""
+    repo.session.commit()
+
+
 @router.post("/confirm", dependencies=[Depends(require_admin)])
 def confirm(
     request: Request, repo: Repo, action: str = Form(pattern=r"^(confirm|cancel):\d{1,12}$")
@@ -289,6 +301,7 @@ def confirm(
     """✅ / ❌ on a web draft; the chat app's ownership, replay and merge checks apply."""
     if "chat" not in {m.name for m in visible_manifests(request)}:
         raise HTTPException(404)
+    _end_request_transaction(repo)
     out = chat.on_callback(chat_deps(request.app), Callback(chat.WEB_CHAT_ID, action))
     token = request.cookies.get(limits.COOKIE) or ""
     return response(request, token, _web_reply(request, repo, out))
