@@ -690,8 +690,9 @@ def test_a_migrate_kept_from_the_database_list_says_so_and_to_run_it_again(
     _migrate(monkeypatch, _env(inst))  # nothing holds it now
 
 
+@pytest.mark.parametrize("key", ["farmcore.installation_id", "farmcore.runtime"])
 def test_a_migrate_waiting_on_its_advisory_locks_past_the_lock_timeout_still_succeeds(
-    install, monkeypatch, pg_server
+    install, monkeypatch, key
 ) -> None:
     """The timeout is for `pg_database` only: a migrate queued behind another one on this
     installation's own locks (the installation id, the runtime role) waits as long as it takes."""
@@ -702,10 +703,7 @@ def test_a_migrate_waiting_on_its_advisory_locks_past_the_lock_timeout_still_suc
     holder = create_engine(inst.owner_url)
     conn = holder.connect()
     conn.begin()
-    conn.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:a)), pg_advisory_xact_lock(hashtext(:b))"),
-        {"a": "farmcore.installation_id", "b": "farmcore.runtime"},
-    )
+    conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
 
     def release() -> None:
         time.sleep(3)
