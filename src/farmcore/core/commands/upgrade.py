@@ -18,6 +18,7 @@ Reverting the image never reverts the schema. `--check` only reports steps 2 and
 
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -75,10 +76,16 @@ def upgrade_installation(
                 "`farmcore migrate`; nothing was done"
             )
         bundle = backup_dir / f"pre-upgrade-{_stamp()}.age"
+        umask = os.umask(0o077)  # owner-only, like the daily bundles
         try:
             create_bundle(settings.database_url, recipients, bundle)
         except BundleError as exc:
-            raise MigrateError(f"pre-upgrade backup failed: {exc}; nothing was migrated") from None
+            reason = str(exc).rstrip(".")
+            raise MigrateError(
+                f"pre-upgrade backup failed: {reason}; nothing was migrated"
+            ) from None
+        finally:
+            os.umask(umask)
         echo(f"upgrade: pre-upgrade backup {bundle}")
         try:
             installation_id = migrate_locked(conn, settings)
@@ -125,7 +132,8 @@ def register(cli: typer.Typer) -> None:
                 state = check_upgrade(settings)
                 typer.echo(describe(state))
                 typer.echo(
-                    f"upgrade: {state.reason}; this release expects {', '.join(state.expected)}"
+                    f"upgrade: compatible ({state.reason}); this release expects "
+                    f"{', '.join(state.expected)}"
                 )
                 return
             if backup_dir is None:

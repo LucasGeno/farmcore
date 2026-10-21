@@ -414,16 +414,21 @@ _EXTENSION_RELATIONS = text(
 
 
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+# The advisory lock `ensure_runtime_role` takes; `_set_up` takes it first, with no timeout.
+RUNTIME_LOCK = "farmcore.runtime"
 
 
 class Stopped(KeyboardInterrupt):
     """SIGTERM or SIGHUP during migrate or upgrade. A `KeyboardInterrupt`, so psycopg cancels
     the statement running on the server before it unwinds (the transaction then rolls back)."""
 
-    def __init__(self, name: str, *, migrating: bool = False) -> None:
+    def __init__(
+        self, name: str, *, migrating: bool = False, migrated: tuple[str, ...] | None = None
+    ) -> None:
         super().__init__(name)
         self.name = name
-        self.migrating = migrating
+        self.migrating = migrating  # stopped while the migrations ran: rolled back
+        self.migrated = migrated  # stopped after they committed, at these heads
 
 
 @contextlib.contextmanager
@@ -517,6 +522,16 @@ def migrate_locked(conn: Connection, settings: Settings) -> str:
         raise MigrateError(
             f"migration failed: {_failure(exc)}; the schema is still at {now}"
         ) from None
+    migrated = read_heads(conn)  # committed: a stop from here on leaves the schema moved
+    conn.rollback()
+    try:
+        return _set_up(conn, settings)
+    except Stopped as exc:
+        raise Stopped(exc.name, migrated=migrated) from None
+
+
+def _set_up(conn: Connection, settings: Settings) -> str:
+    """After the migrations: the runtime role, the installation id, and the mark reset."""
     if settings.runtime_database_password:
         # Objects in `postgres` and shared objects first, in their own transaction.
         maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))
@@ -530,6 +545,10 @@ def migrate_locked(conn: Connection, settings: Settings) -> str:
         finally:
             maintenance.dispose()
     with conn.begin():
+        if settings.runtime_database_password:
+            # Before any `lock_databases` in this transaction: its `SET LOCAL lock_timeout`
+            # must not cut short this wait for another migrate's runtime role step.
+            conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": RUNTIME_LOCK})
         installation_id = ensure_installation_id(conn)
         if settings.runtime_database_password:
             ensure_runtime_role(
@@ -552,6 +571,12 @@ def migrate_installation(settings: Settings) -> str:
 
 
 def stopped_message(exc: Stopped) -> str:
+    if exc.migrated is not None:
+        return (
+            f"stopped by {exc.name} after migrating to {', '.join(exc.migrated)}, before the "
+            "installation was set up (installation id, runtime role); the installation stays "
+            "marked failed: run `farmcore migrate` again to finish"
+        )
     if exc.migrating:
         return (
             f"stopped by {exc.name}: the running migration was cancelled and rolled back; the "

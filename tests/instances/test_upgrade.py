@@ -25,6 +25,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -174,6 +175,35 @@ def waiting_on_gate(dbs: Databases, name: str) -> int:
     )[0][0]
 
 
+def gate_waiter_holds_migration_lock(dbs: Databases, name: str) -> bool:
+    """Whether the backend waiting on the test gate is the one holding the migration lock."""
+    key1, key2 = startup.MIGRATION_LOCK
+    rows = dbs.query(
+        name,
+        "SELECT w.pid = h.pid FROM pg_locks w, pg_locks h "
+        "WHERE w.locktype = 'advisory' AND NOT w.granted AND w.objid = :g AND w.objsubid = 1 "
+        "AND h.locktype = 'advisory' AND h.granted AND h.classid = :k1 AND h.objid = :k2 "
+        "AND h.objsubid = 2 AND w.database = h.database "
+        "AND h.database = (SELECT oid FROM pg_database WHERE datname = current_database())",
+        g=GATE,
+        k1=key1,
+        k2=key2,
+    )
+    return rows == [(True,)]
+
+
+# The advisory lock `ensure_runtime_role` takes before setting up the runtime role.
+RUNTIME_LOCK = "hashtext('farmcore.runtime')"
+
+
+def advisory_waiters(dbs: Databases, name: str) -> int:
+    return dbs.query(
+        name,
+        "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+        "AND wait_event_type = 'Lock' AND wait_event = 'advisory'",
+    )[0][0]
+
+
 def wait_for(predicate, what: str, timeout: float = 60) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
@@ -292,12 +322,14 @@ def test_upgrade_backs_up_first_then_migrates_once_and_reports_health(
     assert checked.exit_code == 0, checked.output
     assert f"alembic heads {HEAD}" in checked.output
     assert "zz_test_0001" in checked.output and "pending" in checked.output
+    assert "upgrade: compatible" in checked.output
     assert bundles(backups) == [] and heads(dbs, source["name"]) == [HEAD]
 
     result = upgrade(cli, source, recipient, backups)
 
     assert result.exit_code == 0, result.output
     [bundle] = bundles(backups)
+    assert stat.S_IMODE(bundle.stat().st_mode) == 0o600  # like the daily bundles
     assert f"pre-upgrade backup {bundle}" in result.output
     assert f"release {RELEASE}, alembic heads zz_test_0001, state ok" in result.output
     manifest = json.loads(members(decrypt(bundle, key))["manifest.json"])
@@ -383,6 +415,7 @@ def test_a_failed_preflight_changes_nothing(
 
     assert result.exit_code == 1, result.output
     assert "nothing was migrated" in result.output
+    assert ".;" not in result.output and ";;" not in result.output
     assert heads(dbs, source["name"]) == [HEAD]
     assert tables(dbs, source["name"]) == schema
     assert settings_of(dbs, source["name"]) == settings
@@ -534,6 +567,55 @@ def test_a_busy_server_list_stops_the_upgrade_after_migrating_and_migrate_finish
     )
 
 
+def test_sigterm_after_the_migration_committed_says_so_and_migrate_finishes(
+    source, dbs, cli, owner_key, release, backups, caught_signals
+):
+    """Stopped while the runtime role is being set up: the schema has already moved, so the
+    message must not say nothing was migrated."""
+    _, recipient = owner_key
+    release(PROBE)
+    held = Holder(dbs, source["name"], RUNTIME_LOCK)
+
+    def stop() -> None:
+        wait_for(lambda: advisory_waiters(dbs, source["name"]) == 1, "the runtime role step")
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    killer = threading.Thread(target=stop)
+    killer.start()
+    try:
+        result = upgrade(cli, source, recipient, backups)
+    finally:
+        killer.join()
+        held.release()
+
+    assert result.exit_code == 1, result.output
+    assert "stopped by SIGTERM after migrating to zz_test_0001" in result.output, result.output
+    assert "nothing was migrated" not in result.output
+    assert "farmcore migrate" in result.output
+    assert heads(dbs, source["name"]) == ["zz_test_0001"]
+    assert health(dbs.runtime_url(source))[1]["state"] == "failed"
+    assert caught_signals == []
+    assert cli("migrate", env=source_env(source)).exit_code == 0
+    assert health(dbs.runtime_url(source))[1]["state"] == "ok"
+
+
+def test_a_first_migrate_waits_for_the_runtime_role_lock_past_the_lock_timeout(dbs, cli):
+    """On a first migrate, the new installation id takes the database list under a 5 s lock
+    timeout; the runtime role's advisory lock after it must still wait as long as it takes."""
+    name = dbs.create()
+    env = dbs.installation(name)
+    held = Holder(dbs, name, RUNTIME_LOCK)
+    timer = threading.Timer(8, held.release)  # longer than the 5 s timeout
+    timer.start()
+    try:
+        result = cli("migrate", env=env)
+    finally:
+        timer.join()
+
+    assert result.exit_code == 0, result.output
+    assert installation_id(dbs, name)
+
+
 def test_sigterm_mid_migration_cancels_it_and_leaves_the_installation_failed_not_half_done(
     source, dbs, cli, owner_key, release, backups, caught_signals
 ):
@@ -544,8 +626,13 @@ def test_sigterm_mid_migration_cancels_it_and_leaves_the_installation_failed_not
     gate = Holder(dbs, source["name"], GATE)
     handler = signal.getsignal(signal.SIGTERM)
 
+    same_backend: list[bool] = []
+
     def stop() -> None:
         wait_for(lambda: waiting_on_gate(dbs, source["name"]) == 1, "the migration to block")
+        # The migration runs on the connection that holds the migration lock, so the lock lives
+        # exactly as long as the backend running it.
+        same_backend.append(gate_waiter_holds_migration_lock(dbs, source["name"]))
         os.kill(os.getpid(), signal.SIGTERM)
 
     killer = threading.Thread(target=stop)
@@ -562,6 +649,7 @@ def test_sigterm_mid_migration_cancels_it_and_leaves_the_installation_failed_not
 
     assert result.exit_code == 1, result.output
     assert "stopped by SIGTERM" in result.output
+    assert same_backend == [True]
     assert stuck == 0 and not held  # cancelled on the server, lock gone
     assert heads(dbs, source["name"]) == [HEAD]
     assert "upgrade_probe" not in str(tables(dbs, source["name"]))
@@ -701,6 +789,8 @@ def test_the_upgrade_runbook_says_reverting_the_image_does_not_revert_the_schema
         "up -d --wait",
         "farmcore restore",
         "TEMPLATE template_postgis",
+        "RESET farmcore.upgrade",  # how to clear the mark a pre-upgrade release never clears
+        "-p farm-a --env-file farm-a.env",
     ):
         assert step in section, step
 
@@ -709,8 +799,8 @@ def test_the_upgrade_runbook_says_reverting_the_image_does_not_revert_the_schema
 
 
 def _image_with(base: str, tag: str, context: Path, revision: str, cmd: str | None) -> str:
-    """A newer release: `base` plus a revision file (and, optionally, an app that will not
-    start), built from a throwaway context."""
+    """A newer release: `base` with the version number `NEXT_RELEASE`, plus a revision file
+    (and, optionally, an app that will not start), built from a throwaway context."""
     package = subprocess.run(
         ["docker", "run", "--rm", "--entrypoint", "python", base, "-c",
          "import farmcore, os; print(os.path.dirname(farmcore.__file__))"],
@@ -720,7 +810,15 @@ def _image_with(base: str, tag: str, context: Path, revision: str, cmd: str | No
     (context / "zz_test_0001.py").write_text(
         REVISION.format(rev="zz_test_0001", down=HEAD, body=revision)
     )
-    lines = [f"FROM {base}", f"COPY zz_test_0001.py {package}/migrations/versions/"]
+    lines = [
+        f"FROM {base}",
+        "USER root",
+        f"COPY zz_test_0001.py {package}/migrations/versions/",
+        # What a release bump changes: the package's version and its installed metadata.
+        f"RUN sed -i 's/^__version__ = .*/__version__ = \"{NEXT_RELEASE}\"/' {package}/__init__.py"
+        f" && sed -i 's/^Version: .*/Version: {NEXT_RELEASE}/' {package}-*.dist-info/METADATA",
+        "USER farmcore",
+    ]
     if cmd:
         lines.append(f"CMD {cmd}")
     (context / "Dockerfile").write_text("\n".join(lines) + "\n")
@@ -804,7 +902,7 @@ def test_a_failed_upgrade_of_project_a_recovers_by_restore_while_b_keeps_serving
         _set_image(a, broken_app)
         a.compose("stop", "app")
         migrated = a.compose(*upgrade_args, "--backup-dir", "/backups")
-        assert "alembic heads zz_test_0001, state ok" in migrated.stdout
+        assert f"release {NEXT_RELEASE}, alembic heads zz_test_0001, state ok" in migrated.stdout
         started = a.compose("up", "-d", "--wait", "--wait-timeout", "60", check=False)
         assert started.returncode != 0
         # Reverting the image does not revert the schema: the previous release refuses it.
@@ -814,17 +912,24 @@ def test_a_failed_upgrade_of_project_a_recovers_by_restore_while_b_keeps_serving
         logs = a.compose("logs", "--no-color", "migrate").stdout
         assert "incompatible" in logs and "zz_test_0001" in logs
 
-        # The documented recovery: keep the failed database aside, restore the bundle.
-        listed = a.compose("run", "--rm", "--no-deps", "--entrypoint", "ls", "backup", "/backups")
-        pre = sorted(n for n in listed.stdout.split() if n.startswith("pre-upgrade-"))
+        # The documented recovery, step by step, with the previous image (set above): keep the
+        # failed database aside, restore the bundle the new release wrote.
+        a.compose("stop", "app", "bot", "backup")
+        listed = a.compose(
+            "run", "--rm", "--no-deps", "--entrypoint", "ls", "backup", "-l", "/backups"
+        )  # fmt: skip
+        pre = sorted(w for w in listed.stdout.split() if w.startswith("pre-upgrade-"))
         assert len(pre) == 2, pre  # one per upgrade that ran; the refused preflight wrote none
+        assert all(line.startswith("-rw-------") for line in listed.stdout.splitlines()
+                   if "pre-upgrade-" in line), listed.stdout  # fmt: skip
         restore_dir = tmp_path / "restore"
-        restore_dir.mkdir()
+        restore_dir.mkdir(mode=0o700)
         a.compose("cp", f"backup:/backups/{pre[-1]}", str(restore_dir / "bundle.age"))
         shutil.copy(key, restore_dir / "owner.key")
         for path in restore_dir.iterdir():
             path.chmod(0o600)
-        a.compose("stop", "app", "backup")
+        manifest = json.loads(members(decrypt(restore_dir / "bundle.age", key))["manifest.json"])
+        assert (manifest["release"], manifest["alembic_heads"]) == (NEXT_RELEASE, [HEAD])
         _psql(a, "ALTER DATABASE farmcore RENAME TO farmcore_failed_upgrade", "postgres")
         _psql(a, "CREATE DATABASE farmcore TEMPLATE template_postgis", "postgres")
         restored = a.compose(
@@ -835,6 +940,9 @@ def test_a_failed_upgrade_of_project_a_recovers_by_restore_while_b_keeps_serving
         )  # fmt: skip
         assert restored.returncode == 0, restored.stdout + restored.stderr
         a.compose("up", "-d", "--wait", "--wait-timeout", "180")
+        paused = a.compose("run", "--rm", "--no-deps", "migrate", "farmcore", "effects")
+        assert paused.stdout.strip() == "external effects: paused"
+        a.compose("run", "--rm", "--no-deps", "migrate", "farmcore", "effects", "enable")
     finally:
         done.set()
         watcher.join()
@@ -848,5 +956,5 @@ def test_a_failed_upgrade_of_project_a_recovers_by_restore_while_b_keeps_serving
         assert _psql(a, sql) == before[label], label
     assert _psql(a, "SELECT count(*) FROM pg_database WHERE datname = 'farmcore_failed_upgrade'")
     effects = a.compose("run", "--rm", "--no-deps", "migrate", "farmcore", "effects")
-    assert effects.stdout.strip() == "external effects: paused"
+    assert effects.stdout.strip() == "external effects: enabled"
     assert b.health()["installation_id"] == b_id
