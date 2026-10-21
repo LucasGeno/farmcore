@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse
 from farmcore.apps.advisor import priority, service
 from farmcore.apps.fields.service import (
     NOT_ADVISED_LABEL,
+    UNCERTAIN_STYLE,
     parcels_feature_collection,
     styles_for,
 )
@@ -36,8 +37,8 @@ def advice_layer(request: Request, repo: Repo) -> JSONResponse:
     settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
     zone = ZoneInfo(settings.display_tz)
-    collection = parcels_feature_collection(repo, now, tz=settings.display_tz)
     latest = service.latest_advice(repo, now, tz=settings.display_tz)
+    collection = parcels_feature_collection(repo, now, tz=settings.display_tz, assessments=latest)
     for feature in collection["features"]:
         props = feature["properties"]
         label, colour = styles_for(request)[props["decision"]]
@@ -45,7 +46,12 @@ def advice_layer(request: Request, repo: Repo) -> JSONResponse:
         status = (advice.props or {}).get("assessment_status") if advice else None
         if status in ("limited", "unavailable"):
             props["decision"] = advice.decision
-            label = "Assessment " + status
+            if props["decision"] in ("spray", "wait"):
+                # An observed risk stays actionable; say the assessment is limited.
+                label = f"{label} (assessment {status})"
+            else:
+                label = "Assessment " + status
+                colour = UNCERTAIN_STYLE[request.cookies.get("sunlight") == "1"]
         until = advice.protected_until if advice and props["decision"] == "protected" else None
         props.update(
             label=label if props["advised"] else NOT_ADVISED_LABEL,

@@ -186,7 +186,7 @@ def test_consumers_show_saved_legacy_advice_as_unavailable_without_station_readi
             if f["properties"]["id"] == parcel.id
         )
         expected = (
-            {"label": "Assessment unavailable", "protected_until": None}
+            {"label": "Assessment unavailable", "colour": "#9ca3af", "protected_until": None}
             if path.startswith("/advisor")
             else {"assessment_status": "unavailable", "advised": True, "decision": "none"}
         )

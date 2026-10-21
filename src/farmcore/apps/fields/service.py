@@ -35,6 +35,8 @@ HIGH_CONTRAST_STYLES: dict[str, tuple[str, str]] = {
     NO_ADVICE: ("No action", "#1f2937"),
 }
 NOT_ADVISED_LABEL = "No advice yet"
+# A limited or unavailable assessment with no action: neither "No action" nor "Protected".
+UNCERTAIN_STYLE = {False: "#9ca3af", True: "#374151"}  # normal, Sunlight
 
 
 def styles_for(request) -> dict[str, tuple[str, str]]:
@@ -60,7 +62,11 @@ def _last_sprays(repo: ScopedRepository, now: datetime) -> dict[int, datetime]:
 
 
 def parcels_feature_collection(
-    repo: ScopedRepository, now: datetime, *, tz: str = "Europe/Paris"
+    repo: ScopedRepository,
+    now: datetime,
+    *,
+    tz: str = "Europe/Paris",
+    assessments: dict | None = None,
 ) -> dict[str, Any]:
     """The farm's parcels as a GeoJSON FeatureCollection, ordered P1..P10.
 
@@ -78,7 +84,8 @@ def parcels_feature_collection(
     rows = repo.execute(stmt, scope="fields:read", resource="parcel").all()
     from farmcore.apps.advisor.service import latest_advice
 
-    assessments = latest_advice(repo, now, tz=tz)
+    if assessments is None:
+        assessments = latest_advice(repo, now, tz=tz)
     decisions = {pid: row.decision for pid, row in assessments.items()}
     sprays = _last_sprays(repo, now)
     zone = ZoneInfo(tz)
