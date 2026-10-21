@@ -595,6 +595,7 @@ class Copy:
         try:
             # Like `create`: a stop signal waits until the role is committed, or rolled back.
             with _signals_deferred(), engine.begin() as conn:
+                conn.exec_driver_sql(LOCK_DATABASES)  # GRANT CONNECT below changes pg_database
                 raw = conn.connection.driver_connection
                 verifier = raw.pgconn.encrypt_password(
                     self.loader_password.encode(), self.loader.encode(), b"scram-sha-256"
@@ -674,6 +675,7 @@ class Copy:
         engine = create_engine(self._url(self.staging))
         try:
             with engine.begin() as conn:
+                conn.exec_driver_sql(LOCK_DATABASES)  # DROP OWNED revokes its CONNECT
                 conn.exec_driver_sql(f"DROP OWNED BY {_q(conn, self.loader)}")
         finally:
             engine.dispose()

@@ -52,11 +52,14 @@ RUNTIME_ATTRIBUTES = (
 MIN_SERVER_VERSION = 160000
 
 
-# Taken before revoking PUBLIC's access on every database. GRANT and REVOKE rewrite a
-# database's catalog row without a lock of their own, so two such loops at once (restores, a
-# migrate) fail with "tuple concurrently updated", as does one whose database is renamed or
-# dropped under it. This lock waits for those and holds them off until the transaction ends;
-# `pg_database` is shared, so it is one lock for the whole server.
+# The first statement of every transaction that changes `pg_database` (a database's ACL, as
+# GRANT, REVOKE and DROP OWNED do). GRANT and REVOKE rewrite a database's catalog row without a
+# lock of their own, so two such loops at once (restores, a migrate) fail with "tuple
+# concurrently updated", as does one whose database is renamed or dropped under it. This lock
+# waits for those and holds them off until the transaction ends; `pg_database` is shared, so it
+# is one lock for the whole server. Taken any later, after a change of its own, it deadlocks:
+# that change holds the table in a mode the lock conflicts with, so two such transactions each
+# wait for the other.
 LOCK_DATABASES = "LOCK TABLE pg_catalog.pg_database IN SHARE ROW EXCLUSIVE MODE"
 
 
@@ -258,6 +261,7 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
     part of any statement."""
     me = _refuse_owner_as_runtime(conn, role)
     conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": "farmcore.runtime"})
+    _run(conn, role, [sql.SQL(LOCK_DATABASES)])  # before the reset below changes pg_database
     existed = _exists(conn, role)
     reset_runtime_role_in(conn, role)
     raw = conn.connection.driver_connection
@@ -283,7 +287,6 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
             statements.append(
                 sql.SQL("ALTER ROLE {} IN DATABASE {} RESET ALL").format(r, sql.Identifier(db))
             )
-    _run(conn, role, [sql.SQL(LOCK_DATABASES)])
     statements += [
         sql.SQL("REVOKE CONNECT, TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(d))
         for (d,) in _rows(conn, role, _OTHER_DBS)
@@ -372,6 +375,7 @@ def migrate_installation(settings: Settings) -> str:
             maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))
             try:
                 with maintenance.begin() as conn:
+                    _run(conn, settings.runtime_database_role, [sql.SQL(LOCK_DATABASES)])
                     reset_runtime_role_in(conn, settings.runtime_database_role)
                     # The reset revoked CONNECT on the installation database; give it back
                     # now, so a failure in the next step never locks out the running app.

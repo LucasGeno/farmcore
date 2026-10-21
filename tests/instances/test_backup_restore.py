@@ -1196,6 +1196,48 @@ esac
     assert staging_of(dbs, targets[0]) == []
 
 
+def test_migrates_of_running_installations_during_restores_never_deadlock(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    """A migrate of an installation that already has its runtime role first revokes that
+    role's CONNECT, a change to `pg_database`, then waits for the server-wide catalog lock:
+    unless the lock comes first, two of them (or one and a restore) wait on each other and
+    one dies with "deadlock detected". Real processes, repeated: the race is a timing one."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    other = dbs.create()
+    running = [{k: v for k, v in source.items() if k != "name"}, dbs.installation(other)]
+    assert cli("migrate", env=running[1]).exit_code == 0
+
+    def start(*args: str, env: dict[str, str]) -> subprocess.Popen:
+        full = {**os.environ, **env, "TMPDIR": str(private_tmp)}
+        return subprocess.Popen(
+            [FARMCORE, *args], env=full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True,
+        )  # fmt: skip
+
+    rounds, failed = [], []
+    for _ in range(3):  # before the fix, every one of these deadlocked at least once
+        restoring = start(
+            "restore", str(bundle), "--identity", str(key), env=dbs.installation(dbs.create())
+        )
+        pairs = 0
+        while restoring.poll() is None:  # two migrates at a time, for as long as it runs
+            migrating = [start("migrate", env=e) for e in running]
+            for p in migrating:
+                out = p.communicate(timeout=300)[0]
+                if p.returncode:
+                    failed.append(out)
+            pairs += 1
+        out = restoring.communicate(timeout=300)[0]
+        if restoring.returncode:
+            failed.append(out)
+        rounds.append(pairs)
+
+    assert failed == [], failed
+    assert min(rounds) >= 2, rounds  # the migrates did overlap each restore
+
+
 def test_restores_into_targets_with_a_common_prefix_never_meet(
     source, dbs, cli, owner_key, tmp_path, private_tmp
 ):
