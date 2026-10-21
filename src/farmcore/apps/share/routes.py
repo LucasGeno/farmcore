@@ -7,8 +7,8 @@
   `/share/`; invalid input is a plain-words 422: the page again for a browser, the typed values
   kept and the message next to its field.
 
-Never renders a raw chat id, a `tg:` ref, a cookie or the admin token (actors go through
-`service.mask_actor`).
+Never renders a raw chat id, a `tg:` ref, a cookie or the admin token (actors are named or
+masked by `service.access_rows`).
 """
 
 from __future__ import annotations

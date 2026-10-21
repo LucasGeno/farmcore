@@ -11,15 +11,19 @@ from datetime import UTC, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.share import config
 from farmcore.core.access import ALL_SCOPES, GRANT_READ_SCOPES, OWNER, ScopedRepository
 from farmcore.core.actors import mask_actor
 from farmcore.core.models.canonical import AccessLog, DataGrant
+from farmcore.core.models.identity import LocalIdentity
 from farmcore.core.timeline import post_event
 
 DEFAULT_TZ = "Europe/Paris"
+OPERATOR_WORD = "operator"  # the `owner` actor: the installation operator, not a signed-in user
+DELETED_USER = "deleted user"
 DATE_FORMAT = "%d %b %Y"
 SOURCE_APP = "share"
 AUDIT_SCOPE = "audit:read"
@@ -151,6 +155,19 @@ def create_grant(
     return grant
 
 
+def _actor_label(actor: str, logins: dict[int, str], grants: dict[int, DataGrant]) -> str:
+    """Who, in words: a user's login (`deleted user` once gone), `operator` for the `owner`
+    actor, a grant's recipient for the legacy `grant:<id>` token, else the masked actor."""
+    prefix, _, rest = actor.partition(":")
+    if actor == OWNER:
+        return OPERATOR_WORD
+    if prefix == "user" and rest.isdigit():
+        return logins.get(int(rest), DELETED_USER)
+    if prefix == "grant" and rest.isdigit() and int(rest) in grants:
+        return f"{grants[int(rest)].grantee} (grant #{rest})"
+    return mask_actor(actor)
+
+
 def access_rows(
     repo: ScopedRepository,
     *,
@@ -159,8 +176,8 @@ def access_rows(
     tz: str = DEFAULT_TZ,
 ) -> list[dict[str, Any]]:
     """The farm's last `limit` access_log rows, newest first (`audit:read`), each with its time
-    (display tz), masked actor, purpose, resource, scope and grant (`#id grantee` or `owner`).
-    `grantees_only` keeps rows of third-party grants."""
+    (display tz), who in words (`_actor_label`), purpose, resource, scope and grant (`#id grantee`
+    or `owner`). `grantees_only` keeps rows of third-party grants."""
     grants = {g.id: g for g in repo.list(DataGrant, scope=AUDIT_SCOPE)}
     third = [gid for gid, g in grants.items() if not is_owner_grant(g)]
     where = [AccessLog.grant_id.in_(third)] if grantees_only else []
@@ -171,6 +188,21 @@ def access_rows(
         order_by=(AccessLog.ts.desc(), AccessLog.id.desc()),
         limit=limit,
     )
+    user_ids = {
+        int(rest)
+        for r in rows
+        for prefix, _, rest in [r.actor.partition(":")]
+        if prefix == "user" and rest.isdigit()
+    }
+    logins = (
+        dict(
+            repo.session.execute(
+                select(LocalIdentity.id, LocalIdentity.login).where(LocalIdentity.id.in_(user_ids))
+            ).all()
+        )
+        if user_ids
+        else {}
+    )
     zone = ZoneInfo(tz)
     out = []
     for r in rows:
@@ -179,7 +211,7 @@ def access_rows(
             {
                 "id": r.id,
                 "ts": r.ts.astimezone(zone).strftime("%d %b %Y %H:%M:%S"),
-                "actor": mask_actor(r.actor),
+                "actor": _actor_label(r.actor, logins, grants),
                 "purpose": r.purpose,
                 "resource": r.resource,
                 "scope": r.scope,
