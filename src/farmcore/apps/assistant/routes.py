@@ -89,7 +89,7 @@ def ask(
     manifests = visible_manifests(request)
     if "assistant" not in {m.name for m in manifests}:
         raise HTTPException(404)
-    token, allowed = limits.take(request.app, request.cookies.get(limits.COOKIE))
+    token, allowed = _take_quota(request)
     if not allowed:
         return response(
             request, token, {"text": "Too many questions. Try again in a minute.", "links": []}, 429
@@ -249,7 +249,7 @@ def message(
     text = q.strip()
     if "chat" not in names or not _spray_turn(request, repo, text):
         return ask(request, repo, q, conversation)
-    token, allowed = limits.take(request.app, request.cookies.get(limits.COOKIE))
+    token, allowed = _take_quota(request)
     if not allowed:
         return response(request, token, {"text": "Too many messages. Try again in a minute."}, 429)
     message_id = time.time_ns() // 1000  # unique per message: the draft's idempotency key
@@ -486,7 +486,7 @@ def voice(request: Request):
 
 @router.post("/transcribe", dependencies=[Depends(require_admin)])
 async def transcribe(request: Request, repo: Repo):
-    token, allowed = limits.take(request.app, request.cookies.get(limits.COOKIE))
+    token, allowed = _take_quota(request)
     if not allowed:
         return response(request, token, {"detail": "Too many requests. Try again soon."}, 429)
     form = await _capped_form(request)
@@ -550,6 +550,14 @@ def _transcribe(request: Request, repo: ScopedRepository, audio: UploadFile) -> 
     if transcript.seconds > MAX_AUDIO_SECONDS:
         raise HTTPException(413, f"Recording longer than {MAX_AUDIO_SECONDS} seconds.")
     return transcript.text[:500]
+
+
+def _take_quota(request: Request) -> tuple[str, bool]:
+    from farmcore.core.identity import principal_for
+
+    principal = principal_for(request)
+    member = principal.identity_id if principal is not None and not is_admin(request) else None
+    return limits.take(request.app, request.cookies.get(limits.COOKIE), member)
 
 
 def response(request, token, body, status=200):
