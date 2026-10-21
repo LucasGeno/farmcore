@@ -110,7 +110,7 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 
 ## 2026-10-19 — Isolated-installation planning moved to the private vault
 
-- Lucas asked that specs and tickets stop living in this public repository. Revision 2 of the isolated-installations spec and its 18 tickets were copied to the private `LucasGeno/farmcore-vault` (`work/isolated-instances-modules/`), which is now canonical. This directory keeps a pointer README only.
+- Lucas asked that specs and tickets stop living in this public repository. Revision 2 of the isolated-installations spec and its 18 tickets moved to private planning, which is now canonical.
 - New initiatives (farmer-first experience, compliant records, weather providers, bring your own agent, irrigation, crop models) live only in the vault.
 - The milestone 1–4 revamp planning stays here until ticket 12 closes, then moves too. This entry changes no revamp ticket status, ownership or authorization.
 
