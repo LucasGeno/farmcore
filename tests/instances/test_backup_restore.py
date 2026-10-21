@@ -1302,24 +1302,35 @@ def short_lock_timeout(monkeypatch) -> str:
 
 @pytest.fixture
 def database_list_locker(dbs) -> Iterator:
-    """`lock()` holds `pg_database` locked, as a long restore or migrate step would, until the
-    test ends or `unlock()`."""
+    """`lock()` holds `pg_database` locked, as a long restore or migrate step would, for 8
+    seconds or until `unlock()`: a step that waits for it without a timeout ends late."""
     from farmcore.core.commands.migrate import LOCK_DATABASES
 
     engine = create_engine(dbs.server.url("postgres"))
     conn = engine.connect()
+    held = threading.Lock()
 
     class Locker:
+        timer: threading.Timer | None = None
+
         def lock(self) -> None:
             conn.begin()
             conn.exec_driver_sql(LOCK_DATABASES)
+            self.timer = threading.Timer(8, self.unlock)
+            self.timer.start()
 
         def unlock(self) -> None:
-            conn.rollback()
+            with held:
+                if conn.in_transaction():
+                    conn.rollback()
 
+    locker = Locker()
     try:
-        yield Locker()
+        yield locker
     finally:
+        if locker.timer:
+            locker.timer.cancel()
+        locker.unlock()
         conn.close()
         engine.dispose()
 

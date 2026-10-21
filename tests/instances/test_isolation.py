@@ -664,18 +664,23 @@ def test_a_migrate_kept_from_the_database_list_says_so_and_to_run_it_again(
     inst = install()
     monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "1s")
     holder = create_engine(pg_server.url("postgres"))
+    conn = holder.connect()
+    conn.begin()
+    conn.exec_driver_sql(migrate.LOCK_DATABASES)
+    released = threading.Timer(8, conn.rollback)  # a migrate without a timeout ends late
+    released.start()
     seen: list[str] = []
     done = threading.Event()
+    watcher = _waiting(pg_server, seen, done)
+    started = time.monotonic()
     try:
-        with holder.begin() as conn:
-            conn.exec_driver_sql(migrate.LOCK_DATABASES)
-            watcher = _waiting(pg_server, seen, done)
-            started = time.monotonic()
-            out = _migrate_fails(monkeypatch, _env(inst))
-            waited = time.monotonic() - started
-            done.set()
-            watcher.join()
+        out = _migrate_fails(monkeypatch, _env(inst))
     finally:
+        waited = time.monotonic() - started
+        done.set()
+        watcher.join()
+        released.join()
+        conn.close()
         holder.dispose()
 
     assert "the server is busy: another restore or migrate kept its list of databases " in out
