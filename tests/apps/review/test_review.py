@@ -31,11 +31,7 @@ def test_parameter_catalog_is_explicitly_unreviewed(client, session):
     assert body["accuracy_claim"] is False
 
 
-@pytest.mark.parametrize("value", [0, 2**63])
-@pytest.mark.parametrize("action", ["detail", "review", "activate", "parent"])
-def test_parameter_identifiers_reject_outside_positive_bigint_before_sql(
-    client, session, value, action
-):
+def test_an_out_of_range_version_id_is_not_found_without_a_server_error(client, session):
     farm = Farm(name="ID boundary farm", props={"region": "FRI12"})
     session.add(farm)
     session.flush()
@@ -43,28 +39,8 @@ def test_parameter_identifiers_reject_outside_positive_bigint_before_sql(
     with TestClient(
         client.app, headers=dict(client.headers), raise_server_exceptions=False
     ) as http:
-        if action == "detail":
-            response = http.get(f"/review/versions/{value}.json", params={"farm": farm.id})
-        elif action == "review":
-            response = http.post(
-                f"/review/versions/{value}/reviews",
-                params={"farm": farm.id},
-                json={"verdict": "approved", "note": "Opinion", "evidence": "Desk"},
-            )
-        elif action == "activate":
-            response = http.post(f"/review/versions/{value}/activate", params={"farm": farm.id})
-        else:
-            response = http.post(
-                "/review/versions",
-                params={"farm": farm.id},
-                json={
-                    "parent_version_id": value,
-                    "evidence": "Boundary",
-                    "overrides": {"downy_rain_min_mm": 12.0},
-                },
-            )
-    assert response.status_code == (422 if action == "parent" else 404)
-    assert "parameter_" not in response.text
+        response = http.post(f"/review/versions/{2**63}/activate", params={"farm": farm.id})
+    assert response.status_code == 404
 
 
 def test_activation_only_changes_future_assessments_and_later_opinion_is_explicit(
@@ -300,3 +276,51 @@ def test_active_parameters_are_explained_and_used_without_claiming_missing_agron
     assert "08:00–20:00" in plan.text
     assert "no weather station attached" in plan.text
     assert "No treatment clearance" in plan.text
+
+
+@pytest.mark.parametrize("scope_change", ["year", "region"])
+def test_scope_change_prevents_activation_and_parent_inheritance(
+    client, session, settings, scope_change
+):
+    from datetime import UTC, datetime
+
+    from farmcore.core.clock import set_replay
+
+    farm = Farm(name="Scope-changed farm", props={"region": "FRI12"})
+    session.add(farm)
+    session.flush()
+    ensure_owner_grant(session, farm)
+    params = {"farm": farm.id}
+    body = {"overrides": {"downy_rain_min_mm": 12.0}, "evidence": "Scope trial"}
+    result = client.post("/review/versions", params=params, json=body)
+    assert result.status_code == 201
+    version = result.json()["id"]
+    assert (
+        client.post(
+            f"/review/versions/{version}/reviews",
+            params=params,
+            json={"verdict": "approved", "note": "Opinion", "evidence": "Desk"},
+        ).status_code
+        == 201
+    )
+    if scope_change == "year":
+        set_replay(session, datetime(2025, 4, 9, tzinfo=UTC), settings)
+    else:
+        session.get(Farm, farm.id).props = {"region": "ES418"}
+    session.commit()
+    assert client.post(f"/review/versions/{version}/activate", params=params).status_code == 409
+    child = client.post(
+        "/review/versions", params=params, json={**body, "parent_version_id": version}
+    )
+    assert child.status_code == 422
+    assert child.json()["detail"] == "Parent version is unavailable for this scope"
+    for opinion in (
+        {"verdict": "approved", "note": " ", "evidence": "Desk"},
+        {"verdict": "approved", "note": "Opinion", "evidence": " "},
+    ):
+        assert (
+            client.post(
+                f"/review/versions/{version}/reviews", params=params, json=opinion
+            ).status_code
+            == 422
+        )

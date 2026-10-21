@@ -2,13 +2,10 @@
 
 from urllib.parse import parse_qs, urlsplit
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from farmcore.apps.review.models import ParameterActivation, ParameterReview, ParameterVersion
-from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Farm
 from farmcore.main import create_app
 from tests.core.test_member_sessions import _account, _login
 
@@ -108,51 +105,3 @@ def test_cookie_forms_build_typed_children_and_require_explicit_approved_activat
         assert session.scalar(select(func.count()).select_from(ParameterVersion)) == 4
         assert session.scalar(select(func.count()).select_from(ParameterReview)) == 3
         assert session.scalar(select(func.count()).select_from(ParameterActivation)) == 1
-
-
-@pytest.mark.parametrize("scope_change", ["year", "region"])
-def test_scope_change_prevents_activation_and_parent_inheritance(
-    client, session, settings, scope_change
-):
-    from datetime import UTC, datetime
-
-    from farmcore.core.access import ensure_owner_grant
-
-    farm = Farm(name="Scope-changed farm", props={"region": "FRI12"})
-    session.add(farm)
-    session.flush()
-    ensure_owner_grant(session, farm)
-    params = {"farm": farm.id}
-    body = {"overrides": {"downy_rain_min_mm": 12.0}, "evidence": "Scope trial"}
-    result = client.post("/review/versions", params=params, json=body)
-    assert result.status_code == 201
-    version = result.json()["id"]
-    assert (
-        client.post(
-            f"/review/versions/{version}/reviews",
-            params=params,
-            json={"verdict": "approved", "note": "Opinion", "evidence": "Desk"},
-        ).status_code
-        == 201
-    )
-    if scope_change == "year":
-        set_replay(session, datetime(2025, 4, 9, tzinfo=UTC), settings)
-    else:
-        session.get(Farm, farm.id).props = {"region": "ES418"}
-    session.commit()
-    assert client.post(f"/review/versions/{version}/activate", params=params).status_code == 409
-    child = client.post(
-        "/review/versions", params=params, json={**body, "parent_version_id": version}
-    )
-    assert child.status_code == 422
-    assert child.json()["detail"] == "Parent version is unavailable for this scope"
-    for opinion in (
-        {"verdict": "approved", "note": " ", "evidence": "Desk"},
-        {"verdict": "approved", "note": "Opinion", "evidence": " "},
-    ):
-        assert (
-            client.post(
-                f"/review/versions/{version}/reviews", params=params, json=opinion
-            ).status_code
-            == 422
-        )

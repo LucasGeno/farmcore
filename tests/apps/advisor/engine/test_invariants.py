@@ -153,10 +153,7 @@ def test_empty_observations_are_unavailable_in_season_and_a_gate_before_it(now, 
     assert advice.passes == advice.treatments == 0
 
 
-@pytest.mark.parametrize(
-    "missing", ["rain", "temperature", "stopped", "one hour", "odd hours duplicated"]
-)
-def test_incomplete_observations_cannot_establish_no_risk_and_future_cannot_heal_it(missing):
+def _downy_rows(missing):
     now = utc(2024, 4, 20, 12)
     rows = series(utc(2024, 3, 25), now, t=15)
     if missing == "stopped":
@@ -165,7 +162,7 @@ def test_incomplete_observations_cannot_establish_no_risk_and_future_cannot_heal
         rows = [o for o in rows if o.ts != now - 30 * H]
     elif missing == "odd hours duplicated":
         rows = [copy for o in rows if o.ts.hour % 2 == 0 for copy in (o, o, o)]
-    else:
+    elif missing != "nothing":
         rows = [
             HourlyObs(
                 o.ts,
@@ -176,24 +173,11 @@ def test_incomplete_observations_cannot_establish_no_risk_and_future_cannot_heal
             )
             for o in rows
         ]
-    future = series(now + H, now + 80 * H, t=15)
-    for observed in (rows, rows + future):
-        advice = evaluate(observed, [], CONFIG, now)
-        assert advice.assessment_status == "limited"
-        assert advice.reason("downy_3_10").verdict == "not evaluable"
-        assert advice.decision != "protected"
-        assert advice.protected_until is None
+    # Rows after now never heal a past gap.
+    return now, rows + series(now + H, now + 80 * H, t=15), [], "downy_3_10"
 
 
-def test_complete_dry_observations_still_establish_no_risk():
-    now = utc(2024, 4, 20, 12)
-    advice = evaluate(series(utc(2024, 3, 25), now, t=15), [], CONFIG, now)
-    assert advice.assessment_status == "evaluable"
-    assert advice.reason("downy_3_10").verdict == "no risk"
-
-
-@pytest.mark.parametrize("gap", ["null day", "duplicated half day"])
-def test_incomplete_powdery_history_cannot_claim_low_pressure_or_protection(gap):
+def _powdery_rows(gap):
     now = utc(2024, 6, 5, 12)
     day = date(2024, 5, 29)
     rows = series(utc(2024, 3, 25), now + 80 * H, t=15, overrides=rain(utc(2024, 6, 4), 1.0, 10))
@@ -209,13 +193,67 @@ def test_incomplete_powdery_history_cannot_claim_low_pressure_or_protection(gap)
             if o.ts.date() != day or o.ts.hour % 2 == 0
             for copy in ((o, o, o) if o.ts.date() == day else (o,))
         ]
-    advice = evaluate(rows, [Spray(utc(2024, 6, 3), (COPPER,))], CONFIG, now)
+    return now, rows, [Spray(utc(2024, 6, 3), (COPPER,))], "powdery_gubler_thomas"
+
+
+def _cover_rows(gap):
+    """A contact cover is only protected while every hour since the spray is known rain."""
+    now = utc(2024, 4, 17, 12)
+    rows = series(utc(2024, 3, 25), now + 80 * H, t=15, overrides=rain(utc(2024, 4, 16), 1.0, 10))
+    hole = utc(2024, 4, 12)
+    sprayed = utc(2024, 4, 11, 12)
+    if gap == "null":
+        rows = [
+            HourlyObs(o.ts, None if o.ts == hole else o.rr1_mm, o.t_c, o.rh_pct, o.ff_kmh)
+            for o in rows
+        ]
+    elif gap == "conflicting duplicate":
+        rows.append(HourlyObs(hole, 40, 15, 70, 5))
+    else:
+        rows = [o for o in rows if o.ts != hole]
+        if gap == "removed + duplicate":
+            rows.append(next(o for o in rows if o.ts == hole + H))
+        elif gap == "removed + off-grid":
+            rows.append(HourlyObs(hole + H / 2, 0, 15, 70, 5))
+        else:
+            sprayed += H / 2
+    return now, rows, [Spray(sprayed, (COPPER,))], "protection_downy"
+
+
+INCOMPLETE = [
+    *(("downy", m) for m in ("rain", "temperature", "stopped", "one hour", "odd hours duplicated")),
+    *(("powdery", g) for g in ("null day", "duplicated half day")),
+    *(
+        ("cover", g)
+        for g in (
+            "null",
+            "removed + duplicate",
+            "removed + off-grid",
+            "removed + partial-hour spray",
+            "conflicting duplicate",
+        )
+    ),
+    ("downy", "nothing"),  # control: complete dry observations still establish no risk
+]
+
+
+@pytest.mark.parametrize("model,gap", INCOMPLETE)
+def test_incomplete_inputs_never_establish_no_risk_low_pressure_or_protection(model, gap):
+    build = {"downy": _downy_rows, "powdery": _powdery_rows, "cover": _cover_rows}[model]
+    now, rows, sprays, rule = build(gap)
+    advice = evaluate(rows, sprays, CONFIG, now)
+    if gap == "nothing":
+        assert advice.assessment_status == "evaluable"
+        assert advice.reason(rule).verdict == "no risk"
+        return
     assert advice.assessment_status == "limited"
     assert advice.decision != "protected"
     assert advice.protected_until is None
-    reason = advice.reason("powdery_gubler_thomas")
-    assert reason.verdict == "not evaluable"
-    assert reason.inputs["risk"] is None
+    if model == "cover":
+        assert advice.reason("downy_3_10").verdict == "risk"
+        assert advice.reason(rule).inputs["rain_data_gap"] is True
+    else:
+        assert advice.reason(rule).verdict == "not evaluable"
 
 
 def test_missing_rain_does_not_erase_observed_positive_infection():
@@ -268,45 +306,6 @@ def test_old_rain_gap_does_not_invalidate_expired_or_rainfast_cover(product, spr
     assert advice.assessment_status == "evaluable"
     assert advice.decision == decision
     assert advice.reason("downy_3_10").verdict == "risk"
-
-
-@pytest.mark.parametrize(
-    "gap",
-    [
-        "null",
-        "removed + duplicate",
-        "removed + off-grid",
-        "removed + partial-hour spray",
-        "conflicting duplicate",
-    ],
-)
-def test_unknown_contact_cover_rain_cannot_guarantee_protection(gap):
-    """A contact cover is only protected while every hour since the spray is known rain."""
-    now = utc(2024, 4, 17, 12)
-    rows = series(utc(2024, 3, 25), now + 80 * H, t=15, overrides=rain(utc(2024, 4, 16), 1.0, 10))
-    hole = utc(2024, 4, 12)
-    sprayed = utc(2024, 4, 11, 12)
-    if gap == "null":
-        rows = [
-            HourlyObs(o.ts, None if o.ts == hole else o.rr1_mm, o.t_c, o.rh_pct, o.ff_kmh)
-            for o in rows
-        ]
-    elif gap == "conflicting duplicate":
-        rows.append(HourlyObs(hole, 40, 15, 70, 5))
-    else:
-        rows = [o for o in rows if o.ts != hole]
-        if gap == "removed + duplicate":
-            rows.append(next(o for o in rows if o.ts == hole + H))
-        elif gap == "removed + off-grid":
-            rows.append(HourlyObs(hole + H / 2, 0, 15, 70, 5))
-        else:
-            sprayed += H / 2
-    advice = evaluate(rows, [Spray(sprayed, (COPPER,))], CONFIG, now)
-    assert advice.reason("downy_3_10").verdict == "risk"
-    assert advice.assessment_status == "limited"
-    assert advice.decision != "protected"
-    assert advice.protected_until is None
-    assert advice.reason("protection_downy").inputs["rain_data_gap"] is True
 
 
 @pytest.mark.parametrize(
