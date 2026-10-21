@@ -13,11 +13,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Every test except the dataset and Compose ones, with the backup, restore and upgrade tests
+  # required to run: a missing age or pg_dump 17 fails the job instead of skipping them.
   python:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PG_BINDIR: /usr/lib/postgresql/17/bin
+      FARMCORE_REQUIRE_TOOLS: "1"
     services:
-      db:
+      db: &db
         image: postgis/postgis:17-3.5
         env:
           POSTGRES_DB: farmcore
@@ -32,18 +37,54 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - uses: ./.github/actions/backup-tools
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.16"
       - run: uv sync --frozen --python 3.12
-      - name: Lint, format and tests (without the slower dataset tests)
-        run: bash scripts/check.sh
+      - name: Lint, format and tests (without the dataset and Compose tests)
+        shell: bash
+        run: bash scripts/check.sh 2>&1 | tee pytest.log
         env:
-          PYTEST_ADDOPTS: "-m 'not data' -rs"
+          PYTEST_ADDOPTS: "-m 'not data and not slow' -rs"
+      - name: Fail if a test skipped for a missing tool
+        shell: bash
+        run: &no-tool-skips |
+          if grep -E '^SKIPPED .*(needs the age CLI|needs pg_dump|needs a Docker daemon|needs Docker)' pytest.log; then
+            echo "::error::tests skipped for a missing tool (see above)"
+            exit 1
+          fi
       - name: Audit runtime dependencies
         run: |
           uv export --frozen --no-dev --no-emit-project --no-hashes --output-file requirements-audit.txt
           uvx pip-audit -r requirements-audit.txt --no-deps --disable-pip
+
+  # The Compose journeys and other `slow` tests, serially, on a fresh Docker network pool.
+  slow:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PG_BINDIR: /usr/lib/postgresql/17/bin
+      FARMCORE_REQUIRE_TOOLS: "1"
+    services:
+      db: *db
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/backup-tools
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.16"
+      - run: uv sync --frozen --python 3.12
+      - name: Free Docker networks left by earlier projects
+        run: docker network prune -f
+      - name: Slow tests
+        shell: bash
+        run: uv run pytest -q -m slow -rs 2>&1 | tee pytest.log
+      - name: Fail if a test skipped for a missing tool
+        shell: bash
+        run: *no-tool-skips
 
   node:
     runs-on: ubuntu-latest
