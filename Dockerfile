@@ -14,9 +14,16 @@ ENV UV_COMPILE_BYTECODE=1 \
     HF_HOME=/home/farmcore/.cache/huggingface \
     DATA_DIR=/app/sample-data
 
+# `farmcore backup` / `restore`: pg_dump and pg_restore (Debian's PostgreSQL 17, the server's
+# major) and age for the bundle's encryption. /backups is where the compose `backup` service
+# writes; a new volume mounted there inherits its owner.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends age postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
 RUN useradd --create-home --uid 10001 farmcore \
     && mkdir -p "$HF_HOME" \
-    && chown -R farmcore:farmcore /home/farmcore/.cache
+    && chown -R farmcore:farmcore /home/farmcore/.cache \
+    && install -d -o farmcore -g farmcore -m 700 /backups
 
 WORKDIR /app
 
@@ -33,6 +40,7 @@ COPY sample-data ./sample-data
 
 USER farmcore
 EXPOSE 8000
-# Migrate, then serve. The `bot` service overrides this command.
+# Serve only: migrations run in the one-shot `migrate` service (`farmcore migrate`, as the
+# database owner) before the app starts. The `migrate` and `bot` services override this command.
 # Behind a reverse proxy, set FORWARDED_ALLOW_IPS (read by uvicorn) to the proxy's address.
-CMD ["sh", "-c", "farmcore migrate && exec uvicorn farmcore.main:create_app --factory --host 0.0.0.0 --port 8000"]
+CMD ["uvicorn", "farmcore.main:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]

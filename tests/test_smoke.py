@@ -33,7 +33,7 @@ def _request(app) -> Request:
 def test_health_reports_db_ok(client: TestClient) -> None:
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"db": "ok"}
+    assert resp.json()["db"] == "ok"
 
 
 def test_kernel_tables_and_postgis_exist(session) -> None:

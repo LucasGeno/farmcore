@@ -21,9 +21,10 @@ STATION = "Synthetic withheld station"
 
 
 @pytest.fixture
-def grant(session, owner_repo):
+def grant(session, owner_repo, grantee_identity):
     g = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Co-op adviser",
         preset="adviser_logs",
         purpose="spray advice",
@@ -63,9 +64,9 @@ def evidence(session, demo, spray):
 
 
 def test_grantee_register_json_keeps_its_keys_with_saved_weather_present(
-    anonymous, admin, evidence, grant
+    grantee_client, admin, evidence, grant
 ) -> None:
-    rows = anonymous.get(f"/share/as/{grant.id}/register.json").json()
+    rows = grantee_client.get(f"/share/as/{grant.id}/register.json").json()
 
     assert {r["log_id"] for r in rows} == {evidence.id}
     # the EU fields, then the portable parcel ids; never saved weather
@@ -75,9 +76,11 @@ def test_grantee_register_json_keeps_its_keys_with_saved_weather_present(
     assert {e["station"]["name"] for r in owner for e in r["saved_weather"]} == {STATION}
 
 
-def test_grantee_page_and_ngsi_export_never_show_saved_weather(anonymous, evidence, grant) -> None:
+def test_grantee_page_and_ngsi_export_never_show_saved_weather(
+    grantee_client, evidence, grant
+) -> None:
     for path in ("", "register.json", "ngsi-ld.json"):
-        resp = anonymous.get(f"/share/as/{grant.id}/{path}")
+        resp = grantee_client.get(f"/share/as/{grant.id}/{path}")
         assert resp.status_code == 200
         assert STATION not in resp.text
         assert "saved_weather" not in resp.text

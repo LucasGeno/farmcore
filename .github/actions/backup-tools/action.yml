@@ -1,0 +1,34 @@
+name: Backup tools
+description: >-
+  Install age and the PostgreSQL 17 client (from the PGDG apt repo), then fail unless the
+  backup, restore and upgrade tests will find them. Expects PG_BINDIR in the job env.
+
+runs:
+  using: composite
+  steps:
+    - name: Install age and postgresql-client-17
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends postgresql-common
+        sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+        sudo apt-get install -y -qq --no-install-recommends age postgresql-client-17
+
+    - name: Require age and pg_dump/pg_restore 17+
+      shell: bash
+      run: |
+        missing=0
+        for tool in age age-keygen; do
+          command -v "$tool" >/dev/null || { echo "::error::$tool is not on PATH"; missing=1; }
+        done
+        for tool in pg_dump pg_restore; do
+          [ -x "${PG_BINDIR:?PG_BINDIR is not set}/$tool" ] \
+            || { echo "::error::$PG_BINDIR/$tool is missing"; missing=1; }
+        done
+        if [ -x "$PG_BINDIR/pg_dump" ]; then
+          major=$("$PG_BINDIR/pg_dump" --version | sed -E 's/[^0-9]*([0-9]+)\..*/\1/')
+          [ "$major" -ge 17 ] || { echo "::error::pg_dump is $major, needs 17+"; missing=1; }
+        fi
+        [ "$missing" -eq 0 ] || exit 1
+        age --version
+        "$PG_BINDIR/pg_dump" --version

@@ -1,23 +1,32 @@
 # Self-hosted FarmCore: web app, optional Telegram bot, PostgreSQL + PostGIS and a daily backup.
 #
-#   cp .env.example .env      # set POSTGRES_PASSWORD and ADMIN_TOKEN (see docs/self-hosting.md)
+#   cp .env.example .env      # set the three secrets (see docs/self-hosting.md)
 #   docker compose up -d --build
-#   docker compose exec app farmcore seed --scene B    # optional: the open-data demo farm
+#   docker compose exec app farmcore farms create "My farm"   # or, optional: the demo farm
+#   docker compose exec app farmcore seed --scene B
 #   docker compose --profile telegram up -d            # also start the bot
+#
+# One installation = one Compose project. Several on one host: give each its own project name
+# and env file (`docker compose -p farm-a --env-file farm-a.env up -d`); containers, network,
+# volumes, image tag and cookies are then all per project. See docs/self-hosting.md.
 #
 # The app listens on 127.0.0.1:8000 by default; put a TLS-terminating reverse proxy in front.
 # Never paste `docker compose config` output anywhere: it inlines .env values.
-name: farmcore
 
 x-farmcore: &farmcore
   build: .
-  image: farmcore:local
+  # Per project unless FARMCORE_IMAGE names a release: rebuilding one installation never
+  # swaps the image under another.
+  image: ${FARMCORE_IMAGE:-farmcore-${COMPOSE_PROJECT_NAME}:local}
   restart: unless-stopped
-  depends_on:
+  depends_on: &after-migrate
     db:
       condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
   environment: &farmcore-env
-    DATABASE_URL: postgresql+psycopg://farmcore:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/farmcore
+    # The DML-only runtime role: it cannot change the schema, create roles or databases.
+    DATABASE_URL: postgresql+psycopg://farmcore_app:${RUNTIME_DATABASE_PASSWORD:?set RUNTIME_DATABASE_PASSWORD in .env}@db:5432/farmcore
     ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN in .env (openssl rand -hex 24)}
     # Refuse to start without a strong ADMIN_TOKEN; turn off the interactive API docs.
     FARMCORE_PUBLIC: "1"
@@ -40,7 +49,7 @@ x-farmcore: &farmcore
     TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
   volumes:
-    # Shared Whisper model cache (voice notes): downloads once, about 460 MB.
+    # This installation's Whisper model cache (voice notes): downloads once, about 460 MB.
     - whisper-cache:/home/farmcore/.cache/huggingface
   logging: &logging
     driver: json-file
@@ -54,20 +63,45 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: farmcore
+      # The owner/migrator: this server's bootstrap superuser, owner of the database, the schema
+      # and the PostGIS extension. Only `migrate` and `backup` hold its password.
       POSTGRES_USER: farmcore
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
-    # No published port: only the app, bot and backup reach the database.
+    # A sign-in left halfway holds up every DROP DATABASE (a stopped restore's cleanup too)
+    # until it times out: 5 s, not the default 60, fits in `docker compose stop`'s 10 s.
+    command: ["postgres", "-c", "authentication_timeout=5s"]
+    # No published port: only this project's services reach the database.
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U farmcore -d farmcore"]
+      # Over TCP: the image's first-start init server listens on the socket only, then restarts.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U farmcore -d farmcore"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 30s
     logging: *logging
 
-  # No `command`: the image CMD runs `farmcore migrate`, then uvicorn on :8000.
+  # One-shot, as the owner: upgrade the schema, set the installation id once, create or update
+  # the runtime role. App and bot start only after it exits 0, and never migrate themselves.
+  # One migrator at a time (an advisory lock): a second `migrate` waits, then finds nothing to
+  # do. `farmcore upgrade` runs here too: it writes its pre-upgrade bundle into /backups
+  # (docs/self-hosting.md, "Upgrading").
+  migrate:
+    <<: *farmcore
+    restart: "no"
+    command: ["farmcore", "migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://farmcore:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/farmcore
+      RUNTIME_DATABASE_ROLE: farmcore_app
+      RUNTIME_DATABASE_PASSWORD: ${RUNTIME_DATABASE_PASSWORD:?set RUNTIME_DATABASE_PASSWORD in .env}
+      BACKUP_RECIPIENT: ${BACKUP_RECIPIENT:-}
+    volumes:
+      - ${BACKUP_DIR:-backups}:/backups
+
   app:
     <<: *farmcore
     ports:
@@ -84,58 +118,48 @@ services:
     <<: *farmcore
     profiles: ["telegram"]
     command: ["farmcore", "bot"]
-    # Wait for `app`: it runs the migrations, so the bot never sees a half-migrated schema.
-    depends_on:
-      db:
-        condition: service_healthy
-      app:
-        condition: service_healthy
 
-  # Daily pg_dump (custom format, checked with pg_restore --list), seven-day retention.
+  # Daily `farmcore backup` as the owner: one bundle (pg_dump + manifest, encrypted with age to
+  # BACKUP_RECIPIENT, the owner's public key) into this project's `backups` volume (or the host
+  # directory BACKUP_DIR, one per installation), seven-day retention. Without BACKUP_RECIPIENT
+  # it writes nothing and logs `backup: FAILED` every hour; nothing is deleted then either.
   # One-off backup: docker compose run --rm --no-deps -e BACKUP_ONCE=1 backup
   backup:
-    image: ${POSTGIS_IMAGE:-postgis/postgis:17-3.5}
-    restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
+    <<: *farmcore
     environment:
-      PGHOST: db
-      PGUSER: farmcore
-      PGDATABASE: farmcore
-      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      DATABASE_URL: postgresql+psycopg://farmcore:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/farmcore
+      BACKUP_RECIPIENT: ${BACKUP_RECIPIENT:-}
     volumes:
-      - ${BACKUP_DIR:-./backups}:/backups
+      - ${BACKUP_DIR:-backups}:/backups
     stop_grace_period: 2m
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         set -u
         umask 077
-        tmp=""
-        cleanup() { [ -z "$$tmp" ] || rm -f "$$tmp"; }
-        trap 'cleanup; exit 0' INT TERM
+        trap 'exit 0' INT TERM
         backup_once() {
-          dump="/backups/farmcore-$$(date -u +%Y%m%dT%H%M%SZ).dump"
-          tmp="$$dump.tmp"
-          find /backups -maxdepth 1 -name 'farmcore-*.tmp' -mmin +60 -delete
-          pg_dump -Fc -f "$$tmp" || return 1
-          pg_restore --list "$$tmp" > /dev/null || return 1
-          mv "$$tmp" "$$dump" || return 1
-          tmp=""
-          find /backups -maxdepth 1 -name 'farmcore-*.dump' -mtime +6 -delete
-          echo "backup: wrote $$dump"
+          # Plaintext a killed backup left behind (SIGKILL skips its own cleanup).
+          rm -rf /tmp/farmcore-backup-*
+          if [ -z "$${BACKUP_RECIPIENT:-}" ]; then
+            echo 'backup: FAILED: set BACKUP_RECIPIENT, the owner age public key (docs/self-hosting.md)' >&2
+            return 1
+          fi
+          find /backups -maxdepth 1 -name 'farmcore-*.partial' -mmin +60 -delete
+          farmcore backup --output "/backups/farmcore-$$(date -u +%Y%m%dT%H%M%SZ).age" || return 1
+          # Plaintext `.dump` files from releases before bundles age out with the rest.
+          find /backups -maxdepth 1 \( -name 'farmcore-*.age' -o -name 'farmcore-*.dump' \) \
+            -mtime +6 -delete
         }
         if [ -n "$${BACKUP_ONCE:-}" ]; then
-          if backup_once; then exit 0; fi
-          cleanup; exit 1
+          backup_once; exit $$?
         fi
         while true; do
-          if backup_once; then delay=86400; else cleanup; echo 'backup: FAILED' >&2; delay=3600; fi
+          if backup_once; then delay=86400; else echo 'backup: FAILED' >&2; delay=3600; fi
           sleep "$$delay" & wait $$!
         done
-    logging: *logging
 
 volumes:
   pgdata:
   whisper-cache:
+  backups:

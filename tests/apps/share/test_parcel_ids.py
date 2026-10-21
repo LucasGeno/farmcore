@@ -97,10 +97,13 @@ def test_register_json_rows_carry_the_aliases_and_the_csv_is_unchanged(admin, de
     assert header[: len(register.CSV_FIELDS)] == list(register.CSV_FIELDS)
 
 
-def test_a_grantee_reads_the_same_ids(anonymous, session, owner_repo, demo, spray):
+def test_a_grantee_reads_the_same_ids(
+    grantee_client, session, owner_repo, demo, spray, grantee_identity
+):
     spray()
     grant = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Co-op adviser",
         preset="adviser_logs",
         purpose="spray advice",
@@ -108,8 +111,8 @@ def test_a_grantee_reads_the_same_ids(anonymous, session, owner_repo, demo, spra
     )
     session.commit()
 
-    body = anonymous.get(f"/share/as/{grant.id}/ngsi-ld.json").json()
-    rows = anonymous.get(f"/share/as/{grant.id}/register.json").json()
+    body = grantee_client.get(f"/share/as/{grant.id}/ngsi-ld.json").json()
+    rows = grantee_client.get(f"/share/as/{grant.id}/register.json").json()
 
     assert {p["name"] for p in _parcels(body).values()} == {"P1", "P2"}
     assert "Share parcel" not in str(body)
@@ -117,13 +120,14 @@ def test_a_grantee_reads_the_same_ids(anonymous, session, owner_repo, demo, spra
 
 
 def test_no_parcel_shape_is_exported_to_a_grantee_or_the_owner(
-    admin, anonymous, session, owner_repo, demo, spray
+    admin, grantee_client, session, owner_repo, demo, spray, grantee_identity
 ):
     """Portable ids only: an `AgriParcel` carries no `location`, so a register:read grant gets
     no parcel geometry it did not get before."""
     spray()
     grant = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Co-op adviser",
         preset="adviser_logs",
         purpose="spray advice",
@@ -132,7 +136,7 @@ def test_no_parcel_shape_is_exported_to_a_grantee_or_the_owner(
     session.commit()
 
     for body in (
-        anonymous.get(f"/share/as/{grant.id}/ngsi-ld.json").json(),
+        grantee_client.get(f"/share/as/{grant.id}/ngsi-ld.json").json(),
         admin.get("/share/ngsi-ld.json").json(),
     ):
         parcels = _parcels(body).values()
@@ -183,7 +187,7 @@ def test_related_sources_identify_rpg_stand_ins_without_losing_other_namespaces(
 
 
 def test_synthetic_dg_agri_aliases_are_omitted_from_owner_and_grantee_json(
-    admin, anonymous, session, owner_repo, demo, spray
+    admin, grantee_client, session, owner_repo, demo, spray, grantee_identity
 ):
     parcel = demo.parcels[0]
     parcel.props = {**parcel.props, "id_label": "synthetic id"}
@@ -193,6 +197,7 @@ def test_synthetic_dg_agri_aliases_are_omitted_from_owner_and_grantee_json(
     spray(parcels=[parcel])
     grant = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Co-op adviser",
         preset="adviser_logs",
         purpose="spray advice",
@@ -203,7 +208,7 @@ def test_synthetic_dg_agri_aliases_are_omitted_from_owner_and_grantee_json(
     for client, ngsi_url, register_url in (
         (admin, "/share/ngsi-ld.json", "/operations/register.json"),
         (
-            anonymous,
+            grantee_client,
             f"/share/as/{grant.id}/ngsi-ld.json",
             f"/share/as/{grant.id}/register.json",
         ),
@@ -221,7 +226,7 @@ def test_synthetic_dg_agri_aliases_are_omitted_from_owner_and_grantee_json(
 
 
 def test_foreign_farm_parcel_ids_never_reach_owner_or_grantee_exports(
-    admin, anonymous, session, owner_repo, demo, other_farm, spray
+    admin, grantee_client, session, owner_repo, demo, other_farm, spray, grantee_identity
 ):
     foreign = session.scalars(select(Parcel).where(Parcel.farm_id == other_farm.id)).one()
     foreign_key = "FOREIGN-KEY"
@@ -229,6 +234,7 @@ def test_foreign_farm_parcel_ids_never_reach_owner_or_grantee_exports(
     spray()
     grant = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Co-op adviser",
         preset="adviser_logs",
         purpose="spray advice",
@@ -239,8 +245,8 @@ def test_foreign_farm_parcel_ids_never_reach_owner_or_grantee_exports(
     for client, url in (
         (admin, "/share/ngsi-ld.json"),
         (admin, "/operations/register.json"),
-        (anonymous, f"/share/as/{grant.id}/ngsi-ld.json"),
-        (anonymous, f"/share/as/{grant.id}/register.json"),
+        (grantee_client, f"/share/as/{grant.id}/ngsi-ld.json"),
+        (grantee_client, f"/share/as/{grant.id}/register.json"),
     ):
         response = client.get(url)
         assert response.status_code == 200

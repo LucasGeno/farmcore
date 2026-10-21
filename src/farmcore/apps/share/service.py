@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from farmcore.apps.share import config
-from farmcore.core.access import ALL_SCOPES, OWNER, ScopedRepository
+from farmcore.core.access import ALL_SCOPES, GRANT_READ_SCOPES, OWNER, ScopedRepository
 from farmcore.core.actors import mask_actor
 from farmcore.core.models.canonical import AccessLog, DataGrant
 from farmcore.core.timeline import post_event
@@ -44,27 +44,26 @@ def is_owner_grant(grant: DataGrant) -> bool:
     return grant.grantee.casefold() == OWNER or ALL_SCOPES in (grant.scopes or [])
 
 
-def grant_repo(session: Session, grant: DataGrant) -> ScopedRepository:
-    """The grantee's repository: the grant's farm (never the farm switcher's), actor
-    `grant:<id>`, the grant's purpose. Every read is checked against the grant and logged."""
-    return ScopedRepository(
-        session, grant.farm_id, grant, actor=f"grant:{grant.id}", purpose=grant.purpose
+def is_shareable_grant(grant: DataGrant) -> bool:
+    """Legacy broad, write, private-history and reserved owner grants fail closed as a whole."""
+    return (
+        bool(grant.scopes) and not is_owner_grant(grant) and set(grant.scopes) <= GRANT_READ_SCOPES
     )
 
 
-def denied_message(grant: DataGrant, status: str, tz: str = DEFAULT_TZ) -> str:
-    """Plain words for a grantee whose grant is not active."""
-    who = grant.grantee
-    if status == "revoked" and grant.revoked_at is not None:
-        when = local_time(grant.revoked_at, tz)
-        return f"This access was revoked on {when}. {who} can no longer read this farm."
-    if status == "expired" and grant.valid_to is not None:
-        when = local_time(grant.valid_to, tz)
-        return f"This access expired on {when}. {who} can no longer read this farm."
-    if status == "scheduled":
-        when = local_time(grant.valid_from, tz)
-        return f"This access starts on {when}. {who} cannot read this farm yet."
-    return f"This access is {status}. {who} cannot read this farm."
+def grant_repo(session: Session, grant: DataGrant, *, actor: str | None = None) -> ScopedRepository:
+    """The grantee's repository: the grant's farm (never the farm switcher's), with
+    the authenticated `user:<id>` (or legacy operator probe `grant:<id>`), with the grant's purpose.
+    Every read is checked against the grant and logged with its farm and grant ID."""
+    return ScopedRepository(
+        session,
+        grant.farm_id,
+        grant,
+        actor=actor or f"grant:{grant.id}",
+        purpose=grant.purpose,
+        grant_view=True,
+        private_member=True,
+    )
 
 
 def grant_status(grant: DataGrant, now: datetime) -> str:
@@ -83,6 +82,7 @@ def create_grant(
     repo: ScopedRepository,
     *,
     grantee: str,
+    recipient_identity_id: int | None = None,
     preset: str,
     purpose: str,
     valid_to: datetime,
@@ -113,6 +113,7 @@ def create_grant(
     grant = DataGrant(
         farm_id=repo.farm_id,
         grantee=name,
+        recipient_identity_id=recipient_identity_id,
         scopes=list(scopes),
         purpose=purpose,
         valid_from=now,
@@ -130,7 +131,7 @@ def create_grant(
             f"Granted {name} read access: {scope_words(scopes)}, until {local_date(valid_to, tz)}"
         ),
         payload={"grantee": name, "scopes": list(scopes), "purpose": purpose},
-        actor=OWNER,
+        actor=repo.actor,
         source_app=SOURCE_APP,
         occurred_at=now,
     )
@@ -195,8 +196,52 @@ def revoke_grant(repo: ScopedRepository, grant_id: int, *, tz: str = DEFAULT_TZ)
         kind="share.revoked",
         body=f"Revoked {grant.grantee}'s read access on {local_time(now, tz)}",
         payload={"grantee": grant.grantee},
-        actor=OWNER,
+        actor=repo.actor,
         source_app=SOURCE_APP,
         occurred_at=now,
     )
     return grant
+
+
+def shared_advice(row) -> dict[str, Any]:
+    """Stored advice projection; private parameter inputs/review evidence never travel here."""
+    from farmcore.apps.advisor.service import advice_json
+
+    stored = advice_json(row)
+    allowed = (
+        "id",
+        "parcel_id",
+        "evaluated_at",
+        "decision",
+        "headline",
+        "reasons",
+        "next_window",
+        "protected_until",
+        "mm_since_spray",
+        "incubation_pct",
+        "flags",
+        "products",
+        "passes",
+        "treatments",
+    )
+    data = {key: stored[key] for key in allowed}
+    props = row.props or {}
+    data["assessment_status"] = props.get("assessment_status")
+    version = props.get("config_version")
+    data["config_version"] = None
+    if isinstance(version, dict):
+        safe = {
+            key: version[key]
+            for key in ("id", "hash", "scope", "status")
+            if isinstance(version.get(key), (str, int))
+        }
+        safe["accuracy_claim"] = False
+        review = version.get("review")
+        if isinstance(review, dict):
+            safe["review"] = {
+                key: review[key]
+                for key in ("id", "verdict", "status")
+                if isinstance(review.get(key), (str, int))
+            }
+        data["config_version"] = safe
+    return data

@@ -99,12 +99,31 @@ def _auth_error(request: Request, status: int) -> Response:
     )
 
 
+def _grant_context(request: Request) -> bool:
+    return request.url.path == "/share/received" or request.url.path.startswith("/share/as/")
+
+
+def _grant_error(request: Request, status: int) -> Response:
+    """Denied recipient pages reveal no grant metadata and load no private farm widgets."""
+    return templates.TemplateResponse(
+        request,
+        "core/recipient_error.html",
+        {"status_code": status, "sunlight": is_sunlight(request)},
+        status_code=status,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
     if request.url.path in AUTH_PATHS:
         return _auth_error(request, exc.status_code)
     if not wants_html(request) or not is_body_allowed_for_status_code(exc.status_code):
         return await fastapi_http_exception_handler(request, exc)
-    resp = _page(request, exc.status_code, _message(exc))
+    resp = (
+        _grant_error(request, exc.status_code)
+        if _grant_context(request)
+        else _page(request, exc.status_code, _message(exc))
+    )
     resp.headers.update(exc.headers or {})
     return resp
 
@@ -114,6 +133,8 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         return _auth_error(request, 422)
     if not wants_html(request):
         return await fastapi_validation_exception_handler(request, exc)
+    if _grant_context(request):
+        return _grant_error(request, 422)
     return _page(request, 422, " ".join(_validation_line(e) for e in exc.errors()))
 
 

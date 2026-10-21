@@ -58,9 +58,10 @@ def test_plain_sharing_sections_unsupported_choices_and_collapsed_audit(admin, a
     filtered = admin.get("/share/?scope=weather&status=active&who=grantees").text
     assert "open" in re.search(r'<details id="access-log"([^>]*)>', filtered)[1]
     assert "scope=weather" in filtered and "status=active" in filtered
-    page = anonymous.get("/share/").text
-    assert 'action="/share/grants"' not in page
-    assert "No sharing preset for parcels" in page
+    denied = anonymous.get("/share/")
+    assert denied.status_code == 403
+    assert 'action="/share/grants"' not in denied.text
+    assert "No sharing preset for parcels" not in denied.text
 
 
 def test_filters_and_forms_remain_farm_scoped_and_tour_read_only(admin, session, demo, other_farm):

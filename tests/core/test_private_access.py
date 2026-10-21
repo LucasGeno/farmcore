@@ -100,7 +100,7 @@ def test_operator_and_public_bootstrap_remain_usable(settings, session_factory, 
     ensure_default_farm(session, settings)
     session.commit()
     with TestClient(create_app(settings, session_factory=session_factory)) as client:
-        assert client.get("/health").json() == {"db": "ok"}
+        assert client.get("/health").json()["db"] == "ok"
         assert client.get("/admin/sign-in").status_code == 200
         assert client.get("/static/core/navigation.js").status_code == 200
         assert client.get("/today/").status_code == 403
@@ -184,15 +184,13 @@ def test_demo_audit_grant_never_queries_global_audit(settings, session_factory, 
     session.commit()
     showcase = settings.model_copy(update={"demo_mode": True, "demo_farm_ids": [demo.id]})
     with TestClient(create_app(showcase, session_factory=session_factory)) as client:
-        assert client.get(f"/share/as/{grant.id}/").status_code == 200
-        assert client.get(f"/share/as/{grant.id}/audit.json").status_code == 403
+        assert client.get(f"/share/as/{grant.id}/").status_code == 404
+        assert client.get(f"/share/as/{grant.id}/audit.json").status_code == 404
     assert session.scalar(select(AccessLog).where(AccessLog.resource == "llm_audit")) is None
 
 
-def test_operator_grant_page_probes_audit_with_grant_bound_access_log(
-    settings, session_factory, session
-):
-    """The operator can inspect the global audit through a live grant; every read stays logged."""
+def test_operator_grant_context_never_elevates_to_global_audit(settings, session_factory, session):
+    """Even an operator's grant preview stays restricted; global audit has its own route."""
     from sqlalchemy import select
 
     from farmcore.core.models.canonical import AccessLog, DataGrant, LlmAudit
@@ -225,18 +223,22 @@ def test_operator_grant_page_probes_audit_with_grant_bound_access_log(
     ) as client:
         response = client.get(f"/share/as/{grant.id}/")
 
-    assert response.status_code == 200
-    assert "Shared: this grant includes the model-call audit." in response.text
-    assert "Not shared: this grant does not include the model-call audit." not in response.text
+    assert response.status_code == 404
+    assert "Synthetic audit adviser" not in response.text
     assert "payload-only-for-operator" not in response.text
+    assert session.scalar(select(AccessLog.id).where(AccessLog.id > before)) is None
+    # The installation operator still has the separate explicit global audit surface.
+    with TestClient(
+        create_app(settings, session_factory=session_factory),
+        headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+    ) as client:
+        assert client.get("/chat/").status_code == 200
     reads = list(
         session.scalars(
             select(AccessLog).where(AccessLog.id > before, AccessLog.resource == "llm_audit")
         )
     )
-    assert [(row.farm_id, row.grant_id, row.actor, row.scope, row.purpose) for row in reads] == [
-        (farm.id, grant.id, f"grant:{grant.id}", "audit:read", "operator audit inspection")
-    ]
+    assert reads and all(row.grant_id != grant.id for row in reads)
 
 
 # Each example shares the function-scoped rollback connection intentionally: setup is

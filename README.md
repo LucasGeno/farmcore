@@ -92,12 +92,14 @@ amd64-only).
 
 ## Self-hosting
 
-`docker-compose.yml` runs the app, an optional Telegram bot, PostgreSQL + PostGIS and a daily
-backup, and refuses to start without a strong admin token:
+`docker-compose.yml` is one installation: the app, an optional Telegram bot, PostgreSQL +
+PostGIS, a one-shot `migrate` service and a daily backup. It refuses to start without a strong
+admin token. Several installations run side by side as separate Compose projects.
 
 ```sh
-cp .env.example .env    # set POSTGRES_PASSWORD and ADMIN_TOKEN
+cp .env.example .env    # set POSTGRES_PASSWORD, RUNTIME_DATABASE_PASSWORD and ADMIN_TOKEN
 docker compose up -d --build
+docker compose exec app farmcore farms create "My farm"    # or the demo data:
 docker compose exec app farmcore seed --scene B
 ```
 
@@ -118,3 +120,14 @@ and anonymous farm access is closed. Public demo access requires explicit farm d
 FarmCore is licensed under the [Apache License 2.0](LICENSE). Bundled third-party libraries,
 fonts and open data keep their own licences: see [NOTICE](NOTICE) and
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+### Recipient sharing
+
+An owner opens **Sharing** to create/revoke scoped, time-limited grants. Provision a recipient
+with `uv run farmcore users create <login>` (omit `--farm-id`); the form requires that existing
+login separately from its display label. The recipient signs in at `/login` and opens
+`/share/received`. Sending a numeric grant URL alone never opens data, including public demos.
+Legacy grants without a bound identity remain inaccessible to recipients; create an explicitly
+bound replacement. Consent expiry uses real time, independently of seasonal replay. Advice-only
+consent shares stored evaluations and safe version metadata, without station/log or private
+review provenance access.

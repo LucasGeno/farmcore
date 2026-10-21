@@ -146,7 +146,11 @@ def render(request: Request, name: str, **ctx: Any) -> HTMLResponse:
             group: [
                 item
                 for item in items
-                if item.path.rstrip("/") not in {"/chat", "/share", "/apps", "/demo"}
+                if item.path.rstrip("/") not in {"/chat", "/apps", "/demo"}
+                and (
+                    item.path.rstrip("/") != "/share"
+                    or principal.memberships.get(farm_id) == "owner"
+                )
             ]
             for group, items in nav.items()
         }
