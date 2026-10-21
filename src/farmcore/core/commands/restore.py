@@ -38,6 +38,7 @@ installation and every bundle are left as they were, and no plaintext is left be
 from __future__ import annotations
 
 import contextlib
+import gc
 import hashlib
 import json
 import os
@@ -50,6 +51,7 @@ import subprocess
 import tarfile
 import tempfile
 import time
+import traceback
 import uuid
 from collections.abc import Iterator
 from datetime import datetime
@@ -196,6 +198,22 @@ def _signals_deferred() -> Iterator[None]:
     finally:
         _STOPS.deferring = False
     _stop_point()
+
+
+def _close_what_failed(exc: BaseException) -> None:
+    """Free what the frames of `exc` (and the exceptions it chains) still hold. A stop raised
+    while a connection signs in leaves its socket open in those frames, and the server keeps
+    that backend in authentication: every DROP DATABASE then waits for it, up to the server's
+    `authentication_timeout` (60 s by default), past `docker compose stop`'s 10 seconds."""
+    pending, seen = [exc], set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        traceback.clear_frames(current.__traceback__)
+        pending += [current.__context__, current.__cause__]
+    gc.collect()  # a connection in a reference cycle closes now, not at some later collection
 
 
 def sweep_temp() -> None:
@@ -783,7 +801,8 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                         deferred.enter_context(_signals_deferred())
                         copy.swap()
                         swapped = True
-                    except BaseException:
+                    except BaseException as exc:
+                        _close_what_failed(exc)
                         copy.discard()
                         raise
                 new_id = migrate_installation(settings)

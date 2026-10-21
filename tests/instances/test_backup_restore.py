@@ -1165,6 +1165,68 @@ def test_a_stop_the_handler_could_not_raise_still_stops_the_restore_before_the_s
     assert caught_signals == []
 
 
+def test_a_stop_while_a_connection_signs_in_still_ends_well_within_compose_stops_grace(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, caught_signals
+):
+    """SIGTERM while one of restore's connections is halfway through signing in (it sent the
+    first password message, the server waits for the next): unless restore closes that socket
+    first, the server keeps the backend in authentication, and the cleanup's DROP DATABASE
+    waits for it until `authentication_timeout` (60 s), long past the 10 seconds `docker
+    compose stop` gives before SIGKILL. Here the loader role exists too, so both must go."""
+    import psycopg
+    from psycopg.generators import WAIT_R
+
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    real_connect = psycopg.Connection._connect_gen.__func__
+    armed: list[bool] = []
+    stopped_at: list[float] = []
+
+    def signing_in(cls, conninfo: str = ""):
+        steps = real_connect(cls, conninfo)
+        wait, reads = next(steps), 0
+        while True:
+            reads += wait[1] == WAIT_R
+            # The 1st read waits for the SSL answer (or, without SSL, the password request);
+            # by the 2nd, the server has a sign-in under way and waits on this client.
+            if armed and reads == 2:
+                armed.clear()
+                stopped_at.append(time.monotonic())
+                os.kill(os.getpid(), signal.SIGTERM)
+            try:
+                wait = steps.send((yield wait))
+            except StopIteration as done:
+                return done.value
+
+    monkeypatch.setattr(psycopg.Connection, "_connect_gen", classmethod(signing_in))
+    drop_loader = restore.Copy.drop_loader
+
+    loaders: list[str] = []
+
+    def stopped_while_signing_in(copy) -> None:
+        loaders.append(copy.loader)
+        armed.append(True)  # its first connection, to the staging copy, is the one stopped
+        drop_loader(copy)
+
+    monkeypatch.setattr(restore.Copy, "drop_loader", stopped_while_signing_in)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    took = time.monotonic() - stopped_at[0]
+    assert result.exit_code == 1
+    assert "restore: stopped by SIGTERM; nothing was restored" in result.output, result.output
+    assert took < 5, f"the stop took {took:.1f} s"
+    assert staging_of(dbs, target) == []
+    assert len(loaders) == 1 and not role_exists(dbs, loaders[0])
+    untouched.check()
+    assert caught_signals == []
+
+
 @pytest.mark.parametrize("failure", ["refusal", "database"])
 def test_a_setup_failure_after_the_swap_says_the_data_is_in_and_to_run_migrate(
     source, dbs, cli, owner_key, tmp_path, monkeypatch, failure
