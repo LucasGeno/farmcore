@@ -53,7 +53,7 @@ import tempfile
 import time
 import traceback
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
 
@@ -128,7 +128,7 @@ PLAIN_FILES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 LOADER_PREFIX = "farmcore_restore_"
 # Emptied again after the load (an older revision may not have them yet).
 SESSION_TABLES = ("local_session", "login_bucket")
-STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP)
+STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)  # as `migrate`: Ctrl-C too
 # What `farmcore backup` writes (`datetime.isoformat()` in UTC): nothing else is printed.
 _CREATED_AT = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}:\d{2})", re.A
@@ -140,7 +140,7 @@ STALE_TEMP_SECONDS = 6 * 3600
 
 
 class Interrupted(BaseException):
-    """SIGTERM or SIGHUP during a restore: unwinds like Ctrl-C, through every cleanup."""
+    """SIGTERM, SIGHUP or SIGINT (Ctrl-C) during a restore: unwinds through every cleanup."""
 
 
 class _Stops:
@@ -327,7 +327,8 @@ def _read(tar: tarfile.TarFile, member: tarfile.TarInfo, dst) -> bytes:
 
 
 def _release(value: str) -> tuple[int, ...]:
-    if not re.fullmatch(r"\d+(\.\d+){0,3}", value):
+    # ASCII digits, and few of them: `int()` refuses a part of over 4,300 digits with an error.
+    if not re.fullmatch(r"\d{1,9}(\.\d{1,9}){0,3}", value, re.A):
         raise BundleError("manifest field 'release' is missing or invalid")
     return tuple(int(part) for part in value.split("."))
 
@@ -381,6 +382,15 @@ def check_manifest(manifest: object, dump: Path) -> dict:
     return manifest
 
 
+def verify_plain(plain: Path, into: Path) -> tuple[dict, Path]:
+    """Steps 1 and 2 on the decrypted archive `plain`, which only touch files: `unpack` into
+    `into`, delete `plain` (the decrypted archive never waits on disk while the dump is
+    hashed), then `check_manifest`. The manifest and the dump's path."""
+    manifest, dump = unpack(plain, into)
+    plain.unlink()
+    return check_manifest(manifest, dump), dump
+
+
 def _dump_heads(dump: Path) -> list[str]:
     """The schema revisions recorded inside the dump itself (its `alembic_version` rows).
 
@@ -396,11 +406,12 @@ def _dump_heads(dump: Path) -> list[str]:
     return sorted(rows.group(1).split()) if rows else []
 
 
-def check_compatible(manifest: dict, dump: Path) -> list[str]:
+def check_compatible(manifest: dict, dump_heads: list[str], script: ScriptDirectory) -> list[str]:
+    """The bundle's heads, if the dump records the ones its manifest names (`dump_heads`, read
+    from the dump, sorted) and this release's migrations (`script`) know every one of them."""
     heads = sorted(manifest["alembic_heads"])
-    if _dump_heads(dump) != heads:
+    if dump_heads != heads:
         raise BundleError("the dump's schema revision does not match the manifest")
-    script = ScriptDirectory.from_config(alembic_config())
     for head in heads:
         try:
             known = script.get_revision(head)
@@ -450,11 +461,24 @@ def _toc(listing: str) -> list[tuple[str, str]]:
     return entries
 
 
-def _list(dump: Path) -> list[tuple[str, str]]:
+def _listing(dump: Path) -> str:
+    """`pg_restore --list` of `dump`: its table of contents, read without executing anything."""
     listed = subprocess.run([tool("pg_restore"), "--list", str(dump)], capture_output=True)
     if listed.returncode != 0:
         raise BundleError(f"the dump is unreadable: {tool_error(listed.stderr)}")
-    return _toc(listed.stdout.decode(errors="replace"))
+    return listed.stdout.decode(errors="replace")
+
+
+def check_objects(listing: str, expected: str) -> list[tuple[str, str]]:
+    """The dump's entries, from its `pg_restore --list` (`listing`), as (line, key). Refuse any
+    object the listing of FarmCore's own schema at the bundle's revision (`expected`) lacks."""
+    entries = _toc(listing)
+    extra = sorted({key for _, key in entries} - {key for _, key in _toc(expected)})
+    if extra:
+        more = f"; and {len(extra) - 5} more" if len(extra) > 5 else ""
+        shown = "; ".join(map(_printable, extra[:5])) + more
+        raise BundleError(f"the dump holds objects that are not part of FarmCore: {shown}")
+    return entries
 
 
 def _safe_load_error(stderr: bytes) -> str:
@@ -603,13 +627,8 @@ class Copy:
         )  # fmt: skip
         if done.returncode != 0:
             raise BundleError(f"pg_dump of the new schema failed: {tool_error(done.stderr)}")
-        expected = {key for _, key in _list(expected_dump)}
-        entries = _list(dump)
-        extra = sorted({key for _, key in entries} - expected)
-        if extra:
-            more = f"; and {len(extra) - 5} more" if len(extra) > 5 else ""
-            shown = "; ".join(map(_printable, extra[:5])) + more
-            raise BundleError(f"the dump holds objects that are not part of FarmCore: {shown}")
+        expected = _listing(expected_dump)
+        entries = check_objects(_listing(dump), expected)
         engine = create_engine(self._url(self.staging))
         try:
             with engine.connect() as conn:
@@ -781,6 +800,9 @@ class Copy:
 
 
 _DATA_IN = "the data is in, paused; run migrate to finish"
+# The steps of a restore after the checks, in order; `restore_bundle` calls `on_step` with each
+# name just before that step, under the same signal handling as the step itself.
+STEPS = ("create", "create_loader", "load", "drop_loader", "swap", "drop_old", "migrate")
 _STAGING_SUFFIX = re.compile(r"_restore_[0-9a-f]{6}_([0-9a-f]{8})$")
 
 
@@ -788,19 +810,26 @@ def _q(conn, name: str) -> str:
     return conn.dialect.identifier_preparer.quote(name)
 
 
-def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[dict, str]:
+def restore_bundle(
+    settings: Settings,
+    bundle: Path,
+    identity: Path,
+    on_step: Callable[[str], None] | None = None,
+) -> tuple[dict, str]:
     """Verify `bundle` completely, then restore its rows into the empty target as a new
-    installation; (manifest, new installation id). Run inside `_stop_on_signals`."""
+    installation; (manifest, new installation id). Run inside `_stop_on_signals`.
+
+    `on_step(name)` runs just before each of `STEPS` (a stop or a lock at that moment)."""
+    step = on_step or (lambda _name: None)
     sweep_temp()
     preflight(bundle, identity)
     with tempfile.TemporaryDirectory(prefix=TEMP_PREFIX) as name:
         tmp = Path(name)
         plain = tmp / "bundle.tar"
         decrypt(bundle, identity, plain)
-        manifest, dump = unpack(plain, tmp)
-        plain.unlink()
-        check_manifest(manifest, dump)
-        heads = check_compatible(manifest, dump)
+        manifest, dump = verify_plain(plain, tmp)
+        script = ScriptDirectory.from_config(alembic_config())
+        heads = check_compatible(manifest, _dump_heads(dump), script)
         copy = Copy(settings, check_target(settings))
         with copy.exclusive():
             copy.sweep()
@@ -810,16 +839,22 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                 # delivered once this block is left (outside the cleanup below).
                 with contextlib.ExitStack() as deferred:
                     try:
+                        step("create")
                         copy.create()
                         copy.build_schema(heads)
                         lines = copy.check_contents(dump, tmp)
+                        step("create_loader")
                         copy.create_loader()
+                        step("load")
                         copy.load(dump, lines, tmp)
+                        step("drop_loader")
                         copy.drop_loader()
                         check_target(settings)  # still empty: nobody started using it meanwhile
                         deferred.enter_context(_signals_deferred())
+                        step("swap")
                         old = copy.swap()
                         swapped = True
+                        step("drop_old")
                         left = copy.drop_old(old)
                         if left:
                             typer.echo(f"restore: warning: the data is in, but {left}", err=True)
@@ -827,6 +862,7 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                         _close_what_failed(exc)
                         copy.discard()
                         raise
+                step("migrate")
                 new_id = migrate_installation(settings)
                 _STOPS.deferring = True  # done: a stop now only waits for the report
             except Interrupted as exc:
@@ -848,6 +884,7 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
 def register(cli: typer.Typer) -> None:
     @cli.command()
     def restore(
+        ctx: typer.Context,
         # Readability is checked by restore itself, with a hint for containers.
         bundle: Path = typer.Argument(
             ..., help="Bundle written by `farmcore backup`.", readable=False
@@ -862,11 +899,13 @@ def register(cli: typer.Typer) -> None:
     ) -> None:
         """Restore a backup into this new installation's empty database (DATABASE_URL, owner)."""
         settings = get_settings()
+        # A caller that runs the command in process may pass `obj={"on_step": ...}`.
+        on_step = ctx.obj.get("on_step") if isinstance(ctx.obj, dict) else None
         # Around the messages too: a second stop signal must not end the command before it
         # says what the first one left.
         with _stop_on_signals():
             try:
-                manifest, new_id = restore_bundle(settings, bundle, identity)
+                manifest, new_id = restore_bundle(settings, bundle, identity, on_step)
             except (BundleError, MigrateError) as exc:
                 typer.echo(f"restore: {exc}", err=True)
                 raise typer.Exit(1) from None

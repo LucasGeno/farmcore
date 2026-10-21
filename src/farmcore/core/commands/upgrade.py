@@ -24,11 +24,13 @@ from pathlib import Path
 
 import typer
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from farmcore import __version__
 from farmcore.core.commands.backup import BundleError, create_bundle
 from farmcore.core.commands.migrate import (
     MigrateError,
+    MigrationFailed,
     ServerBusy,
     Stopped,
     check_compatible,
@@ -95,6 +97,20 @@ def upgrade_installation(
                 "`farmcore migrate` again to finish setting up the runtime role; the "
                 "installation says failed until then"
             ) from None
+        except MigrationFailed as exc:
+            try:
+                now = read_heads(conn)
+                conn.rollback()
+            except SQLAlchemyError:  # the connection was lost: assume the schema moved
+                now = None
+            if now == before.heads:  # rolled back as a whole: the previous release still fits
+                way_back = (
+                    f"nothing was applied: fix the cause, or set the previous image again; "
+                    f"{bundle} is kept ({RECOVERY})"
+                )
+            else:
+                way_back = f"to go back, restore {bundle} ({RECOVERY})"
+            raise MigrateError(f"{exc}. The installation is marked failed; {way_back}") from None
         except MigrateError as exc:
             raise MigrateError(
                 f"{exc}. The installation is marked failed; to go back, restore {bundle} "
@@ -138,19 +154,28 @@ def register(cli: typer.Typer) -> None:
                 return
             if backup_dir is None:
                 raise MigrateError("give --backup-dir for the pre-upgrade backup; nothing was done")
-            with stop_on_signals():
-                before, after, installation_id = upgrade_installation(
-                    settings, backup_dir, recipient, typer.echo
-                )
         except MigrateError as exc:
             typer.echo(f"upgrade: {exc}", err=True)
             raise typer.Exit(1) from None
-        except Stopped as exc:
-            typer.echo(f"upgrade: {stopped_message(exc)}", err=True)
-            raise typer.Exit(1) from None
-        if before.heads == after.heads:
-            typer.echo(f"upgrade: already at {', '.join(after.heads)}")
-        else:
-            typer.echo(f"upgrade: migrated {', '.join(before.heads)} -> {', '.join(after.heads)}")
-        typer.echo(describe(after))
-        typer.echo(f"installation {installation_id}")
+        # Around the report too: a second stop must not end the command before it is printed.
+        with stop_on_signals() as reporting:
+            try:
+                before, after, installation_id = upgrade_installation(
+                    settings, backup_dir, recipient, typer.echo
+                )
+                reporting()
+            except MigrateError as exc:
+                reporting()
+                typer.echo(f"upgrade: {exc}", err=True)
+                raise typer.Exit(1) from None
+            except Stopped as exc:
+                typer.echo(f"upgrade: {stopped_message(exc)}", err=True)
+                raise typer.Exit(1) from None
+            if before.heads == after.heads:
+                typer.echo(f"upgrade: already at {', '.join(after.heads)}")
+            else:
+                typer.echo(
+                    f"upgrade: migrated {', '.join(before.heads)} -> {', '.join(after.heads)}"
+                )
+            typer.echo(describe(after))
+            typer.echo(f"installation {installation_id}")

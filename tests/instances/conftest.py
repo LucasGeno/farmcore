@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError, OperationalError
 
 
 def postgis_image() -> str:
@@ -237,3 +237,203 @@ def fresh_db(pg_server: Server) -> Iterator[str]:
         with admin.connect() as conn:
             conn.execute(text(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)'))
         admin.dispose()
+
+
+# --- Installations on the throwaway server -----------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def fast_lock_timeout(monkeypatch) -> str:
+    """The public lock timeout at 200 ms: a wait for `pg_database` gives up at once. `restore`
+    holds its own copy of the constant, so both modules are set."""
+    from farmcore.core.commands import migrate, restore
+
+    monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "200ms")
+    monkeypatch.setattr(restore, "LOCK_TIMEOUT", "200ms")
+    return "200ms"
+
+
+@pytest.fixture(autouse=True)
+def no_leftover_loader_role(request) -> Iterator[None]:
+    """A loader role a test leaves on the session's server is swept by the next restore, which
+    then breaks some other test's server-wide count: fail the test that left it instead, after
+    dropping the roles so the tests after it start clean."""
+    yield
+    if "pg_server" not in request.fixturenames:
+        return
+    server = request.getfixturevalue("pg_server")
+    engine = create_engine(server.url("postgres"), isolation_level="AUTOCOMMIT")
+    loaders = text("SELECT rolname FROM pg_roles WHERE rolname LIKE 'farmcore\\_restore\\_%'")
+    try:
+        with engine.connect() as conn:
+            left = conn.execute(loaders).scalars().all()
+            for role in left:
+                try:
+                    conn.execute(text(f'DROP OWNED BY "{role}"'))
+                    conn.execute(text(f'DROP ROLE "{role}"'))
+                except DBAPIError:  # still granted rights in a database left behind
+                    pass
+    finally:
+        engine.dispose()
+    assert not left, f"loader roles left on the server: {left}"
+
+
+@pytest.fixture(scope="module")
+def pg_tools() -> Iterator[None]:
+    """age, and pg_dump/pg_restore 17+ first on PATH. Missing tools skip the test, or fail it
+    with FARMCORE_REQUIRE_TOOLS=1 (CI), so a skip never passes for a run."""
+    from tests.instances.support import AGE, AGE_KEYGEN, pg_bindir
+
+    bindir = pg_bindir()
+    missing = [
+        what
+        for what, found in (("the age CLI (age, age-keygen)", AGE and AGE_KEYGEN), (
+            "pg_dump/pg_restore 17+ (set PG_BINDIR)", bindir))
+        if not found
+    ]  # fmt: skip
+    if missing:
+        message = "needs " + " and ".join(missing)
+        if os.environ.get("FARMCORE_REQUIRE_TOOLS") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+        yield
+
+
+@pytest.fixture(scope="module")
+def owner_key(tmp_path_factory, pg_tools) -> tuple[Path, str]:
+    """The owner's age identity file (private, in a temp dir) and its public recipient."""
+    from tests.instances.support import make_key
+
+    return make_key(tmp_path_factory.mktemp("keys"))
+
+
+@pytest.fixture(scope="session")
+def templates(pg_server):
+    """Bare, migrated and seeded databases built once and copied by every test that needs one."""
+    from tests.instances.support import Databases, Templates
+
+    made = Databases(pg_server)
+    try:
+        yield Templates(made)
+    finally:
+        made.close()
+
+
+@pytest.fixture
+def dbs(pg_server, templates):
+    """Databases made for one test, dropped (with their runtime roles) after it."""
+    from tests.instances.support import Databases
+
+    made = Databases(pg_server, templates)
+    try:
+        yield made
+    finally:
+        made.close()
+
+
+@pytest.fixture(scope="module")
+def module_dbs(pg_server, templates):
+    """Databases shared by one module's read-only tests."""
+    from tests.instances.support import Databases
+
+    made = Databases(pg_server, templates)
+    try:
+        yield made
+    finally:
+        made.close()
+
+
+@pytest.fixture
+def source(dbs) -> dict[str, str]:
+    """Installation A (seeded, replayed, `kpi` off) for a test that changes it."""
+    from tests.instances.support import installation_from
+
+    return installation_from(dbs, dbs.templates.seeded)
+
+
+@pytest.fixture(scope="module")
+def shared_source(module_dbs) -> dict[str, str]:
+    """Installation A for the module's tests that only read it or restore its bundles."""
+    from tests.instances.support import installation_from
+
+    return installation_from(module_dbs, module_dbs.templates.seeded)
+
+
+@pytest.fixture
+def private_tmp(tmp_path, monkeypatch) -> Path:
+    """The temporary directory backup and restore use (the filesystem boundary)."""
+    import tempfile
+
+    path = tmp_path / "tmp"
+    path.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(path))
+    return path
+
+
+@pytest.fixture
+def caught_signals() -> Iterator[list[int]]:
+    """Stop signals this test process receives land here, never on pytest's default handler
+    (which would end the whole run): a command that fails to handle one fails the test."""
+    import signal
+
+    stops = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    caught: list[int] = []
+    previous = {s: signal.signal(s, lambda n, _f: caught.append(n)) for s in stops}
+    try:
+        yield caught
+    finally:
+        for s, handler in previous.items():
+            signal.signal(s, handler)
+
+
+@pytest.fixture(scope="module")
+def member_bundle(shared_source, owner_key, tmp_path_factory):
+    """A's bundle, with a member signed in (a session row the copy must never carry)."""
+    from tests.instances.support import backup, signed_in_member
+
+    _, recipient = owner_key
+    signed_in_member(shared_source)
+    return backup(shared_source, recipient, tmp_path_factory.mktemp("bundle") / "a.age")
+
+
+@pytest.fixture
+def restore_at(shared_source, member_bundle, owner_key, module_dbs, private_tmp):
+    """`restore_at(step=action, ...)`: restore the bundle into a new target, calling
+    `action(target)` just before that step; (result, target, env, the evidence that nothing
+    changed)."""
+    from farmcore.core.commands.restore import STEPS
+    from tests.instances.support import Untouched, restore
+
+    key, _ = owner_key
+
+    def go(**at):
+        assert set(at) <= set(STEPS), at  # a misspelt step must fail
+        target = module_dbs.create()
+        env = module_dbs.installation(target)
+        untouched = Untouched(
+            module_dbs, shared_source["name"], target, [member_bundle], private_tmp
+        )
+        fired: list[str] = []
+
+        def on_step(name: str) -> None:
+            if name in at:
+                fired.append(name)
+                at[name](target)
+
+        result = restore(member_bundle, key, env, on_step=on_step)
+        assert fired == list(at), (fired, result.output)
+        return result, target, env, untouched
+
+    return go
+
+
+@pytest.fixture
+def server_list(module_dbs):
+    """`pg_database` held locked by another session when the test says so."""
+    from tests.instances.support import DatabaseList
+
+    held = DatabaseList(module_dbs)
+    yield held
+    held.close()

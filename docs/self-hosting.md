@@ -341,7 +341,8 @@ name, and `migrate`'s steps follow: upgrade an older schema, generate the new
 
 Any refusal or failure before the swap leaves the target, the source installation, the bundle
 and older bundles as they were, and leaves no staging database, loader role or plaintext. That
-includes a restore stopped by `SIGTERM` or `SIGHUP` (`docker compose stop`, a closed terminal):
+includes a restore stopped by `SIGTERM`, `SIGHUP` or Ctrl-C (`docker compose stop`, a closed
+terminal, the keyboard):
 a signal that arrives while the staging database or the loader role is being created waits
 for that to finish, so that both can be removed.
 `SIGKILL` (or a power cut) skips that cleanup: the staging database
@@ -472,9 +473,10 @@ instead.
 (the schema revisions in the database) and `state`. It answers 503 unless `state` is `ok`:
 `maintenance` while a migration runs or is still pending for this release, `failed` when the
 last migrate or upgrade failed or was stopped, or when the database's schema is unknown to
-this release. A failed migration (or one stopped with `SIGTERM`) is cancelled on the server
-and rolled back as a whole; the installation stays `failed` until a migrate or upgrade
-succeeds.
+this release. A failed migration (or one stopped with `SIGTERM`, `SIGHUP` or Ctrl-C) is
+cancelled on the server and rolled back as a whole; the installation stays `failed` until a
+migrate or upgrade succeeds. A stopped `migrate` or `upgrade` says what the stop left before
+it exits; a second stop signal does not cut it short.
 
 Without `farmcore upgrade` (say, a scripted deploy), take a bundle first
 (`docker compose -p farm-a --env-file farm-a.env run --rm --no-deps -e BACKUP_ONCE=1 backup`)
@@ -483,15 +485,18 @@ backup.
 
 ### Recovering from a failed upgrade
 
-**The migration failed** (`upgrade: migration failed: …; the schema is still at <old
-revision>`). Nothing was applied. Fix the cause or go back: set the previous image again and
+**The migration failed and nothing was applied** (`upgrade: migration failed: …; the schema
+is still at <old revision>. … nothing was applied`). Fix the cause, or go back to the previous
+release: set the previous image again (`git checkout <previous tag>`, then
+`docker compose -p farm-a --env-file farm-a.env build`; with `FARMCORE_IMAGE`, set it back to
+the previous tag in `farm-a.env` instead, no build) and
 `docker compose -p farm-a --env-file farm-a.env up -d --wait`. The installation stays marked
 failed until a `migrate` that knows the mark succeeds: the next upgrade's, or this one if the
 previous release already has `farmcore upgrade`. A release from before it neither reads nor
 clears the mark, so it does not matter while that release runs; to clear it by hand:
 `docker compose -p farm-a --env-file farm-a.env exec -T db psql -U farmcore -d postgres -c
-'ALTER DATABASE farmcore RESET farmcore.upgrade'`. If the message does not say the schema is
-still at the old revision, restore as below.
+'ALTER DATABASE farmcore RESET farmcore.upgrade'`. If the message says to restore instead (the
+schema moved before the failure), restore as below.
 
 **The new release migrated but does not work** (`up --wait` fails, `/health` is not `ok`), or
 you are not sure what state the database is in: restore the pre-upgrade bundle with the
@@ -500,23 +505,27 @@ previous release restores the bundle the new one wrote just before migrating. Th
 database is kept aside under another name, so nothing is lost:
 
 ```sh
-dc="docker compose -p farm-a --env-file farm-a.env"
-$dc stop app bot backup
-# Previous image again: `git checkout <previous tag> && $dc build`, or set FARMCORE_IMAGE in
-# farm-a.env back to the previous tag.
-$dc run --rm --no-deps --entrypoint ls backup -l /backups    # the pre-upgrade-*.age bundles
+dc() { docker compose -p farm-a --env-file farm-a.env "$@"; }   # works in sh, bash and zsh
+dc stop app bot backup
+# The previous image again: `git checkout` the previous release's tag, then `dc build`; or,
+# with FARMCORE_IMAGE, set it back to the previous tag in farm-a.env (no build).
+dc run --rm --no-deps --entrypoint ls backup -l /backups    # the pre-upgrade-*.age bundles
 mkdir -m 700 ~/farmcore-restore
-$dc cp backup:/backups/pre-upgrade-20261021T101500Z.age ~/farmcore-restore/bundle.age
+# The newest pre-upgrade bundle: names sort by UTC time, so the last one listed.
+dc cp backup:/backups/pre-upgrade-20261021T101500Z.age ~/farmcore-restore/bundle.age
 cp ~/keys/farmcore-backup.key ~/farmcore-restore/owner.key
-$dc exec -T db psql -U farmcore -d postgres -v ON_ERROR_STOP=1 \
+dc exec -T db psql -U farmcore -d postgres -v ON_ERROR_STOP=1 \
   -c 'ALTER DATABASE farmcore RENAME TO farmcore_failed_upgrade' \
   -c 'CREATE DATABASE farmcore TEMPLATE template_postgis'
-$dc run --rm --no-deps --user "$(id -u):$(id -g)" -v ~/farmcore-restore:/restore:ro migrate \
+dc run --rm --no-deps --user "$(id -u):$(id -g)" -v ~/farmcore-restore:/restore:ro migrate \
   farmcore restore /restore/bundle.age --identity /restore/owner.key
 rm -P ~/farmcore-restore/owner.key 2>/dev/null || shred -u ~/farmcore-restore/owner.key
-$dc up -d --wait --wait-timeout 180
-$dc run --rm --no-deps migrate farmcore effects enable
+dc up -d --wait --wait-timeout 180
+dc run --rm --no-deps migrate farmcore effects enable
 ```
+
+Pick the newest `pre-upgrade-*.age`: it is the one this upgrade wrote just before migrating.
+An older one brings back an older state of the data.
 
 `cp` needs the `backup` container to exist (stopped is fine). The restored
 installation is what the bundle held at the upgrade, with what a restore always changes (see
