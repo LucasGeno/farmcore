@@ -547,7 +547,6 @@ def test_restore_says_what_age_reports_not_its_footer(refusal, tmp_path):
 @pytest.mark.parametrize(
     ("change", "message"),
     [
-        ({"release": "999.0.0"}, "newer FarmCore release"),
         ({"release": "1.0; DROP"}, "manifest field 'release' is missing or invalid"),
         ({"modules": {"fc_unknown_app": {"version": "1.0.0", "state": "installed"}}},
          "fc_unknown_app"),

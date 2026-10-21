@@ -325,10 +325,12 @@ docker compose -p farm-c --env-file farm-c.env up -d
 read is named, with the `--user` hint), decrypts the whole bundle into a private temporary
 directory and checks it: the key, every encrypted chunk (a modified or truncated file fails),
 exactly two plain files no larger than the archive (no links, devices or sparse files), the
-manifest's fields, the dump's size and SHA-256, the release (a bundle from a newer release,
-or with an app this release does not ship, is refused: restore it with that release or later),
-and that the schema revision inside the dump is the one the manifest names and is known to
-this release. Only then does it touch the server: it checks that it runs as the superuser and
+manifest's fields, the dump's size and SHA-256, the apps (a bundle with an app this release
+does not ship is refused), and that the schema revision inside the dump is the one the
+manifest names and is known to this release. Compatibility is the schema, not the release
+number: a release restores any bundle whose schema revision it knows, so the previous release
+restores the bundle `farmcore upgrade` wrote just before migrating; a bundle at a revision this
+release does not know is refused (restore it with that release or a later one). Only then does it touch the server: it checks that it runs as the superuser and
 that the target holds no data, builds the copy in a staging database closed to every other
 role with external effects already paused, creates the schema from this release's migrations,
 refuses any dump entry that schema lacks, loads the rows as the temporary loader role, adds

@@ -62,6 +62,7 @@ caught_signals, cli, dbs, owner_key, source = (
 pg_tools = br.pg_tools
 
 RELEASE = version("farmcore")
+NEXT_RELEASE = "99.0.0"  # what a newer image calls itself
 ORIGINAL = startup.MIGRATIONS
 GATE = 4242  # an advisory lock a test holds to stop a test revision mid-migration
 
@@ -439,8 +440,13 @@ def test_after_a_failed_post_start_check_reverting_the_release_is_refused_and_re
     key, recipient = owner_key
     before = semantic(dbs, source["name"])
     release(PROBE)
-    assert upgrade(cli, source, recipient, backups).exit_code == 0
+    import farmcore.core.commands.backup as backup_module
+
+    with pytest.MonkeyPatch.context() as newer:  # a real release bump: the new version number
+        newer.setattr(backup_module, "version", lambda _: NEXT_RELEASE)
+        assert upgrade(cli, source, recipient, backups).exit_code == 0
     [bundle] = bundles(backups)
+    assert json.loads(members(decrypt(bundle, key))["manifest.json"])["release"] == NEXT_RELEASE
 
     release()  # the previous image again
     reverted = cli("migrate", env=source_env(source))

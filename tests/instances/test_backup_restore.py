@@ -750,6 +750,25 @@ def test_restore_refuses_a_bundle_from_an_incompatible_release(refusal, source, 
     assert "incompatible release" in run(newer).output
 
 
+def test_a_bundle_from_a_newer_release_whose_schema_this_release_knows_restores(
+    source, dbs, cli, owner_key, tmp_path
+):
+    """Compatibility is the schema, not the release number: an upgrade's pre-upgrade bundle is
+    written by the new release, and the previous release must be able to restore it."""
+    key, recipient = owner_key
+    good = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    files = edit_manifest(release="999.0.0")(members(decrypt(good, key)))
+    bundle = encrypt(repack(files), recipient, tmp_path / "newer-release.age")
+    target = dbs.create()
+    env = dbs.installation(target)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    assert result.exit_code == 0, result.output
+    for label, sql in SEMANTIC.items():
+        assert dbs.query(target, sql) == dbs.query(source["name"], sql), label
+
+
 def test_restore_never_replaces_an_installation_that_holds_data(
     source, dbs, cli, owner_key, tmp_path
 ):
