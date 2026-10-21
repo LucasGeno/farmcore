@@ -141,6 +141,7 @@ def test_geojson_on_the_real_parcels_has_p1_to_p10(client, session, data_dir, se
     )
     set_replay(session, NOW, settings)
     p3 = session.scalar(select(Parcel).where(Parcel.alias == "P3"))
+    complete_station(session, p3.farm_id, NOW)
     _advice(session, p3, NOW - timedelta(hours=1), "spray")
     _advice(session, p3, NOW + timedelta(days=1), "protected")  # future of the clock
     session.commit()
