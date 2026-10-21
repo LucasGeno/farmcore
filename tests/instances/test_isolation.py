@@ -629,7 +629,8 @@ def test_a_failing_second_step_leaves_the_runtime_role_able_to_connect(
 
 
 def _waiting(pg_server, seen: list[str], done: threading.Event) -> threading.Thread:
-    """A thread noting the statement of every session waiting for a lock until `done`."""
+    """A thread noting the statement of every client session waiting for a lock until `done`
+    (not the server's own workers: autovacuum waits on `pg_database` too)."""
 
     def run() -> None:
         engine = create_engine(pg_server.url("postgres"))
@@ -639,7 +640,7 @@ def _waiting(pg_server, seen: list[str], done: threading.Event) -> threading.Thr
                     rows = conn.execute(
                         text(
                             "SELECT query FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
-                            "AND pid <> pg_backend_pid()"
+                            "AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
                         )
                     ).scalars()
                     seen.extend(rows.all())
