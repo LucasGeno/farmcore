@@ -722,6 +722,37 @@ def test_a_migrate_waiting_on_its_advisory_locks_past_the_lock_timeout_still_suc
     assert time.monotonic() - started >= 2.5  # it did wait behind the other one
 
 
+def test_a_migrate_giving_the_installation_its_id_locks_the_database_list_first(
+    install, monkeypatch
+) -> None:
+    """Setting the installation id locks this database; the runtime role's step then waits for
+    `pg_database`. Holding the first while waiting for the second could cross with a restore
+    or migrate that holds `pg_database` and waits for this database: the id is set only once
+    `pg_database` is locked."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    with create_engine(inst.owner_url).begin() as conn:
+        conn.exec_driver_sql(f'ALTER DATABASE "{inst.database}" RESET farmcore.installation_id')
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args) -> None:
+        statements.append(statement)
+
+    event.listen(Engine, "before_cursor_execute", record)
+    try:
+        _migrate(monkeypatch, _env(inst))
+    finally:
+        event.remove(Engine, "before_cursor_execute", record)
+
+    (setting,) = [i for i, s in enumerate(statements) if "SET farmcore.installation_id" in s]
+    began = max(i for i, s in enumerate(statements[:setting]) if "pg_advisory_xact_lock" in s)
+    assert migrate.LOCK_DATABASES in statements[began:setting], statements[began : setting + 1]
+
+
 def test_the_lock_timeout_ends_with_its_transaction_and_other_errors_pass_through(
     install,
 ) -> None:

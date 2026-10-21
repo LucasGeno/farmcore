@@ -40,6 +40,7 @@ def ensure_installation_id(conn: Connection) -> str:
     database = conn.dialect.identifier_preparer.quote(
         conn.execute(text("SELECT current_database()")).scalar_one()
     )
+    lock_databases(conn)  # before this database is locked by the change below
     # A UUID string is a safe literal; ALTER DATABASE takes no bind parameters.
     conn.exec_driver_sql(f"ALTER DATABASE {database} SET {INSTALLATION_SETTING} = '{new}'")
     return new
