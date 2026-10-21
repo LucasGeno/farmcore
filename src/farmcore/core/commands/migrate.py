@@ -93,6 +93,10 @@ class MigrateError(RuntimeError):
     """A refusal or failure `farmcore migrate` reports in one line (never with SQL text)."""
 
 
+class MigrationFailed(MigrateError):
+    """A migration itself failed and was rolled back; the message says where the schema is."""
+
+
 class ServerBusy(MigrateError):
     """Another restore or migrate kept `pg_database` locked for longer than `LOCK_TIMEOUT`;
     the transaction that waited changed nothing."""
@@ -519,7 +523,7 @@ def migrate_locked(conn: Connection, settings: Settings) -> str:
             conn.rollback()
         except DBAPIError:  # pragma: no cover - the connection itself was lost
             now = "unknown (the connection was lost)"
-        raise MigrateError(
+        raise MigrationFailed(
             f"migration failed: {_failure(exc)}; the schema is still at {now}"
         ) from None
     migrated = read_heads(conn)  # committed: a stop from here on leaves the schema moved

@@ -483,15 +483,18 @@ backup.
 
 ### Recovering from a failed upgrade
 
-**The migration failed** (`upgrade: migration failed: …; the schema is still at <old
-revision>`). Nothing was applied. Fix the cause or go back: set the previous image again and
+**The migration failed and nothing was applied** (`upgrade: migration failed: …; the schema
+is still at <old revision>. … nothing was applied`). Fix the cause, or go back to the previous
+release: set the previous image again (`git checkout <previous tag>`, then
+`docker compose -p farm-a --env-file farm-a.env build`; with `FARMCORE_IMAGE`, set it back to
+the previous tag in `farm-a.env` instead, no build) and
 `docker compose -p farm-a --env-file farm-a.env up -d --wait`. The installation stays marked
 failed until a `migrate` that knows the mark succeeds: the next upgrade's, or this one if the
 previous release already has `farmcore upgrade`. A release from before it neither reads nor
 clears the mark, so it does not matter while that release runs; to clear it by hand:
 `docker compose -p farm-a --env-file farm-a.env exec -T db psql -U farmcore -d postgres -c
-'ALTER DATABASE farmcore RESET farmcore.upgrade'`. If the message does not say the schema is
-still at the old revision, restore as below.
+'ALTER DATABASE farmcore RESET farmcore.upgrade'`. If the message says to restore instead (the
+schema moved before the failure), restore as below.
 
 **The new release migrated but does not work** (`up --wait` fails, `/health` is not `ok`), or
 you are not sure what state the database is in: restore the pre-upgrade bundle with the

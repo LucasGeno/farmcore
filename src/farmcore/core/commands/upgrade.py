@@ -24,11 +24,13 @@ from pathlib import Path
 
 import typer
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from farmcore import __version__
 from farmcore.core.commands.backup import BundleError, create_bundle
 from farmcore.core.commands.migrate import (
     MigrateError,
+    MigrationFailed,
     ServerBusy,
     Stopped,
     check_compatible,
@@ -95,6 +97,20 @@ def upgrade_installation(
                 "`farmcore migrate` again to finish setting up the runtime role; the "
                 "installation says failed until then"
             ) from None
+        except MigrationFailed as exc:
+            try:
+                now = read_heads(conn)
+                conn.rollback()
+            except SQLAlchemyError:  # the connection was lost: assume the schema moved
+                now = None
+            if now == before.heads:  # rolled back as a whole: the previous release still fits
+                way_back = (
+                    f"nothing was applied: fix the cause, or set the previous image again; "
+                    f"{bundle} is kept ({RECOVERY})"
+                )
+            else:
+                way_back = f"to go back, restore {bundle} ({RECOVERY})"
+            raise MigrateError(f"{exc}. The installation is marked failed; {way_back}") from None
         except MigrateError as exc:
             raise MigrateError(
                 f"{exc}. The installation is marked failed; to go back, restore {bundle} "
