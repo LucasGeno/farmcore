@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 from farmcore.apps.advisor.engine.config import AdvisorConfig
+from farmcore.apps.advisor.engine.gate import gate_start
 from farmcore.apps.advisor.engine.types import HourlyObs, RuleResult
 
 if TYPE_CHECKING:
@@ -110,21 +111,41 @@ def explain(
     """One reason for the card: the latest event's progress; every event's progress in inputs."""
     runs = [progress(past, e, config, now) for e in events if e <= now]
     latest = runs[-1] if runs else None
+    incomplete = bool(latest and latest.missing_hours)
+    start = gate_start(config) - timedelta(hours=config.downy_window_h.value)
+    available = {
+        o.ts for o in past if start < o.ts <= now and o.rr1_mm is not None and o.t_c is not None
+    }
+    history_complete = len(available) >= int((now - start) / HOUR)
     inputs = {
+        "coverage": "limited" if incomplete else "complete",
+        "event_history_coverage": "complete" if history_complete else "limited",
+        "pct_basis": "observed-hours-only" if incomplete else "complete-hours",
         "event": latest.event if latest else None,
         "pct": latest.pct if latest else None,
-        "alert_at": latest.alert_at if latest else None,
-        "symptoms_at": latest.symptoms_at if latest else None,
-        "expected_symptoms": latest.expected_symptoms if latest else None,
-        "projected": latest.projected if latest else None,
+        "alert_at": latest.alert_at if latest and not incomplete else None,
+        "symptoms_at": latest.symptoms_at if latest and not incomplete else None,
+        "expected_symptoms": latest.expected_symptoms if latest and not incomplete else None,
+        "projected": False if incomplete else (latest.projected if latest else None),
         "missing_hours": latest.missing_hours if latest else 0,
         "events": [
-            {"event": r.event, "pct": r.pct, "alert_at": r.alert_at, "symptoms_at": r.symptoms_at}
+            {
+                "event": r.event,
+                "pct": r.pct,
+                "alert_at": r.alert_at if not r.missing_hours else None,
+                "symptoms_at": r.symptoms_at if not r.missing_hours else None,
+                "missing_hours": r.missing_hours,
+                "coverage": "limited" if r.missing_hours else "complete",
+            }
             for r in runs
         ],
     }
     note = f"{NOTE}; {config.incub_table.note}"
-    reason = config.explain(RULE, THRESHOLDS, inputs, _verdict(latest), note)
+    if not history_complete:
+        note += "; incomplete event history does not establish absence of additional infections"
+    reason = config.explain(
+        RULE, THRESHOLDS, inputs, "not evaluable" if incomplete else _verdict(latest), note
+    )
     if config.incub_table.source in reason.source:
         return reason
     return replace(reason, source=f"{reason.source}; {config.incub_table.source}")

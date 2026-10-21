@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from farmcore.apps.advisor.engine.config import AdvisorConfig
-from farmcore.apps.advisor.engine.types import Disease, HourlyObs, RuleResult, Spray
+from farmcore.apps.advisor.engine.types import Disease, HourlyObs, RuleResult, Spray, floor_hour
 
 WASHOFF_KEY: dict[Disease, str] = {"downy": "washoff_copper_mm", "powdery": "washoff_sulphur_mm"}
 _COMMON = (
@@ -42,6 +42,7 @@ class Cover:
     expired: bool
     data_gap: bool
     reason: RuleResult
+    rain_required: bool = False
 
     @property
     def valid(self) -> bool:
@@ -50,10 +51,26 @@ class Cover:
 
 def rain_since(past: Sequence[HourlyObs], start: datetime, now: datetime) -> tuple[float, bool]:
     """(mm over rows with ts in (start, now], missing rows or values present)."""
-    rows = [o for o in past if start < o.ts <= now]
-    total = round(sum(o.rr1_mm for o in rows if o.rr1_mm is not None), 6)
-    expected = int((now - start) / timedelta(hours=1))
-    gap = len(rows) < expected or any(o.rr1_mm is None for o in rows)
+    by_hour: dict[datetime, set[float | None]] = {}
+    for row in past:
+        if start < row.ts <= now:
+            by_hour.setdefault(row.ts.astimezone(UTC), set()).add(row.rr1_mm)
+    # Only unambiguous readings on the expected UTC grid establish known rain.
+    # Repeated identical readings count once; conflicting/off-grid rows are gaps.
+    known = {
+        ts: next(iter(values))
+        for ts, values in by_hour.items()
+        if ts == floor_hour(ts) and len(values) == 1 and None not in values
+    }
+    total = round(sum(known.values()), 6)
+    expected = max(
+        0,
+        int(
+            (floor_hour(now.astimezone(UTC)) - floor_hour(start.astimezone(UTC)))
+            / timedelta(hours=1)
+        ),
+    )
+    gap = len(known) < expected or len(known) != len(by_hour)
     return total, gap
 
 
@@ -117,4 +134,7 @@ def latest_cover(
         "rain_data_gap": gap,
     }
     reason = config.explain(rule, names, inputs, verdict)
-    return Cover(disease, spray, until, mm, is_washed, is_expired, gap, reason)
+    rain_required = bool(holding) and not any(
+        p.product_type == "penetrant" and now < u for p, u in zip(products, untils, strict=True)
+    )
+    return Cover(disease, spray, until, mm, is_washed, is_expired, gap, reason, rain_required)

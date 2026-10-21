@@ -119,7 +119,7 @@ def gubler_thomas(past: Sequence[HourlyObs], config: AdvisorConfig, now: datetim
     while day <= end and _local_hour(day, 23, tz) <= now:
         rows = by_day.get(day, [])
         expected = int((_local_hour(day + DAY, 0, tz) - _local_hour(day, 0, tz)) / HOUR)
-        if len(rows) < expected or any(o.t_c is None for o in rows):
+        if len({o.ts for o in rows if o.t_c is not None}) < expected:
             incomplete += 1
         qualifies, hot = _day_flags(rows, config)
         if onset_day is None:
@@ -150,11 +150,12 @@ def sulphur_interval_days(index: int, config: AdvisorConfig) -> float:
 
 
 def explain(state: GTState, config: AdvisorConfig, extra: dict | None = None) -> RuleResult:
-    level = risk_level(state.index, config)
+    incomplete = state.in_period and bool(state.incomplete_days)
+    level = None if incomplete else risk_level(state.index, config)
     inputs = {
         "index": state.index,
         "risk": level,
-        "interval_days": sulphur_interval_days(state.index, config),
+        "interval_days": None if incomplete else sulphur_interval_days(state.index, config),
         "in_period": state.in_period,
         "onset_day": state.onset_day,
         "days_counted": len(state.days),
@@ -162,7 +163,11 @@ def explain(state: GTState, config: AdvisorConfig, extra: dict | None = None) ->
         "incomplete_days": state.incomplete_days,
         **(extra or {}),
     }
-    verdict = f"{level} pressure" if state.in_period else "outside powdery period"
+    verdict = (
+        ("not evaluable" if incomplete else f"{level} pressure")
+        if state.in_period
+        else "outside powdery period"
+    )
     note = "temperature-only risk phase; hourly 2 m air T, not canopy T"
     return config.explain(RULE, THRESHOLDS, inputs, verdict, note)
 
@@ -176,6 +181,7 @@ class PowderyCover:
     interval_days: float
     washed_off: bool
     expired: bool
+    rain_required: bool = False
 
     @property
     def ended(self) -> bool:
@@ -200,6 +206,18 @@ def period_cover(ctx: EvalContext, state: GTState) -> tuple[PowderyCover, RuleRe
         expired = ctx.now >= until
         cover = PowderyCover(base.spray.ts, until, interval, base.washed_off, expired)
         verdict = "washed off" if base.washed_off else ("expired" if expired else "protected")
+    cover = (
+        replace(
+            cover,
+            rain_required=not cover.ended
+            and not any(
+                p.product_type == "penetrant" and "powdery" in p.targets
+                for p in base.spray.products
+            ),
+        )
+        if base.spray is not None
+        else cover
+    )
     inputs = {**base.reason.inputs, "until": cover.until, "interval_days": interval}
     return cover, config.explain(base.reason.rule, names, inputs, verdict, note)
 
@@ -229,6 +247,10 @@ def rule(ctx: EvalContext) -> None:
     state = gubler_thomas(ctx.past, config, ctx.now)
     ctx.state["powdery"] = state
     advice.reasons.append(explain(state, config))
+    if state.in_period and state.incomplete_days:
+        advice.assessment_status = "limited"
+        advice.flags.add("data_gap")
+        return
     if not state.in_period:
         return
 
