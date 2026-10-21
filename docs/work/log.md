@@ -62,7 +62,7 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 ## 2026-10-19 — Accepted installation and module architecture
 
 - User approved independently isolated hosted/self-hosted installations and modular architecture, and requested a spec plus implementation tickets while current QA/merges continue.
-- Published the subsequent initiative under docs/work/isolated-instances-modules/: one Change Spec, a dependency index and 20 bounded tickets. Same OSS runtime/profile across hosting modes; separate customer runtime/database/files/secrets; optional hosting manager; durable tasks/outbox; module lifecycle and compatible neutral-domain migration; weather-risk and fertilization-record proof apps.
+- Published the subsequent isolated-installations initiative in this repository (since removed; see git history): one Change Spec, a dependency index and 20 bounded tickets. Same OSS runtime/profile across hosting modes; separate customer runtime/database/files/secrets; optional hosting manager; durable tasks/outbox; module lifecycle and compatible neutral-domain migration; weather-risk and fertilization-record proof apps.
 - Merchant checkout/provider selection, production provisioning/deployment, unrestricted hosted code uploads, permanent data deletion and new scientific recommendation algorithms remain out of scope. This publication does not claim runtime implementation.
 - Core/worker/module/domain changes depend on current revamp integration QA. Packaging/recovery have explicit privacy/identity prerequisites. Current PRs retain independent exact-head QA/CI and final revamp acceptance; no status in the older log is upgraded by this entry.
 - Durable accepted rationale recorded through /doc in the existing EU Agri Hackathon vault folder; ticket/task state remains solely in this repository. Domain glossary distinguishes Customer, Installation, Farm, Module profile, Planned job and Background task.
@@ -99,3 +99,21 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 - Root serialized original03/05/09 schema/policy commits into frozen migration branch e89dcef; sole chain core_0004_grant_recipients→operations_0002→review_0001. No feature routes copied. Models retain audit evidence, enforce scoped parameter ancestry and database append-only parameter history.
 - Final tier3:246passed4deselected30.23s,cov100%,lint/secrets clean; ordered4passed1.89s,Node30passed,format10files. Four actual planted faults killed/restored; independent seven public-Alembic/PostGIS/repository checks clear. First wider gate caught an uncategorized review tile; unchanged HTTP RED→one-line category fix→GREEN, independently rechecked. Full evidence/known limits in existing ticket12.
 -03/05/09 workers may consume this verified shared foundation; each retains its own HTTP/concurrency/browser/QA/CI/integration gates. Foundation not merged into integration yet. AggregatePR6 stays draft; no milestone/main/deploy claim.
+
+## 2026-10-19 — Reshaped installation and module initiative (revision 2)
+
+- Critical review of revision 1 found: hosting-platform scope (portal, control DB, provisioning state machine) ahead of any customer; a 13-deep serial graph that made fertilization wait on customer suspension; a contradiction between modules shipping migrations and a single coordinator-only chain; a hand-rolled lease/fencing queue where Postgres libraries exist; a database/file backup consistency problem that does not exist (no private bytes persist outside Postgres today: voice notes use a tempdir, ISOXML is parsed in memory).
+- Lucas asked for the initiative to be reshaped. Revision 2 records decisions D1–D7 with rejected alternatives: one Compose project per installation (shared-process multi-site and shared hosted installation rejected, revisit trigger on measured cost); private bytes in Postgres; Procrastinate-or-minimal-table spike with app-owned publication fence; transactional outbox with an `external_effects` pause; entry-point apps with per-app Alembic branches; expand–migrate–contract with `pint` units; hosting as declarative operator fleet tooling, deferred behind a demand trigger.
+- 20 tickets replaced by 18 in four independent tracks (portable, background work, neutral domain, module ecosystem) plus deferred ticket 18 (hosting). Rev1→rev2 mapping is in tickets.md. The vault architecture note still describes revision 1 and needs a `/doc` update.
+- No product implementation or test pass claimed.
+- Independent read-only review of revision 2 found 15 issues; all applied. Main ones: forecast, chat and kpi depend on advisor (ticket 14 now decouples them); the real outbound effect is `chat.push_advice`, not notifications (02 and 07 retargeted); split owner/runtime DB roles; restore fences queued tasks; Decimal-only units; explicit Alembic branch shape and a build-time bundle. Links, YAML and acyclic dependencies re-checked.
+
+## 2026-10-19 — Isolated-installation planning moved to the private vault
+
+- Lucas asked that specs and tickets stop living in this public repository. Revision 2 of the isolated-installations spec and its 18 tickets moved to private planning, which is now canonical.
+- New initiatives (farmer-first experience, compliant records, weather providers, bring your own agent, irrigation, crop models) live only in the vault.
+- The milestone 1–4 revamp planning stays here until ticket 12 closes, then moves too. This entry changes no revamp ticket status, ownership or authorization.
+
+## 2026-10-21 — Isolated-installation pointer removed
+
+- The pointer README for the isolated-installations initiative was removed; this repository keeps no planning docs for it. Shipped operator docs: [docs/self-hosting.md](../self-hosting.md).
