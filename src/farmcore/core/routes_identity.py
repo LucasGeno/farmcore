@@ -28,7 +28,7 @@ NEXT_MAX = 2048
 def return_path(value: str | None) -> str:
     """`next` when it is a path on this site (never another origin, never back to sign-in),
     else ""."""
-    if not value or len(value) > NEXT_MAX or safe_next(value) != value:
+    if not value or len(value) > NEXT_MAX or not value.isprintable() or safe_next(value) != value:
         return ""
     if value.split("?")[0] in {"/login", "/logout"}:
         return ""

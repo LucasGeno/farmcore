@@ -24,7 +24,11 @@ class TourMiddleware:
             request = Request(scope)
             if is_tour(request) and request.method not in SAFE_METHODS:
                 from farmcore.core.errors import refusal  # errors -> web -> tour
+                from farmcore.core.identity import resolve_principal
 
+                # The refusal page carries the tour banner; its exit form needs the member's
+                # CSRF nonce, so resolve the member here (privacy runs after this layer).
+                request.state.principal = resolve_principal(request)
                 await refusal(request, 403, "Tour mode is read-only.")(scope, receive, send)
                 return
         await self.app(scope, receive, send)
