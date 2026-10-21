@@ -7,10 +7,11 @@
 <ul class="mt-4 grid gap-3">
 {% for member in members %}<li class="rounded-lg border border-line bg-surface p-4">
 <p><strong>{{ member.login }}</strong> · {{ member.role }} · {{ 'Revoked' if member.revoked else 'Active' }}</p>
-{% if not member.revoked %}<form method="post" action="{{ resolved_farm_url('/farms/members/' ~ member.id ~ '/revoke') }}" class="mt-3">
+{% if not member.revoked and not is_tour %}<form method="post" action="{{ resolved_farm_url('/farms/members/' ~ member.id ~ '/revoke') }}" class="mt-3">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="min-h-[44px] rounded-lg border border-line px-4 hover:bg-ground">Revoke access</button></form>{% endif %}</li>
 {% else %}<li>No members assigned.</li>{% endfor %}
 </ul>
+{% if not is_tour %}
 <h2 class="mt-6 text-lg font-semibold">Assign or change membership</h2>
 <form method="post" action="{{ resolved_farm_url('/farms/members') }}" class="mt-3 grid max-w-xl gap-3">
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,4 +19,5 @@
 <label for="member-role">Role</label><select id="member-role" name="role" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"><option value="advisor">Advisor</option><option value="owner">Owner</option></select>
 <button class="min-h-[44px] rounded-lg bg-brand-900 px-4 text-white hover:bg-brand-700">Save membership</button>
 </form>
+{% endif %}
 {% endblock %}
