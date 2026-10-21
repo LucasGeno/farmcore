@@ -23,9 +23,11 @@ NOW = "2024-04-10 06:00"
 # The facts the model chooser may send, from the tool contract plus the "parcel" label ("P6
 # Peyrot") and the "parcels" wrapper of the per-parcel list. Literal on purpose: widening the
 # allowlist is a test change.
-TODAY_FACTS = {"parcels", "parcel", "decision", "headline", "advised"}
+# Every advice also names its assessment status and parameter version (`id`, review `status`).
+VERSION_FACTS = {"assessment_status", "config_version", "id", "status"}
+TODAY_FACTS = {"parcels", "parcel", "decision", "headline", "advised"} | VERSION_FACTS
 STATUS_FACTS = {"decision", "headline", "protected_until", "mm_since_spray", "next_window"}
-STATUS_FACTS |= {"products", "flags", "parcel"}
+STATUS_FACTS |= {"products", "flags", "parcel"} | VERSION_FACTS
 # The unknown-parcel error fact : {"error": "unknown parcel", "parcels": [...]}.
 ERROR_FACTS = {"error", "parcels"}
 

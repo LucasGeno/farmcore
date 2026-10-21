@@ -192,6 +192,12 @@ def _card(parcel_id: int) -> str:
     return service.CARD_PATH.format(id=parcel_id)
 
 
+def _version(row) -> dict:
+    """Which parameter version produced the advice, and its review status; nothing else."""
+    version = service.advice_json(row)["config_version"]
+    return {"id": version.get("id"), "status": version.get("status")}
+
+
 def today(ctx: ToolContext) -> ToolResult:
     """The farm's advice in at most three lines. A parcel without advice up to now is
     `advised: false` and "awaiting advice", never counted as nothing to spray: "Nothing to
@@ -208,7 +214,7 @@ def today(ctx: ToolContext) -> ToolResult:
                 "assessment_status": (a.props or {}).get("assessment_status", "legacy-unknown")
                 if a
                 else "unavailable",
-                "config_version": service.advice_json(a)["config_version"] if a else None,
+                "config_version": _version(a) if a else None,
                 "headline": (a.props or {}).get("headline") if a else None,
             }
             for p, a in rows
@@ -298,7 +304,7 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
     facts = {
         "parcel": label,
         "assessment_status": props.get("assessment_status", "legacy-unknown"),
-        "config_version": service.advice_json(row)["config_version"],
+        "config_version": _version(row),
         "decision": row.decision,
         "headline": props.get("headline"),
         "protected_until": _local(row.protected_until, ctx),
