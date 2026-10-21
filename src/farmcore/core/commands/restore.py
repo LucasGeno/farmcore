@@ -746,14 +746,27 @@ class Copy:
         self.created = False
         return old
 
-    def drop_old(self, old: str) -> None:
-        """Drop the empty target, renamed by the swap."""
+    def drop_old(self, old: str) -> str | None:
+        """Drop the empty target, renamed by the swap; None, or why it is left behind. The data
+        is in by now, so a failure only leaves that empty database (the caller says so).
+
+        Stop signals wait for this drop, so it waits for `pg_database` only up to
+        `LOCK_TIMEOUT`, set on this connection of its own."""
         engine = self._admin()
         try:
             with engine.connect() as conn:
+                conn.exec_driver_sql(f"SET lock_timeout = '{LOCK_TIMEOUT}'")
                 conn.exec_driver_sql(f"DROP DATABASE {_q(conn, old)} WITH (FORCE)")
+        except DBAPIError as exc:
+            quoted = '"' + old.replace('"', '""') + '"'
+            return (
+                f"the emptied database it replaced is left as {_printable(old)} "
+                f"({database_error(exc)}); drop it with DROP DATABASE {_printable(quoted)} WITH "
+                "(FORCE), connected to postgres as the owner"
+            )
         finally:
             engine.dispose()
+        return None
 
     def discard(self) -> None:
         """After a failure: no staging database and no loader role are left."""
@@ -812,7 +825,9 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                         deferred.enter_context(_signals_deferred())
                         old = copy.swap()
                         swapped = True
-                        copy.drop_old(old)
+                        left = copy.drop_old(old)
+                        if left:
+                            typer.echo(f"restore: warning: the data is in, but {left}", err=True)
                     except BaseException as exc:
                         _close_what_failed(exc)
                         copy.discard()

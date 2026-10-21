@@ -1457,6 +1457,103 @@ def test_a_restore_kept_from_the_database_list_after_the_swap_says_the_data_is_i
     assert cli("migrate", env=env).exit_code == 0
 
 
+def drop_hint(old: str) -> str:
+    return f'drop it with DROP DATABASE "{old}" WITH (FORCE), connected to postgres as the owner'
+
+
+def on_server(dbs: Databases, statement: str) -> None:
+    """A statement that runs outside a transaction (ALTER or DROP DATABASE), as the owner."""
+    with dbs.admin.connect() as conn:
+        conn.execute(text(statement))
+
+
+def test_an_emptied_target_that_cannot_be_dropped_is_named_and_migrate_still_runs(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch
+):
+    """The swap is done, so the data is in: a failed drop of the emptied target, renamed by the
+    swap, only leaves that database behind. Restore names it, says how to drop it, and
+    finishes the job."""
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    swap = restore.Copy.swap
+    olds: list[str] = []
+
+    def undroppable(copy) -> str:
+        old = swap(copy)
+        olds.append(old)  # the server refuses to drop a template database
+        on_server(dbs, f'ALTER DATABASE "{old}" IS_TEMPLATE true')
+        return old
+
+    monkeypatch.setattr(restore.Copy, "swap", undroppable)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    try:
+        assert result.exit_code == 0, result.output
+        assert (
+            "restore: warning: the data is in, but the emptied database it replaced is left as "
+            f"{olds[0]} (cannot drop a template database); {drop_hint(olds[0])}"
+        ) in result.output, result.output
+        assert f"installation {installation_id(dbs, target)}" in result.output  # migrated
+        assert dbs.query(target, SEMANTIC["records"]) == dbs.query(
+            source["name"], SEMANTIC["records"]
+        )
+        assert staging_of(dbs, target) == olds
+    finally:
+        on_server(dbs, f'ALTER DATABASE "{olds[0]}" IS_TEMPLATE false')
+        on_server(dbs, f'DROP DATABASE "{olds[0]}"')
+
+
+def test_a_stop_while_the_emptied_target_waits_to_be_dropped_ends_after_the_lock_timeout(
+    source, dbs, cli, owner_key, tmp_path, monkeypatch, short_lock_timeout,
+    database_list_locker, caught_signals,
+):  # fmt: skip
+    """The drop runs where stop signals wait for it, so it waits for `pg_database` only up to
+    the lock timeout: held by another restore or migrate, a stop never outlasts `docker
+    compose stop`'s grace (the list is held here for 8 s)."""
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    swap = restore.Copy.swap
+    olds: list[str] = []
+    stopped_at: list[float] = []
+
+    def then_busy_and_stopped(copy) -> str:
+        olds.append(swap(copy))
+        database_list_locker.lock()
+        stopped_at.append(time.monotonic())
+        os.kill(os.getpid(), signal.SIGTERM)
+        return olds[0]
+
+    monkeypatch.setattr(restore.Copy, "swap", then_busy_and_stopped)
+
+    result = cli("restore", str(bundle), "--identity", str(key), env=env)
+
+    took = time.monotonic() - stopped_at[0]
+    database_list_locker.unlock()
+    assert result.exit_code == 1
+    assert took < 5, f"the stop took {took:.1f} s"
+    assert (
+        f"the emptied database it replaced is left as {olds[0]} (canceling statement due to "
+        f"lock timeout); {drop_hint(olds[0])}"
+    ) in result.output, result.output
+    assert (
+        "stopped by SIGTERM after the copy was swapped in: the data is in, paused; run migrate "
+        "to finish"
+    ) in result.output
+    assert dbs.query(target, SEMANTIC["records"]) == dbs.query(source["name"], SEMANTIC["records"])
+    assert caught_signals == []
+    on_server(dbs, f'DROP DATABASE "{olds[0]}"')
+    assert cli("migrate", env=env).exit_code == 0
+
+
 def test_restores_into_targets_with_a_common_prefix_never_meet(
     source, dbs, cli, owner_key, tmp_path, private_tmp
 ):
