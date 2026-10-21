@@ -60,7 +60,13 @@ def _scopes(session) -> set[tuple[str, str]]:
 def test_manifest_declares_the_operations_app():
     assert MANIFEST.name == "operations"
     assert MANIFEST.depends == ("core", "fields")
-    assert set(MANIFEST.scopes) == {"logs:read", "logs:write", "register:read", "fields:read"}
+    assert set(MANIFEST.scopes) == {
+        "logs:read",
+        "logs:write",
+        "register:read",
+        "fields:read",
+        "corrections:read",
+    }
     assert MANIFEST.nav == ("Diary", "/operations/")
     assert MANIFEST.seed == "farmcore.apps.operations.seed:seed"
 

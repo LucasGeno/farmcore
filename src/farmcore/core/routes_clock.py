@@ -27,7 +27,7 @@ INPUT_FORMAT = "%Y-%m-%dT%H:%M"
 
 
 def require_admin(request: Request) -> None:
-    """When `admin_token` is set, require it as `X-Admin-Token` header or `admin_token` cookie."""
+    """Require a configured `admin_token` as `X-Admin-Token` header or `admin_token` cookie."""
     if not is_admin(request):
         raise HTTPException(status_code=403, detail="admin token required")
 

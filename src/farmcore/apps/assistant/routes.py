@@ -95,7 +95,14 @@ def ask(
         )
     if intent.intent(q) == intent.LOG:
         return response(request, token, {"text": LOG_ELSEWHERE, "links": [], "tool": None})
-    scoped = ScopedRepository(repo.session, repo.farm_id, repo.grant, "web:assistant", "assistant")
+    scoped = ScopedRepository(
+        repo.session,
+        repo.farm_id,
+        repo.grant,
+        repo.actor if repo.private_member else "web:assistant",
+        "assistant",
+        private_member=repo.private_member,
+    )
     settings = request.app.state.settings
     ctx = ToolContext(
         scoped, get_clock(repo.session, settings).now(), ZoneInfo(settings.display_tz)
@@ -247,6 +254,7 @@ def message(
     if repo.farm_id != default_farm(repo.session, request.app.state.settings).id:
         return response(request, token, {"kind": "reply", "text": LOG_OTHER_FARM, "actions": []})
     message_id = time.time_ns() // 1000  # unique per message: the draft's idempotency key
+    _end_request_transaction(repo)
     out = chat.on_message(
         chat_deps(request.app), Incoming(chat.WEB_CHAT_ID, text, None, message_id)
     )
@@ -265,7 +273,25 @@ def _conversation_key(request: Request, repo: Repo, token: str, conversation: st
     # Grants/viewer mode and farm are part of the key, never shared across a scope change.
     if not conversation:
         return None
-    return (token, conversation, repo.farm_id, repo.grant.id, is_admin(request))
+    return (
+        token,
+        conversation,
+        repo.farm_id,
+        repo.grant.id,
+        is_admin(request),
+        repo.actor if repo.private_member else None,
+    )
+
+
+def _end_request_transaction(repo: ScopedRepository) -> None:
+    """Commit the request's transaction before the chat handlers open their own sessions.
+
+    `get_repo` takes the farm's operations advisory lock and its row lock (`FOR UPDATE`) on a
+    POST. The chat handlers write `access_log`, grants and logs on other pooled connections;
+    those writes wait for both locks, while this request waits for the handlers: an in-process
+    deadlock Postgres cannot see. The handlers take the same locks themselves when they write.
+    Reads after this run in a fresh transaction that `get_repo` commits as usual."""
+    repo.session.commit()
 
 
 @router.post("/confirm", dependencies=[Depends(require_admin)])
@@ -275,6 +301,7 @@ def confirm(
     """✅ / ❌ on a web draft; the chat app's ownership, replay and merge checks apply."""
     if "chat" not in {m.name for m in visible_manifests(request)}:
         raise HTTPException(404)
+    _end_request_transaction(repo)
     out = chat.on_callback(chat_deps(request.app), Callback(chat.WEB_CHAT_ID, action))
     token = request.cookies.get(limits.COOKIE) or ""
     return response(request, token, _web_reply(request, repo, out))
@@ -470,7 +497,14 @@ def _transcribe(request: Request, repo: ScopedRepository, audio: UploadFile) -> 
         raise HTTPException(413, "Recording too large.")
     if not data:
         raise HTTPException(422, "Empty recording.")
-    scoped = ScopedRepository(repo.session, repo.farm_id, repo.grant, "web:assistant", "assistant")
+    scoped = ScopedRepository(
+        repo.session,
+        repo.farm_id,
+        repo.grant,
+        repo.actor if repo.private_member else "web:assistant",
+        "assistant",
+        private_member=repo.private_member,
+    )
     hints = [p.name for p in parcels(scoped)] + [
         p.name for p in products_for_farm(scoped, scope="fields:read")
     ]

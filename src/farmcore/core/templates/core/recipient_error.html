@@ -1,0 +1,11 @@
+{% extends "core/public_auth.html" %}
+{% block title %}Shared access unavailable · farmcore{% endblock %}
+{% block content %}
+<section role="alert" class="rounded-lg border border-line bg-surface p-4">
+  <p class="text-sm font-semibold text-muted">{{ status_code }}</p>
+  <h1 class="mt-2 text-xl font-semibold">Shared access is unavailable</h1>
+  <p class="mt-2 text-sm text-muted">Sign in or ask the farm owner to check your access.</p>
+  <a href="/login" class="mt-4 flex min-h-[44px] items-center font-semibold text-brand-700 underline">Sign in</a>
+  <a href="/share/received" class="flex min-h-[44px] items-center font-semibold text-brand-700 underline">Back to shared access</a>
+</section>
+{% endblock %}

@@ -8,6 +8,7 @@ re-runs `advisor.evaluate` with `run_now`. The advice digest push is a manifest 
 from __future__ import annotations
 
 import logging
+from time import sleep
 
 import typer
 from sqlalchemy.orm import Session, sessionmaker
@@ -20,10 +21,13 @@ from farmcore.apps.chat.transcribe import WhisperTranscriber
 from farmcore.composition import compose_spray_weather_reader
 from farmcore.core import registry
 from farmcore.core.manifest import Manifest
+from farmcore.core.startup import EFFECTS_ENABLED, read_external_effects
 from farmcore.db import make_engine, make_session_factory
 from farmcore.settings import Settings, get_settings
 
 logger = logging.getLogger("farmcore.bot")
+# How often a paused bot looks again whether the owner enabled external effects.
+EFFECTS_RECHECK_SECONDS = 30
 # These log every request URL at INFO, and Bot API URLs carry the token.
 _URL_LOGGERS = ("httpx", "httpcore", "telegram", "apscheduler")
 
@@ -54,6 +58,23 @@ def bot_deps(
     )
 
 
+def _wait_for_effects(factory: sessionmaker[Session]) -> None:
+    """Hold off polling while external effects are paused (a restored copy, until its owner
+    enables them): a second poller on the original's token would make both fail."""
+    announced = False
+    while True:
+        with factory() as session:
+            if read_external_effects(session) == EFFECTS_ENABLED:
+                return
+        if not announced:
+            typer.echo(
+                "External effects are paused for this installation; the bot will not poll "
+                "Telegram until the owner runs `farmcore effects enable`."
+            )
+            announced = True
+        sleep(EFFECTS_RECHECK_SECONDS)
+
+
 def configure_logging() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     for name in _URL_LOGGERS:
@@ -81,6 +102,7 @@ def register(cli: typer.Typer) -> None:
             if not any(m.name == "chat" for m in manifests):
                 typer.echo("Chat is off; the bot will not start.")
                 return
+            _wait_for_effects(factory)
             sender = HttpxTelegramSender(token)
             try:
                 runtime = BotRuntime(

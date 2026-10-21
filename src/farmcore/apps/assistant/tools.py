@@ -38,6 +38,11 @@ def plan(ctx: ToolContext, busy_days: tuple[str, ...] = ()) -> ToolResult:
             if as_issued is False
             else "Forecast provenance unknown"
         )
-        lines.append(f"{provenance} · issued {view['run']['issued']}.")
+        if view["run"].get("receipt"):
+            lines.append(
+                f"{provenance} · fetched {view['run']['fetched']} · provider issue time unknown."
+            )
+        else:
+            lines.append(f"{provenance} · issued {view['run']['issued']}.")
     lines.extend(f"{d['day']}: {d['word']} — {d['reason']}" for d in view["days"][:7])
     return ToolResult({"days": days, "run": view["run"]}, "\n".join(lines), links)

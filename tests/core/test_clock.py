@@ -85,7 +85,12 @@ def _app_client(settings, session_factory, **overrides):
     app = create_app(
         settings.model_copy(update=overrides), manifests=manifests, session_factory=session_factory
     )
-    return TestClient(app)
+    return TestClient(
+        app,
+        headers={}
+        if "admin_token" in overrides
+        else {"X-Admin-Token": settings.admin_token.get_secret_value()},
+    )
 
 
 def test_get_clock_partial_shows_mode_time_input_and_presets(client) -> None:
@@ -145,6 +150,8 @@ def test_post_clock_step_requires_the_admin_token_when_set(settings, session_fac
         ok = c.post("/clock/step", data=form, headers={"X-Admin-Token": "tok-test"})
         assert ok.status_code == 200
         c.cookies.set("admin_token", "tok-test")
+        assert c.post("/clock/step", data=form).status_code == 403
+        c.headers["Origin"] = "http://testserver"
         assert c.post("/clock/step", data=form).status_code == 200
 
 

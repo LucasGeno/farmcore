@@ -25,10 +25,13 @@ from fastapi.exception_handlers import (
 from fastapi.exceptions import RequestValidationError
 from fastapi.utils import is_body_allowed_for_status_code
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from farmcore.core.access import FarmNotSeeded
-from farmcore.web import render
+from farmcore.web import is_sunlight, render, templates
+
+AUTH_PATHS = frozenset({"/login", "/admin/sign-in", "/admin/sign-out"})
+AUTH_ERROR = "Sign-in request refused. Open the sign-in form and try again."
 
 DATA_SUFFIXES = (".json", ".csv", ".geojson")
 NO_FARM = "No farm data yet. Run `farmcore seed` (or `seed --scene B`)."
@@ -78,17 +81,60 @@ def _page(request: Request, status_code: int, message: str) -> Response:
     return resp
 
 
+def _auth_error(request: Request, status: int) -> Response:
+    """Credential parsing errors never echo inputs or load the private application shell."""
+    headers = {"Cache-Control": "no-store"}
+    if not wants_html(request):
+        return JSONResponse({"detail": AUTH_ERROR}, status_code=status, headers=headers)
+    return templates.TemplateResponse(
+        request,
+        "core/auth_error.html",
+        {
+            "message": AUTH_ERROR,
+            "return_path": "/login" if request.url.path == "/login" else "/admin/sign-in",
+            "sunlight": is_sunlight(request),
+        },
+        status_code=status,
+        headers=headers,
+    )
+
+
+def _grant_context(request: Request) -> bool:
+    return request.url.path == "/share/received" or request.url.path.startswith("/share/as/")
+
+
+def _grant_error(request: Request, status: int) -> Response:
+    """Denied recipient pages reveal no grant metadata and load no private farm widgets."""
+    return templates.TemplateResponse(
+        request,
+        "core/recipient_error.html",
+        {"status_code": status, "sunlight": is_sunlight(request)},
+        status_code=status,
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> Response:
+    if request.url.path in AUTH_PATHS:
+        return _auth_error(request, exc.status_code)
     if not wants_html(request) or not is_body_allowed_for_status_code(exc.status_code):
         return await fastapi_http_exception_handler(request, exc)
-    resp = _page(request, exc.status_code, _message(exc))
+    resp = (
+        _grant_error(request, exc.status_code)
+        if _grant_context(request)
+        else _page(request, exc.status_code, _message(exc))
+    )
     resp.headers.update(exc.headers or {})
     return resp
 
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError) -> Response:
+    if request.url.path in AUTH_PATHS:
+        return _auth_error(request, 422)
     if not wants_html(request):
         return await fastapi_validation_exception_handler(request, exc)
+    if _grant_context(request):
+        return _grant_error(request, 422)
     return _page(request, 422, " ".join(_validation_line(e) for e in exc.errors()))
 
 

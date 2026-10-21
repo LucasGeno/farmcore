@@ -47,8 +47,9 @@
       <div class="col-span-2"><dt class="text-[13px] text-muted">Your low-stock number</dt><dd class="tabular-nums">{% if r.stock.low_stock is none %}Not set{% else %}{{ num(r.stock.low_stock) }} {{ unit(r.stock.unit) }}{% endif %}</dd></div>
     </dl>
 
-    {% if is_admin %}
-    <form method="post" action="{{ farm_url('/inventory/' ~ r.stock.id ~ '/low-stock') }}" class="mt-3 flex items-end gap-2">
+    {% if is_farm_owner %}
+    <form method="post" action="{{ resolved_farm_url('/inventory/' ~ r.stock.id ~ '/low-stock') }}" class="mt-3 flex items-end gap-2">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
       <label class="min-w-0 flex-1 text-[13px] text-muted">Change it ({{ unit(r.stock.unit) }})
         <input name="low_stock" inputmode="decimal" value="{{ num(r.stock.low_stock) }}" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-[15px] text-ink">
       </label>

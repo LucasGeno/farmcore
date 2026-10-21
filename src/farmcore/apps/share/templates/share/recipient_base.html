@@ -1,0 +1,14 @@
+{% extends "core/public_auth.html" %}
+{% block content %}
+<header class="mb-6 flex flex-wrap items-center justify-between gap-3 border-b border-line pb-3">
+  <a href="/share/received" class="flex min-h-[44px] items-center font-semibold text-brand-700 underline">Shared access</a>
+  {% if principal_login %}
+  <span class="break-words text-sm text-muted">{{ principal_login }}</span>
+  <form method="post" action="/logout">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="min-h-[44px] rounded-lg border border-line px-3 py-2 font-semibold">Sign out</button>
+  </form>
+  {% endif %}
+</header>
+{% block shared_content %}{% endblock %}
+{% endblock %}

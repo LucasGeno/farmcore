@@ -30,7 +30,7 @@
   </div>
 {% endcall %}
 
-{% if not is_admin %}
+{% if not is_farm_owner %}
 <details data-isoxml-panel class="mt-4 rounded-xl border border-line bg-surface p-4">
   <summary class="cursor-pointer font-semibold">Machine records (ISOXML)</summary>
   <p class="mt-2 text-sm text-muted">
@@ -46,11 +46,12 @@
     Upload the sprayer's TaskData file (<code>TASKDATA.XML</code> or its zip). A pass that matches a
     voice log becomes one record with both sources; its time and dose come from the machine.
   </p>
-  <form action="{{ farm_url('/operations/isoxml') }}" method="post" enctype="multipart/form-data"
-        hx-post="{{ farm_url('/operations/isoxml') }}" hx-encoding="multipart/form-data" hx-target="#isoxml-result" hx-swap="outerHTML"
+  <form action="{{ resolved_farm_url('/operations/isoxml') }}" method="post" enctype="multipart/form-data"
+        hx-post="{{ resolved_farm_url('/operations/isoxml') }}" hx-encoding="multipart/form-data" hx-target="#isoxml-result" hx-swap="outerHTML"
         hx-on::before-swap="if (event.detail.xhr.status === 400) { event.detail.shouldSwap = true; event.detail.isError = false; }"
         hx-on::response-error="const s = event.detail.xhr.status; const r = document.getElementById('isoxml-result'); const p = document.createElement('p'); p.className = 'rounded-xl border border-line bg-spray-soft p-3 text-sm text-spray'; p.dataset.isoxml = 'error'; let msg = s === 403 ? 'Import refused: admin token required' : 'Import failed (HTTP ' + s + ')'; if (s === 400) { const e = new DOMParser().parseFromString(event.detail.xhr.responseText, 'text/html').querySelector('[data-isoxml=error]'); const t = e ? e.textContent.replace(/\s+/g, ' ').trim() : ''; if (t) msg = t; } p.textContent = msg; r.replaceChildren(p)"
         class="mt-3 flex flex-wrap items-center gap-2">
+    {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
     <input type="file" name="file" accept=".xml,.zip" required class="text-sm file:mr-3 file:min-h-[44px] file:cursor-pointer file:rounded-lg file:border file:border-line file:bg-surface file:px-4 file:py-2 file:font-semibold file:text-ink">
     <button type="submit" class="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-lg bg-brand-900 px-4 text-[15px] font-semibold text-white transition-colors hover:bg-brand-700">Import</button>
   </form>

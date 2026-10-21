@@ -302,7 +302,8 @@ def test_popover_wording_and_admin_demo_link(demo_client):
     assert message in admin.text and 'href="/demo/"' in admin.text
     demo_client.cookies.clear()
     anonymous = demo_client.get("/clock")
-    assert message in anonymous.text and 'href="/demo/"' not in anonymous.text
+    assert anonymous.status_code == 403
+    assert message not in anonymous.text and 'href="/demo/"' not in anonymous.text
 
 
 def test_presets_step_and_back_to_replay_record_activity(demo_client, session, settings):
@@ -438,7 +439,10 @@ def test_legacy_clock_step_invalidates_demo_confirmation(demo_client, session, s
         "generation": generation,
         "confirm": "yes",
     }
-    assert demo_client.post("/clock/step", data={"to": "2024-04-10T06:00"}).status_code == 200
+    assert (
+        demo_client.post("/clock/step", data={"to": "2024-04-10T06:00"}, headers=ORIGIN).status_code
+        == 200
+    )
     response = demo_client.post("/demo/apply", data=form, headers=ORIGIN, follow_redirects=False)
     assert response.status_code == 409
 
@@ -472,11 +476,21 @@ def test_scoped_demo_jobs_do_not_suppress_the_next_global_step(demo_client, sess
     session.expire_all()
     assert session.get(ClockState, 1).job_runs["last_run"] == previous_global
     for _ in range(2):
-        assert demo_client.post("/clock/step", data={"to": "2024-04-10T06:00"}).status_code == 200
+        assert (
+            demo_client.post(
+                "/clock/step", data={"to": "2024-04-10T06:00"}, headers=ORIGIN
+            ).status_code
+            == 200
+        )
         assert len([c for c in fake_jobs.CALLS if c[0] == "record"]) == 2
     # A subsequent genuinely global evaluation must also reconcile the scoped schedule.
     for _ in range(2):
-        assert demo_client.post("/clock/step", data={"to": "2024-04-10T07:00"}).status_code == 200
+        assert (
+            demo_client.post(
+                "/clock/step", data={"to": "2024-04-10T07:00"}, headers=ORIGIN
+            ).status_code
+            == 200
+        )
         assert len([c for c in fake_jobs.CALLS if c[0] == "record"]) == 3
 
 
@@ -554,7 +568,9 @@ def test_reset_then_legacy_step_revisits_spray_day_without_touching_other_farm(
             def advance():
                 if entrypoint == "web":
                     assert (
-                        client.post("/clock/step", data={"to": "2024-04-10T06:00"}).status_code
+                        client.post(
+                            "/clock/step", data={"to": "2024-04-10T06:00"}, headers=ORIGIN
+                        ).status_code
                         == 200
                     )
                 else:

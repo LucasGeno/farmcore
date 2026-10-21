@@ -2,7 +2,7 @@
 a cookie.
 
 - `GET /admin/sign-in`: a POST-only form with one password field (autocomplete off). It says
-  when no `admin_token` is configured (development: everyone is admin already) and when tour
+  when no `admin_token` is configured (private access stays closed) and when tour
   mode disables it. No nav entry links here: the administrator bookmarks it.
 - `POST /admin/sign-in`: same-origin only (`routes_demo.same_origin`); refused in tour mode (the
   tour middleware already refuses every non-GET); `hmac.compare_digest` against
@@ -135,6 +135,6 @@ async def sign_in(request: Request, token: Annotated[str, Form(max_length=512)] 
 
 @router.post("/admin/sign-out", dependencies=[Depends(same_origin)])
 def sign_out(request: Request) -> RedirectResponse:
-    response = RedirectResponse("/", status_code=303)
+    response = RedirectResponse("/admin/sign-in", status_code=303)
     response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="strict")
     return response

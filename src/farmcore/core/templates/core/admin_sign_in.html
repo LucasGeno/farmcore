@@ -1,4 +1,4 @@
-{% extends "core/base.html" %}
+{% extends "core/public_auth.html" %}
 {% block title %}Admin sign-in · farmcore{% endblock %}
 {% block content %}
 <div class="mx-auto max-w-xl">
@@ -6,11 +6,11 @@
   {% if tour %}
   <p class="mt-3 text-[15px] text-muted">Sign-in is disabled in tour mode.</p>
   {% elif not configured %}
-  <p class="mt-3 text-[15px] text-muted">No admin token is configured on this server (development): everyone is admin already.</p>
+  <p class="mt-3 text-[15px] text-muted">No admin token is configured. Private farm access is closed; configure ADMIN_TOKEN locally.</p>
   {% elif signed_in %}
   <p class="mt-3 text-[15px] text-muted">You are signed in as admin.</p>
   <div class="mt-4 flex flex-wrap gap-2">
-    <a href="/demo/" class="inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 text-[15px] font-semibold text-white">Demo controls</a>
+    <a href="/demo/" class="inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 text-[15px] font-semibold" style="color: var(--surface)">Demo controls</a>
     <form method="post" action="/admin/sign-out"><button type="submit" class="min-h-[44px] rounded-lg border border-line bg-surface px-4 text-[15px] font-semibold text-ink hover:bg-stone-50">Sign out</button></form>
   </div>
   {% else %}
@@ -19,7 +19,7 @@
   <form method="post" action="/admin/sign-in" autocomplete="off" class="mt-4 grid gap-3">
     <label for="admin-token" class="font-semibold">Admin token</label>
     <input id="admin-token" name="token" type="password" autocomplete="off" required maxlength="512" class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-ink">
-    <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white">Sign in</button>
+    <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold" style="color: var(--surface)">Sign in</button>
   </form>
   {% endif %}
   {% if error and (tour or not configured or signed_in) %}<p role="alert" class="mt-4 text-[15px] text-spray">{{ error }}</p>{% endif %}

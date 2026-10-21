@@ -256,6 +256,9 @@ class DataGrant(Base):
     id: Mapped[int] = _pk()
     farm_id: Mapped[int] = _fk("farm.id")
     grantee: Mapped[str] = mapped_column(Text)
+    recipient_identity_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("local_identity.id"), nullable=True, index=True
+    )
     scopes: Mapped[list[str]] = mapped_column(ARRAY(Text))
     purpose: Mapped[str] = mapped_column(Text)
     valid_from: Mapped[datetime] = _now()

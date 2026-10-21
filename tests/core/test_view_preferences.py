@@ -45,7 +45,9 @@ def test_field_expert_and_sunlight_are_native_independent_controls(client, exper
 
 def test_changing_view_and_sunlight_preserves_context_and_authority(settings, session_factory):
     with TestClient(_app(settings, session_factory)) as browser:
-        target = "/apps?farm=2&return_to=parcel&parcel_id=7"
+        target = (
+            f"/apps?farm={browser.app.state.settings.demo_farm_ids[0]}&return_to=parcel&parcel_id=7"
+        )
         for pref, on in [("sunlight", 1), ("expert", 1), ("expert", 0), ("sunlight", 0)]:
             response = browser.get(
                 f"/prefs/{pref}", params={"on": on, "next": target}, follow_redirects=False

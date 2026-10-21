@@ -1,6 +1,6 @@
-{% extends "core/base.html" %}
+{% extends "share/recipient_base.html" %}
 {% block title %}Viewing as {{ grant.grantee }} · farmcore{% endblock %}
-{% block content %}
+{% block shared_content %}
 <section class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
   <p>
     You are viewing as <strong>{{ grant.grantee }}</strong> — grant #{{ grant.id }}:
@@ -43,6 +43,13 @@
   {% endif %}
 </section>
 
+{% if 'advice:read' in grant.scopes|map(attribute='scope')|list %}
+<section class="mt-6 rounded-lg border border-line bg-surface p-4">
+  <h2 class="text-lg font-semibold">Stored advice</h2>
+  <p class="mt-2 text-sm text-muted">Current inputs are not authorized by advice consent alone. Stored evaluations do not assert field accuracy.</p>
+  <a href="/share/as/{{ grant.id }}/advice.json" class="mt-2 flex min-h-[44px] items-center font-semibold text-brand-700 underline">Download stored advice JSON</a>
+</section>
+{% endif %}
 {% if probes %}
 <section class="mt-6 grid gap-3 sm:grid-cols-2">
   {% for probe in probes %}

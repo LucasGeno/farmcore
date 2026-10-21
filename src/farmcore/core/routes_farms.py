@@ -18,19 +18,23 @@ from urllib.parse import parse_qsl, urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from farmcore.core.access import (
     FARM_COOKIE,
     FarmNotSeeded,
+    authorize_farm_read,
     owned_farms,
     selectable_farm,
     selected_farm,
 )
+from farmcore.core.identity import principal_for
+from farmcore.core.models.canonical import Farm
 from farmcore.core.navigation import farm_switch_parent
 from farmcore.core.urls import with_farm
 from farmcore.db import get_session
-from farmcore.web import render
+from farmcore.web import operator_authenticated, render
 
 router = APIRouter()
 
@@ -60,7 +64,18 @@ def _current_path(request: Request) -> str:
 def switcher(
     request: Request, slot: str = "header", session: Session = Depends(get_session)
 ) -> HTMLResponse:
-    farms = owned_farms(session)
+    principal = principal_for(request)
+    farms = (
+        list(
+            session.scalars(
+                select(Farm).where(Farm.id.in_(principal.memberships)).order_by(Farm.id)
+            )
+        )
+        if principal and not operator_authenticated(request)
+        else owned_farms(session)
+    )
+    if not principal and not operator_authenticated(request):
+        farms = [f for f in farms if f.id in request.app.state.settings.demo_farm_ids]
     try:
         selected_id = selected_farm(request, session, request.app.state.settings).id
     except FarmNotSeeded:
@@ -80,9 +95,22 @@ def switcher(
 def select_farm(
     request: Request, farm: str, next: str | None = None, session: Session = Depends(get_session)
 ) -> RedirectResponse:
-    chosen = selectable_farm(session, farm)
+    principal = principal_for(request)
+    if principal and not operator_authenticated(request):
+        try:
+            farm_id = int(farm)
+        except ValueError:
+            raise HTTPException(403, "Farm access denied.") from None
+        if farm_id not in principal.memberships:
+            # PrivacyMiddleware already denies every nonempty foreign selector; defense
+            # for a future caller that mounts this router without the application boundary.
+            raise HTTPException(403, "Farm access denied.")  # pragma: no cover
+        chosen = session.get(Farm, farm_id)
+    else:
+        chosen = selectable_farm(session, farm)
     if chosen is None:
         raise HTTPException(status_code=404, detail="farm not found")
+    authorize_farm_read(request, chosen.id, request.app.state.settings)
     target = safe_next(next)
     if parent := farm_switch_parent(target):
         target = with_farm(parent, chosen.id)

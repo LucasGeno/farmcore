@@ -66,7 +66,11 @@ def run_info(run):
         "name": "the ECMWF forecast"
         if run.props.get("model") == sources.SINGLE_RUNS_MODEL
         else f"the forecast ({run.label})",
-        "issued": utc_text(run.issued_at),
+        "issued": None if run.props.get("issued_at_kind") == "receipt" else utc_text(run.issued_at),
+        "fetched": utc_text(run.available_at)
+        if run.props.get("issued_at_kind") == "receipt"
+        else None,
+        "receipt": run.props.get("issued_at_kind") == "receipt",
         "available": utc_text(run.available_at),
         "label": run.label,
         "as_issued": run.as_issued,
@@ -212,6 +216,7 @@ def plan_days(
         "display_tz": tz,
         "days": days,
         "run": run_info(run),
+        "freshness": store.freshness(repo, now),
         "band": f"{band_start:02d}:00–{band_end:02d}:00",
         "unavailable": unavailable,
         "undated": undated,

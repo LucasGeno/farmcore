@@ -240,6 +240,7 @@ def home_weather(request: Request, repo: Repo) -> HTMLResponse:
         "forecast/_home_weather.html",
         days=days,
         run=run,
+        freshness=store.freshness(repo, now),
         issued=_utc_text(run.issued_at) if run else None,
         available=_utc_text(run.available_at) if run else None,
     )

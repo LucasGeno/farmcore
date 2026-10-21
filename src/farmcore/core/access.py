@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import Select, select
+from sqlalchemy import Select, or_, select
 from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
 
@@ -37,6 +37,7 @@ from farmcore.core.models.canonical import (
     AccessLog,
     Asset,
     DataGrant,
+    Event,
     Farm,
     Log,
     LogParcel,
@@ -55,10 +56,15 @@ SCOPES = frozenset(
         "stations:read",
         "logs:read",
         "logs:write",
+        "corrections:read",
         "advice:read",
+        "parameters:read",
         "register:read",
         "audit:read",
     }
+)
+GRANT_READ_SCOPES = frozenset(
+    {"fields:read", "stations:read", "logs:read", "register:read", "advice:read"}
 )
 ALL_SCOPES = "*"
 OWNER = "owner"
@@ -78,6 +84,7 @@ _ANY = SCOPES
 _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
 # Which scopes may read which resource (table name). Unlisted tables accept any known scope.
 RESOURCE_SCOPES: dict[str, frozenset[str]] = {
+    "operation_correction": frozenset({"corrections:read"}),
     "farm": _ANY,
     "product": _ANY,
     "source": _ANY,
@@ -90,6 +97,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "log_source": _LOG_READS,
     "event": frozenset({"logs:read", "advice:read"}),
     "advice": frozenset({"advice:read"}),
+    "parameter_version": frozenset({"parameters:read"}),
+    "parameter_review": frozenset({"parameters:read"}),
+    "parameter_activation": frozenset({"parameters:read"}),
     "llm_audit": frozenset({"audit:read"}),
     "access_log": frozenset({"audit:read"}),
     "data_grant": frozenset({"audit:read"}),
@@ -106,17 +116,51 @@ class FarmNotSeeded(LookupError):
 
 class ScopedRepository:
     def __init__(
-        self, session: Session, farm_id: int, grant: DataGrant, actor: str, purpose: str
+        self,
+        session: Session,
+        farm_id: int,
+        grant: DataGrant,
+        actor: str,
+        purpose: str,
+        *,
+        private_member: bool = False,
+        grant_view: bool = False,
     ) -> None:
         self.session = session
         self.farm_id = farm_id
         self.grant = grant
         self.actor = actor
         self.purpose = purpose
+        self.private_member = private_member
+        self.grant_view = grant_view
 
     def check(self, scope: str, resource: str | None = None) -> None:
         """Raise `ScopeDenied` unless the grant allows `scope` on this farm now and `scope`
         covers `resource`."""
+        if self.grant_view and (
+            not self.grant.scopes
+            or not set(self.grant.scopes) <= GRANT_READ_SCOPES
+            or scope not in GRANT_READ_SCOPES
+            or (
+                resource is not None
+                and resource
+                not in {
+                    "farm",
+                    "parcel",
+                    "product",
+                    "source",
+                    "asset",
+                    "observation",
+                    "log",
+                    "quantity",
+                    "log_parcel",
+                    "log_source",
+                    "ext_id",
+                    "advice",
+                }
+            )
+        ):
+            raise ScopeDenied("This resource is not available through ordinary grants.")
         if scope not in SCOPES:
             raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
         if resource is not None and scope not in RESOURCE_SCOPES.get(resource, _ANY):
@@ -178,6 +222,14 @@ class ScopedRepository:
 
     def _scoped[M: Base](self, model: type[M]) -> Select[tuple[M]]:
         stmt = select(model)
+        if model is Event and self.private_member:
+            stmt = stmt.where(
+                or_(
+                    Event.kind != "log.created",
+                    Event.payload["status"].as_string().is_distinct_from("pending"),
+                ),
+                Event.kind != "log.cancelled",
+            )
         if model is Farm:
             return stmt.where(Farm.id == self.farm_id)
         if "farm_id" in model.__table__.c:
@@ -285,12 +337,60 @@ def selected_farm(request: Request, session: Session, settings: Settings) -> Far
     """The request's farm: `?farm=<id>`, else cookie `farmcore_farm`, else the default farm.
     An id that is not a farm with a live owner grant falls back to the default farm. Only web
     routes use it (`get_repo`); jobs, chat and the bot keep `default_farm`."""
+    from farmcore.core.identity import principal_for
+    from farmcore.web import operator_authenticated
+
+    principal = principal_for(request)
+    if principal is not None and not operator_authenticated(request):
+        for value in (request.query_params.get(FARM_PARAM), request.cookies.get(FARM_COOKIE)):
+            if value:
+                try:
+                    farm_id = int(value)
+                except ValueError:
+                    raise HTTPException(403, "Farm access denied.") from None
+                if farm_id not in principal.memberships:
+                    raise HTTPException(403, "Farm access denied.")
+                farm = session.get(Farm, farm_id)
+                if farm is None:
+                    raise HTTPException(403, "Farm access denied.")
+                return farm
+        if not principal.memberships:
+            raise HTTPException(403, "Farm access denied.")
+        farm = session.get(Farm, min(principal.memberships))
+        if farm is None:
+            raise HTTPException(403, "Farm access denied.")
+        return farm
+
     for value in (request.query_params.get(FARM_PARAM), request.cookies.get(FARM_COOKIE)):
         if value:
+            if not operator_authenticated(request):
+                try:
+                    farm_id = int(value)
+                except ValueError:
+                    raise HTTPException(
+                        status_code=403, detail="Authentication required."
+                    ) from None
+                authorize_farm_read(request, farm_id, settings)
             farm = selectable_farm(session, value)
             if farm is not None:
+                authorize_farm_read(request, farm.id, settings)
                 return farm
-    return default_farm(session, settings)
+    farm = default_farm(session, settings)
+    authorize_farm_read(request, farm.id, settings)
+    return farm
+
+
+def authorize_farm_read(request: Request, farm_id: int, settings: Settings) -> None:
+    from farmcore.core.identity import principal_for
+    from farmcore.web import operator_authenticated
+
+    principal = principal_for(request)
+    if principal is not None and farm_id in principal.memberships:
+        return
+    if not operator_authenticated(request) and (
+        principal is not None or not settings.demo_mode or farm_id not in settings.demo_farm_ids
+    ):
+        raise HTTPException(status_code=403, detail="Authentication required.")
 
 
 def get_repo(
@@ -306,7 +406,27 @@ def get_repo(
     except FarmNotSeeded as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     request.state.selected_farm_id = farm.id
-    repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), OWNER, "web")
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        from farmcore.core.logs import lock_farm
+
+        # Match canonical operation ordering: advisory lock, then farm row lock.
+        lock_farm(session, farm.id)
+        # Lock before owner-grant/audit inserts take farm foreign-key KEY SHARE locks.
+        # Otherwise concurrent first writes can deadlock upgrading those locks.
+        session.execute(select(Farm.id).where(Farm.id == farm.id).with_for_update())
+    from farmcore.core.identity import principal_for
+    from farmcore.web import operator_authenticated
+
+    principal = principal_for(request)
+    actor = f"user:{principal.identity_id}" if principal else OWNER
+    repo = ScopedRepository(
+        session,
+        farm.id,
+        ensure_owner_grant(session, farm),
+        actor,
+        "web",
+        private_member=bool(principal and not operator_authenticated(request)),
+    )
     try:
         yield repo
     except BaseException:
@@ -326,3 +446,33 @@ def repo_for_job(session: Session, farm_id: int, job_name: str) -> ScopedReposit
 
 
 Repo = Annotated[ScopedRepository, Depends(get_repo, scope="function")]
+
+
+def require_farm_owner(request: Request, repo: Repo) -> None:
+    """Farm writes require a current explicit owner membership, or installation operator."""
+    from farmcore.core.identity import principal_for
+    from farmcore.core.models.identity import FarmMembership, LocalIdentity
+    from farmcore.core.tour import is_tour
+    from farmcore.web import is_admin
+
+    if is_admin(request):
+        return
+    principal = principal_for(request)
+    if is_tour(request) or principal is None:
+        raise HTTPException(403, "Farm owner required.")
+    # Serialize with membership edits, then re-read authority in the write transaction.
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        repo.session.execute(select(Farm.id).where(Farm.id == repo.farm_id).with_for_update())
+    active = repo.session.scalar(
+        select(FarmMembership.id)
+        .join(LocalIdentity)
+        .where(
+            FarmMembership.farm_id == repo.farm_id,
+            FarmMembership.identity_id == principal.identity_id,
+            FarmMembership.role == "owner",
+            FarmMembership.revoked_at.is_(None),
+            LocalIdentity.disabled_at.is_(None),
+        )
+    )
+    if active is None:
+        raise HTTPException(403, "Farm owner required.")

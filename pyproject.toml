@@ -33,7 +33,11 @@ Issues = "https://github.com/LucasGeno/farmcore/issues"
 farmcore = "farmcore.cli:main"
 
 [dependency-groups]
-dev = ["pytest", "ruff"]
+dev = [
+    "hypothesis>=6.170.1",
+    "pytest",
+    "ruff",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -43,8 +47,9 @@ build-backend = "hatchling.build"
 packages = ["src/farmcore"]
 
 [tool.coverage.run]
-# Measure product code. Optional data-fixture test bodies are not product gaps.
-source = ["farmcore"]
+# Measure product code, including Alembic standalone revisions loaded by path.
+# Optional data-fixture test bodies are not product gaps.
+source = ["src/farmcore"]
 
 [tool.ruff]
 line-length = 100

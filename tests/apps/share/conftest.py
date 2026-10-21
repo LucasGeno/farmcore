@@ -122,12 +122,21 @@ def spray(session, demo) -> Callable[..., Log]:
 
 
 @pytest.fixture
-def make_client(settings, session_factory) -> Iterator[Callable[..., TestClient]]:
+def make_client(
+    settings, session_factory, demo, grantee_identity
+) -> Iterator[Callable[..., TestClient]]:
     """`make_client(admin=True|False)`: the real app with an admin token configured; the admin
-    client sends it as a cookie, the anonymous one sends nothing."""
+    client sends it as a cookie. Anonymous reads expose only the designated synthetic
+    demo farm; private-mode denial is covered separately in test_private_access."""
     clients: list[TestClient] = []
     app = create_app(
-        settings.model_copy(update={"admin_token": SecretStr(TOKEN)}),
+        settings.model_copy(
+            update={
+                "admin_token": SecretStr(TOKEN),
+                "demo_mode": True,
+                "demo_farm_ids": [demo.farm.id],
+            }
+        ),
         session_factory=session_factory,
     )
 
@@ -136,6 +145,7 @@ def make_client(settings, session_factory) -> Iterator[Callable[..., TestClient]
         c.__enter__()
         if admin:
             c.cookies.set("admin_token", TOKEN)
+            c.headers["Origin"] = "http://testserver"
         clients.append(c)
         return c
 
@@ -152,3 +162,45 @@ def admin(make_client) -> TestClient:
 @pytest.fixture
 def anonymous(make_client) -> TestClient:
     return make_client(admin=False)
+
+
+@pytest.fixture(scope="session")
+def share_password_hash():
+    from farmcore.core.identity import hash_password
+
+    return hash_password("synthetic-share-recipient-password")  # gauntlet:allow-secret synthetic
+
+
+@pytest.fixture
+def grantee_identity(session, share_password_hash):
+    from farmcore.core.models.identity import LocalIdentity
+
+    identity = LocalIdentity(login="share-recipient", password_hash=share_password_hash)
+    session.add(identity)
+    session.commit()
+    return identity
+
+
+@pytest.fixture
+def grantee_client(settings, session_factory, grantee_identity):
+    """Real authenticated recipient, never a membership or installation credential."""
+    import re
+
+    with TestClient(
+        create_app(settings, session_factory=session_factory), base_url="https://testserver"
+    ) as browser:
+        page = browser.get("/login")
+        csrf = re.search(r'name="csrf_token" value="([^"]+)"', page.text).group(1)
+        response = browser.post(
+            "/login",
+            data={
+                "login": grantee_identity.login,
+                "password": "synthetic-share-recipient-password",  # gauntlet:allow-secret synthetic
+                "csrf_token": csrf,
+            },
+            headers={"Origin": "https://testserver"},
+            follow_redirects=False,
+        )
+        assert response.status_code == 303
+        browser.identity_id = grantee_identity.id
+        yield browser

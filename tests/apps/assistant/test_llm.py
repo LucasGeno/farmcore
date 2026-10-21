@@ -263,7 +263,7 @@ def test_vertex_settings_build_an_audited_chooser_in_the_app(settings, session_f
             },
         )
 
-    with TestClient(app) as c:
+    with TestClient(app, headers={"X-Admin-Token": settings.admin_token.get_secret_value()}) as c:
         chooser = assistant_routes.chooser_for(c.app)
         assert isinstance(chooser, llm.VertexToolChooser)
         chooser._client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -361,9 +361,11 @@ def test_voice_is_admin_only_when_an_admin_token_is_set(settings, session_factor
     )
     with TestClient(app) as c:
         c.app.state.assistant_transcriber = FakeTranscriber(Transcript("hi", "en", 1.0))
-        assert c.get("/assistant/voice").json()["voice"] is False
+        assert c.get("/assistant/voice").status_code == 403
         assert _post_audio(c).status_code == 403
         c.cookies.set("admin_token", "t0ken")
+        assert _post_audio(c).status_code == 403
+        c.headers["Origin"] = "http://testserver"
         assert c.get("/assistant/voice").json()["voice"] is True
         assert _post_audio(c).status_code == 200
 
@@ -390,8 +392,8 @@ def test_anonymous_visitors_never_reach_the_model_admins_do(settings, session_fa
     fake = FakeChooser(llm.Choice("fields_list_parcels", {}))
     with TestClient(_token_app(settings, session_factory)) as c:
         c.app.state.assistant_chooser = fake
-        anonymous = c.get("/assistant/ask", params={"q": "what vines do I have"}).json()
-        assert anonymous["via"] == "keywords" and fake.calls == []
+        anonymous = c.get("/assistant/ask", params={"q": "what vines do I have"})
+        assert anonymous.status_code == 403 and fake.calls == []
         c.cookies.set("admin_token", "t0ken")
         admin = c.get("/assistant/ask", params={"q": "what vines do I have"}).json()
     assert admin["via"] == "model" and len(fake.calls) == 1
@@ -416,10 +418,10 @@ def test_panel_subtitle_names_the_mode_actually_used(settings, session_factory, 
     with TestClient(_token_app(settings, session_factory)) as c:
         c.cookies.set("admin_token", "t0ken")
         no_creds = c.get("/apps").text
-    assert "From your farm records" in anonymous
+    assert "Authentication required" in anonymous
     assert "keyword-only" not in anonymous
     assert "AI-assisted" in _subtitle(admin)
-    for page in (anonymous, tour, no_creds):
+    for page in (tour, no_creds):
         assert "Keyword" in _subtitle(page) and "AI-assisted" not in _subtitle(page)
 
 

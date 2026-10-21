@@ -162,10 +162,13 @@ def test_route_exports_done_sprays_up_to_the_clock_as_ld_json(
     assert admin.get("/share/ngsi-ld.json").json() == []
 
 
-def test_grantee_export_reads_under_the_grant(anonymous, session, owner_repo, demo, spray) -> None:
+def test_grantee_export_reads_under_the_grant(
+    grantee_client, session, owner_repo, demo, spray, grantee_identity
+) -> None:
     spray()
     grant = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Co-op adviser",
         preset="adviser_logs",
         purpose="spray advice",
@@ -174,7 +177,7 @@ def test_grantee_export_reads_under_the_grant(anonymous, session, owner_repo, de
     session.commit()
     last = session.scalar(select(AccessLog.id).order_by(AccessLog.id.desc()).limit(1)) or 0
 
-    resp = anonymous.get(f"/share/as/{grant.id}/ngsi-ld.json")
+    resp = grantee_client.get(f"/share/as/{grant.id}/ngsi-ld.json")
 
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/ld+json")
@@ -182,7 +185,7 @@ def test_grantee_export_reads_under_the_grant(anonymous, session, owner_repo, de
     session.expire_all()
     rows = session.scalars(select(AccessLog).where(AccessLog.id > last)).all()
     assert rows and {(r.actor, r.grant_id, r.scope) for r in rows} == {
-        (f"grant:{grant.id}", grant.id, "register:read")
+        (f"user:{grantee_client.identity_id}", grant.id, "register:read")
     }
 
 

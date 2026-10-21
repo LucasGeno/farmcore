@@ -24,8 +24,8 @@ To keep several checkouts apart, create a database per checkout on the same serv
 ## Checks
 
 ```sh
-scripts/check.sh                                   # data guard, ruff lint + format, pytest
-PYTEST_ADDOPTS="-m 'not data'" scripts/check.sh    # skip the slower dataset tests
+scripts/check.sh          # data guard, ruff lint + format, fast tests (-m 'not data and not slow')
+scripts/check.sh --all    # every test, including dataset replays and Compose; once before merge
 node --test tests/core/*.mjs tests/apps/fields/*.mjs
 ```
 

@@ -16,9 +16,10 @@ AUDIT_SECRET = "synthetic-audit-body-7f3a"
 
 
 @pytest.fixture
-def grant(session, owner_repo):
+def grant(session, owner_repo, grantee_identity):
     g = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Co-op adviser",
         preset="adviser_logs",
         purpose="spray advice",
@@ -67,12 +68,12 @@ def _last(session) -> int:
 
 
 def test_register_json_returns_the_grant_farm_rows_and_logs_each_read(
-    anonymous, session, demo, spray, grant
+    grantee_client, session, demo, spray, grant
 ) -> None:
     log = spray()
     last = _last(session)
 
-    resp = anonymous.get(f"/share/as/{grant.id}/register.json")
+    resp = grantee_client.get(f"/share/as/{grant.id}/register.json")
 
     assert resp.status_code == 200
     rows = resp.json()
@@ -82,7 +83,7 @@ def test_register_json_returns_the_grant_farm_rows_and_logs_each_read(
     assert reads
     for row in reads:
         assert (row.actor, row.grant_id, row.purpose, row.scope, row.farm_id) == (
-            f"grant:{grant.id}",
+            f"user:{grantee_client.identity_id}",
             grant.id,
             "spray advice",
             "register:read",
@@ -90,10 +91,10 @@ def test_register_json_returns_the_grant_farm_rows_and_logs_each_read(
         )
 
 
-def test_html_page_shows_the_banner_and_the_register(anonymous, demo, spray, grant) -> None:
+def test_html_page_shows_the_banner_and_the_register(grantee_client, demo, spray, grant) -> None:
     spray()
 
-    page = anonymous.get(f"/share/as/{grant.id}/")
+    page = grantee_client.get(f"/share/as/{grant.id}/")
 
     assert page.status_code == 200
     assert "You are viewing as" in page.text and "Co-op adviser" in page.text
@@ -103,53 +104,62 @@ def test_html_page_shows_the_banner_and_the_register(anonymous, demo, spray, gra
 
 
 def test_grantee_view_follows_the_grant_farm_not_the_farm_cookie(
-    anonymous, session, demo, other_farm, spray, grant
+    grantee_client, admin, session, demo, other_farm, spray, grant
 ) -> None:
     log = spray()
-    anonymous.cookies.set(FARM_COOKIE, str(other_farm.id))
+    grantee_client.cookies.set(FARM_COOKIE, str(other_farm.id))
     last = _last(session)
 
-    rows = anonymous.get(f"/share/as/{grant.id}/register.json").json()
+    response = grantee_client.get(f"/share/as/{grant.id}/register.json")
+    assert response.status_code == 200
+    assert {r["log_id"] for r in response.json()} == {log.id}
+    assert {r.farm_id for r in _since(session, last)} == {demo.farm.id}
+    last = _last(session)
+    admin.cookies.set(FARM_COOKIE, str(other_farm.id))
+    response = admin.get(f"/share/as/{grant.id}/register.json")
+    assert response.status_code == 200
+    rows = response.json()
 
     assert {r["log_id"] for r in rows} == {log.id}
     assert {r.farm_id for r in _since(session, last)} == {demo.farm.id}
 
 
-def test_owner_grant_and_unknown_id_are_404(anonymous, session, demo) -> None:
+def test_owner_grant_and_unknown_id_are_404(grantee_client, session, demo) -> None:
     owner = ensure_owner_grant(session, demo.farm)
     session.commit()
     assert owner.grantee == OWNER
 
-    assert anonymous.get(f"/share/as/{owner.id}/").status_code == 404
-    assert anonymous.get(f"/share/as/{owner.id}/register.json").status_code == 404
-    assert anonymous.get("/share/as/999999/").status_code == 404
-    assert anonymous.get("/share/as/999999/register.json").status_code == 404
-    assert anonymous.get(f"/share/as/{2**64}/").status_code == 404
-    assert anonymous.get("/share/as/0/").status_code == 404
+    assert grantee_client.get(f"/share/as/{owner.id}/").status_code == 404
+    assert grantee_client.get(f"/share/as/{owner.id}/register.json").status_code == 404
+    assert grantee_client.get("/share/as/999999/").status_code == 404
+    assert grantee_client.get("/share/as/999999/register.json").status_code == 404
+    assert grantee_client.get(f"/share/as/{2**64}/").status_code == 404
+    assert grantee_client.get("/share/as/0/").status_code == 404
 
 
 def test_station_and_audit_reads_are_403_and_log_nothing(
-    anonymous, session, demo, private_rows, grant
+    grantee_client, session, demo, private_rows, grant
 ) -> None:
     last = _last(session)
 
-    obs = anonymous.get(f"/share/as/{grant.id}/observations.json")
-    audit = anonymous.get(f"/share/as/{grant.id}/audit.json")
+    obs = grantee_client.get(f"/share/as/{grant.id}/observations.json")
+    audit = grantee_client.get(f"/share/as/{grant.id}/audit.json")
 
     assert obs.status_code == 403
     assert "weather station data" in obs.json()["detail"]
     assert audit.status_code == 403
-    assert "model-call audit" in audit.json()["detail"]
+    assert audit.json()["detail"] == "admin token required"
     for resp in (obs, audit):
         assert str(OBS_VALUE) not in resp.text and AUDIT_SECRET not in resp.text
     assert _since(session, last) == []
 
 
 def test_a_station_grant_reads_observations_but_not_the_register(
-    anonymous, session, owner_repo, demo, private_rows
+    grantee_client, session, owner_repo, demo, private_rows, grantee_identity
 ) -> None:
     g = service.create_grant(
         owner_repo,
+        recipient_identity_id=grantee_identity.id,
         grantee="Weather service",
         preset="station",
         purpose="forecast",
@@ -157,23 +167,23 @@ def test_a_station_grant_reads_observations_but_not_the_register(
     )
     session.commit()
 
-    obs = anonymous.get(f"/share/as/{g.id}/observations.json")
-    page = anonymous.get(f"/share/as/{g.id}/").text
+    obs = grantee_client.get(f"/share/as/{g.id}/observations.json")
+    page = grantee_client.get(f"/share/as/{g.id}/").text
 
     assert obs.status_code == 200 and [o["value"] for o in obs.json()] == [OBS_VALUE]
-    assert anonymous.get(f"/share/as/{g.id}/register.json").status_code == 403
+    assert grantee_client.get(f"/share/as/{g.id}/register.json").status_code == 403
     assert "Shared: this grant includes weather station data." in page
     assert "Not shared: this grant does not include the spray register." in page
     assert AUDIT_SECRET not in page
 
 
 def test_html_page_shows_both_not_shared_panels_and_no_private_data(
-    anonymous, session, demo, spray, private_rows, grant
+    grantee_client, session, demo, spray, private_rows, grant
 ) -> None:
     spray()
     last = _last(session)
 
-    page = anonymous.get(f"/share/as/{grant.id}/").text
+    page = grantee_client.get(f"/share/as/{grant.id}/").text
 
     assert "Not shared: this grant does not include weather station data." in page
     assert "Not shared: this grant does not include the model-call audit." in page
@@ -181,7 +191,7 @@ def test_html_page_shows_both_not_shared_panels_and_no_private_data(
     assert {r.scope for r in _since(session, last)} == {"register:read"}
 
 
-def test_phone_register_cells_keep_their_column_labels(anonymous, spray, grant):
+def test_phone_register_cells_keep_their_column_labels(grantee_client, spray, grant):
     from html import unescape
     from html.parser import HTMLParser
 
@@ -206,7 +216,7 @@ def test_phone_register_cells_keep_their_column_labels(anonymous, spray, grant):
                 self.headings.append(unescape(data).strip())
 
     spray()
-    page = anonymous.get(f"/share/as/{grant.id}/").text
+    page = grantee_client.get(f"/share/as/{grant.id}/").text
     parser = RegisterCells()
     parser.feed(page)
     assert parser.headings
