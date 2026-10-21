@@ -1816,10 +1816,11 @@ def test_signed_in_member_in_tour_gets_the_read_only_page_not_sign_in(
     ) as browser:
         assert _login(browser).status_code == 303
         browser.cookies.set("farmcore_tour", "1")
-        page = browser.post("/logout", headers=HTML, follow_redirects=False)
+        # Sign-out leaves the tour, so it is let through; any other write is refused.
+        page = browser.post("/operations/production", headers=HTML, follow_redirects=False)
         assert page.status_code == 403
         assert "read-only" in page.text
-        api = browser.post("/logout", follow_redirects=False)
+        api = browser.post("/operations/production", follow_redirects=False)
         assert api.status_code == 403
         assert api.json() == {"detail": "Tour mode is read-only."}
 
