@@ -130,7 +130,9 @@ def test_activation_only_changes_future_assessments_and_later_opinion_is_explici
     assert latest.id != previous.id
     assert latest.decision == "none"
     assert latest.props["config_version"]["id"] == version
-    assert latest.props["effective_config"]["downy_rain_min_mm"]["value"] == 12.0
+    detail = client.get(f"/review/versions/{version}.json", params=params).json()
+    assert latest.props["config_version"]["hash"] == detail["config_hash"]
+    assert detail["effective_config"]["downy_rain_min_mm"]["value"] == 12.0
     assert previous.props == original
     assert previous.reasons == original_reasons
     assert (

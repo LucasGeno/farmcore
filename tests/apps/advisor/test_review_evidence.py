@@ -29,8 +29,12 @@ def test_empty_station_job_is_unavailable_through_persisted_http(client, session
     assert body["assessment_status"] == "unavailable"
     assert body["headline"] == "Assessment unavailable: missing hourly observations"
     assert body["config_version"]["status"] == "unreviewed"
-    assert row.props["effective_config"]["downy_rain_min_mm"]["value"] == 10.0
-    assert row.props["input_snapshot"]["observations"] == []
+    saved = client.get(
+        f"/advisor/parcels/{parcel.id}/assessments/{row.id}.json", params={"farm": farm.id}
+    ).json()
+    assert saved["effective_config"]["downy_rain_min_mm"]["value"] == 10.0
+    assert "effective_config" not in row.props
+    assert row.props["input_snapshot"]["hourly_inputs"] == []
     assert row.props["input_snapshot"]["evaluation_at"] == NOW.isoformat()
     assert row.props["input_snapshot"]["observation_receipt"] == "unknown"
     page = client.get(f"/advisor/parcels/{parcel.id}").text
@@ -155,8 +159,6 @@ def test_job_snapshots_exact_inputs_and_keeps_rejected_raw_values(session, setti
     assert snapshot["log_sources"][0]["raw_payload"] == {"entered": literal}
     assert [s["precision_rank"] for s in snapshot["log_sources"]] == [2, 1]
     assert row.props["assessment_status"] == "limited"
-    observation = next(o for o in snapshot["observations"] if o["id"] == bad.id)
-    assert observation["value"] == {"rejected": "non-finite", "raw": "nan"}
     hourly = next(o for o in snapshot["hourly_inputs"] if o["ts"] == NOW.isoformat())
     assert hourly["t_c"] == {"rejected": "non-finite", "raw": "nan"}
 
@@ -456,3 +458,46 @@ def test_consumers_show_saved_advice_as_unavailable_without_station_readings(
     assert "Protected until tomorrow" not in response.text
     assert ">Protected<" not in response.text
     assert not any(claim in response.text for claim in REASSURANCE)
+
+
+def test_stored_series_and_version_reproduce_the_assessment(session, settings):
+    from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs
+    from farmcore.apps.advisor.engine import evaluate as engine_evaluate
+    from farmcore.apps.advisor.service import saved_config
+    from farmcore.apps.review.service import digest
+    from farmcore.core.access import repo_for_job
+    from farmcore.core.models.canonical import Observation
+    from tests.apps.advisor.review_fixtures import complete_station
+
+    ids = seed_farm(session, settings)
+    parcel = session.get(Parcel, ids["P1"])
+    station = complete_station(session, parcel.farm_id, NOW)
+    rainy = session.scalar(
+        select(Observation).where(
+            Observation.asset_id == station.id,
+            Observation.variable == "rr1_mm",
+            Observation.ts == datetime(2024, 4, 9, 4, tzinfo=UTC),
+        )
+    )
+    rainy.value = 11.0
+    session.flush()
+    evaluate(JobContext(session, NOW, settings, (parcel.farm_id,)))
+    row = session.scalar(
+        select(Advice).where(Advice.parcel_id == parcel.id).order_by(Advice.id.desc())
+    )
+    rainy.value = 0.0  # a later station correction must not change the saved evidence
+    session.flush()
+
+    repo = repo_for_job(session, parcel.farm_id, "advisor.evaluate")
+    config = AdvisorConfig.model_validate(saved_config(repo, row))
+    assert digest(config) == row.props["config_version"]["hash"]
+    series = [
+        HourlyObs(**{**hour, "ts": datetime.fromisoformat(hour["ts"])})
+        for hour in row.props["input_snapshot"]["hourly_inputs"]
+    ]
+    again = engine_evaluate(series, [], config, NOW)
+    assert row.decision == "wait"
+    assert again.decision == row.decision
+    assert [(r.rule, r.verdict) for r in again.reasons] == [
+        (r["rule"], r["verdict"]) for r in row.reasons
+    ]

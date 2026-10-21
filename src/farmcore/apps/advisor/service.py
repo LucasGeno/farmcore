@@ -43,7 +43,6 @@ from farmcore.core.models.canonical import (
     Log,
     LogParcel,
     LogSource,
-    Observation,
     Product,
     Quantity,
 )
@@ -384,7 +383,13 @@ def advice_row(
         props={
             "headline": headline(advice, series, config, now, tz),
             "assessment_status": advice.assessment_status,
-            "effective_config": config.model_dump(mode="json"),
+            # The version row is immutable and holds the configuration; copy it only
+            # when there is no version to point at.
+            **(
+                {}
+                if effective and effective.version
+                else {"effective_config": config.model_dump(mode="json")}
+            ),
             "config_version": effective.identity()
             if effective
             else {"id": None, "status": "unreviewed", "accuracy_claim": False},
@@ -473,15 +478,9 @@ def runs_to_forecast_edge(end: datetime | None, evaluated_at: datetime, horizon_
 
 
 def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
-    """Exact rows loaded at this evaluation, with unknown receipt semantics stated explicitly."""
-    observations = repo.list(
-        Observation,
-        Observation.asset_id == station.id,
-        Observation.ts >= series_start(now, tz),
-        Observation.ts <= now + forecast_span(config),
-        scope="stations:read",
-        order_by=(Observation.ts, Observation.variable, Observation.id),
-    )
+    """The exact hourly series the engine read, plus the spray evidence, with unknown receipt
+    semantics stated explicitly. Station rows are not copied: `hourly_inputs` is what was
+    evaluated, and rows written before this shape also carry `observations`."""
     logs = repo.list(
         Log,
         Log.type == "spray",
@@ -542,7 +541,6 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
         "future_observations": "Replay surrogate, not as-issued forecast",
         "loaded_from": series_start(now, tz).isoformat(),
         "loaded_until": (now + forecast_span(config)).isoformat(),
-        "observations": [columns(o) for o in observations],
         "hourly_inputs": evidence(series),
         "spray_logs": [columns(log) for log in logs],
         "log_sources": [columns(source) for source in sources],
@@ -568,3 +566,18 @@ def current_availability(repo, now, tz):
     if assessment.assessment_status == "evaluable":
         return "evaluable", None
     return assessment.assessment_status, headline(assessment, series, config, now, tz)
+
+
+def saved_config(repo: ScopedRepository, row: Advice) -> dict | None:
+    """The configuration a saved assessment used: its own copy (rows saved before configs were
+    stored by version) or the immutable parameter version it names."""
+    props = row.props or {}
+    if "effective_config" in props:
+        return props["effective_config"]
+    version_id = (props.get("config_version") or {}).get("id")
+    if version_id is None:
+        return None
+    from farmcore.apps.review.models import ParameterVersion
+
+    version = repo.get(ParameterVersion, version_id, scope="parameters:read")
+    return version.effective_config if version else None

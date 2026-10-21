@@ -747,6 +747,6 @@ def saved_assessment(parcel_id: int, advice_id: int, request: Request, repo: Rep
         raise HTTPException(404, "Assessment unavailable")
     return {
         **service.advice_json(row),
-        "effective_config": (row.props or {}).get("effective_config"),
+        "effective_config": service.saved_config(repo, row),
         "input_snapshot": (row.props or {}).get("input_snapshot"),
     }
