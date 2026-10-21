@@ -57,7 +57,8 @@ def item(
 def items(repo, now, tz, visible, *, busy_days=()):
     out = []
     farm = repo.get(Farm, repo.farm_id, scope="fields:read")
-    unavailable = advisor.current_availability(repo, now, tz)[1]
+    availability = advisor.current_availability(repo, now, tz)
+    unavailable = availability[1]
     if "advisor" in visible and unavailable:
         out.append(
             item(
@@ -70,7 +71,7 @@ def items(repo, now, tz, visible, *, busy_days=()):
             )
         )
     if "advisor" in visible and not unavailable:
-        latest = advisor.latest_advice(repo, now, tz=tz)
+        latest = advisor.latest_advice(repo, now, tz=tz, availability=availability)
         parcels = sorted(
             repo.list(Parcel, scope="fields:read"), key=lambda p: alias_number(p.alias)
         )

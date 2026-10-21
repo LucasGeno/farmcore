@@ -9,6 +9,7 @@ from farmcore.apps.advisor.tools import TOOLS
 from farmcore.core.manifest import JobSpec, Manifest, MapLayer, ParcelView, Widget
 
 JOB_NAME = "advisor.evaluate"
+EVALUATION_INTERVAL = timedelta(hours=1)
 
 MANIFEST = Manifest(
     name="advisor",
@@ -21,7 +22,7 @@ MANIFEST = Manifest(
         JobSpec(
             name=JOB_NAME,
             func="farmcore.apps.advisor.job:evaluate",
-            interval=timedelta(hours=1),
+            interval=EVALUATION_INTERVAL,
         ),
     ),
     routes=(

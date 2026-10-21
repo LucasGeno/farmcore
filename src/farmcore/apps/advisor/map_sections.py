@@ -70,14 +70,15 @@ def _plural(n: int) -> str:
 
 @router.get("/map/farm", response_class=HTMLResponse)
 def farm_section(request: Request, repo: Repo) -> HTMLResponse:
-    if (unavailable := unavailable_view(request, repo)) is not None:
-        return unavailable
     tz = request.app.state.settings.display_tz
     now = _now(request, repo)
+    availability = service.current_availability(repo, now, tz)
+    if (unavailable := unavailable_view(request, repo, availability=availability)) is not None:
+        return unavailable
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
-    latest = service.latest_advice(repo, now, tz=tz)
+    latest = service.latest_advice(repo, now, tz=tz, availability=availability)
     rows = [parcel_row(p, latest.get(p.id), tz) for p in parcels]
     evaluated = [r for r in rows if r.has_advice]
     counts = [

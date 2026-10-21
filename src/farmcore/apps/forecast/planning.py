@@ -108,7 +108,8 @@ def plan_days(
     farm = repo.get(Farm, repo.farm_id, scope=store.SCOPE)
     from farmcore.apps.review.service import resolve
 
-    unavailable = advice.current_availability(repo, now, tz)[1]
+    availability = advice.current_availability(repo, now, tz)
+    unavailable = availability[1]
     try:
         repo.check("parameters:read", "parameter_version")
     except ScopeDenied:
@@ -179,7 +180,7 @@ def plan_days(
     undated = []
     rescheduled = []
     if not unavailable:
-        current = advice.latest_advice(repo, now, tz=tz)
+        current = advice.latest_advice(repo, now, tz=tz, availability=availability)
         by_day = {d["day"]: d for d in days}
         for parcel in repo.list(Parcel, scope="fields:read", order_by=Parcel.id):
             a = current.get(parcel.id)

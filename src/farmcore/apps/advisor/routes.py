@@ -506,9 +506,14 @@ def _protection(reasons: list[dict[str, Any]], tz: str) -> dict[str, Any] | None
     return view
 
 
-def unavailable_view(request: Request, repo: Repo, *, full_page=False, parcel=None):
-    reason = service.current_availability(
-        repo, _now(request, repo), request.app.state.settings.display_tz
+def unavailable_view(
+    request: Request, repo: Repo, *, full_page=False, parcel=None, availability=None
+):
+    reason = (
+        availability
+        or service.current_availability(
+            repo, _now(request, repo), request.app.state.settings.display_tz
+        )
     )[1]
     if reason:
         history_context = (

@@ -185,7 +185,12 @@ def previous_decisions(repo: ScopedRepository, now: datetime) -> dict[int, str]:
 
 
 def latest_advice(
-    repo: ScopedRepository, now: datetime, *, tz: str, parcel_id: int | None = None
+    repo: ScopedRepository,
+    now: datetime,
+    *,
+    tz: str,
+    parcel_id: int | None = None,
+    availability: tuple[str, str | None] | None = None,
 ) -> dict[int, Advice]:
     """parcel id -> its latest advice row with `evaluated_at <= now` (one parcel if given)."""
     where = [Advice.farm_id == repo.farm_id, Advice.evaluated_at <= now]
@@ -210,7 +215,7 @@ def latest_advice(
         resource="advice",
     ).mappings()
     result = {row["parcel_id"]: Advice(**row) for row in rows}
-    status, reason = current_availability(repo, now, tz)
+    status, reason = availability or current_availability(repo, now, tz)
     if reason:
         # Transient read projection: saved historical evidence is never modified.
         projected = {}
@@ -574,9 +579,20 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
 
 
 def current_availability(repo, now, tz):
+    """(status, reason) of the farm's current inputs; reason None when evaluable.
+
+    When every parcel's latest advice was evaluated within one job interval of `now` and
+    saved its own assessment status, those rows already describe the current inputs (each
+    parcel's limited status is shown on its own row). Otherwise, e.g. legacy or stale advice,
+    the current series is evaluated again.
+    """
     reason = unavailable_reason(repo)
     if reason:
         return ("limited" if "not authorized" in reason else "unavailable"), reason
+    fresh = _fresh_statuses(repo, now)
+    if fresh is not None:
+        missing = [text for status, text in fresh if status == "unavailable"]
+        return ("unavailable", missing[0]) if missing else ("evaluable", None)
     from farmcore.apps.advisor.engine import evaluate
     from farmcore.apps.review.service import resolve
 
@@ -587,6 +603,30 @@ def current_availability(repo, now, tz):
     if assessment.assessment_status == "evaluable":
         return "evaluable", None
     return assessment.assessment_status, headline(assessment, series, config, now, tz)
+
+
+def _fresh_statuses(repo, now) -> list[tuple[str, str]] | None:
+    """(status, headline) of each advised parcel's latest advice, or None unless all of it is
+    fresh and states its assessment status."""
+    from farmcore.apps.advisor.manifest import EVALUATION_INTERVAL
+
+    rows = repo.execute(
+        select(
+            Advice.evaluated_at,
+            Advice.props["assessment_status"].astext,
+            Advice.props["headline"].astext,
+        )
+        .where(Advice.farm_id == repo.farm_id, Advice.evaluated_at <= now)
+        .ext(distinct_on(Advice.parcel_id))
+        .order_by(Advice.parcel_id, Advice.evaluated_at.desc(), Advice.id.desc()),
+        scope=SCOPE,
+        resource="advice",
+    ).all()
+    if not rows:
+        return None
+    if any(status is None or now - at >= EVALUATION_INTERVAL for at, status, _ in rows):
+        return None
+    return [(status, text) for _, status, text in rows]
 
 
 def saved_config(repo: ScopedRepository, row: Advice) -> tuple[dict | None, str]:
