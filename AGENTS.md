@@ -12,8 +12,8 @@ FarmCore is an open-source (Apache-2.0) farm records and decision-support platfo
 ```sh
 docker compose -f docker-compose.dev.yml up -d db   # PostGIS on localhost:55442
 uv sync && uv run farmcore migrate
-scripts/check.sh                                    # data guard, ruff lint + format, pytest
-PYTEST_ADDOPTS="-m 'not data'" scripts/check.sh     # skip the slower dataset tests
+scripts/check.sh                                    # data guard, ruff, fast pytest (-m 'not data and not slow')
+scripts/check.sh --all                              # everything; an explicit -m always wins
 node --test tests/core/*.mjs tests/apps/fields/*.mjs
 uv run alembic heads                                # must print one head
 ```

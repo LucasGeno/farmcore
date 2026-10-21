@@ -62,7 +62,7 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 ## 2026-10-19 — Accepted installation and module architecture
 
 - User approved independently isolated hosted/self-hosted installations and modular architecture, and requested a spec plus implementation tickets while current QA/merges continue.
-- Published the subsequent initiative under docs/work/isolated-instances-modules/: one Change Spec, a dependency index and 20 bounded tickets. Same OSS runtime/profile across hosting modes; separate customer runtime/database/files/secrets; optional hosting manager; durable tasks/outbox; module lifecycle and compatible neutral-domain migration; weather-risk and fertilization-record proof apps.
+- Published the subsequent isolated-installations initiative in this repository (since removed; see git history): one Change Spec, a dependency index and 20 bounded tickets. Same OSS runtime/profile across hosting modes; separate customer runtime/database/files/secrets; optional hosting manager; durable tasks/outbox; module lifecycle and compatible neutral-domain migration; weather-risk and fertilization-record proof apps.
 - Merchant checkout/provider selection, production provisioning/deployment, unrestricted hosted code uploads, permanent data deletion and new scientific recommendation algorithms remain out of scope. This publication does not claim runtime implementation.
 - Core/worker/module/domain changes depend on current revamp integration QA. Packaging/recovery have explicit privacy/identity prerequisites. Current PRs retain independent exact-head QA/CI and final revamp acceptance; no status in the older log is upgraded by this entry.
 - Durable accepted rationale recorded through /doc in the existing EU Agri Hackathon vault folder; ticket/task state remains solely in this repository. Domain glossary distinguishes Customer, Installation, Farm, Module profile, Planned job and Background task.
@@ -113,3 +113,7 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 - Lucas asked that specs and tickets stop living in this public repository. Revision 2 of the isolated-installations spec and its 18 tickets were copied to the private `LucasGeno/farmcore-vault` (`work/isolated-instances-modules/`), which is now canonical. This directory keeps a pointer README only.
 - New initiatives (farmer-first experience, compliant records, weather providers, bring your own agent, irrigation, crop models) live only in the vault.
 - The milestone 1–4 revamp planning stays here until ticket 12 closes, then moves too. This entry changes no revamp ticket status, ownership or authorization.
+
+## 2026-10-21 — Isolated-installation pointer removed
+
+- The pointer README for the isolated-installations initiative was removed; this repository keeps no planning docs for it. Shipped operator docs: [docs/self-hosting.md](../self-hosting.md).
