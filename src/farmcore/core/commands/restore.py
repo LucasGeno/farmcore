@@ -327,7 +327,8 @@ def _read(tar: tarfile.TarFile, member: tarfile.TarInfo, dst) -> bytes:
 
 
 def _release(value: str) -> tuple[int, ...]:
-    if not re.fullmatch(r"\d+(\.\d+){0,3}", value):
+    # ASCII digits, and few of them: `int()` refuses a part of over 4,300 digits with an error.
+    if not re.fullmatch(r"\d{1,9}(\.\d{1,9}){0,3}", value, re.A):
         raise BundleError("manifest field 'release' is missing or invalid")
     return tuple(int(part) for part in value.split("."))
 
