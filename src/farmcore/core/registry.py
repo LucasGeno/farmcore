@@ -20,7 +20,8 @@
   once; one `app_module` read per request, cached on `request.state`.
 
 Install / uninstall only change `app_module.state`. The UI follows at once for loaded apps;
-routes, jobs and models follow at the next start.
+routes, jobs and models follow at the next start. `switch_refusal` is the one rule for which
+switches are allowed, shared by `/apps` and `farmcore apps`.
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import heapq
 import importlib
 import importlib.util
 import pkgutil
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
@@ -254,3 +256,54 @@ def visible_from_states(manifests: list[Manifest], states: dict[str, str]) -> li
         for m in manifests
         if m.name == CORE.name or m.required or states.get(m.name, INSTALLED) != UNINSTALLED
     ]
+
+
+def join_names(names: list[str]) -> str:
+    """`A`, `A and B`, `A, B and C`."""
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+@dataclass(frozen=True)
+class SwitchRefusal:
+    """Why an app cannot be switched: farmer words (app titles), plus the app names involved."""
+
+    detail: str
+    extra: dict[str, list[str]] = field(default_factory=dict)
+
+
+def switch_refusal(
+    ordered: list[Manifest], states: dict[str, str], manifest: Manifest, state: str
+) -> SwitchRefusal | None:
+    """None if `manifest` may be switched to `state` (INSTALLED / UNINSTALLED) given `states`.
+
+    Off: refused for core and required apps, and while an installed app depends on it. On:
+    refused while a dependency would not load at the next start (uninstalled, unknown, or
+    installed but missing its own dependency: `active_manifests`)."""
+    this = manifest.display_name
+    if state == UNINSTALLED:
+        if manifest.required or manifest.name == CORE.name:
+            return SwitchRefusal(f"{this} is always on.", {"dependants": []})
+        dependants = [
+            m
+            for m in ordered
+            if manifest.name in m.depends and states.get(m.name, INSTALLED) == INSTALLED
+        ]
+        if not dependants:
+            return None
+        titles = [m.display_name for m in dependants]
+        if len(titles) == 1:
+            detail = f"{titles[0]} needs {this}. Switch off {titles[0]} first."
+        else:
+            detail = f"{join_names(titles)} need {this}. Switch them off first."
+        return SwitchRefusal(detail, {"dependants": [m.name for m in dependants]})
+    loading = {m.name for m in active_manifests(ordered, states)} | {CORE.name}
+    missing = [d for d in manifest.depends if d not in loading]
+    if not missing:
+        return None
+    by_name = {m.name: m for m in ordered}
+    titles = [by_name[d].display_name if d in by_name else d for d in missing]
+    if len(titles) == 1:
+        detail = f"{this} needs {titles[0]}. Switch on {titles[0]} first."
+    else:
+        detail = f"{this} needs {join_names(titles)}. Switch them on first."
+    return SwitchRefusal(detail, {"uninstalled_dependencies": missing})

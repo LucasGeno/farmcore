@@ -92,12 +92,14 @@ amd64-only).
 
 ## Self-hosting
 
-`docker-compose.yml` runs the app, an optional Telegram bot, PostgreSQL + PostGIS and a daily
-backup, and refuses to start without a strong admin token:
+`docker-compose.yml` is one installation: the app, an optional Telegram bot, PostgreSQL +
+PostGIS, a one-shot `migrate` service and a daily backup. It refuses to start without a strong
+admin token. Several installations run side by side as separate Compose projects.
 
 ```sh
-cp .env.example .env    # set POSTGRES_PASSWORD and ADMIN_TOKEN
+cp .env.example .env    # set POSTGRES_PASSWORD, RUNTIME_DATABASE_PASSWORD and ADMIN_TOKEN
 docker compose up -d --build
+docker compose exec app farmcore farms create "My farm"    # or the demo data:
 docker compose exec app farmcore seed --scene B
 ```
 

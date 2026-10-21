@@ -41,6 +41,8 @@ def notifications(request: Request, repo: Repo):
         items=items,
         read=read,
         unread_count=unread,
-        cookie_name=cookie_name,
+        # bell.js writes this cookie itself: give it the installation-scoped name the browser
+        # stores (core/cookie_scope.py); the server reads it back under the plain name.
+        cookie_name=getattr(request.state, "cookie_prefix", "") + cookie_name,
         refresh_url=with_farm("/notifications", repo.farm_id),
     )
