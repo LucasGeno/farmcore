@@ -36,7 +36,9 @@
           <div><dt>Temperature</dt><dd>{% if d.temp.low is not none %}{{ '%.0f'|format(d.temp.low) }}–{{ '%.0f'|format(d.temp.high) }} °C{% else %}Not available{% endif %}{% if d.temp.known and d.temp.known < d.expected %}<small>Partial day</small>{% endif %}</dd></div>
           <div><dt>Availability</dt><dd>{{ 'Busy' if d.busy else 'Available' }}</dd></div>
         </dl>
-        {% if not unavailable %}<h3>Current advice{% if d.parcels %} · {{ d.parcels|length }} {{ 'parcel' if d.parcels|length == 1 else 'parcels' }}{% endif %}</h3>
+        <h3>Current advice{% if d.parcels %} · {{ d.parcels|length }} {{ 'parcel' if d.parcels|length == 1 else 'parcels' }}{% endif %}</h3>
+        {% if unavailable %}<p class="fc-plan-caption">{{ unavailable }}. No treatment clearance.</p>
+        {% else %}
           {% if d.parcels %}
             {% for decision in d.parcels|groupby('decision') %}
               {% for window in decision.list|groupby('window') %}

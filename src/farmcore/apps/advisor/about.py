@@ -129,9 +129,11 @@ def _assumed_counts(config: AdvisorConfig) -> tuple[int, int]:
 def build(repo, now: datetime, tz: str) -> dict[str, Any]:
     zone = ZoneInfo(tz)
     farm = repo.get(Farm, repo.farm_id, scope=service.SCOPE)
-    props = farm.props or {}
-    config = service.config_for(farm, now, tz)
-    unavailable = props.get("advisor_unavailable_reason")
+    from farmcore.apps.review.service import resolve
+
+    effective = resolve(repo, now, tz)
+    config = effective.config
+    unavailable = service.current_availability(repo, now, tz)[1]
     parcels = repo.list(Parcel, scope=PARCEL_SCOPE)
     varieties = sorted({p.props.get("variety") for p in parcels if (p.props or {}).get("variety")})
 
@@ -192,8 +194,12 @@ def build(repo, now: datetime, tz: str) -> dict[str, Any]:
                 "rules": [
                     {
                         "name": "3-10 rule",
-                        "what": "Infection risk when about 10 mm of rain falls within 24–48 h "
-                        "at a mean temperature of 10 °C or more.",
+                        "what": (
+                            f"Infection risk when about {config.downy_rain_min_mm.value:g} mm "
+                            f"of rain falls within {config.downy_window_h.value} h "
+                            f"at a mean temperature of {config.downy_temp_min_c.value:g} °C "
+                            "or more."
+                        ),
                         "source": _cite(config.threshold("downy_rain_min_mm").source),
                     },
                     {

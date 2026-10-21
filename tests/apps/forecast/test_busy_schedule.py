@@ -8,11 +8,13 @@ import pytest
 from farmcore.apps.forecast import sources, store
 from farmcore.core import clock
 from farmcore.core.models.canonical import Advice
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.forecast.test_routes import parcel as parcel
 
 
 def _schedule(session, settings, farm, parcel, winds, start_day=9):
     now = datetime(2024, 4, start_day, 4, tzinfo=UTC)
+    complete_station(session, farm.id, now)
     begin = datetime(2024, 4, 9, tzinfo=UTC)
     values = []
     for i in range(150):

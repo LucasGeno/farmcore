@@ -248,6 +248,12 @@
     // The status chip: the core decision_chip, rendered once per decision into <template>s
     // (only while Crop protection is on). Another colouring layer falls back to its own label.
     function chip(info) {
+      if (info.assessment_status === "limited" || info.assessment_status === "unavailable") {
+        var availability = document.createElement("span");
+        availability.className = "font-semibold text-muted";
+        availability.textContent = "Assessment " + info.assessment_status;
+        return availability;
+      }
       var key = info.advised === false ? "not-advised" : info.decision;
       var tpl = key ? section.querySelector('template[data-chip="' + key + '"]') : null;
       if (tpl) return tpl.content.firstElementChild.cloneNode(true);

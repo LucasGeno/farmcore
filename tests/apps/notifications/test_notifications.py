@@ -9,6 +9,7 @@ from farmcore.core.clock import set_replay
 from farmcore.core.models.canonical import Advice
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.advisor import scenes
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.scenes import local
 from tests.apps.share.conftest import make_parcel
 
@@ -18,6 +19,7 @@ NOW = local("2024-04-10 06:00")
 
 def test_bell_shows_only_current_risky_parcels_with_safe_wait_wording(client, session, settings):
     farm = ensure_default_farm(session, settings)
+    complete_station(session, farm.id, NOW)
     for n, decision in enumerate(("spray", "wait", "protected", "none"), 1):
         parcel = make_parcel(session, farm, n)
         session.add(
@@ -131,6 +133,7 @@ def test_read_cookie_is_bounded_farm_local_and_does_not_hide_current_risk(
     import re
 
     farm = ensure_default_farm(session, settings)
+    complete_station(session, farm.id, NOW)
     parcel = make_parcel(session, farm, 1)
     row = Advice(
         farm_id=farm.id,
@@ -190,6 +193,7 @@ def test_unknown_advice_is_information_and_upcoming_window_is_not_infection_pred
     client, session, settings
 ):
     farm = ensure_default_farm(session, settings)
+    complete_station(session, farm.id, NOW)
     parcel = make_parcel(session, farm, 1)
     set_replay(session, NOW, settings)
     session.commit()

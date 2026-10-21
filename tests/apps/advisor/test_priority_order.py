@@ -11,6 +11,7 @@ from farmcore.apps.chat.push import digest
 from farmcore.core.clock import set_replay
 from farmcore.core.models.canonical import Advice
 from farmcore.core.seed import ensure_default_farm
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.scenes import local
 from tests.apps.share.conftest import make_parcel
 
@@ -80,6 +81,7 @@ def _reasons(level: int) -> list[dict]:
 
 def _farm_with_levels(session, settings, levels=(1, 3, 2)):
     farm = ensure_default_farm(session, settings)
+    complete_station(session, farm.id, NOW)
     for n, level in enumerate(levels, 1):
         parcel = make_parcel(session, farm, n)
         session.add(

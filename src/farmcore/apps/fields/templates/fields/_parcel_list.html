@@ -25,7 +25,7 @@
     name truncates instead of widening the page (QA F3). -#}
 <ul class="grid grid-cols-1 gap-2 sm:grid-cols-2 2xl:grid-cols-3">
   {% for p in parcels %}
-  {% set label = styles[p.decision][0] if p.advised else not_advised_label %}
+  {% set label = ("Assessment " ~ p.assessment_status) if p.advised and p.assessment_status in ("limited", "unavailable") else (styles[p.decision][0] if p.advised else not_advised_label) %}
   <li class="min-w-0 rounded-xl border border-line bg-surface" data-parcel="{{ p.alias }}">
     <a href="{{ map_read_url('/fields/parcels/' ~ p.id, p.id) }}" class="group flex min-h-[60px] items-center gap-3 px-3 py-2.5 transition-colors hover:bg-ground/60"
        aria-label="Open parcel {{ p.alias }} {{ p.name }}">

@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 
 from farmcore.core import clock
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.forecast.test_plan_calendar import top3
 from tests.apps.forecast.test_routes import _days
 from tests.apps.forecast.test_routes import imported as imported
@@ -63,6 +64,7 @@ def test_plan_replans_busy_advice_and_keeps_other_current_windows(
     from tests.apps.share.conftest import make_parcel
 
     now = datetime(2024, 4, 9, 4, tzinfo=UTC)
+    complete_station(session, farm.id, now)
     p1, p2, p3 = [make_parcel(session, farm, n) for n in (1, 2, 3)]
     session.add_all(
         [

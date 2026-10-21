@@ -18,6 +18,7 @@
   </div>
   <p id="lead" class="mt-3 text-[18px] font-semibold sm:text-[20px] leading-snug">{{ advice.lead }}</p>
   <p id="headline" class="mt-2 text-[13px] text-muted">{{ advice.headline }}</p>
+  {% if advice.id is not none %}<p data-config-version class="mt-2 text-sm text-muted">{% if advice.config_version.status == 'legacy-unversioned' %}Legacy · unversioned parameters{% else %}Parameter version {{ advice.config_version.id }} · {{ advice.config_version.status }}. Human opinion is not proof of field accuracy.{% endif %}</p>{% endif %}
   {% if advice.priority %}
   <div class="mt-3 flex flex-col items-start gap-1" data-fact="priority">
     <span class="text-[13px] text-muted">Spraying priority</span>
@@ -82,7 +83,7 @@
     {% endif %}
     {% if advice.tankmix %}<div><dt class="inline font-semibold">Tank-mix:</dt> <dd class="inline">{{ advice.tankmix }}</dd></div>{% endif %}
     {# Incubation progress is a model detail: Expert view or debug only. #}
-    {% if advice.incubation and (expert or debug) %}<div><dt class="inline font-semibold">Incubation:</dt> <dd class="inline tabular-nums">{{ advice.incubation }}. A risk indicator, not a prediction.</dd></div>{% endif %}
+    {% if advice.incubation and (expert or debug or advice.incubation_limited) %}<div><dt class="inline font-semibold">Incubation:</dt> <dd class="inline tabular-nums">{{ advice.incubation }}. A risk indicator, not a prediction.</dd></div>{% endif %}
   </dl>
   {% if advice.replay %}<p id="replay-note" class="mt-2 flex items-center gap-1.5 text-[13px] text-muted">{{ icon("info", "h-3.5 w-3.5") }}Replay: the observed weather stands in for the forecast.</p>{% endif %}
   {% if advice.flags %}

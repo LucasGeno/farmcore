@@ -84,3 +84,26 @@ def test_risk_without_a_stored_product_is_not_a_no_pass_claim():
         reasons=[reason("downy_3_10", "risk"), reason("protection_downy", "no cover")],
     )
     assert project(MODELS[0], row).action == "See combined advice"
+
+
+def test_stored_limited_models_retain_evidence_without_inventing_an_action():
+    for status in ("limited", "unavailable"):
+        risk = reason("downy_3_10", "risk", mm=10)
+        row = Advice(
+            decision="wait",
+            reasons=[risk],
+            products=[],
+            props={
+                "assessment_status": status,
+                "headline": "Observed risk; required inputs missing",
+            },
+        )
+        for model in MODELS:
+            view = project(model, row)
+            assert view.status == "Not evaluable"
+            assert view.action == "Observed risk; required inputs missing"
+            assert view.actionable is False
+            assert view.cover == "Not recorded"
+            if model.key == "downy":
+                assert view.reasons == (risk,)
+        assert row.reasons == [risk] and row.decision == "wait"

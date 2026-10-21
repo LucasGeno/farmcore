@@ -305,6 +305,13 @@ def _incubation(reasons: list[dict[str, Any]], evaluated_at: str | None, tz: str
         return None
     inputs, threshold = reason.get("inputs", {}), reason.get("threshold", {})
     pct, event = inputs.get("pct"), inputs.get("event")
+    if inputs.get("coverage") == "limited":
+        return (
+            "Incubation not evaluable: observed-hours accumulation only; "
+            "required temperature/humidity history is incomplete"
+        )
+    if not event and inputs.get("event_history_coverage") == "limited":
+        return "No observed infection event; historical event coverage is limited"
     if pct is None or not event:
         return "No infection event to incubate"
     zone = ZoneInfo(tz)
@@ -414,6 +421,8 @@ def _because(by_rule: dict[str, dict[str, Any]], products: list[dict[str, Any]])
 
 def _lead(advice: dict[str, Any], tz: str) -> str:
     """What, where and by when, in plain words, from the stored advice (no engine call)."""
+    if advice.get("assessment_status") in ("limited", "unavailable"):
+        return advice["headline"]
     if advice["id"] is None:
         return NO_ADVICE_HEADLINE
     by_rule = {r["rule"]: r for r in advice["reasons"]}
@@ -498,7 +507,9 @@ def _protection(reasons: list[dict[str, Any]], tz: str) -> dict[str, Any] | None
 
 
 def unavailable_view(request: Request, repo: Repo, *, full_page=False, parcel=None):
-    reason = service.unavailable_reason(repo)
+    reason = service.current_availability(
+        repo, _now(request, repo), request.app.state.settings.display_tz
+    )[1]
     if reason:
         history_context = (
             _history_context(request, repo, parcel, request.query_params.get("season"))
@@ -638,6 +649,10 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
         "protection": _protection(reasons, tz),
         "next_window_text": _next_window(advice, tz),
         "incubation": _incubation(reasons, advice["evaluated_at"], tz),
+        "incubation_limited": any(
+            r.get("rule") == "downy_incubation" and r.get("inputs", {}).get("coverage") == "limited"
+            for r in reasons
+        ),
         "evaluated_at": advice["evaluated_at"] and _fmt(advice["evaluated_at"], tz),
     }
     return {"parcel": advice["parcel"], "advice": view, "now": now, "debug": debug}
@@ -712,4 +727,24 @@ def _history_context(request: Request, repo: Repo, parcel: Parcel, season: str |
         else None,
         "when": when,
         "now": now,
+    }
+
+
+@router.get("/parcels/{parcel_id}/assessments/{advice_id}.json")
+def saved_assessment(parcel_id: int, advice_id: int, request: Request, repo: Repo):
+    """Exact saved assessment evidence for assigned members; never current-view projection."""
+    from farmcore.apps.review.routes import authorized_review
+    from farmcore.core.models.canonical import Advice
+
+    authorized_review(request, repo)
+    parcel = _parcel(repo, parcel_id)
+    if not 0 < advice_id < 2**63:
+        raise HTTPException(404, "Assessment unavailable")
+    row = repo.get(Advice, advice_id, scope=service.SCOPE)
+    if row is None or row.parcel_id != parcel.id or row.evaluated_at > _now(request, repo):
+        raise HTTPException(404, "Assessment unavailable")
+    return {
+        **service.advice_json(row),
+        "effective_config": (row.props or {}).get("effective_config"),
+        "input_snapshot": (row.props or {}).get("input_snapshot"),
     }

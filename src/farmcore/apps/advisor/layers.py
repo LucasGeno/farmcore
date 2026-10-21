@@ -42,6 +42,10 @@ def advice_layer(request: Request, repo: Repo) -> JSONResponse:
         props = feature["properties"]
         label, colour = styles_for(request)[props["decision"]]
         advice = latest.get(props["id"])
+        status = (advice.props or {}).get("assessment_status") if advice else None
+        if status in ("limited", "unavailable"):
+            props["decision"] = advice.decision
+            label = "Assessment " + status
         until = advice.protected_until if advice and props["decision"] == "protected" else None
         props.update(
             label=label if props["advised"] else NOT_ADVISED_LABEL,

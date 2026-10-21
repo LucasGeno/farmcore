@@ -77,6 +77,7 @@
       <ul class="mt-1">{% for r in protected %}{{ parcel_row(r) }}{% endfor %}</ul>
     </details>
     {% endif %}
+    {% if limited %}<div class="rounded-xl border border-line bg-surface p-4 text-sm text-muted" data-assessment-limited>{% for r in limited %}<p>{{ r.alias }}: {{ r.headline }}</p>{% endfor %}</div>{% endif %}
     {% if calm %}
     <div class="rounded-xl border border-line bg-surface px-4 py-3 text-[14px] text-muted">
       Nothing to do on {{ calm|map(attribute="alias")|join(", ") }}: no infection risk right now.

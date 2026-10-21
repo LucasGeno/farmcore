@@ -15,6 +15,7 @@ from farmcore.apps.forecast import ranking, store
 from farmcore.apps.stations import data_sources as station_sources
 from farmcore.apps.stations.service import station_for_farm
 from farmcore.apps.stations.today import STALE_AFTER
+from farmcore.core.access import ScopeDenied
 from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.urls import with_farm
 
@@ -56,7 +57,7 @@ def item(
 def items(repo, now, tz, visible, *, busy_days=()):
     out = []
     farm = repo.get(Farm, repo.farm_id, scope="fields:read")
-    unavailable = (farm.props or {}).get("advisor_unavailable_reason")
+    unavailable = advisor.current_availability(repo, now, tz)[1]
     if "advisor" in visible and unavailable:
         out.append(
             item(
@@ -121,7 +122,7 @@ def items(repo, now, tz, visible, *, busy_days=()):
         out.extend(i for _, i in sorted(advice_items, key=lambda pair: -pair[0]))
     if "stations" in visible:
         out.extend(station_items(repo, now, unavailable))
-    if "forecast" in visible and not unavailable:
+    if "forecast" in visible and not (farm.props or {}).get("advisor_unavailable_reason"):
         station = station_for_farm(repo)
         if not station or not station.props.get("archive_only"):
             out.extend(forecast_items(repo, now, tz, farm, busy_days))
@@ -144,7 +145,14 @@ def forecast_items(repo, now, tz, farm, busy_days):
                 href,
             )
         ]
-    config = advisor.config_for(farm, now, tz)
+    from farmcore.apps.review.service import resolve
+
+    try:
+        repo.check("parameters:read", "parameter_version")
+    except ScopeDenied:
+        config = advisor.config_for(farm, now, tz)
+    else:
+        config = resolve(repo, now, tz).config
     days = ranking.rank_days(run.series, now, tz, config, busy_days=busy_days)
     provenance = "As-issued forecast" if run.as_issued else "Forecast not as issued"
     if run.props.get("issued_at_kind") == "receipt":

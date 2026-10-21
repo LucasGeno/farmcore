@@ -15,6 +15,7 @@ from farmcore.core import clock, ext_ids
 from farmcore.core.access import FARM_COOKIE, ensure_owner_grant
 from farmcore.core.models.canonical import Advice, Farm, Parcel
 from farmcore.core.models.kernel import AppModule, ClockState
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.forecast.conftest import FIXTURE
 
 SQUARE = "SRID=4326;MULTIPOLYGON(((-0.16 44.89,-0.15 44.89,-0.15 44.90,-0.16 44.90,-0.16 44.89)))"
@@ -310,6 +311,7 @@ def test_without_a_forecast_by_now_the_note_says_so(client, session, settings, p
 def test_protected_days_say_so_without_changing_the_grade(
     client, session, settings, farm, parcel, imported
 ):
+    complete_station(session, farm.id, _utc(9, 4))
     session.add(
         Advice(
             farm_id=farm.id,
@@ -340,6 +342,7 @@ def test_today_shows_the_farm_window(client, session, settings, parcel, imported
 def test_the_advice_card_carries_the_window_slot_only_while_the_app_is_on(
     client, session, settings, parcel, imported
 ):
+    complete_station(session, parcel.farm_id, _utc(9, 4))
     on = _get(client, session, settings, f"/advisor/parcels/{parcel.id}", _utc(9, 4))
     session.get(AppModule, "forecast").state = "uninstalled"
     off = _get(client, session, settings, f"/advisor/parcels/{parcel.id}", _utc(9, 4))

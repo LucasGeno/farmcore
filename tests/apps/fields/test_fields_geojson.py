@@ -14,6 +14,7 @@ from farmcore.core.clock import set_replay
 from farmcore.core.commands.seed import run_seeds
 from farmcore.core.models.canonical import AccessLog, Advice, Log, Parcel
 from farmcore.core.registry import discover
+from tests.apps.advisor.review_fixtures import complete_station
 
 # 10 Apr 2024 06:00 Europe/Paris (CEST, UTC+2).
 NOW = datetime(2024, 4, 10, 4, 0, tzinfo=UTC)
@@ -29,6 +30,7 @@ def _parcel(session, id_parcel: str) -> Parcel:
 @pytest.fixture
 def seeded(session, synthetic_data_dir, settings):
     seed(session, scene=None, data_dir=synthetic_data_dir)
+    complete_station(session, _parcel(session, "900010").farm_id, NOW)
     set_replay(session, NOW, settings)
     session.commit()
     return session
@@ -71,6 +73,7 @@ def test_geojson_lists_parcels_in_alias_order_with_their_fields(client, seeded):
         "variety": "Merlot",
         "decision": "none",
         "advised": False,
+        "assessment_status": "unavailable",
         "last_spray": None,
         "card_url": f"/advisor/parcels/{parcel.id}",
         "label_point": ten["properties"]["label_point"],

@@ -35,7 +35,7 @@
     {% if expert %}<a href="{{ farm_url('/advisor/') }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700 underline">View crop protection{% if act|length > 3 %} · {{ act|length }} parcels need attention{% endif %}</a>{% endif %}
     {% else %}
     <div class="rounded-xl border border-line bg-surface px-4 py-3">
-      <h2 class="font-semibold">{% if hero.coverage[1] > 0 and hero.coverage[0] == hero.coverage[1] %}Nothing to spray today{% else %}{{ hero.title }}{% endif %}</h2>
+      <h2 class="font-semibold">{% if hero.coverage[1] > 0 and hero.coverage[0] == hero.coverage[1] and not hero.has_limited %}Nothing to spray today{% else %}{{ hero.title }}{% endif %}</h2>
       {% if hero.decision == 'protected' %}<p class="mt-1 text-sm text-protected-ink">{{ protected|length }} parcel{{ 's' if protected|length != 1 }} protected{% if hero.protected_until %} · first cover ends {{ hero.protected_until }}{% endif %}</p>{% endif %}
       {% if hero.reason %}<p class="mt-1 text-sm text-muted">{{ hero.reason }}</p>{% endif %}
       {% if advice_checked %}<p class="mt-2 text-sm text-muted">Advice checked {{ advice_checked|local }}{% if expert %} · oldest current parcel evaluation{% endif %}</p>{% endif %}

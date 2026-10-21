@@ -83,13 +83,22 @@ def farm_section(request: Request, repo: Repo) -> HTMLResponse:
     counts = [
         (d, NO_SPRAY_NEEDED if d == service.NO_ADVICE else None, _plural(n))
         for d in DECISIONS
-        if (n := sum(r.decision == d for r in evaluated))
+        if (
+            n := sum(
+                r.decision == d and r.assessment_status not in ("limited", "unavailable")
+                for r in evaluated
+            )
+        )
     ]
+    limited = [r for r in evaluated if r.assessment_status in ("limited", "unavailable")]
+    if limited:
+        counts.append(("none", "Assessment limited", _plural(len(limited))))
     waiting = len(rows) - len(evaluated)
     deadline = nearest_spray_deadline(rows, now)
     return render(
         request,
         "advisor/_map_farm.html",
+        limited=limited,
         total=len(rows),
         evaluated=len(evaluated),
         counts=counts,
@@ -144,7 +153,13 @@ def parcel_section(parcel_id: ParcelId, request: Request, repo: Repo) -> HTMLRes
     if advice is not None:
         flags = (advice.props or {}).get("flags", [])
         view.update(
-            chip_label=NO_SPRAY_NEEDED if row.decision == service.NO_ADVICE else None,
+            chip_label=(
+                "Assessment " + row.assessment_status
+                if row.assessment_status in ("limited", "unavailable")
+                else NO_SPRAY_NEEDED
+                if row.decision == service.NO_ADVICE
+                else None
+            ),
             rain=_rain_text(row.mm_since_spray, _rain_gap(advice)),
             weather_gap=DATA_GAP in flags,
             when=_window_text(row, advice.evaluated_at, now, tz),

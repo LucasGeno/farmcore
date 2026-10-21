@@ -19,6 +19,7 @@
     <li class="flex items-center gap-2" data-count="awaiting">{{ decision_chip("none", awaiting_label, size="sm") }}<span class="text-[15px]">{{ awaiting }}</span></li>
     {% endif %}
   </ul>
+  {% for r in limited %}<p class="text-sm text-muted">{{ r.alias }}: {{ r.headline }}</p>{% endfor %}
   {% if deadline %}
   <p class="flex items-center gap-2 text-[15px]" data-fact="deadline">{{ icon("clock", "h-4 w-4 text-spray") }}<span>Nearest spray deadline: <strong>{{ deadline[0] }}</strong> ({{ deadline[1] }})</span></p>
   {% endif %}

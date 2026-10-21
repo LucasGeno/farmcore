@@ -9,11 +9,10 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.postgresql import distinct_on
 
 from farmcore.apps.fields.seed import alias_number
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Advice, Log, LogParcel, Parcel
+from farmcore.core.models.canonical import Log, LogParcel, Parcel
 
 NO_ADVICE = "none"
 CARD_URL = "/advisor/parcels/{id}"
@@ -41,18 +40,6 @@ NOT_ADVISED_LABEL = "No advice yet"
 def styles_for(request) -> dict[str, tuple[str, str]]:
     """The map/legend colours for this viewer: the strong set with the Sunlight cookie."""
     return HIGH_CONTRAST_STYLES if request.cookies.get("sunlight") == "1" else DECISION_STYLES
-
-
-def _latest_decisions(repo: ScopedRepository, now: datetime) -> dict[int, str]:
-    """parcel id -> decision of its latest advice with `evaluated_at <= now`."""
-    stmt = (
-        select(Advice.parcel_id, Advice.decision)
-        .where(Advice.farm_id == repo.farm_id, Advice.evaluated_at <= now)
-        .ext(distinct_on(Advice.parcel_id))
-        .order_by(Advice.parcel_id, Advice.evaluated_at.desc(), Advice.id.desc())
-    )
-    rows = repo.execute(stmt, scope="advice:read", resource="advice")
-    return {parcel_id: decision for parcel_id, decision in rows}
 
 
 def _last_sprays(repo: ScopedRepository, now: datetime) -> dict[int, datetime]:
@@ -89,7 +76,10 @@ def parcels_feature_collection(
         func.ST_Y(point).label("label_y"),
     ).where(Parcel.farm_id == repo.farm_id)
     rows = repo.execute(stmt, scope="fields:read", resource="parcel").all()
-    decisions = _latest_decisions(repo, now)
+    from farmcore.apps.advisor.service import latest_advice
+
+    assessments = latest_advice(repo, now)
+    decisions = {pid: row.decision for pid, row in assessments.items()}
     sprays = _last_sprays(repo, now)
     zone = ZoneInfo(tz)
     features = []
@@ -110,6 +100,13 @@ def parcels_feature_collection(
                     "variety": parcel.props.get("variety"),
                     "decision": decisions.get(parcel.id, NO_ADVICE),
                     "advised": parcel.id in decisions,
+                    "assessment_status": (
+                        (assessments[parcel.id].props or {}).get(
+                            "assessment_status", "legacy-unknown"
+                        )
+                        if parcel.id in assessments
+                        else "unavailable"
+                    ),
                     "last_spray": last.astimezone(zone).date().isoformat() if last else None,
                     "card_url": CARD_URL.format(id=parcel.id),
                     "label_point": [label_x, label_y],

@@ -26,6 +26,7 @@ from farmcore.core.access import FARM_COOKIE, ensure_owner_grant
 from farmcore.core.models.canonical import Advice, Farm
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.advisor import scenes
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.scenes import confirm_spray, local
 from tests.apps.advisor.test_presenter import row, spray
 from tests.apps.operations.conftest import make_parcel
@@ -71,6 +72,7 @@ def at(session, settings, t):
 @pytest.fixture
 def farm(session, settings):
     f = ensure_default_farm(session, settings)
+    complete_station(session, f.id, NOW + timedelta(hours=2))
     parcels = [make_parcel(session, f, n, area="1", props={}) for n in (1, 2, 3)]
     at(session, settings, NOW)
     return f, parcels
@@ -110,7 +112,8 @@ def test_manifest_declares_the_sections() -> None:
 
 
 def test_empty_farm(client, session, settings) -> None:
-    ensure_default_farm(session, settings)
+    empty = ensure_default_farm(session, settings)
+    complete_station(session, empty.id, NOW)
     at(session, settings, NOW)
     resp = client.get("/advisor/map/farm")
     assert resp.status_code == 200
@@ -236,6 +239,7 @@ def farms(client, session, settings, farm):
     session.add(second)
     session.flush()
     ensure_owner_grant(session, second)
+    complete_station(session, second.id, datetime(2024, 5, 10, 4, tzinfo=UTC))
     p202 = make_parcel(session, second, 202, area="2", props={})
     advise(session, second, p202, "protected", until=NOW + timedelta(days=3))
     session.commit()
@@ -362,6 +366,7 @@ def test_expired_stored_forecast_window_never_claims_open_now(client, session, s
     session.add(second)
     session.flush()
     ensure_owner_grant(session, second)
+    complete_station(session, second.id, datetime(2024, 5, 10, 4, tzinfo=UTC))
     make_parcel(session, first, 1, area="1", props={})
     from farmcore.core import ext_ids
     from farmcore.core.models.canonical import Parcel

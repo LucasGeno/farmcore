@@ -15,6 +15,7 @@ from pydantic import SecretStr
 from farmcore.apps.operations import seed as ops_seed
 from farmcore.core import clock, logs
 from farmcore.main import create_app
+from tests.apps.advisor.review_fixtures import complete_station
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW = datetime(2024, 6, 1, 8, 0, tzinfo=PARIS)
@@ -147,6 +148,7 @@ def test_mode_switch_needs_the_admin_and_is_blocked_for_tour_visitors(
 
 
 def test_crop_protection_page_loads_the_production_section(client, session, settings, demo):
+    complete_station(session, demo.farm.id, NOW)
     _setup(session, settings, demo)
 
     page = client.get("/advisor/").text

@@ -49,6 +49,7 @@ class ParcelRow:
     name: str = ""
     decision: str = service.NO_ADVICE
     has_advice: bool = False
+    assessment_status: str = "legacy-unknown"
     products: tuple[str, ...] = ()
     window_start: datetime | None = None
     window_end: datetime | None = None
@@ -119,6 +120,7 @@ def parcel_row(parcel: Parcel, advice: Advice | None, tz: str) -> ParcelRow:
         **base,
         decision=advice.decision,
         has_advice=True,
+        assessment_status=props.get("assessment_status", "legacy-unknown"),
         products=tuple(p["name"] for p in advice.products or [] if p.get("name")),
         window_start=advice.next_window_start,
         window_end=advice.next_window_end,
@@ -187,6 +189,10 @@ class FarmAdvice:
             if members:
                 out.append(Section(d, SECTION_TITLES[d], members))
         return tuple(out)
+
+    @property
+    def has_limited(self) -> bool:
+        return any(r.assessment_status in ("limited", "unavailable") for r in self.rows)
 
     @property
     def title(self) -> str:
@@ -329,8 +335,18 @@ def present_farm_advice(rows: list[ParcelRow], now: datetime, tz: str) -> FarmAd
         decision=lead,
         coverage=coverage,
         groups=groups,
-        headline=_headline(lead, len(members), len(groups), coverage),
-        label=_label(lead, coverage),
+        headline=(
+            ("", None, "Assessment limited or unavailable: required inputs missing")
+            if lead == service.NO_ADVICE
+            and any(r.assessment_status in ("limited", "unavailable") for r in rows)
+            else _headline(lead, len(members), len(groups), coverage)
+        ),
+        label=(
+            "Assessment limited"
+            if lead == service.NO_ADVICE
+            and any(r.assessment_status in ("limited", "unavailable") for r in rows)
+            else _label(lead, coverage)
+        ),
         awaiting=f"{waiting} awaiting advice" if waiting and evaluated else "",
         reason=groups[0].reason if groups else "",
         protected_until=_day(min(until), tz) if until else "",
