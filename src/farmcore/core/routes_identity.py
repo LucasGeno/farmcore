@@ -18,6 +18,7 @@ from farmcore.core.identity import (
 from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 from farmcore.core.routes_demo import same_origin
 from farmcore.core.routes_farms import safe_next
+from farmcore.core.tour import end_tour
 from farmcore.web import is_sunlight, templates
 
 router = APIRouter()
@@ -142,4 +143,5 @@ def logout(request: Request):
     response.headers["Cache-Control"] = "no-store"
     for name in ("farmcore_session", "farmcore_csrf", "farmcore_farm"):
         response.delete_cookie(name, secure=True, httponly=True, samesite="strict")
+    end_tour(request, response)
     return response

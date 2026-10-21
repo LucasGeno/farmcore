@@ -62,6 +62,16 @@
     </div>
   </header>
 
+  {% if is_tour %}
+  <div role="status" aria-label="Tour mode" class="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-brand-50 px-4 py-2 text-sm text-brand-900">
+    <span><strong class="font-semibold">You're in the read-only tour.</strong> Nothing can be changed here.</span>
+    <form method="post" action="/tour/exit">
+      {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+      <input type="hidden" name="next" value="{{ nav_request_path or '/' }}">
+      <button class="min-h-[44px] rounded-lg border border-line bg-surface px-3 font-semibold hover:bg-ground">Exit tour</button>
+    </form>
+  </div>
+  {% endif %}
   {% if principal_login %}
   <div class="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-surface px-4 py-2 text-sm">
     <span>{{ principal_login }} · {{ member_role or 'no farm selected' }}</span>

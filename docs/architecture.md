@@ -45,7 +45,9 @@ database, a small core and installable apps, in the style of Odoo.
   installation (the `ADMIN_TOKEN` holder) and no per-user accounts: see
   [SECURITY.md](../SECURITY.md) for what anonymous visitors can see.
 - **Read-only tour.** `/tour` sets a browser cookie that refuses every non-GET request before
-  routing, even with administrator credentials, for sharing a demo safely.
+  routing, even with administrator credentials, for sharing a demo safely. Every page shows a
+  tour banner; the only requests let through are the ones that leave the tour (`POST /tour/exit`
+  and the two sign-outs), each with its usual Origin/CSRF checks.
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
 

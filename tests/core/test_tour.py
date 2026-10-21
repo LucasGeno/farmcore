@@ -1,9 +1,12 @@
 """Tour restrictions apply before routing, even to an authenticated administrator."""
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from farmcore.core.models.canonical import Farm
 from farmcore.main import create_app
 
 WRITES = (
@@ -326,3 +329,87 @@ def test_tour_hides_configured_telegram_logging_actions(
         if credential == "cookie":
             client.cookies.set("admin_token", "test-admin")
         assert 'href="https://t.me/synthetic_tour_test_bot"' in client.get(path).text
+
+
+def _member_in_tour(settings, factory, role="owner"):
+    """A signed-in farm member whose browser has opened the tour."""
+    from farmcore.core.access import ensure_owner_grant
+    from farmcore.core.clock import clock_row
+    from tests.core.test_member_sessions import _account, _login
+
+    _, farm_id = _account(factory, role=role)
+    with factory() as session:  # an installation that has run once outside the tour
+        ensure_owner_grant(session, session.get(Farm, farm_id))
+        clock_row(session, settings)
+        session.commit()
+    browser = TestClient(
+        create_app(settings, session_factory=factory), base_url="https://testserver"
+    )
+    assert _login(browser).status_code == 303
+    assert browser.get("/tour").status_code == 200
+    return browser, farm_id
+
+
+def _post(browser, path, data=None, origin="https://testserver"):
+    form = {"csrf_token": browser.cookies.get("farmcore_csrf"), **(data or {})}
+    return browser.post(path, data=form, headers={"Origin": origin}, follow_redirects=False)
+
+
+def test_owner_tour_shows_exit_banner_and_opens_sharing_read_only(
+    settings, committed_session_factory
+):
+    browser, _ = _member_in_tour(settings, committed_session_factory)
+    with browser:
+        tour = browser.get("/tour")
+        assert 'href="/share/"' in tour.text
+        for path in ("/today/", "/share/", "/farms/members"):
+            page = browser.get(path)
+            assert page.status_code == 200, path
+            assert "Exit tour" in page.text
+            # Owner pages render read-only: the only forms that post leave the tour.
+            posts = re.findall(r'<form[^>]*method="post"[^>]*action="([^"]+)"', page.text)
+            assert sorted(posts) == ["/logout", "/tour/exit"], path
+
+
+def test_advisor_in_tour_is_still_refused_owner_pages(settings, committed_session_factory):
+    browser, _ = _member_in_tour(settings, committed_session_factory, role="advisor")
+    with browser:
+        for path in ("/share/", "/farms/members"):
+            assert browser.get(path).status_code == 403, path
+
+
+def test_exit_tour_returns_to_the_page_and_writes_work_again(settings, committed_session_factory):
+    browser, farm_id = _member_in_tour(settings, committed_session_factory)
+    with browser:
+        production = {"mode": "organic"}
+        assert (
+            _post(browser, f"/operations/production?farm={farm_id}", production).status_code == 403
+        )
+        assert _post(browser, "/tour/exit", origin="https://evil.example").status_code == 403
+        assert browser.cookies.get("farmcore_tour") == "1"
+        left = _post(browser, "/tour/exit", {"next": "/share/?status=active"})
+        assert left.status_code == 303
+        assert left.headers["location"] == "/share/?status=active"
+        assert browser.cookies.get("farmcore_tour") is None
+        assert 'action="/tour/exit"' not in browser.get("/share/").text
+        assert (
+            _post(browser, f"/operations/production?farm={farm_id}", production).status_code == 303
+        )
+        for next_path in ("/tour", "//evil.example"):
+            browser.get("/tour")
+            assert _post(browser, "/tour/exit", {"next": next_path}).headers["location"] == "/"
+    with committed_session_factory() as session:
+        assert session.get(Farm, farm_id).props.get("production") == "organic"
+
+
+def test_sign_out_in_tour_ends_the_session_and_the_tour(settings, committed_session_factory):
+    browser, _ = _member_in_tour(settings, committed_session_factory)
+    with browser:
+        assert _post(browser, "/logout/").status_code == 403  # the allowlist is exact paths
+        response = _post(browser, "/logout")
+        assert response.status_code == 303
+        assert response.headers["location"] == "/login"
+        assert browser.cookies.get("farmcore_session") is None
+        assert browser.cookies.get("farmcore_tour") is None
+        browser.cookies.set("farmcore_tour", "1")
+        assert _post(browser, "/tour/exit", origin="https://evil.example").status_code == 403

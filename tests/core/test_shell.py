@@ -138,7 +138,8 @@ def test_tour_shell_has_no_demo_admin_or_app_mutations(client):
     assert 'href="/demo/"' in client.get("/today/").text
     client.cookies.set("farmcore_tour", "1")
     assert 'href="/demo/"' not in client.get("/today/").text
-    assert 'method="post"' not in client.get("/apps").text
+    apps = client.get("/apps").text
+    assert apps.count('method="post"') == 1 and 'action="/tour/exit"' in apps  # only the exit
 
 
 def test_optional_daily_apps_disappear_from_navigation_and_home(client):
