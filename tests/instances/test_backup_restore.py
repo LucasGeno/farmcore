@@ -1088,7 +1088,7 @@ def test_a_signal_during_the_swap_waits_for_it_and_says_the_copy_is_in(
 
     def stopped_during(copy) -> None:
         os.kill(os.getpid(), signal.SIGTERM)  # `docker compose stop` at this very moment
-        swap(copy)
+        return swap(copy)
 
     monkeypatch.setattr(restore.Copy, "swap", stopped_during)
     # Another thread in the process (libraries start them), which may receive the signal.
@@ -1436,13 +1436,13 @@ def test_a_restore_kept_from_the_database_list_after_the_swap_says_the_data_is_i
     bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
     target = dbs.create()
     env = dbs.installation(target)
-    swap = restore.Copy.swap
+    drop_old = restore.Copy.drop_old
 
-    def then_busy(copy) -> None:
-        swap(copy)
+    def then_busy(copy, old: str) -> None:
+        drop_old(copy, old)
         database_list_locker.lock()
 
-    monkeypatch.setattr(restore.Copy, "swap", then_busy)
+    monkeypatch.setattr(restore.Copy, "drop_old", then_busy)
 
     result = cli("restore", str(bundle), "--identity", str(key), env=env)
 
@@ -1657,6 +1657,103 @@ esac
     assert "restore: cannot use the database:" in result.output, result.output
     assert dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target) == oid
     assert staging_of(dbs, target) == []
+
+
+def test_a_restore_killed_between_the_renames_leaves_the_target_under_its_name(
+    source, dbs, cli, owner_key, tmp_path, private_tmp
+):
+    """The two renames are one transaction: a restore killed (SIGKILL, a crash) while the
+    second one waits for a lock leaves the target as it was, never no database by its name."""
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    oid = dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target)
+    held = HeldLoad(tmp_path, bundle, key, env, private_tmp)
+    staging, _ = held_copy(dbs, target)
+    # A transaction that comments on the staging copy locks it: renaming it waits.
+    engine = create_engine(dbs.server.url("postgres"))
+    conn = engine.connect()
+    try:
+        conn.begin()
+        conn.exec_driver_sql(f"COMMENT ON DATABASE \"{staging}\" IS 'held'")
+        held.release()
+        deadline = time.monotonic() + 120
+        while not (
+            renaming := dbs.query(
+                "postgres",
+                "SELECT pid FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                "AND query LIKE 'ALTER DATABASE%RENAME%'",
+            )
+        ):
+            assert held.proc.poll() is None, held.result()
+            assert time.monotonic() < deadline, "restore never reached the swap"
+            time.sleep(0.05)
+        held.proc.kill()  # and its session dies with it, as in a crash
+        dbs.query("postgres", "SELECT pg_terminate_backend(:p)", p=renaming[0][0])
+    finally:
+        conn.rollback()
+        conn.close()
+        engine.dispose()
+    held.result()
+
+    assert dbs.query("postgres", "SELECT oid FROM pg_database WHERE datname = :d", d=target) == oid
+    again = cli("restore", str(bundle), "--identity", str(key), env=env)
+    assert again.exit_code == 0, again.output
+    assert staging_of(dbs, target) == []
+
+
+@pytest.mark.parametrize("held", ["database list", "staging copy"])
+def test_a_swap_kept_waiting_for_a_lock_renames_nothing_and_says_so(
+    source, dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch, short_lock_timeout,
+    database_list_locker, held,
+):  # fmt: skip
+    """The swap waits for a lock (`pg_database`, or the staging copy for its rename) at most
+    the lock timeout, well within `docker compose stop`'s 10 seconds, and a swap that timed
+    out renamed nothing."""
+    from farmcore.core.commands import restore
+
+    key, recipient = owner_key
+    bundle = backup(cli, source, recipient, tmp_path / "a.farmcore-backup")
+    target = dbs.create()
+    env = dbs.installation(target)
+    untouched = Untouched(dbs, source["name"], target, [bundle], private_tmp)
+    swap = restore.Copy.swap
+    started: list[float] = []
+    engine = create_engine(dbs.server.url("postgres"))
+    conn = engine.connect()
+    released = threading.Timer(3, conn.rollback)
+
+    def busy_then_swap(copy) -> None:
+        if held == "database list":
+            database_list_locker.lock()
+        else:  # commenting on the copy locks it until this transaction ends, after 3 s
+            conn.begin()
+            conn.exec_driver_sql(f"COMMENT ON DATABASE \"{copy.name}\" IS 'held'")
+            released.start()  # the cleanup's DROP DATABASE waits for it too
+        started.append(time.monotonic())
+        return swap(copy)
+
+    monkeypatch.setattr(restore.Copy, "swap", busy_then_swap)
+    try:
+        result = cli("restore", str(bundle), "--identity", str(key), env=env)
+    finally:
+        waited = time.monotonic() - started[0]
+        database_list_locker.unlock()
+        if released.is_alive():
+            released.join()
+        conn.close()
+        engine.dispose()
+
+    assert result.exit_code == 1
+    assert "restore: the server is busy" in result.output, result.output
+    assert "locked for over 1s; nothing was restored, try again" in result.output, result.output
+    assert waited < 10
+    assert staging_of(dbs, target) == []
+    untouched.check()
+    monkeypatch.setattr(restore.Copy, "swap", swap)
+    again = cli("restore", str(bundle), "--identity", str(key), env=env)
+    assert again.exit_code == 0, again.output
 
 
 def test_a_swap_that_fails_while_a_signal_waits_reports_the_swap_error(

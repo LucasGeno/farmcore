@@ -722,25 +722,36 @@ class Copy:
             engine.dispose()
         self.loader_created = False
 
-    def swap(self) -> None:
-        """The staging database takes the target's name; the empty target is dropped."""
+    def swap(self) -> str:
+        """The staging database takes the target's name, and the empty target a new one (which
+        it returns), in one transaction: both renames happen, or neither (a failure, a crash,
+        a wait for a lock past `LOCK_TIMEOUT`)."""
         old = f"{self.url.database[:32]}_old_{self.short[-6:]}_{uuid.uuid4().hex[:8]}"
-        engine = self._admin()
+        engine = create_engine(self.url.set(database="postgres"))
         try:
-            with engine.connect() as conn:
+            with engine.begin() as conn:
                 q = conn.dialect.identifier_preparer.quote
-                conn.exec_driver_sql(f"ALTER DATABASE {q(self.url.database)} RENAME TO {q(old)}")
+                lock_databases(conn)  # its timeout holds for the renames too
                 try:
+                    conn.exec_driver_sql(
+                        f"ALTER DATABASE {q(self.url.database)} RENAME TO {q(old)}"
+                    )
                     conn.exec_driver_sql(
                         f"ALTER DATABASE {q(self.name)} RENAME TO {q(self.url.database)}"
                     )
-                except BaseException:
-                    conn.exec_driver_sql(
-                        f"ALTER DATABASE {q(old)} RENAME TO {q(self.url.database)}"
-                    )
-                    raise
-                self.created = False
-                conn.exec_driver_sql(f"DROP DATABASE {q(old)} WITH (FORCE)")
+                except DBAPIError as exc:
+                    raise ServerBusy() if lock_timed_out(exc) else exc from None
+        finally:
+            engine.dispose()
+        self.created = False
+        return old
+
+    def drop_old(self, old: str) -> None:
+        """Drop the empty target, renamed by the swap."""
+        engine = self._admin()
+        try:
+            with engine.connect() as conn:
+                conn.exec_driver_sql(f"DROP DATABASE {_q(conn, old)} WITH (FORCE)")
         finally:
             engine.dispose()
 
@@ -787,8 +798,8 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
             copy.sweep()
             swapped = False
             try:
-                # Never stopped between the two renames: a signal that arrives during the swap
-                # is held, and delivered once this block is left (outside the cleanup below).
+                # Never stopped inside the swap: a signal that arrives during it is held, and
+                # delivered once this block is left (outside the cleanup below).
                 with contextlib.ExitStack() as deferred:
                     try:
                         copy.create()
@@ -799,8 +810,9 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
                         copy.drop_loader()
                         check_target(settings)  # still empty: nobody started using it meanwhile
                         deferred.enter_context(_signals_deferred())
-                        copy.swap()
+                        old = copy.swap()
                         swapped = True
+                        copy.drop_old(old)
                     except BaseException as exc:
                         _close_what_failed(exc)
                         copy.discard()

@@ -364,11 +364,13 @@ the same installation is not cut short: it waits for it to finish.
 
 If restore stops after the swap (say, the runtime role cannot be set up), it says so: the
 data is in, paused, with no sessions. Fix the cause and run
-`docker compose -p farm-c --env-file farm-c.env up -d`, whose `migrate` finishes the job. A swap
-that fails halfway renames the target back, and `SIGTERM` or `SIGHUP` during the swap waits
-for it to finish, then says the copy is in. Only if the process is killed with `SIGKILL`
-between the two renames is there no `farmcore` database: rename `farmcore_restore_<hex>_<hex>`
-to `farmcore` with `ALTER DATABASE`, and drop the empty `farmcore_old_<hex>_<hex>`.
+`docker compose -p farm-c --env-file farm-c.env up -d`, whose `migrate` finishes the job. The
+swap is one transaction: the target becomes `farmcore_old_<hex>_<hex>` and the staging copy
+`farmcore` together, or neither is renamed. A swap that fails or waits too long, or is cut
+short by `SIGKILL` or a crash, leaves the target as it was under its name (the next restore
+removes the staging copy), and `SIGTERM` or `SIGHUP` during the swap waits for it to finish,
+then says the copy is in. Restore then drops the emptied `farmcore_old_<hex>_<hex>`; if it is
+killed after the swap, run `up -d` as above and drop that empty database by hand.
 
 The restored installation is independent of the original: restoring into C never changes A
 or any other project, and both may keep running.
