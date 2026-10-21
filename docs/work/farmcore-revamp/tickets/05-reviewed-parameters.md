@@ -256,3 +256,33 @@ Final runs after the last edit:
   selection after the fix: **956 passed, 3 skipped, 193 deselected**.
 - Node: 32 passed. `uv run alembic heads`: `review_0001 (head)`.
 
+
+### Rebase and storage measurement — 2026-10-22
+
+Rebased onto `main` at `fba0749`; the pinned CSS took main's copy and was rebuilt with
+`scripts/build_css.sh` (38382 bytes, digest in the vendor README). `latest_advice` and
+current availability now use the configured display timezone. `scripts/check.sh` on the
+rebased head: ruff clean; **2773 passed, 3 skipped, 281 deselected in 497.24s** (skips:
+optional SIGPAC/InfoRiego data).
+
+Scene B seeded on a fresh migrated database and replayed daily at 06:00 from 10 Apr to
+8 Jul 2024 (90 steps, 900 advice rows, 10 parcels): stored `props` average 128,998
+bytes per row (max 190,080; 1.06 MB average as JSON text, of which the full
+observation rows are 0.84 MB and the hourly series 0.20 MB). The advice table is
+120 MB after the season, almost all TOAST; the same rows without the evidence
+average 568 bytes. The live job evaluates hourly, so one 10-parcel farm would store
+about 2.8 GB per season.
+
+Measured alternatives on the same rows, no migration needed for either:
+
+- Drop the duplicated full observation rows and the per-row configuration (the
+  immutable version row already holds it): 33,184 bytes per row, 31 MB per season.
+  Keeps the exact hourly series the engine read.
+- Keep references only: station, evaluated window, observation count and highest id,
+  a SHA-256 digest of the hourly series, the rejected or missing hours, and the
+  spray logs, quantities and sources; configuration by version id and hash: 1,977
+  bytes per row, 2.6 MB per season. Observations can be upserted later, so a digest
+  detects a changed input but cannot rebuild it.
+
+Storing one series per farm run instead of per parcel needs a new table, so a core
+migration.
