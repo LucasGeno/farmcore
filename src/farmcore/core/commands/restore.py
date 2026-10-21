@@ -381,6 +381,15 @@ def check_manifest(manifest: object, dump: Path) -> dict:
     return manifest
 
 
+def verify_plain(plain: Path, into: Path) -> tuple[dict, Path]:
+    """Steps 1 and 2 on the decrypted archive `plain`, which only touch files: `unpack` into
+    `into`, delete `plain` (the decrypted archive never waits on disk while the dump is
+    hashed), then `check_manifest`. The manifest and the dump's path."""
+    manifest, dump = unpack(plain, into)
+    plain.unlink()
+    return check_manifest(manifest, dump), dump
+
+
 def _dump_heads(dump: Path) -> list[str]:
     """The schema revisions recorded inside the dump itself (its `alembic_version` rows).
 
@@ -396,11 +405,12 @@ def _dump_heads(dump: Path) -> list[str]:
     return sorted(rows.group(1).split()) if rows else []
 
 
-def check_compatible(manifest: dict, dump: Path) -> list[str]:
+def check_compatible(manifest: dict, dump_heads: list[str], script: ScriptDirectory) -> list[str]:
+    """The bundle's heads, if the dump records the ones its manifest names (`dump_heads`, read
+    from the dump, sorted) and this release's migrations (`script`) know every one of them."""
     heads = sorted(manifest["alembic_heads"])
-    if _dump_heads(dump) != heads:
+    if dump_heads != heads:
         raise BundleError("the dump's schema revision does not match the manifest")
-    script = ScriptDirectory.from_config(alembic_config())
     for head in heads:
         try:
             known = script.get_revision(head)
@@ -450,11 +460,24 @@ def _toc(listing: str) -> list[tuple[str, str]]:
     return entries
 
 
-def _list(dump: Path) -> list[tuple[str, str]]:
+def _listing(dump: Path) -> str:
+    """`pg_restore --list` of `dump`: its table of contents, read without executing anything."""
     listed = subprocess.run([tool("pg_restore"), "--list", str(dump)], capture_output=True)
     if listed.returncode != 0:
         raise BundleError(f"the dump is unreadable: {tool_error(listed.stderr)}")
-    return _toc(listed.stdout.decode(errors="replace"))
+    return listed.stdout.decode(errors="replace")
+
+
+def check_objects(listing: str, expected: str) -> list[tuple[str, str]]:
+    """The dump's entries, from its `pg_restore --list` (`listing`), as (line, key). Refuse any
+    object the listing of FarmCore's own schema at the bundle's revision (`expected`) lacks."""
+    entries = _toc(listing)
+    extra = sorted({key for _, key in entries} - {key for _, key in _toc(expected)})
+    if extra:
+        more = f"; and {len(extra) - 5} more" if len(extra) > 5 else ""
+        shown = "; ".join(map(_printable, extra[:5])) + more
+        raise BundleError(f"the dump holds objects that are not part of FarmCore: {shown}")
+    return entries
 
 
 def _safe_load_error(stderr: bytes) -> str:
@@ -603,13 +626,8 @@ class Copy:
         )  # fmt: skip
         if done.returncode != 0:
             raise BundleError(f"pg_dump of the new schema failed: {tool_error(done.stderr)}")
-        expected = {key for _, key in _list(expected_dump)}
-        entries = _list(dump)
-        extra = sorted({key for _, key in entries} - expected)
-        if extra:
-            more = f"; and {len(extra) - 5} more" if len(extra) > 5 else ""
-            shown = "; ".join(map(_printable, extra[:5])) + more
-            raise BundleError(f"the dump holds objects that are not part of FarmCore: {shown}")
+        expected = _listing(expected_dump)
+        entries = check_objects(_listing(dump), expected)
         engine = create_engine(self._url(self.staging))
         try:
             with engine.connect() as conn:
@@ -797,10 +815,9 @@ def restore_bundle(settings: Settings, bundle: Path, identity: Path) -> tuple[di
         tmp = Path(name)
         plain = tmp / "bundle.tar"
         decrypt(bundle, identity, plain)
-        manifest, dump = unpack(plain, tmp)
-        plain.unlink()
-        check_manifest(manifest, dump)
-        heads = check_compatible(manifest, dump)
+        manifest, dump = verify_plain(plain, tmp)
+        script = ScriptDirectory.from_config(alembic_config())
+        heads = check_compatible(manifest, _dump_heads(dump), script)
         copy = Copy(settings, check_target(settings))
         with copy.exclusive():
             copy.sweep()
