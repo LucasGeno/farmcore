@@ -165,7 +165,11 @@ class Project:
             return json.loads(resp.read())
 
     def up(self, deadline_s: float = 240) -> None:
-        self.compose("up", "-d")
+        started = self.compose("up", "-d", check=False)
+        if started.returncode != 0:
+            raise AssertionError(
+                f"{self.name}: docker compose up failed:\n{started.stderr[-4000:]}"
+            )
         deadline = time.monotonic() + deadline_s
         while inspect(self.container("app"))["State"].get("Health", {}).get("Status") != "healthy":
             if time.monotonic() > deadline:

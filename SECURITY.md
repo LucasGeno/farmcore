@@ -91,8 +91,47 @@ requests remain available for trusted scripts. Never put credentials or tokens i
 - Telegram: keep `TELEGRAM_ALLOWED_USER_IDS` set (empty means nobody); run one bot per token.
 - Vertex AI: use a service account that can only call `aiplatform.endpoints.predict`, mount its
   key as a file (`docker-compose.vertex.yml`), and set budget alerts.
-- Back up the database (the `backup` service) and test a restore before relying on the data.
+- Back up with the `backup` service (set `BACKUP_RECIPIENT`, the public half of an age key you
+  keep off the server) and test a restore before relying on the data.
 - Only install apps you trust: an app is Python code running with full database access.
+
+## Backups and restore
+
+A backup bundle is encrypted with [age](https://age-encryption.org) to the owner's public key:
+only the private key reads it. age gives confidentiality, not authenticity: the public key sits
+in the server's environment, and anyone who has it can encrypt a bundle of their own. So a
+bundle is data only, never code:
+
+- `farmcore restore` never runs a bundle's SQL as the database superuser. The schema comes from
+  this release's own migrations; a dump holding anything that schema lacks (a function,
+  trigger, view, rule, extra table, index or schema) is refused before any row is loaded.
+- Rows are loaded with `pg_restore --data-only` connected as a temporary login role created for
+  that restore: not a superuser, no role membership, no `CREATE` or `TEMP` anywhere, `INSERT`
+  only on FarmCore's tables and `UPDATE` only on their sequences, `CONNECT` only to the staging
+  database. Whatever SQL an archive carries in its data entries runs with those rights only. The
+  role is dropped (with anything it owns) before the copy goes live.
+- Member sessions are never loaded, database settings an archive records are never applied,
+  and the copy starts with a new `installation_id` and external effects paused.
+- The archive is read strictly: two plain files, no links, devices or sparse files, nothing
+  larger than the archive itself. Strings from the bundle reach the terminal escaped.
+- Restore revokes `CONNECT` and `TEMP` from PUBLIC on every database of the server but
+  `template0`, permanently (as `migrate` does), so the loader role opens only the staging
+  database. One restore runs per target; SIGTERM and SIGHUP still clean up, a signal during
+  the swap waits for its end, and the next restore removes what a SIGKILL left (its staging
+  database and loader role, and its temporary directory once six hours old).
+
+What restore cannot prove is that the rows are the ones you backed up, and the rows are what
+grants access: members and their password hashes, farm roles and memberships, sharing grants,
+app states and settings, and the farms' links to Telegram chats are all rows. Whoever forges a
+bundle chooses who can sign in to the copy (as its owner, with a password they know) and, once
+effects are enabled, which chats its advice push writes to. A bundle someone hands you is as
+untrusted as one replaced on shared storage: restore only bundles you wrote and kept where
+only you can write. Old plain `.dump` files from earlier releases are not bundles and are
+restored by hand as the superuser, so only restore dumps you made and kept yourself.
+
+For migration authors: after a restore, `migrate` runs every newer migration as the superuser
+over those restored rows. A migration must never put a row's value into SQL text (no string
+formatting of selected values into `op.execute`); use set-based statements or bind parameters.
 
 ## Known limits
 

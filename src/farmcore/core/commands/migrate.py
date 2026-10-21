@@ -8,6 +8,7 @@ import uuid
 from importlib.resources import files
 
 import psycopg
+import psycopg.errors
 import typer
 from alembic import command
 from alembic.config import Config
@@ -17,7 +18,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from farmcore.core.startup import INSTALLATION_SETTING, read_installation_id
-from farmcore.settings import get_settings
+from farmcore.settings import Settings, get_settings
 
 
 def alembic_config(url: str | None = None) -> Config:
@@ -39,6 +40,7 @@ def ensure_installation_id(conn: Connection) -> str:
     database = conn.dialect.identifier_preparer.quote(
         conn.execute(text("SELECT current_database()")).scalar_one()
     )
+    lock_databases(conn)  # before this database is locked by the change below
     # A UUID string is a safe literal; ALTER DATABASE takes no bind parameters.
     conn.exec_driver_sql(f"ALTER DATABASE {database} SET {INSTALLATION_SETTING} = '{new}'")
     return new
@@ -52,8 +54,49 @@ RUNTIME_ATTRIBUTES = (
 MIN_SERVER_VERSION = 160000
 
 
+# The first statement of every transaction that changes `pg_database` (a database's ACL, as
+# GRANT, REVOKE and DROP OWNED do). GRANT and REVOKE rewrite a database's catalog row without a
+# lock of their own, so two such loops at once (restores, a migrate) fail with "tuple
+# concurrently updated", as does one whose database is renamed or dropped under it. This lock
+# waits for those and holds them off until the transaction ends; `pg_database` is shared, so it
+# is one lock for the whole server. Taken any later, after a change of its own, it deadlocks:
+# that change holds the table in a mode the lock conflicts with, so two such transactions each
+# wait for the other.
+LOCK_DATABASES = "LOCK TABLE pg_catalog.pg_database IN SHARE ROW EXCLUSIVE MODE"
+# How long a change to `pg_database` waits for another restore's or migrate's to end. Less than
+# the 10 seconds `docker compose stop` waits before SIGKILL: a restore creating its staging
+# database cannot be stopped while it waits, and SIGKILL would leave that database behind.
+LOCK_TIMEOUT = "5s"
+
+
 class MigrateError(RuntimeError):
     """A refusal or failure `farmcore migrate` reports in one line (never with SQL text)."""
+
+
+class ServerBusy(MigrateError):
+    """Another restore or migrate kept `pg_database` locked for longer than `LOCK_TIMEOUT`;
+    the transaction that waited changed nothing."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the server is busy: another restore or migrate kept its list of databases locked "
+            f"for over {LOCK_TIMEOUT}"
+        )
+
+
+def lock_databases(conn: Connection) -> None:
+    """`LOCK_DATABASES`, waiting at most `LOCK_TIMEOUT`. The timeout is `SET LOCAL`: it ends
+    with this transaction and leaves a wait before it (an advisory lock) alone, but every lock
+    wait after it in the same transaction gives up after `LOCK_TIMEOUT` too."""
+    try:
+        conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{LOCK_TIMEOUT}'")
+        conn.exec_driver_sql(LOCK_DATABASES)
+    except DBAPIError as exc:
+        raise ServerBusy() if lock_timed_out(exc) else exc from None
+
+
+def lock_timed_out(exc: DBAPIError) -> bool:
+    return isinstance(exc.orig, psycopg.errors.LockNotAvailable)
 
 
 def check_owner(conn: Connection) -> str:
@@ -250,6 +293,7 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
     part of any statement."""
     me = _refuse_owner_as_runtime(conn, role)
     conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": "farmcore.runtime"})
+    lock_databases(conn)  # before the reset below changes pg_database
     existed = _exists(conn, role)
     reset_runtime_role_in(conn, role)
     raw = conn.connection.driver_connection
@@ -349,6 +393,40 @@ _EXTENSION_RELATIONS = text(
 )
 
 
+def migrate_installation(settings: Settings) -> str:
+    """Upgrade to head, give the installation its id, set up the runtime role; the id.
+
+    Raises `MigrateError` on a refusal."""
+    engine = create_engine(settings.database_url)
+    try:
+        with engine.connect() as conn:
+            check_owner(conn)
+        command.upgrade(alembic_config(settings.database_url), "head")
+        if settings.runtime_database_password:
+            # Objects in `postgres` and shared objects first, in their own transaction.
+            maintenance = create_engine(make_url(settings.database_url).set(database="postgres"))
+            try:
+                with maintenance.begin() as conn:
+                    lock_databases(conn)
+                    reset_runtime_role_in(conn, settings.runtime_database_role)
+                    # The reset revoked CONNECT on the installation database; give it back
+                    # now, so a failure in the next step never locks out the running app.
+                    keep_connect(conn, settings.runtime_database_role, settings.database_url)
+            finally:
+                maintenance.dispose()
+        with engine.begin() as conn:
+            installation_id = ensure_installation_id(conn)
+            if settings.runtime_database_password:
+                ensure_runtime_role(
+                    conn,
+                    settings.runtime_database_role,
+                    settings.runtime_database_password.get_secret_value(),
+                )
+        return installation_id
+    finally:
+        engine.dispose()
+
+
 def register(cli: typer.Typer) -> None:
     @cli.command()
     def migrate() -> None:
@@ -356,37 +434,11 @@ def register(cli: typer.Typer) -> None:
 
         Run as this server's bootstrap superuser (the database owner); anything else is
         refused."""
-        settings = get_settings()
-        engine = create_engine(settings.database_url)
         try:
-            with engine.connect() as conn:
-                check_owner(conn)
-            command.upgrade(alembic_config(settings.database_url), "head")
-            if settings.runtime_database_password:
-                # Objects in `postgres` and shared objects first, in their own transaction.
-                maintenance = create_engine(
-                    make_url(settings.database_url).set(database="postgres")
-                )
-                try:
-                    with maintenance.begin() as conn:
-                        reset_runtime_role_in(conn, settings.runtime_database_role)
-                        # The reset revoked CONNECT on the installation database; give it back
-                        # now, so a failure in the next step never locks out the running app.
-                        keep_connect(conn, settings.runtime_database_role, settings.database_url)
-                finally:
-                    maintenance.dispose()
-            with engine.begin() as conn:
-                installation_id = ensure_installation_id(conn)
-                if settings.runtime_database_password:
-                    ensure_runtime_role(
-                        conn,
-                        settings.runtime_database_role,
-                        settings.runtime_database_password.get_secret_value(),
-                    )
+            installation_id = migrate_installation(get_settings())
         except MigrateError as exc:
-            typer.echo(str(exc), err=True)
+            again = "; run migrate again" if isinstance(exc, ServerBusy) else ""
+            typer.echo(f"{exc}{again}", err=True)
             raise typer.Exit(1) from None
-        finally:
-            engine.dispose()
         typer.echo("migrated to head")
         typer.echo(f"installation {installation_id}")

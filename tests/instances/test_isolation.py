@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import secrets
 import subprocess
+import threading
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -622,6 +624,157 @@ def test_a_failing_second_step_leaves_the_runtime_role_able_to_connect(
     try:
         with engine.connect() as conn:
             assert conn.execute(text("SELECT count(*) FROM farm")).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+def _waiting(pg_server, seen: list[str], done: threading.Event) -> threading.Thread:
+    """A thread noting the statement of every client session waiting for a lock until `done`
+    (not the server's own workers: autovacuum waits on `pg_database` too)."""
+
+    def run() -> None:
+        engine = create_engine(pg_server.url("postgres"))
+        try:
+            with engine.connect() as conn:
+                while not done.is_set():
+                    rows = conn.execute(
+                        text(
+                            "SELECT query FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                            "AND backend_type = 'client backend' AND pid <> pg_backend_pid()"
+                        )
+                    ).scalars()
+                    seen.extend(rows.all())
+                    conn.rollback()
+                    time.sleep(0.05)
+        finally:
+            engine.dispose()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    return thread
+
+
+def test_a_migrate_kept_from_the_database_list_says_so_and_to_run_it_again(
+    install, monkeypatch, pg_server
+) -> None:
+    """Another restore or migrate holds `pg_database` locked. Migrate's first transaction that
+    changes it (the runtime role's reset in `postgres`) waits on the lock statement and on
+    nothing else, so on no change of its own made before it; it gives up after the lock
+    timeout and says to run it again. Its later transaction, in the installation database, is
+    never reached here (see the installation id test below for its order)."""
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "1s")
+    holder = create_engine(pg_server.url("postgres"))
+    conn = holder.connect()
+    conn.begin()
+    conn.exec_driver_sql(migrate.LOCK_DATABASES)
+    released = threading.Timer(8, conn.rollback)  # a migrate without a timeout ends late
+    released.start()
+    seen: list[str] = []
+    done = threading.Event()
+    watcher = _waiting(pg_server, seen, done)
+    started = time.monotonic()
+    try:
+        out = _migrate_fails(monkeypatch, _env(inst))
+    finally:
+        waited = time.monotonic() - started
+        done.set()
+        watcher.join()
+        released.join()
+        conn.close()
+        holder.dispose()
+
+    assert "the server is busy: another restore or migrate kept its list of databases " in out
+    assert "locked for over 1s; run migrate again" in out, out
+    assert waited < 10
+    assert seen and all(q.startswith(migrate.LOCK_DATABASES) for q in seen), seen
+    _migrate(monkeypatch, _env(inst))  # nothing holds it now
+
+
+@pytest.mark.parametrize("key", ["farmcore.installation_id", "farmcore.runtime"])
+def test_a_migrate_waiting_on_its_advisory_locks_past_the_lock_timeout_still_succeeds(
+    install, monkeypatch, key
+) -> None:
+    """The timeout is for `pg_database` only: a migrate queued behind another one on this
+    installation's own locks (the installation id, the runtime role) waits as long as it takes."""
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "1s")
+    holder = create_engine(inst.owner_url)
+    conn = holder.connect()
+    conn.begin()
+    conn.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": key})
+
+    def release() -> None:
+        time.sleep(3)
+        conn.rollback()
+        conn.close()
+
+    releaser = threading.Thread(target=release, daemon=True)
+    releaser.start()
+    started = time.monotonic()
+    try:
+        _migrate(monkeypatch, _env(inst))
+    finally:
+        releaser.join()
+        holder.dispose()
+
+    assert time.monotonic() - started >= 2.5  # it did wait behind the other one
+
+
+def test_a_migrate_giving_the_installation_its_id_locks_the_database_list_first(
+    install, monkeypatch
+) -> None:
+    """Setting the installation id locks this database; the runtime role's step then waits for
+    `pg_database`. Holding the first while waiting for the second could cross with a restore
+    or migrate that holds `pg_database` and waits for this database: the id is set only once
+    `pg_database` is locked."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    with create_engine(inst.owner_url).begin() as conn:
+        conn.exec_driver_sql(f'ALTER DATABASE "{inst.database}" RESET farmcore.installation_id')
+    statements: list[str] = []
+
+    def record(_conn, _cursor, statement, *_args) -> None:
+        statements.append(statement)
+
+    event.listen(Engine, "before_cursor_execute", record)
+    try:
+        _migrate(monkeypatch, _env(inst))
+    finally:
+        event.remove(Engine, "before_cursor_execute", record)
+
+    (setting,) = [i for i, s in enumerate(statements) if "SET farmcore.installation_id" in s]
+    began = max(i for i, s in enumerate(statements[:setting]) if "pg_advisory_xact_lock" in s)
+    assert migrate.LOCK_DATABASES in statements[began:setting], statements[began : setting + 1]
+
+
+def test_the_lock_timeout_ends_with_its_transaction_and_other_errors_pass_through(
+    install,
+) -> None:
+    from farmcore.core.commands import migrate
+
+    inst = install()
+    engine = create_engine(inst.owner_url)
+    try:
+        with engine.connect() as conn:
+            with conn.begin():
+                migrate.lock_databases(conn)
+                assert conn.exec_driver_sql("SHOW lock_timeout").scalar_one() == "5s"
+            assert conn.exec_driver_sql("SHOW lock_timeout").scalar_one() == "0"
+            conn.rollback()
+            with pytest.raises(DBAPIError) as exc, conn.begin():
+                with pytest.raises(DBAPIError):
+                    conn.exec_driver_sql("SELECT no_such_column")
+                migrate.lock_databases(conn)  # in a failed transaction: not a busy server
+            assert isinstance(exc.value.orig, psycopg.errors.InFailedSqlTransaction)
     finally:
         engine.dispose()
 
