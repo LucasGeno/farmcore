@@ -78,6 +78,14 @@ def grant_status(grant: DataGrant, now: datetime) -> str:
     return "active"
 
 
+class InvalidGrant(ValueError):
+    """Grant input refused, in plain words; `field` names the form field it is about."""
+
+    def __init__(self, field: str, message: str) -> None:
+        super().__init__(message)
+        self.field = field
+
+
 def create_grant(
     repo: ScopedRepository,
     *,
@@ -89,26 +97,31 @@ def create_grant(
     tz: str = DEFAULT_TZ,
 ) -> DataGrant:
     """A grant of `preset`'s scopes on `repo.farm_id` from wall now to `valid_to`, and its
-    `share.granted` event. `ValueError` (plain words) on invalid input; nothing is written then."""
+    `share.granted` event. `InvalidGrant` (a `ValueError`) on invalid input; nothing is written
+    then."""
     name = grantee.strip()
     if not name:
-        raise ValueError("Give the third party a name.")
+        raise InvalidGrant("grantee", "Give the third party a name.")
     if len(name) > config.GRANTEE_MAX_LEN:
-        raise ValueError(f"The name is longer than {config.GRANTEE_MAX_LEN} characters.")
+        raise InvalidGrant(
+            "grantee", f"The name is longer than {config.GRANTEE_MAX_LEN} characters."
+        )
     if name.casefold() == OWNER:
-        raise ValueError("The name 'owner' is reserved for the farmer's own access.")
+        raise InvalidGrant("grantee", "The name 'owner' is reserved for the farmer's own access.")
     if preset not in config.PRESETS:
-        raise ValueError(f"Unknown preset {preset!r}; pick one from the list.")
+        raise InvalidGrant("preset", "Pick a preset from the list.")
     purpose = purpose.strip()
     if not purpose:
-        raise ValueError("Say what the access is for (the purpose).")
+        raise InvalidGrant("purpose", "Say what the access is for (the purpose).")
     if len(purpose) > config.PURPOSE_MAX_LEN:
-        raise ValueError(f"The purpose is longer than {config.PURPOSE_MAX_LEN} characters.")
+        raise InvalidGrant(
+            "purpose", f"The purpose is longer than {config.PURPOSE_MAX_LEN} characters."
+        )
     now = datetime.now(UTC)
     if valid_to.tzinfo is None:
-        raise ValueError("The end date needs a timezone.")
+        raise InvalidGrant("valid_to", "The end date needs a timezone.")
     if valid_to <= now:
-        raise ValueError("The end date must be in the future.")
+        raise InvalidGrant("valid_to", "The end date must be in the future.")
     _label, scopes = config.PRESETS[preset]
     grant = DataGrant(
         farm_id=repo.farm_id,

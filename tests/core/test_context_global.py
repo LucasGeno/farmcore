@@ -127,7 +127,7 @@ def test_app_actions_still_require_admin_even_with_valid_farm_context(
 
             denied = browser.post(actual_action, headers=HTML, follow_redirects=False)
 
-            assert denied.status_code == 403
+            assert (denied.status_code, denied.headers["location"]) == (303, "/login")
             readonly = browser.get("/apps", params={"farm": second.id}).text
             assert 'data-status="' + before + '"' in tile(readonly, "share")
             assert "<form" not in tile(readonly, "share")

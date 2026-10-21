@@ -111,6 +111,24 @@ def test_low_stock_rejects_negative_or_non_numbers(client, session, settings, in
     assert client.post(url, data={"low_stock": "x"}).status_code == 422
 
 
+def test_browser_low_stock_error_keeps_the_typed_value_and_the_saved_threshold(
+    client, session, inv
+):
+    row = stock(session, inv.farm, inv.products["copper-contact"], purchased="20")
+    row.low_stock = Decimal("5")
+    session.commit()
+
+    r = client.post(
+        f"/inventory/{row.id}/low-stock", data={"low_stock": "-3"}, headers={"Accept": "text/html"}
+    )
+
+    assert r.status_code == 422
+    assert 'name="low_stock" inputmode="decimal" value="-3"' in r.text
+    assert f'aria-describedby="low-stock-{row.id}-error"' in r.text
+    session.expire_all()
+    assert session.get(InventoryStock, row.id).low_stock == Decimal("5")
+
+
 def test_low_stock_rejects_huge_tiny_or_too_precise_values_with_422(client, session, inv):
     row = stock(session, inv.farm, inv.products["copper-contact"], purchased="20")
     session.commit()

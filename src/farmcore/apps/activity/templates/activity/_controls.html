@@ -14,11 +14,15 @@
       {% for key, label in type_options %}<option value="{{ key }}"{% if key == filter_values.kind %} selected{% endif %}>{{ label }}</option>{% endfor %}
     </select>
   </label>
+  {% set err = (filter_errors or {}).get("from") %}
   <label class="grid min-w-0 gap-1 text-sm font-semibold">From
-    <input type="date" name="from" value="{{ filter_values.start }}" max="{{ today }}" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-2 font-normal">
+    <input type="date" name="from" value="{{ filter_values.start }}" max="{{ today }}"{% if err %} aria-invalid="true" aria-describedby="activity-from-error"{% endif %} class="min-h-[44px] w-full min-w-0 rounded-lg border {{ 'border-spray' if err else 'border-line' }} bg-surface px-2 font-normal">
+    {% if err %}<span id="activity-from-error" role="alert" class="text-[13px] text-spray">{{ err }}</span>{% endif %}
   </label>
+  {% set err = (filter_errors or {}).get("to") %}
   <label class="grid min-w-0 gap-1 text-sm font-semibold">Through
-    <input type="date" name="to" value="{{ filter_values.end }}" max="{{ today }}" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-2 font-normal">
+    <input type="date" name="to" value="{{ filter_values.end }}" max="{{ today }}"{% if err %} aria-invalid="true" aria-describedby="activity-to-error"{% endif %} class="min-h-[44px] w-full min-w-0 rounded-lg border {{ 'border-spray' if err else 'border-line' }} bg-surface px-2 font-normal">
+    {% if err %}<span id="activity-to-error" role="alert" class="text-[13px] text-spray">{{ err }}</span>{% endif %}
   </label>
   <div class="col-span-2 flex flex-wrap items-center gap-3 sm:col-span-4">
     <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white">Apply filters</button>

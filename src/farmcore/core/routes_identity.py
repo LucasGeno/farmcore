@@ -17,18 +17,35 @@ from farmcore.core.identity import (
 )
 from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 from farmcore.core.routes_demo import same_origin
+from farmcore.core.routes_farms import safe_next
 from farmcore.web import is_sunlight, templates
 
 router = APIRouter()
 LOGIN_CSRF_COOKIE = "farmcore_login_csrf"
+NEXT_MAX = 2048
 
 
-def login_page(request: Request, *, error: str = "", status: int = 200):
+def return_path(value: str | None) -> str:
+    """`next` when it is a path on this site (never another origin, never back to sign-in),
+    else ""."""
+    if not value or len(value) > NEXT_MAX or not value.isprintable() or safe_next(value) != value:
+        return ""
+    if value.split("?")[0] in {"/login", "/logout"}:
+        return ""
+    return value
+
+
+def login_page(request: Request, *, error: str = "", status: int = 200, next: str = ""):
     nonce = secrets.token_urlsafe(32)
     response = templates.TemplateResponse(
         request,
         "core/login.html",
-        {"csrf_token": nonce, "error": error, "sunlight": is_sunlight(request)},
+        {
+            "csrf_token": nonce,
+            "error": error,
+            "next": return_path(next),
+            "sunlight": is_sunlight(request),
+        },
     )
     response.status_code = status
     response.headers["Cache-Control"] = "no-store"
@@ -39,8 +56,8 @@ def login_page(request: Request, *, error: str = "", status: int = 200):
 
 
 @router.get("/login", response_class=HTMLResponse)
-def login(request: Request):
-    return login_page(request)
+def login(request: Request, next: str = ""):
+    return login_page(request, next=next)
 
 
 @router.post("/login")
@@ -49,6 +66,7 @@ def sign_in(
     login: str = Form(max_length=128),
     password: str = Form(max_length=256),
     csrf_token: str = Form(default="", max_length=128),
+    next: str = Form(default="", max_length=NEXT_MAX),
 ):
     same_origin(request)
     expected = request.cookies.get(LOGIN_CSRF_COOKIE, "")
@@ -56,7 +74,9 @@ def sign_in(
         raise HTTPException(403, "Invalid request token.")
     peer = request.client.host if request.client else "unknown"
     if not reserve_login_attempt(request.app.state.session_factory, login, peer):
-        response = login_page(request, error="Too many attempts. Try again later.", status=429)
+        response = login_page(
+            request, error="Too many attempts. Try again later.", status=429, next=next
+        )
         response.headers["Retry-After"] = "600"
         return response
     try:
@@ -71,7 +91,7 @@ def sign_in(
         )
         valid = password_matches(password, identity.password_hash if identity else DUMMY_HASH)
         if not valid or identity is None or identity.disabled_at is not None:
-            return login_page(request, error="Sign-in failed.", status=401)
+            return login_page(request, error="Sign-in failed.", status=401, next=next)
         has_membership = (
             session.scalar(
                 select(FarmMembership.id)
@@ -93,7 +113,8 @@ def sign_in(
                 expires_at=now + timedelta(hours=12),
             )
         )
-    response = RedirectResponse("/" if has_membership else "/share/received", status_code=303)
+    landing = "/" if has_membership else "/share/received"
+    response = RedirectResponse(return_path(next) or landing, status_code=303)
     response.headers["Cache-Control"] = "no-store"
     response.set_cookie(
         "farmcore_session", nonce, max_age=43200, secure=True, httponly=True, samesite="strict"

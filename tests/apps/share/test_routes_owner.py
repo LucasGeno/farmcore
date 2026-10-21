@@ -73,21 +73,29 @@ def test_admin_post_creates_one_grant_on_the_selected_farm_and_redirects(
 
 
 @pytest.mark.parametrize(
-    "over",
+    ("over", "field"),
     [
-        {"grantee": ""},
-        {"grantee": "OWNER"},
-        {"preset": "everything"},
-        {"valid_to": (_today() - timedelta(days=1)).isoformat()},
-        {"valid_to": "not a date"},
+        ({"grantee": ""}, "grantee"),
+        ({"grantee": "OWNER"}, "grantee"),
+        ({"preset": "everything"}, "preset"),
+        ({"valid_to": (_today() - timedelta(days=1)).isoformat()}, "valid_to"),
+        ({"valid_to": "not a date"}, "valid_to"),
+        ({"recipient_login": "nobody-here"}, "recipient_login"),
     ],
 )
-def test_invalid_input_is_a_plain_words_422_and_writes_nothing(admin, session, demo, over) -> None:
-    resp = admin.post("/share/grants", data=_form(**over), headers={"Accept": "text/html"})
+def test_invalid_input_is_a_422_beside_its_field_that_keeps_the_typed_values(
+    admin, session, demo, over, field
+) -> None:
+    form = _form(purpose="Soil sampling visit", **over)
+    resp = admin.post("/share/grants", data=form, headers={"Accept": "text/html"})
 
     assert resp.status_code == 422
     assert "<html" in resp.text and "Traceback" not in resp.text
+    assert f'aria-describedby="grant-{field}-error"' in resp.text
+    assert 'value="Soil sampling visit"' in resp.text
     assert _third_party_grants(session) == []
+    api = admin.post("/share/grants", data=form)
+    assert api.status_code == 422 and api.json()["detail"]
 
 
 def test_anonymous_cannot_read_consent_ledger_or_post(anonymous, admin, session, demo) -> None:

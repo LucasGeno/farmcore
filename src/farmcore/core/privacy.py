@@ -3,10 +3,10 @@
 import re
 
 from fastapi import HTTPException, Request
-from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from farmcore.core.access import FarmNotSeeded, selected_farm
+from farmcore.core.errors import AUTH_REQUIRED, FARM_DENIED, refusal
 from farmcore.core.identity import resolve_principal
 from farmcore.web import operator_authenticated
 
@@ -39,9 +39,9 @@ class PrivacyMiddleware:
                     )
                 )
                 if restricted and not operator_authenticated(request):
-                    await JSONResponse(
-                        {"detail": "Installation operator required."}, status_code=403
-                    )(scope, receive, send)
+                    await refusal(request, 403, "Installation operator required.")(
+                        scope, receive, send
+                    )
                     return
                 if (
                     not operator_authenticated(request)
@@ -54,9 +54,7 @@ class PrivacyMiddleware:
                             farm = selected_farm(request, session, request.app.state.settings)
                             request.state.selected_farm_id = farm.id
                     except (HTTPException, FarmNotSeeded):
-                        await JSONResponse({"detail": "Farm access denied."}, status_code=403)(
-                            scope, receive, send
-                        )
+                        await refusal(request, 403, FARM_DENIED)(scope, receive, send)
                         return
                 await self.app(scope, receive, send)
                 return
@@ -66,9 +64,7 @@ class PrivacyMiddleware:
                 and not operator_authenticated(request)
             ):
                 if request.cookies.get("farmcore_session"):
-                    await JSONResponse({"detail": "Authentication required."}, status_code=403)(
-                        scope, receive, send
-                    )
+                    await refusal(request, 403, AUTH_REQUIRED)(scope, receive, send)
                     return
                 allowed = False
                 settings = request.app.state.settings
@@ -82,7 +78,6 @@ class PrivacyMiddleware:
                 if allowed:
                     await self.app(scope, receive, send)
                     return
-                response = JSONResponse({"detail": "Authentication required."}, status_code=403)
-                await response(scope, receive, send)
+                await refusal(request, 403, AUTH_REQUIRED)(scope, receive, send)
                 return
         await self.app(scope, receive, send)

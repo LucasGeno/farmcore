@@ -62,40 +62,50 @@
     <button type="submit" class="col-span-2 min-h-[44px] rounded-lg border border-line bg-surface px-4 py-2 text-sm font-semibold">Filter grants</button>
   </form>
 {% if is_farm_owner and not is_tour %}
-<details class="mt-4 rounded-xl border border-line bg-surface p-4">
+{% macro field_error(name) %}{% if grant_errors.get(name) %}<span id="grant-{{ name }}-error" role="alert" class="text-sm font-semibold text-spray">{{ grant_errors[name] }}</span>{% endif %}{% endmacro %}
+{% macro invalid(name) %}{% if grant_errors.get(name) %} aria-invalid="true" aria-describedby="grant-{{ name }}-error"{% endif %}{% endmacro %}
+{% macro border(name) %}{{ 'border-spray' if grant_errors.get(name) else 'border-line' }}{% endmacro %}
+{% set typed_preset = grant_form.get('preset', default_preset) %}
+<details class="mt-4 rounded-xl border border-line bg-surface p-4"{% if grant_errors %} open{% endif %}>
   <summary class="flex min-h-[44px] cursor-pointer items-center font-semibold">Grant read access</summary>
   <form method="post" action="/share/grants?farm={{ farm_id }}" class="mt-3 grid gap-3 sm:grid-cols-2">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% if grant_errors.get('form') %}<p role="alert" class="text-sm font-semibold text-spray sm:col-span-2">{{ grant_errors.form }}</p>{% endif %}
     <label class="grid min-w-0 gap-1 text-sm">
       <span class="font-medium">Recipient login</span>
-      <input name="recipient_login" required maxlength="128" autocomplete="off"
-             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+      <input name="recipient_login" value="{{ grant_form.get('recipient_login', '') }}" required maxlength="128" autocomplete="off"{{ invalid('recipient_login') }}
+             class="min-h-[44px] w-full min-w-0 rounded-lg border {{ border('recipient_login') }} bg-surface px-3 py-2">
+      {{ field_error('recipient_login') }}
       <span class="text-sm text-muted">An existing enabled account. Names do not grant access.</span>
     </label>
     <label class="grid min-w-0 gap-1 text-sm">
       <span class="font-medium">Third party</span>
-      <input name="grantee" value="{{ default_grantee }}" required maxlength="{{ grantee_max_len }}"
-             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+      <input name="grantee" value="{{ grant_form.get('grantee', default_grantee) }}" required maxlength="{{ grantee_max_len }}"{{ invalid('grantee') }}
+             class="min-h-[44px] w-full min-w-0 rounded-lg border {{ border('grantee') }} bg-surface px-3 py-2">
+      {{ field_error('grantee') }}
     </label>
     <label class="grid min-w-0 gap-1 text-sm">
       <span id="sharing-preset-label" class="font-medium">What they may read</span>
-      <select name="preset" aria-labelledby="sharing-preset-label" class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+      <select name="preset" aria-labelledby="sharing-preset-label"{{ invalid('preset') }} class="min-h-[44px] w-full min-w-0 rounded-lg border {{ border('preset') }} bg-surface px-3 py-2">
         {% for key, label in presets %}
-        <option value="{{ key }}"{% if key == default_preset %} selected{% endif %}>{{ label }}</option>
+        <option value="{{ key }}"{% if key == typed_preset %} selected{% endif %}>{{ label }}</option>
         {% endfor %}
         <option value="parcels" disabled>Parcels — no sharing preset available</option>
         <option value="kpis" disabled>KPIs — no sharing preset available</option>
       </select>
+      {{ field_error('preset') }}
     </label>
     <label class="grid min-w-0 gap-1 text-sm">
       <span class="font-medium">Purpose</span>
-      <input name="purpose" value="{{ default_purpose }}" required maxlength="{{ purpose_max_len }}"
-             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+      <input name="purpose" value="{{ grant_form.get('purpose', default_purpose) }}" required maxlength="{{ purpose_max_len }}"{{ invalid('purpose') }}
+             class="min-h-[44px] w-full min-w-0 rounded-lg border {{ border('purpose') }} bg-surface px-3 py-2">
+      {{ field_error('purpose') }}
     </label>
     <label class="grid min-w-0 gap-1 text-sm">
       <span class="font-medium">Valid until (end of day)</span>
-      <input type="date" name="valid_to" value="{{ default_valid_to }}" required
-             class="min-h-[44px] w-full min-w-0 rounded-lg border border-line bg-surface px-3 py-2">
+      <input type="date" name="valid_to" value="{{ grant_form.get('valid_to', default_valid_to) }}" required{{ invalid('valid_to') }}
+             class="min-h-[44px] w-full min-w-0 rounded-lg border {{ border('valid_to') }} bg-surface px-3 py-2">
+      {{ field_error('valid_to') }}
     </label>
     <div class="sm:col-span-2">
       <button type="submit" class="min-h-[44px] rounded-lg bg-brand-900 px-4 py-2 text-sm font-semibold text-white">Grant</button>

@@ -15,6 +15,7 @@ from farmcore.apps.activity import columns
 from farmcore.core.access import Repo, selected_farm
 from farmcore.core.activity import PAGE, ActivityFilters, ActivityType, activity_rows
 from farmcore.core.clock import ReplayClock, get_clock
+from farmcore.core.errors import wants_html
 from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.navigation import reading_destination, workspace_parent
 from farmcore.core.routes_activity import live_apps
@@ -25,6 +26,9 @@ from farmcore.web import render
 router = APIRouter()
 APP = "activity"
 ONE_YEAR = 365 * 24 * 3600
+DAY_MAX = 32  # characters of a typed filter date
+BAD_DAY = "Enter a date like 2026-04-10."
+BAD_RANGE = "From must be on or before Through."
 
 
 def _require_on(request: Request) -> set[str]:
@@ -42,8 +46,8 @@ def index(
     before_id: int = 0,
     parcel_id: Annotated[int | Literal[""] | None, Query()] = None,
     event_type: Annotated[ActivityType, Query(alias="type")] = "all",
-    from_day: Annotated[date | Literal[""] | None, Query(alias="from")] = None,
-    to_day: Annotated[date | Literal[""] | None, Query(alias="to")] = None,
+    from_day: Annotated[str, Query(alias="from", max_length=DAY_MAX)] = "",
+    to_day: Annotated[str, Query(alias="to", max_length=DAY_MAX)] = "",
 ) -> HTMLResponse:
     """`before` + `before_id` (from "Show older": the last row's time and newest event id): only
     rows after that row in the feed's order; without `before_id`, rows strictly older than
@@ -59,11 +63,12 @@ def index(
         from_day,
         to_day,
     )
-    return render(
+    response = render(
         request,
         "activity/_feed.html" if request.headers.get("hx-request") else "activity/index.html",
         **context,
     )
+    return _refused_filters(request, context, response)
 
 
 @router.get("/parcels/{parcel_id}/workspace", response_class=HTMLResponse)
@@ -74,8 +79,8 @@ def workspace(
     before: datetime | None = None,
     before_id: int = 0,
     event_type: Annotated[ActivityType, Query(alias="type")] = "all",
-    from_day: Annotated[date | Literal[""] | None, Query(alias="from")] = None,
-    to_day: Annotated[date | Literal[""] | None, Query(alias="to")] = None,
+    from_day: Annotated[str, Query(alias="from", max_length=DAY_MAX)] = "",
+    to_day: Annotated[str, Query(alias="to", max_length=DAY_MAX)] = "",
 ) -> HTMLResponse:
     apps = _require_on(request)
     if not 1 <= parcel_id < 2**31 or repo.get(Parcel, parcel_id, scope="fields:read") is None:
@@ -98,7 +103,25 @@ def workspace(
     response = render(
         request, "activity/_feed.html" if polling else "activity/_workspace.html", **context
     )
+    return _refused_filters(request, context, response)
+
+
+def _refused_filters(request: Request, context: dict, response: HTMLResponse) -> HTMLResponse:
+    """A refused filter is a 422: the page with the message beside its field for a browser,
+    a plain-words JSON detail otherwise."""
+    errors = context["filter_errors"]
+    if not errors:
+        return response
+    if not wants_html(request):
+        raise HTTPException(status_code=422, detail=" ".join(errors.values()))
+    response.status_code = 422
     return response
+
+
+def _day(value: str) -> date | None:
+    """A typed filter date (`2026-04-10`), or None when empty. `ValueError` when not a date."""
+    value = value.strip()
+    return date.fromisoformat(value) if value else None
 
 
 def _context(
@@ -120,14 +143,23 @@ def _context(
     clock = get_clock(repo.session, settings)
     now = clock.now()
     parcel_id = None if parcel_id == "" else parcel_id
-    from_day, to_day = from_day or None, to_day or None
+    typed = {"from": from_day, "to": to_day}
+    days: dict[str, date | None] = {}
+    errors: dict[str, str] = {}
+    for key, value in typed.items():
+        try:
+            days[key] = _day(value)
+        except ValueError:
+            days[key], errors[key] = None, BAD_DAY
+    from_day, to_day = days["from"], days["to"]
     if parcel_id is not None and not 1 <= parcel_id <= 2**63 - 1:
         raise HTTPException(status_code=422, detail="Choose a valid parcel.")
     unavailable_parcel = (
         parcel_id is not None and repo.get(Parcel, parcel_id, scope="fields:read") is None
     )
     if from_day and to_day and from_day > to_day:
-        raise HTTPException(status_code=422, detail="From must be on or before Through.")
+        errors["to"] = BAD_RANGE
+        from_day = to_day = None
     zone = ZoneInfo(settings.display_tz)
     today = now.astimezone(zone).date()
     since = datetime.combine(from_day, time.min, zone) if from_day else None
@@ -232,7 +264,9 @@ def _context(
         older=older,
         newest_url=newest_url,
         current_url=current_url,
-        filtered=bool(event_type != "all" or from_day or to_day or (parcel_id and not fixed)),
+        filtered=bool(
+            event_type != "all" or from_day or to_day or errors or (parcel_id and not fixed)
+        ),
         fixed_parcel=fixed,
         parent=current_url if parent else None,
         origin=origin,
@@ -248,9 +282,10 @@ def _context(
         filter_values={
             "parcel_id": parcel_id,
             "kind": event_type,
-            "start": from_day.isoformat() if from_day else "",
-            "end": to_day.isoformat() if to_day else "",
+            "start": typed["from"].strip(),
+            "end": typed["to"].strip(),
         },
+        filter_errors=errors,
         type_options=(
             ("all", "All activities"),
             ("spray", "Sprays"),

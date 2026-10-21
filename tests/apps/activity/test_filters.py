@@ -193,6 +193,18 @@ def test_bad_filters_are_validation_errors_not_server_errors(client, farm):  # n
     assert client.get("/activity/", params={"to": "9999-12-31"}).status_code == 200
 
 
+def test_browser_bad_date_filter_is_a_422_beside_the_field_keeping_the_typed_value(
+    client,
+    farm,  # noqa: F811
+):
+    page = client.get("/activity/", params={"from": "10/04/2024"}, headers={"Accept": "text/html"})
+
+    assert page.status_code == 422
+    assert 'name="from" value="10/04/2024"' in page.text
+    assert 'aria-describedby="activity-from-error"' in page.text
+    assert "literal" not in page.text
+
+
 def test_farm_switch_keeps_activity_usable_when_the_parcel_filter_belongs_to_the_old_farm(
     client,
     session,

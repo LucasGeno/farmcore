@@ -4,7 +4,8 @@
   `audit:read`), the access log and the export links. Admins also get the grant form and a Revoke
   button per active grant; anonymous visitors see the same page read-only.
 - `POST /share/grants`, `POST /share/grants/{id}/revoke`: admin only (`require_admin`), 303 to
-  `/share/`; invalid input is a plain-words 422.
+  `/share/`; invalid input is a plain-words 422: the page again for a browser, the typed values
+  kept and the message next to its field.
 
 Never renders a raw chat id, a `tg:` ref, a cookie or the admin token (actors go through
 `service.mask_actor`).
@@ -20,7 +21,7 @@ from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,7 @@ from farmcore.apps.operations import register
 from farmcore.apps.share import config, ngsi, service
 from farmcore.core.access import OWNER, Repo, ScopeDenied, ScopedRepository, require_farm_owner
 from farmcore.core.clock import get_clock
+from farmcore.core.errors import wants_html
 from farmcore.core.identity import canonical_login, principal_for
 from farmcore.core.models.canonical import Advice, DataGrant, LlmAudit, Observation, Parcel
 from farmcore.core.models.identity import LocalIdentity
@@ -168,6 +170,21 @@ def index(
 ) -> HTMLResponse:
     if not operator_authenticated(request):
         require_farm_owner(request, repo)
+    return _index_page(request, repo, scope, status, season, parcel)
+
+
+def _index_page(
+    request: Request,
+    repo: ScopedRepository,
+    scope: str = "all",
+    status: str = "all",
+    season: str | None = None,
+    parcel: str = "",
+    *,
+    form: dict[str, str] | None = None,
+    errors: dict[str, str] | None = None,
+) -> HTMLResponse:
+    """The Sharing page; `form` and `errors` refill the grant form after a refused grant."""
     now = datetime.now(UTC)
     grants = repo.list(
         DataGrant, DataGrant.grantee != OWNER, scope=AUDIT_SCOPE, order_by=DataGrant.id.desc()
@@ -206,6 +223,8 @@ def index(
         ).isoformat(),
         grantee_max_len=config.GRANTEE_MAX_LEN,
         purpose_max_len=config.PURPOSE_MAX_LEN,
+        grant_form=form or {},
+        grant_errors=errors or {},
         **_exports(request, repo, season, int(parcel) if ASCII_INT.fullmatch(parcel) else None),
     )
 
@@ -214,7 +233,9 @@ def _valid_to(value: str, tz: str) -> datetime:
     try:
         day = date.fromisoformat(value.strip())
     except ValueError as exc:
-        raise ValueError(f"{value!r} is not a date (use the date picker).") from exc
+        raise service.InvalidGrant(
+            "valid_to", "Enter the end date as a date, for example 2026-11-15."
+        ) from exc
     return datetime.combine(day, END_OF_DAY, tzinfo=ZoneInfo(tz))
 
 
@@ -227,17 +248,22 @@ def create(
     preset: str = Form(""),
     purpose: str = Form(""),
     valid_to: str = Form(""),
-) -> RedirectResponse:
+) -> Response:
     tz = _tz(request)
     try:
-        normalized = canonical_login(recipient_login)
+        try:
+            normalized = canonical_login(recipient_login)
+        except ValueError as exc:
+            raise service.InvalidGrant("recipient_login", str(exc)) from exc
         recipient = repo.session.scalar(
             select(LocalIdentity).where(
                 LocalIdentity.login == normalized, LocalIdentity.disabled_at.is_(None)
             )
         )
         if recipient is None:
-            raise ValueError("Choose an existing enabled recipient login.")
+            raise service.InvalidGrant(
+                "recipient_login", "Choose an existing enabled recipient login."
+            )
         service.create_grant(
             repo,
             grantee=grantee,
@@ -248,7 +274,20 @@ def create(
             tz=tz,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        if not wants_html(request):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        field = getattr(exc, "field", "form")
+        typed = {
+            "recipient_login": recipient_login,
+            "grantee": grantee,
+            "preset": preset,
+            "purpose": purpose,
+            "valid_to": valid_to,
+        }
+        page = _index_page(request, repo, form=typed, errors={field: str(exc)})
+        page.status_code = 422
+        page.headers["Cache-Control"] = "no-store"
+        return page
     return RedirectResponse(context_url(request, "/share/"), status_code=303)
 
 
