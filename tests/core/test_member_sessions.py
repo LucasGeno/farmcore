@@ -635,7 +635,6 @@ def test_member_shell_exposes_role_logout_and_only_authorized_farm_forms(
         assert ('enctype="multipart/form-data"' in page.text) == (role == "owner")
         assert ('href="/farms/members?farm=' in page.text) == (role == "owner")
         assert 'hx-get="/clock"' not in page.text
-        assert "data-message-url=" not in page.text
 
 
 def test_member_activity_hides_unbound_capture_drafts_but_preserves_completed_facts(

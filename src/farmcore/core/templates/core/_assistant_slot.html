@@ -4,9 +4,10 @@
         aria-label="Ask your farm" title="Ask your farm"
         class="fc-assistant-launcher inline-flex h-11 w-11 items-center justify-center rounded-full bg-brand-900 text-white shadow-xl"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="h-6 w-6" aria-hidden="true"><path d="M20 11a8 8 0 0 1-8 8H5l-3 3V11a9 9 0 0 1 18 0Z"/><path d="M7 10h8M7 14h5"/></svg></button>
 {# The signed-in farmer can also log a spray here (chat app's draft → ✅ path); others only ask. #}
-{% set assistant_can_log = is_admin and 'chat' in manifests|map(attribute='name')|list %}
+{% set assistant_capture_resolved = request.state.selected_farm_id is defined %}
+{% set assistant_can_log = is_farm_owner and not is_tour and assistant_capture_resolved and 'chat' in manifests|map(attribute='name')|list %}
 <dialog id="assistant-dialog" aria-labelledby="assistant-heading" data-ask-url="{{ farm_url('/assistant/ask') }}"
-        {% if assistant_can_log %}data-message-url="{{ farm_url('/assistant/message') }}" data-confirm-url="{{ farm_url('/assistant/confirm') }}"{% endif %}
+        {% if assistant_can_log %}data-message-url="{{ resolved_farm_url('/assistant/message') }}" data-confirm-url="{{ resolved_farm_url('/assistant/confirm') }}"{% endif %}
         class="rounded-2xl border border-line bg-surface p-4 text-ink shadow-xl backdrop:bg-black/40">
   <div class="flex items-center justify-between gap-3">
     <h2 id="assistant-heading" class="text-lg font-semibold">Ask your farm</h2>

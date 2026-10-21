@@ -13,15 +13,16 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from farmcore.apps.chat import assistant, conversation, push, service
 from farmcore.apps.chat.assistant import fallback, router
 from farmcore.apps.chat.audit import DbAuditSink, audit_ref
 from farmcore.apps.chat.dto import Callback, Incoming, Outgoing
-from farmcore.apps.chat.extractor import Extractor, get_extractor
+from farmcore.apps.chat.extractor import Extractor, RegexExtractor, get_extractor
 from farmcore.apps.chat.extractor.base import NOTE_TIME_CLAMPED, NOTE_TIME_MISSING
-from farmcore.apps.operations import spray_weather
+from farmcore.apps.operations import corrections, spray_weather
 from farmcore.apps.operations.checks import summary as checks_summary
 from farmcore.apps.operations.register import preview_checks, register_rows
 from farmcore.core import jobs, logs
@@ -34,7 +35,7 @@ from farmcore.core.access import (
 from farmcore.core.clock import Clock, get_clock
 from farmcore.core.logs import QuantityInput, SourceInput
 from farmcore.core.manifest import Manifest
-from farmcore.core.models.canonical import DataGrant, Event, Log, LogSource
+from farmcore.core.models.canonical import DataGrant, Event, Farm, Log, LogSource
 from farmcore.core.urls import with_farm
 from farmcore.db import session_scope
 from farmcore.settings import Settings
@@ -84,6 +85,34 @@ PLAIN_FALLBACK = (
 
 
 @dataclass(frozen=True)
+class CaptureBinding:
+    """Server-derived web authority; never accept this object from request payloads."""
+
+    farm_id: int
+    principal: object | None = None
+    operator: bool = False
+    legacy_operator_web: bool = False
+
+    @property
+    def actor_key(self):
+        return "operator" if self.operator else f"identity:{self.principal.identity_id}"
+
+    @property
+    def prefix(self):
+        return f"web:farm:{self.farm_id}:{self.actor_key}:"
+
+    @property
+    def prefixes(self):
+        if self.operator and self.legacy_operator_web:
+            return (self.prefix, "web:farmer:")
+        return (self.prefix,)
+
+    @property
+    def state_key(self):
+        return f"web:farm:{self.farm_id}:{self.actor_key}"
+
+
+@dataclass(frozen=True)
 class ChatDeps:
     session_factory: sessionmaker[Session]
     extractor: Extractor
@@ -93,9 +122,12 @@ class ChatDeps:
     clock: Callable[[Session, Settings], Clock] = get_clock
     # Saved spray weather: the composed station reader, None when Weather is not installed.
     weather_reader: spray_weather.Reader | None = None
+    capture_binding: CaptureBinding | None = None
 
 
-def _actor(chat_id: int) -> str:
+def _actor(chat_id: int, deps=None) -> str:
+    if deps is not None and deps.capture_binding is not None:
+        return deps.capture_binding.actor_key
     return WEB_ACTOR if chat_id == WEB_CHAT_ID else f"chat:{chat_id}"
 
 
@@ -105,14 +137,22 @@ def _plain_note(note: str) -> str:
     return PLAIN_NOTES.get(note, note)
 
 
-def _chat_key(chat_id: int) -> str:
+def _chat_key(chat_id: int, deps=None) -> str:
     """Prefix of every `log_source.external_key` this chat writes (`tg:<chat>:<message>`; the
     web assistant writes `web:farmer:<message>`)."""
+    if deps is not None and deps.capture_binding is not None:
+        return deps.capture_binding.prefix
     return "web:farmer:" if chat_id == WEB_CHAT_ID else f"tg:{chat_id}:"
 
 
-def _from_chat(log: Log, chat_id: int) -> bool:
-    return any(s.external_key.startswith(_chat_key(chat_id)) for s in log.sources)
+def _state_key(deps, chat_id):
+    return deps.capture_binding.state_key if deps.capture_binding else chat_id
+
+
+def _from_chat(log: Log, chat_id: int, deps=None) -> bool:
+    binding = deps.capture_binding if deps is not None else None
+    prefixes = binding.prefixes if binding is not None else (_chat_key(chat_id),)
+    return any(s.external_key.startswith(prefixes) for s in log.sources)
 
 
 def _echo(summary: str, log_id: int, notes: Sequence[str] = (), *, details="") -> Outgoing:
@@ -144,6 +184,25 @@ def _preview(repo, log, now, tz):
 
 
 def _repo(session: Session, deps: ChatDeps, chat_id: int) -> ScopedRepository:
+    if deps.capture_binding is not None:
+        binding = deps.capture_binding
+        logs.lock_farm(session, binding.farm_id)
+        farm = session.scalar(select(Farm).where(Farm.id == binding.farm_id).with_for_update())
+        if farm is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(403, "Farm access denied.")
+        repo = ScopedRepository(
+            session,
+            farm.id,
+            ensure_owner_grant(session, farm),
+            binding.actor_key,
+            PURPOSE,
+            private_member=not binding.operator,
+        )
+        if not binding.operator:
+            corrections.member_authority(repo, binding.principal)
+        return repo
     farm = default_farm(session, deps.settings)
     return ScopedRepository(
         session, farm.id, ensure_owner_grant(session, farm), _actor(chat_id), PURPOSE
@@ -192,7 +251,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             pending = [
                 log
                 for log in repo.list(Log, Log.status == "pending", scope="logs:write")
-                if _from_chat(log, incoming.chat_id)
+                if _from_chat(log, incoming.chat_id, deps)
             ]
             if len(pending) != 1:
                 return Outgoing(
@@ -207,18 +266,18 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         with session_scope(deps.session_factory) as session:
             repo = _repo(session, deps, incoming.chat_id)
             now = deps.clock(session, deps.settings).now()
-            conversation.clear(session, repo.farm_id, incoming.chat_id)
+            conversation.clear(session, repo.farm_id, _state_key(deps, incoming.chat_id))
             pending = repo.list(Log, Log.status == "pending", scope="logs:write")
             for log in pending:
-                if _from_chat(log, incoming.chat_id):
+                if _from_chat(log, incoming.chat_id, deps):
                     logs.cancel(
-                        session, log.id, _actor(incoming.chat_id), now, source_app=SOURCE_APP
+                        session, log.id, _actor(incoming.chat_id, deps), now, source_app=SOURCE_APP
                     )
         return Outgoing(text=REPLY_CANCELLED)
     intent = router.intent(transcript)
     if intent == router.QUESTION:  # read-only tools; logs stay below
         return assistant.answer(deps, incoming.chat_id, transcript)
-    ref = f"{_chat_key(incoming.chat_id)}{incoming.message_id}"
+    ref = f"{_chat_key(incoming.chat_id, deps)}{incoming.message_id}"
     # Read, then close the session before the model call: no transaction waits on the network.
     with session_scope(deps.session_factory) as session:
         repo = _repo(session, deps, incoming.chat_id)
@@ -237,9 +296,10 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             )
         now = deps.clock(session, deps.settings).now()
         ctx = service.load_context(repo, now, deps.settings.display_tz)
-        state = conversation.load(session, repo.farm_id, incoming.chat_id, now)
+        state = conversation.load(session, repo.farm_id, _state_key(deps, incoming.chat_id), now)
         epoch = conversation.epoch(session)
         farm_id = repo.farm_id
+        local_only = bool((session.get(Farm, farm_id).props or {}).get("no_model"))
 
     if intent == router.OTHER and not state and not _names_the_farm(transcript, ctx):
         # "hello", "thanks": no spray to draft, so no extractor call and no "Which parcel?".
@@ -252,7 +312,8 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             update={"clarification": {"draft": state["draft"], "history": history}}
         )
     with audit_ref(ref):
-        draft = conversation.continue_draft(deps.extractor.extract(request), state)
+        extractor = RegexExtractor() if local_only else deps.extractor
+        draft = conversation.continue_draft(extractor.extract(request), state)
     try:
         spray = service.check(draft, ctx)
     except service.Unclear as unclear:
@@ -263,7 +324,10 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         with session_scope(deps.session_factory) as session:
             if not conversation.unchanged(session, farm_id, epoch):
                 return Outgoing(text=REPLY_DEMO_CHANGED)
-            conversation.save(session, farm_id, incoming.chat_id, now, draft, history)
+            _repo(session, deps, incoming.chat_id)
+            conversation.save(
+                session, farm_id, _state_key(deps, incoming.chat_id), now, draft, history
+            )
         return Outgoing(text=unclear.reply)
 
     with session_scope(deps.session_factory) as session:
@@ -301,13 +365,13 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
                 confidence=draft.confidence,
                 precision_rank=logs.RANK_VOICE,
             ),
-            actor=_actor(incoming.chat_id),
+            actor=_actor(incoming.chat_id, deps),
             occurred_at=now,
             source_app=SOURCE_APP,
         )
         log_id = log.id
         details = _preview(repo, log, now, deps.settings.display_tz)
-        conversation.clear(session, repo.farm_id, incoming.chat_id)
+        conversation.clear(session, repo.farm_id, _state_key(deps, incoming.chat_id))
 
     return _echo(service.summary(spray, ctx.tz), log_id, spray.notes, details=details)
 
@@ -347,14 +411,16 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
     if action not in (CONFIRM, CANCEL) or not raw_id.isdigit():
         return Outgoing(text=REPLY_UNKNOWN_BUTTON)
     log_id = int(raw_id)
+    if not 1 <= log_id < 2**63:
+        return Outgoing(text=REPLY_GONE)
     tz = ZoneInfo(deps.settings.display_tz)
-    actor = _actor(callback.chat_id)
+    actor = _actor(callback.chat_id, deps)
     with session_scope(deps.session_factory) as session:
         repo = _repo(session, deps, callback.chat_id)
         now = deps.clock(session, deps.settings).now()
         log = repo.get(Log, log_id, scope="logs:write")  # farm-scoped: another farm's is None
         # Log ids are sequential: only the chat that sent the message may act on its draft.
-        if log is None or not _from_chat(log, callback.chat_id):
+        if log is None or not _from_chat(log, callback.chat_id, deps):
             return Outgoing(text=REPLY_GONE)
         if log.status != "pending":
             return Outgoing(text=REPLY_ALREADY_LOGGED)
@@ -433,7 +499,9 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
             else "\nChecks unavailable; review the register."
         )
     # Committed above: the job opens its own session and must see the done log.
-    run = jobs.run_now(deps.session_factory, deps.manifests, ADVISOR_JOB, deps.settings)
+    run = jobs.run_now(
+        deps.session_factory, deps.manifests, ADVISOR_JOB, deps.settings, farm_ids=(farm_id,)
+    )
     if run is not None:
         text += " Advice updated." if run.ok else " Advice will update at the next step."
     return _with_links(text, deps.settings.public_base_url, farm_id)
