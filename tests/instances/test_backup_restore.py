@@ -1459,6 +1459,31 @@ def test_the_next_restore_removes_plaintext_a_killed_restore_left_in_the_temp_di
     assert left == ["farmcore-restore-running", "unrelated"]
 
 
+def test_the_temp_dir_sweep_never_follows_a_link(
+    dbs, cli, owner_key, tmp_path, private_tmp, monkeypatch
+):
+    """A stale-looking `farmcore-restore-*` link to a directory is not a restore's directory:
+    the sweep leaves it, and never hands it to rmtree."""
+    key, _ = owner_key
+    old = time.time() - 7 * 3600
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    (elsewhere / "kept").write_text("not a restore's")
+    link = private_tmp / "farmcore-restore-link"
+    link.symlink_to(elsewhere, target_is_directory=True)
+    os.utime(elsewhere, (old, old))
+    os.utime(link, (old, old), follow_symlinks=False)
+    removed: list[Path] = []
+    monkeypatch.setattr(shutil, "rmtree", lambda path, **_kw: removed.append(Path(path)))
+    env = dbs.installation(dbs.create())
+
+    result = cli("restore", str(private_tmp / "nothing-here"), "--identity", str(key), env=env)
+
+    assert result.exit_code == 1 and "no bundle" in result.output, result.output
+    assert removed == []
+    assert link.is_symlink() and (elsewhere / "kept").exists()
+
+
 def test_the_temp_dir_sweep_skips_an_entry_that_vanishes_under_it(
     dbs, cli, owner_key, private_tmp, monkeypatch
 ):
