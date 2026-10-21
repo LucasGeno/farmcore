@@ -80,7 +80,9 @@ def test_filters_and_forms_remain_farm_scoped_and_tour_read_only(admin, session,
     response = admin.get(f"/share/?farm={other_farm.id}&scope=sprays&status=active")
     assert response.status_code == 200 and "Synthetic ES adviser" in response.text
     assert "/share/as/" not in response.text
-    assert not re.search(r'<form[^>]*method="post"', response.text)
+    # The only form that posts is the banner's way out of the tour.
+    assert re.findall(r'<form method="post" action="([^"]+)"', response.text) == ["/tour/exit"]
+    assert len(re.findall(r'<form[^>]*method="post"', response.text)) == 1
     assert admin.post(f"/share/grants?farm={other_farm.id}", data=_form()).status_code == 403
     assert admin.get("/share/?scope=unsupported").status_code == 422
     assert admin.get("/share/?status=unsupported").status_code == 422

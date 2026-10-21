@@ -449,7 +449,10 @@ Repo = Annotated[ScopedRepository, Depends(get_repo, scope="function")]
 
 
 def require_farm_owner(request: Request, repo: Repo) -> None:
-    """Farm writes require a current explicit owner membership, or installation operator."""
+    """Farm writes require a current explicit owner membership, or installation operator.
+
+    Tour mode removes the ability to write, not the owner's authority to read: an owner's
+    tour still opens owner-only pages such as Sharing."""
     from farmcore.core.identity import principal_for
     from farmcore.core.models.identity import FarmMembership, LocalIdentity
     from farmcore.core.tour import is_tour
@@ -458,10 +461,11 @@ def require_farm_owner(request: Request, repo: Repo) -> None:
     if is_admin(request):
         return
     principal = principal_for(request)
-    if is_tour(request) or principal is None:
+    writing = request.method not in {"GET", "HEAD", "OPTIONS"}
+    if principal is None or (writing and is_tour(request)):
         raise HTTPException(403, "Farm owner required.")
     # Serialize with membership edits, then re-read authority in the write transaction.
-    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+    if writing:
         repo.session.execute(select(Farm.id).where(Farm.id == repo.farm_id).with_for_update())
     active = repo.session.scalar(
         select(FarmMembership.id)

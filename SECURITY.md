@@ -24,7 +24,7 @@ explicitly bound to the grant. This also applies to intentionally public demo fa
 | Farm advisor | Read/export assigned farms; no arbitrary operation writes, membership administration or installation controls |
 | Anonymous visitor | Health, static files and sign-in; no private farm reads or writes |
 | Explicit demo visitor | Read only explicitly designated demo farms; no model-call audit |
-| Tour visitor | Same farm authority as the underlying identity; every mutation refused |
+| Tour visitor | Same farm read authority as the underlying identity; every mutation refused except leaving the tour (exit, sign-out) |
 | Grant recipient | Read only active explicitly bound grant resources; no farm membership, audit, raw transcripts or pending capture |
 | Numeric grantee URL | No authority without a valid authenticated recipient session |
 

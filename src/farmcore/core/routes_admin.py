@@ -13,7 +13,7 @@ a cookie.
   `WINDOW_S`), then 429 until the window passes. The right token always signs in, even while
   that limit is tripped: behind a proxy many visitors can share one key, and the administrator must
   never be locked out by someone else's wrong guesses.
-- `POST /admin/sign-out`: same-origin; clears the cookie.
+- `POST /admin/sign-out`: same-origin; clears the cookie and ends tour mode.
 
 CSRF: the cookie is SameSite=Strict and both actions are same-origin POSTs. The token is never
 echoed, logged or put in a URL: the form is never refilled and failures log nothing but a count.
@@ -32,7 +32,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from farmcore.core.routes_demo import same_origin
-from farmcore.core.tour import is_tour
+from farmcore.core.tour import end_tour, is_tour
 from farmcore.web import is_admin, render
 
 router = APIRouter()
@@ -137,4 +137,5 @@ async def sign_in(request: Request, token: Annotated[str, Form(max_length=512)] 
 def sign_out(request: Request) -> RedirectResponse:
     response = RedirectResponse("/admin/sign-in", status_code=303)
     response.delete_cookie(COOKIE, path="/", secure=True, httponly=True, samesite="strict")
+    end_tour(request, response)
     return response
