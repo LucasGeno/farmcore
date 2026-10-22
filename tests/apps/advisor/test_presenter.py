@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import unescape
+
+import pytest
 
 from farmcore.apps.advisor.presenter import FarmAdvice, ParcelRow, parcel_row, present_farm_advice
 from farmcore.core.models.canonical import Advice, Parcel
@@ -179,35 +181,75 @@ def test_a_window_to_the_forecast_edge_has_no_deadline() -> None:
     assert later.groups[0].when == "window open from Wed 10 Apr · 09:00"
 
 
-def test_an_open_window_names_the_rain_it_lets_through() -> None:
-    """The brief said "spray window open now" beside the station's "Rain until 07:00": the
-    window allows under 0.5 mm in the next 2 h, the station flags 0.2 mm as rain."""
-    edge = local("2024-04-13 06:00")
-    advice = Advice(
+def stored_spray(
+    rain: float,
+    *,
+    verdict: str = "open",
+    evaluated: datetime = NOW,
+    start: datetime = NOW,
+    status: str = "evaluable",
+    limit: float = 0.5,
+    lookahead: int = 2,
+) -> Advice:
+    """A stored spray advice whose window runs to the forecast edge (72 h)."""
+    return Advice(
         decision="spray",
-        props={},
+        props={"assessment_status": status},
         products=[{"name": "copper"}],
-        next_window_start=NOW,
-        next_window_end=edge,
-        evaluated_at=NOW,
+        next_window_start=start,
+        next_window_end=evaluated + timedelta(hours=72),
+        evaluated_at=evaluated,
         reasons=[
             {
                 "rule": "spray_window",
-                "inputs": {"rain_next_mm": 0.2},
+                "verdict": verdict,
+                "inputs": {"rain_next_mm": rain},
                 "threshold": {
                     "window_horizon_h": 72,
-                    "window_rain_lookahead_h": 2,
-                    "window_rain_next_max_mm": 0.5,
+                    "window_rain_lookahead_h": lookahead,
+                    "window_rain_next_max_mm": limit,
                 },
             }
         ],
     )
+
+
+@pytest.mark.parametrize(
+    ("advice", "viewed", "note"),
+    [
+        # Open at evaluation with some rain: the note, with the limit and look-ahead stored
+        # with the advice (not the current configuration's 0.5 mm / 2 h).
+        (
+            stored_spray(0.2, limit=0.8, lookahead=3),
+            NOW,
+            ["0.2 mm rain in next 3 h", "0.8 mm limit"],
+        ),
+        (stored_spray(0.0), NOW, None),  # no rain: the plain words
+        (stored_spray(0.2, status="limited"), NOW, None),  # never reassure a limited assessment
+        # Closed at 06:00 by 0.8 mm, open from 08:00, viewed at 08:10: 0.8 mm is not this
+        # window's rain, so no note.
+        (
+            stored_spray(0.8, verdict="closed", start=local("2024-04-10 08:00")),
+            local("2024-04-10 08:10"),
+            None,
+        ),
+    ],
+    ids=["open-with-rain", "no-rain", "limited", "opened-after-evaluation"],
+)
+def test_an_open_window_names_only_the_rain_its_evaluation_let_through(
+    advice: Advice, viewed: datetime, note: list[str] | None
+) -> None:
+    """The brief said "spray window open now" beside the station's "Rain until 07:00": the
+    window allows under 0.5 mm in the next 2 h, the station flags 0.2 mm as rain."""
     parcel = Parcel(id=1, alias="P1", name="Parcel 1", props={}, area_ha=1.0)
 
-    when = present_farm_advice([parcel_row(parcel, advice, TZ)], NOW, TZ).groups[0].when
+    when = present_farm_advice([parcel_row(parcel, advice, TZ)], viewed, TZ).groups[0].when
 
-    assert "0.2 mm rain in next 2 h" in when
-    assert "0.5 mm limit" in when
+    assert when.startswith("spray window open now")
+    if note is None:
+        assert "mm rain" not in when
+    else:
+        assert all(phrase in when for phrase in note)
 
 
 def test_wait_names_the_next_window_or_none() -> None:
