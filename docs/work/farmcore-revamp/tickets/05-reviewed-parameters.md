@@ -364,3 +364,17 @@ Tests now: +31 added, 3 changed, 0 deleted from `main`.
 `scripts/check.sh` on this head: ruff clean; **2833 passed, 3 skipped, 281 deselected in
 431.36s** (skips: optional SIGPAC/InfoRiego data). Focused advisor/review/forecast/
 notifications/push/tour: 717 passed, 119 deselected.
+
+### Re-review changes — 2026-10-22
+
+- The Crop protection list and the parcel card show "Assessment limited" or
+  "Assessment unavailable" instead of "No action"; the consumer table gained
+  `/advisor/` and card rows, which fail without the fix.
+- `test_current_availability_trusts_only_fresh_saved_assessments` covers the fresh-advice
+  shortcut. Planted faults all fail it: ignoring stored unavailable rows, removing the
+  shortcut, and ignoring the age limit.
+
+Tests now: +32 added, 3 changed, 0 deleted from `main`. Focused advisor/review/forecast/
+notifications/push/tour: 723 passed, 119 deselected. `scripts/check.sh`: ruff clean;
+**2839 passed, 3 skipped, 281 deselected in 438.18s** (skips: optional SIGPAC/InfoRiego
+data).
