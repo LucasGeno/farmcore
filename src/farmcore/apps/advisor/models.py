@@ -57,6 +57,13 @@ class ModelView:
 
 def project(model: ModelSpec, row: Advice | None) -> ModelView:
     reasons = tuple(r for r in (row.reasons or []) if r["rule"] in model.rule_ids) if row else ()
+    if row and (row.props or {}).get("assessment_status") in ("limited", "unavailable"):
+        return ModelView(
+            model,
+            "Not evaluable",
+            (row.props or {}).get("headline", "Required inputs missing"),
+            reasons,
+        )
     by_rule = {r["rule"]: r for r in reasons}
     risk = by_rule.get(model.rule_ids[0]) if model.enabled else None
     status = risk["verdict"] if risk else "Not evaluated"

@@ -10,4 +10,9 @@ MANIFEST = Manifest(
     depends=("advisor",),
     scopes=("advice:read", "parameters:read"),
     models=("farmcore.apps.review.models",),
+    routes=("farmcore.apps.review.routes:router",),
+    title="Parameter review",
+    nav=("Parameter review", "/review/"),
+    nav_group="more",
+    nav_order=35,
 )

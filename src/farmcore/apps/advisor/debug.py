@@ -63,7 +63,9 @@ def parcel_panel(parcel_id: int, request: Request, repo: Repo) -> HTMLResponse:
     if parcel is None:
         raise HTTPException(status_code=404, detail=f"parcel {parcel_id} not found")
     now = get_clock(repo.session, request.app.state.settings).now()
-    row = service.latest_advice(repo, now, parcel_id=parcel.id).get(parcel.id)
+    row = service.latest_advice(
+        repo, now, tz=request.app.state.settings.display_tz, parcel_id=parcel.id
+    ).get(parcel.id)
     body = (
         service.advice_json(row)
         if row is not None

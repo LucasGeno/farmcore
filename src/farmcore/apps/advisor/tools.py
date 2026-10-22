@@ -19,7 +19,9 @@ from farmcore.core.tools import ToolContext, ToolResult, ToolSpec
 SCOPE = service.SCOPE
 MAP_PATH = "/fields/"
 MAX_CARD_BUTTONS = 4  # more parcels to spray than this: one "Open map" button instead
-TODAY_FACTS = frozenset({"parcels", "parcel", "decision", "headline", "advised"})
+TODAY_FACTS = frozenset(
+    {"parcels", "parcel", "decision", "headline", "advised", "assessment_status", "config_version"}
+)
 STATUS_FACTS = frozenset(
     {
         "parcel",
@@ -30,6 +32,8 @@ STATUS_FACTS = frozenset(
         "next_window",
         "products",
         "flags",
+        "assessment_status",
+        "config_version",
     }
 )
 
@@ -188,12 +192,18 @@ def _card(parcel_id: int) -> str:
     return service.CARD_PATH.format(id=parcel_id)
 
 
+def _version(row) -> dict:
+    """Which parameter version produced the advice, and its review status; nothing else."""
+    version = service.advice_json(row)["config_version"]
+    return {"id": version.get("id"), "status": version.get("status")}
+
+
 def today(ctx: ToolContext) -> ToolResult:
     """The farm's advice in at most three lines. A parcel without advice up to now is
     `advised: false` and "awaiting advice", never counted as nothing to spray: "Nothing to
     spray today" only when every parcel is evaluated and none is at risk."""
     parcels = fields_tools.parcels(ctx.repo)
-    advice = service.latest_advice(ctx.repo, ctx.now)
+    advice = service.latest_advice(ctx.repo, ctx.now, tz=ctx.tz.key)
     rows: list[tuple[Any, Advice | None]] = [(p, advice.get(p.id)) for p in parcels]
     facts = {
         "parcels": [
@@ -201,6 +211,10 @@ def today(ctx: ToolContext) -> ToolResult:
                 "parcel": fields_tools.label(p),
                 "decision": a.decision if a else service.NO_ADVICE,
                 "advised": a is not None,
+                "assessment_status": (a.props or {}).get("assessment_status", "legacy-unknown")
+                if a
+                else "unavailable",
+                "config_version": _version(a) if a else None,
                 "headline": (a.props or {}).get("headline") if a else None,
             }
             for p, a in rows
@@ -234,6 +248,15 @@ def today(ctx: ToolContext) -> ToolResult:
         [(detail, _)] = details.most_common(1)
         if detail:
             lines.append(detail)
+    elif any(
+        (a.props or {}).get("assessment_status") in ("limited", "unavailable") for _, a in evaluated
+    ):
+        lines.append(
+            "Évaluation limitée : données requises manquantes; risque inconnu."
+            if fr
+            else "Assessment limited or unavailable: required inputs missing; "
+            "infection risk unknown."
+        )
     elif not evaluated:
         n = len(rows)
         lines.append(
@@ -272,7 +295,7 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
     label = fields_tools.label(found)
     fr = ctx.lang == "fr"
     links = ((f"Open card {found.alias}", _card(found.id)),)
-    row = service.latest_advice(ctx.repo, ctx.now, parcel_id=found.id).get(found.id)
+    row = service.latest_advice(ctx.repo, ctx.now, tz=ctx.tz.key, parcel_id=found.id).get(found.id)
     if row is None:
         text = f"{label} : pas encore de conseil." if fr else f"{label}: no advice yet."
         facts = {"parcel": label, "decision": service.NO_ADVICE, "headline": None}
@@ -280,6 +303,8 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
     props = row.props or {}
     facts = {
         "parcel": label,
+        "assessment_status": props.get("assessment_status", "legacy-unknown"),
+        "config_version": _version(row),
         "decision": row.decision,
         "headline": props.get("headline"),
         "protected_until": _local(row.protected_until, ctx),
@@ -292,6 +317,11 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
         "products": [p.get("name") for p in row.products or []],
         "flags": list(props.get("flags") or []),
     }
+    if props.get("assessment_status") in ("limited", "unavailable") and row.decision in (
+        "none",
+        "protected",
+    ):
+        return ToolResult(facts=facts, text=f"{label}: {props.get('headline')}", links=links)
     plain = PLAIN["fr" if fr else "en"].get(row.decision, row.decision)
     lines = [f"{label} : {plain}." if fr else f"{label}: {plain}."]
     detail = _fr_detail(row, ctx) if fr else facts["headline"]

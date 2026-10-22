@@ -219,8 +219,8 @@ def _parcel_json(parcel: Parcel) -> dict[str, Any]:
     }
 
 
-def _advice_json(repo: Repo, parcel: Parcel, now: datetime) -> dict[str, Any]:
-    row = service.latest_advice(repo, now, parcel_id=parcel.id).get(parcel.id)
+def _advice_json(repo: Repo, parcel: Parcel, now: datetime, tz: str) -> dict[str, Any]:
+    row = service.latest_advice(repo, now, tz=tz, parcel_id=parcel.id).get(parcel.id)
     if row is None:
         body = service.empty_advice_json(
             parcel.id, service.unavailable_reason(repo) or NO_ADVICE_HEADLINE
@@ -305,6 +305,13 @@ def _incubation(reasons: list[dict[str, Any]], evaluated_at: str | None, tz: str
         return None
     inputs, threshold = reason.get("inputs", {}), reason.get("threshold", {})
     pct, event = inputs.get("pct"), inputs.get("event")
+    if inputs.get("coverage") == "limited":
+        return (
+            "Incubation not evaluable: observed-hours accumulation only; "
+            "required temperature/humidity history is incomplete"
+        )
+    if not event and inputs.get("event_history_coverage") == "limited":
+        return "No observed infection event; historical event coverage is limited"
     if pct is None or not event:
         return "No infection event to incubate"
     zone = ZoneInfo(tz)
@@ -339,13 +346,31 @@ def _tankmix_outcome(reasons: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def _chip_label(has_advice: bool, decision: str) -> str | None:
+def _chip_label(has_advice: bool, decision: str, status: str | None = None) -> str | None:
     """The label override for `core/_ui.html` `decision_chip(decision, label)`: None keeps the
     decision word. The core word for `none` is "No advice yet", true only without an advice row;
     an evaluated parcel with nothing to spray says "No action", as its headline does."""
     if not has_advice:
         return NO_ADVICE_HEADLINE
-    return "No action" if decision == service.NO_ADVICE else None
+    return status_chip_label(decision, status) or (
+        "No action" if decision == service.NO_ADVICE else None
+    )
+
+
+ACTION_WORDS = {"spray": "Spray", "wait": "Wait"}
+
+
+def status_chip_label(decision: str, status: str | None) -> str | None:
+    """The chip label for a limited or unavailable assessment, or None for an evaluable one.
+
+    An observed risk keeps its action and gains a qualifier ("Spray · assessment limited"), so
+    missing inputs never mask a real risk; otherwise the status replaces the decision word,
+    never "No action" or "Protected"."""
+    if status not in service.UNCERTAIN:
+        return None
+    if decision in ACTION_WORDS:
+        return f"{ACTION_WORDS[decision]} · assessment {status}"
+    return f"Assessment {status}"
 
 
 def _when(d: datetime, ref: datetime) -> str:
@@ -414,6 +439,8 @@ def _because(by_rule: dict[str, dict[str, Any]], products: list[dict[str, Any]])
 
 def _lead(advice: dict[str, Any], tz: str) -> str:
     """What, where and by when, in plain words, from the stored advice (no engine call)."""
+    if advice.get("assessment_status") in ("limited", "unavailable"):
+        return advice["headline"]
     if advice["id"] is None:
         return NO_ADVICE_HEADLINE
     by_rule = {r["rule"]: r for r in advice["reasons"]}
@@ -497,8 +524,15 @@ def _protection(reasons: list[dict[str, Any]], tz: str) -> dict[str, Any] | None
     return view
 
 
-def unavailable_view(request: Request, repo: Repo, *, full_page=False, parcel=None):
-    reason = service.unavailable_reason(repo)
+def unavailable_view(
+    request: Request, repo: Repo, *, full_page=False, parcel=None, availability=None
+):
+    reason = (
+        availability
+        or service.current_availability(
+            repo, _now(request, repo), request.app.state.settings.display_tz
+        )
+    )[1]
     if reason:
         history_context = (
             _history_context(request, repo, parcel, request.query_params.get("season"))
@@ -544,7 +578,7 @@ def index(
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
-    latest = service.latest_advice(repo, now)
+    latest = service.latest_advice(repo, now, tz=tz)
     rows = [parcel_row(p, latest.get(p.id), tz) for p in parcels]
     model_views = {
         p.id: tuple(
@@ -577,7 +611,9 @@ def index(
 @router.get("/parcels/{parcel_id}.json")
 def card_json(parcel_id: int, request: Request, repo: Repo) -> JSONResponse:
     parcel = _parcel(repo, parcel_id)
-    return JSONResponse(_advice_json(repo, parcel, _now(request, repo)))
+    return JSONResponse(
+        _advice_json(repo, parcel, _now(request, repo), request.app.state.settings.display_tz)
+    )
 
 
 def _next_window(advice: dict[str, Any], tz: str) -> str:
@@ -621,13 +657,15 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
     """One detailed stored presentation for canonical advice and parcel Protection."""
     tz = request.app.state.settings.display_tz
     now = _now(request, repo)
-    advice = _advice_json(repo, parcel, now)
+    advice = _advice_json(repo, parcel, now, tz)
     reasons = advice["reasons"]
     debug = debug_enabled(request)
     flags = [f for f in advice["flags"] if debug or f != REPLAY_FLAG]
     view = {
         **advice,
-        "chip_label": _chip_label(advice["id"] is not None, advice["decision"]),
+        "chip_label": _chip_label(
+            advice["id"] is not None, advice["decision"], advice.get("assessment_status")
+        ),
         "reasons": [_reason_view(r, tz) for r in reasons],
         "flags": [(f, FLAG_LABELS.get(f, f)) for f in flags],
         # The flag code stays debug-only; farmers get the same fact in plain words.
@@ -638,6 +676,10 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
         "protection": _protection(reasons, tz),
         "next_window_text": _next_window(advice, tz),
         "incubation": _incubation(reasons, advice["evaluated_at"], tz),
+        "incubation_limited": any(
+            r.get("rule") == "downy_incubation" and r.get("inputs", {}).get("coverage") == "limited"
+            for r in reasons
+        ),
         "evaluated_at": advice["evaluated_at"] and _fmt(advice["evaluated_at"], tz),
     }
     return {"parcel": advice["parcel"], "advice": view, "now": now, "debug": debug}
@@ -712,4 +754,32 @@ def _history_context(request: Request, repo: Repo, parcel: Parcel, season: str |
         else None,
         "when": when,
         "now": now,
+    }
+
+
+@router.get("/parcels/{parcel_id}/assessments/{advice_id}.json")
+def saved_assessment(parcel_id: int, advice_id: int, request: Request, repo: Repo):
+    """Exact saved assessment evidence for assigned members; never current-view projection."""
+    from farmcore.apps.review.routes import authorized_review
+    from farmcore.core.models.canonical import Advice
+
+    authorized_review(request, repo)
+    parcel = _parcel(repo, parcel_id)
+    if not 0 < advice_id < 2**63:
+        raise HTTPException(404, "Assessment unavailable")
+    row = repo.get(Advice, advice_id, scope=service.SCOPE)
+    if row is None or row.parcel_id != parcel.id or row.evaluated_at > _now(request, repo):
+        raise HTTPException(404, "Assessment unavailable")
+    config, verification = service.saved_config(repo, row)
+    body = service.advice_json(row)
+    if verification == "unverifiable":
+        # The named version does not match the digest saved with the advice: never present
+        # it as a reproducible assessment.
+        body["assessment_status"] = "limited"
+        body["headline"] = "Assessment unverifiable: its parameter version does not match"
+    return {
+        **body,
+        "config_verification": verification,
+        "effective_config": config,
+        "input_snapshot": (row.props or {}).get("input_snapshot"),
     }

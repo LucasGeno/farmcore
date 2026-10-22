@@ -11,6 +11,7 @@ import html
 import pytest
 
 from farmcore.core.models.canonical import Advice, Parcel
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.test_card_plain import by_id
 from tests.apps.chat.test_handlers import NOW_LOCAL, seed_farm
 
@@ -19,6 +20,7 @@ from tests.apps.chat.test_handlers import NOW_LOCAL, seed_farm
 def stored_card(session, settings):
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
+    complete_station(session, parcel.farm_id, NOW_LOCAL)
 
     def store(decision="none", *, reasons=(), products=(), window=None):
         row = Advice(

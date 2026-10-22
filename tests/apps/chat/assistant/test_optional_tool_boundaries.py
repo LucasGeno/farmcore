@@ -19,6 +19,7 @@ from farmcore.core import logs, registry
 from farmcore.core.manifest import Manifest
 from farmcore.core.models.canonical import AccessLog, Advice, Parcel
 from farmcore.core.tools import ToolSpec
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.chat.assistant.toolkit import CHAT, ctx_at, write_counts
 from tests.apps.chat.test_handlers import NOW_LOCAL, seed_farm
 
@@ -28,6 +29,13 @@ NOW = "2024-04-10 06:00"
 @pytest.fixture
 def synthetic(session, settings):
     return seed_farm(session, settings)
+
+
+@pytest.fixture
+def observed(session, synthetic):
+    """`synthetic` with complete station readings, so saved advice is currently evaluable."""
+    complete_station(session, session.get(Parcel, synthetic["P1"]).farm_id, NOW_LOCAL)
+    return synthetic
 
 
 def failing_extension(ctx):
@@ -103,10 +111,8 @@ def test_french_tools_list_the_farms_parcels_and_unknown_parcel_help(session, se
 
 
 @pytest.mark.parametrize("decision", ["spray", "wait"])
-def test_french_advice_with_a_window_mentions_stored_washoff(
-    session, settings, synthetic, decision
-):
-    parcel = session.get(Parcel, synthetic["P1"])
+def test_french_advice_with_a_window_mentions_stored_washoff(session, settings, observed, decision):
+    parcel = session.get(Parcel, observed["P1"])
     session.add(
         Advice(
             farm_id=parcel.farm_id,
@@ -177,8 +183,8 @@ def test_french_unknown_weather_day_asks_for_a_date(session, settings, synthetic
     assert result.text == "Quel jour ? Dites aujourd'hui, demain ou une date (AAAA-MM-JJ)."
 
 
-def test_french_evaluated_no_action_needs_no_invented_second_line(session, settings, synthetic):
-    parcel = session.get(Parcel, synthetic["P1"])
+def test_french_evaluated_no_action_needs_no_invented_second_line(session, settings, observed):
+    parcel = session.get(Parcel, observed["P1"])
     session.add(
         Advice(
             farm_id=parcel.farm_id,

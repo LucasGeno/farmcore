@@ -9,9 +9,11 @@ import pytest
 from sqlalchemy import select
 
 from farmcore.core.access import FARM_COOKIE, ensure_owner_grant
+from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import DataGrant, Event, Farm, Log
 from farmcore.core.models.kernel import AppModule, ClockState
 from farmcore.core.seed import ensure_default_farm
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.operations.conftest import make_parcel
 
 
@@ -22,6 +24,9 @@ def farms(session, settings):
     session.add(second)
     session.flush()
     ensure_owner_grant(session, second)
+    now = get_clock(session, settings).now()
+    complete_station(session, first.id, now)
+    complete_station(session, second.id, now)
     mine = make_parcel(session, first, 101, area="1.25", props={})
     other = make_parcel(session, second, 202, area="2", props={})
     session.commit()

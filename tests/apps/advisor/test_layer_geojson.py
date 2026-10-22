@@ -18,6 +18,7 @@ from farmcore.core import ext_ids
 from farmcore.core import seed as core_seed
 from farmcore.core.clock import set_replay
 from farmcore.core.models.canonical import AccessLog, Advice, Log, Parcel
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.fields.conftest import SYNTHETIC
 
 # 10 Apr 2024 06:00 Europe/Paris (CEST, UTC+2).
@@ -31,6 +32,7 @@ def seeded(session, settings, monkeypatch, tmp_path: Path):
     (tmp_path / "ign").mkdir()
     (tmp_path / "ign" / "demo_parcels_named.geojson").write_text(json.dumps(SYNTHETIC))
     seed(session, scene=None, data_dir=tmp_path)
+    complete_station(session, _parcel(session, "900010").farm_id, NOW)
     set_replay(session, NOW, settings)
     session.commit()
     return session

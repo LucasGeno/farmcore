@@ -73,7 +73,9 @@ def scan(
             continue
         r48 = round(rain_sum, 6)
         t48 = temp_sum / temp_n if temp_n else None
-        if obs.ts >= lookback_start and rain_n < expected_rows:
+        if obs.ts >= lookback_start and (
+            len({o.ts for o in rows if o.rr1_mm is not None and o.t_c is not None}) < expected_rows
+        ):
             gaps.append(obs.ts)
         condition = r48 >= rain_min and t48 is not None and t48 >= temp_min
         if condition and armed:

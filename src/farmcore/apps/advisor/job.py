@@ -18,10 +18,12 @@ from sqlalchemy import select
 
 from farmcore.apps.advisor import service
 from farmcore.apps.advisor.engine import evaluate as engine_evaluate
+from farmcore.apps.advisor.engine.types import RuleResult
 from farmcore.apps.advisor.manifest import JOB_NAME
 from farmcore.apps.fields.seed import alias_number
 from farmcore.apps.stations import service as stations
 from farmcore.core.access import ScopedRepository, repo_for_job
+from farmcore.core.logs import lock_farm
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.timeline import post_event
@@ -40,19 +42,23 @@ def evaluate(ctx: JobContext) -> None:
     ).all()
     tz = ctx.settings.display_tz
     for farm_id in farm_ids:
+        lock_farm(ctx.session, farm_id)
+        ctx.session.execute(select(Farm.id).where(Farm.id == farm_id).with_for_update())
         evaluate_farm(repo_for_job(ctx.session, farm_id, JOB_NAME), ctx.now, tz)
 
 
 def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
-    """Evaluate the farm's parcels at `now`; returns the number of advice rows written."""
+    """Evaluate parcels. Caller holds advisory→farm row locks before creating this repo."""
     if service.unavailable_reason(repo):
         return 0
     station = stations.station_for_farm(repo)
     if station is None:
         logger.info("%s: farm %s has no weather station, skipped", JOB_NAME, repo.farm_id)
         return 0
-    farm = repo.get(Farm, repo.farm_id, scope=service.SCOPE)
-    config = service.config_for(farm, now, tz)
+    from farmcore.apps.review.service import resolve
+
+    effective = resolve(repo, now, tz, seed=True)
+    config = effective.config
     series = service.load_series(repo, station.id, now, tz, config)
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
@@ -62,6 +68,22 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
     for parcel in parcels:
         sprays, ignored = service.load_sprays(repo, parcel.id, now)
         advice = engine_evaluate(series, sprays, config, now)
+        if effective.status in ("rejected", "unsure"):
+            advice.assessment_status = "limited"
+            advice.decision = "none"
+            advice.protected_until = None
+            advice.next_window = None
+            advice.products_recommended = []
+            advice.passes = advice.treatments = 0
+            advice.reasons.append(
+                RuleResult(
+                    "parameter_review",
+                    {"version_id": effective.version.id, "review_id": effective.review.id},
+                    {},
+                    effective.status,
+                    "Recorded human opinion; not field accuracy evidence",
+                )
+            )
         row = service.advice_row(
             advice,
             series=series,
@@ -71,6 +93,10 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
             now=now,
             tz=tz,
             ignored_sprays=ignored,
+            effective=effective,
+            input_snapshot=service.input_snapshot(
+                repo, station, parcel.id, series, config, now, tz, ignored
+            ),
         )
         session.add(row)
         session.flush()
@@ -86,14 +112,15 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
         }
         _post(repo, parcel.id, "advice.evaluated", head, {**base, "decision": row.decision}, now)
         old = previous.get(parcel.id, service.NO_ADVICE)
-        if old != row.decision:
-            body = f"{parcel.alias}: {old} → {row.decision}. {head}"
+        new = service.state_label(row.decision, row.props)
+        if old != new:
+            body = f"{parcel.alias}: {old} → {new}. {head}"
             _post(
                 repo,
                 parcel.id,
                 "advice.changed",
                 body,
-                {**base, "old": old, "new": row.decision},
+                {**base, "old": old, "new": new},
                 now,
             )
     return len(parcels)

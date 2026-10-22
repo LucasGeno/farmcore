@@ -25,10 +25,10 @@ PLAN = ToolSpec(
 def plan(ctx: ToolContext, busy_days: tuple[str, ...] = ()) -> ToolResult:
     view = plan_days(ctx.repo, ctx.now, str(ctx.tz), {date.fromisoformat(d) for d in busy_days})
     links = (("Open Plan", "/forecast/plan"),)
-    if view["unavailable"]:
-        return ToolResult({"unavailable": view["unavailable"]}, view["unavailable"], links)
     days = [{k: d[k] for k in ("day", "grade", "reason")} for d in view["days"][:7]]
     lines = ["Weather only · next seven days; not treatment clearance. Browser busy days included."]
+    if view["unavailable"]:
+        lines.append(view["unavailable"])
     if view["run"]:
         as_issued = view["run"].get("as_issued")
         provenance = (
@@ -45,4 +45,8 @@ def plan(ctx: ToolContext, busy_days: tuple[str, ...] = ()) -> ToolResult:
         else:
             lines.append(f"{provenance} · issued {view['run']['issued']}.")
     lines.extend(f"{d['day']}: {d['word']} — {d['reason']}" for d in view["days"][:7])
-    return ToolResult({"days": days, "run": view["run"]}, "\n".join(lines), links)
+    return ToolResult(
+        {"days": days, "run": view["run"], "assessment_unavailable": view["unavailable"]},
+        "\n".join(lines),
+        links,
+    )

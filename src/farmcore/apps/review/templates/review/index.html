@@ -1,0 +1,63 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, card, pill, empty_state %}
+{% block title %}Parameter review · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Parameter review", "Human opinion about agronomic parameters; not proof of field accuracy.") %}{% endcall %}
+{% if error %}<p role="alert" class="mb-4 rounded-lg border border-line bg-wait-soft p-4 text-wait">{{ error }}</p>{% endif %}
+{% call card() %}
+<h2 class="text-lg font-semibold">{{ 'Unreviewed baseline' if effective.status == 'unreviewed' else 'Effective parameters · ' ~ effective.status }}</h2>
+<p class="mt-2 text-muted">Farm {{ effective.scope.farm_id }} · {{ effective.scope.crop }} · {{ effective.scope.region }} · {{ effective.scope.evaluation_year }}</p>
+<p class="mt-2">{{ 'Version ' ~ effective.id if effective.id else 'Unchanged defaults; baseline will be saved on evaluation or proposal.' }}</p>
+<p class="mt-2 text-sm text-muted">Activation changes future assessments only. Saved assessments retain their original configuration and inputs.</p>
+{% endcall %}
+{% if can_review %}
+{% call card("mt-4") %}
+<h2 class="text-lg font-semibold">Propose a parameter change</h2>
+<p class="mt-2 text-sm text-muted">Engineering bounds prevent invalid inputs. They do not establish agronomic accuracy. Unchanged source and assumed labels remain visible.</p>
+<form method="post" action="{{ resolved_farm_url('/review/propose-form') }}" class="mt-4 grid gap-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% if selected %}<input type="hidden" name="parent_version_id" value="{{ selected.id }}"><p class="text-sm">New child of version {{ selected.id }}; other values stay as proposed in that parent.</p>{% endif %}
+<label class="grid gap-2">Parameter
+<select name="parameter" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+{% for key, p in catalog.items() %}<option value="{{ key }}">{{ key|replace('_', ' ') }} · {{ p.type }} · {{ p.unit }} · {{ p.min }} to {{ p.max }}</option>{% endfor %}
+</select></label>
+<label class="grid gap-2">New value <input name="value" required maxlength="64" class="min-h-[44px] rounded-lg border border-line bg-surface px-3" aria-describedby="value-help"></label>
+<p id="value-help" class="text-sm text-muted">Use a number, whole number or YYYY-MM-DD as specified by the selected parameter.</p>
+<label class="grid gap-2">Proposal evidence <textarea name="evidence" required maxlength="10000" rows="3" class="rounded-lg border border-line bg-surface p-3"></textarea></label>
+<button class="min-h-[44px] justify-self-start rounded-lg bg-brand-700 px-4 text-surface hover:bg-brand-900 focus-visible:ring-2 focus-visible:ring-brand-700">Save new unreviewed version</button>
+</form>
+{% endcall %}
+{% endif %}
+{% call card("mt-4") %}
+<h2 class="text-lg font-semibold">Version history</h2>
+{% if not versions %}<p class="mt-2 text-muted">No saved parameter versions yet. The current defaults are explicitly unreviewed.</p>{% endif %}
+<ul class="mt-3 grid gap-2">{% for v in versions %}<li><a class="text-brand-700 underline" href="{{ resolved_farm_url('/review/?version=' ~ v.id) }}">Version {{ v.id }}{{ ' · baseline' if v.baseline else '' }}</a> · {{ v.created_by }} · {{ v.created_at|local }}</li>{% endfor %}</ul>
+{% endcall %}
+{% if selected %}
+{% call card("mt-4") %}
+<h2 class="text-lg font-semibold">Version {{ selected.id }} · {{ selected.status }}</h2>
+<p class="mt-2">{{ selected.evidence }}</p>
+<p class="mt-2 text-sm text-muted">Author {{ selected.created_by }} · {{ selected.created_at }} · Parent {{ selected.parent_version_id or 'none' }}</p>
+{% if selected.overrides %}<dl class="mt-3 grid gap-2">{% for key, value in selected.overrides.items() %}<div><dt class="font-semibold">{{ key|replace('_', ' ') }}</dt><dd class="tabular-nums">{{ value }}</dd></div>{% endfor %}</dl>{% endif %}
+{% if can_review %}
+<form method="post" action="{{ resolved_farm_url('/review/versions/' ~ selected.id ~ '/review-form') }}" class="mt-4 grid gap-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<label class="grid gap-2">Human opinion <select name="verdict" required class="min-h-[44px] rounded-lg border border-line bg-surface px-3"><option value="unsure">Unsure</option><option value="approved">Approve</option><option value="rejected">Reject</option></select></label>
+<label class="grid gap-2">Review note <textarea name="note" required maxlength="10000" rows="2" class="rounded-lg border border-line bg-surface p-3"></textarea></label>
+<label class="grid gap-2">Review evidence <textarea name="evidence" required maxlength="10000" rows="2" class="rounded-lg border border-line bg-surface p-3"></textarea></label>
+<button class="min-h-[44px] justify-self-start rounded-lg border border-line px-4 hover:bg-ground">Record opinion</button>
+</form>
+{% if selected.status == 'approved' %}
+<form method="post" action="{{ resolved_farm_url('/review/versions/' ~ selected.id ~ '/activate-form') }}" class="mt-4"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="min-h-[44px] rounded-lg bg-brand-700 px-4 text-surface hover:bg-brand-900">Activate for future assessments</button></form>
+{% else %}<p class="mt-4 text-sm text-muted">Activation requires the latest opinion to approve this version.</p>{% endif %}
+{% endif %}
+<h3 class="mt-6 font-semibold">Immutable review and activation history</h3>
+<ul class="mt-3 grid gap-3">{% for r in selected.reviews %}<li><p>{{ r.verdict|capitalize }} · {{ r.reviewer }} · {{ r.created_at }}</p><p>{{ r.note }}</p><p class="text-sm text-muted">Evidence: {{ r.evidence }}</p></li>{% else %}<li class="text-muted">No opinions recorded; explicitly unreviewed.</li>{% endfor %}</ul>
+<ul class="mt-3 grid gap-2">{% for a in selected.activations %}<li>Activated · {{ a.actor }} · {{ a.created_at }} · review {{ a.review_id }}</li>{% endfor %}</ul>
+{% endcall %}
+{% endif %}
+{% call card("mt-4") %}
+<h2 class="text-lg font-semibold">Current catalog and sources</h2>
+<dl class="mt-4 grid gap-4">{% for key, p in catalog.items() %}<div class="border-t border-line pt-3"><dt class="font-semibold">{{ key|replace('_', ' ') }}</dt><dd class="mt-1 tabular-nums">{{ p.value }} {{ p.unit }} · {{ 'Modified parameter; original source shown' if p.modified else ('Assumed' if p.assumed else 'Sourced default') }}</dd><dd class="mt-1 break-words text-sm text-muted">{{ p.source }}</dd><dd class="mt-1 text-sm text-muted">{{ p.type }} · {{ p.min }} to {{ p.max }} · {{ p.bounds_basis }}</dd></div>{% endfor %}</dl>
+{% endcall %}
+{% endblock %}

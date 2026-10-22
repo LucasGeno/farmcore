@@ -4,6 +4,8 @@ import html
 import re
 from urllib.parse import parse_qs, urlsplit
 
+from farmcore.core.clock import get_clock
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.test_workspace import stored as stored
 from tests.apps.fields.test_workspace import app_client as app_client
 from tests.apps.fields.test_workspace import farms as farms
@@ -28,9 +30,11 @@ def test_list_workspace_return_names_focusable_source_row(app_client, farms):
 
 
 def test_direct_workspace_and_legacy_map_returns_name_existing_panel_heading(
-    app_client, client, farms
+    app_client, client, farms, session, settings
 ):
     farm, _, parcel, _, _ = farms
+    complete_station(session, farm.id, get_clock(session, settings).now())
+    session.commit()
     body = app_client.get(f"/fields/parcels/{parcel.id}").text
     urls = [html.unescape(u) for u in re.findall(r'href="([^"]+)"', body)]
     assert f"/fields/?parcel={parcel.id}&farm={farm.id}#map-panel-heading" in urls
@@ -47,8 +51,12 @@ def test_direct_workspace_and_legacy_map_returns_name_existing_panel_heading(
     assert "scroll-mt-20" in re.search(r'class="([^\"]+)"', heading)[1].split()
 
 
-def test_source_pages_expose_labelled_fallback_heading_and_single_return_script(client, farms):
+def test_source_pages_expose_labelled_fallback_heading_and_single_return_script(
+    client, farms, session, settings
+):
     farm, _, parcel, _, _ = farms
+    complete_station(session, farm.id, get_clock(session, settings).now())
+    session.commit()
     for path, heading in (
         ("/today/", "home-heading"),
         ("/advisor/", "advisor-heading"),

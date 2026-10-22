@@ -488,3 +488,24 @@ def test_digest_lists_the_higher_priority_parcel_first_from_the_stored_advice(
         "P5 Les Granges: Spray today 06–10 h",
     ]
     assert [label for label, _ in msg.url_buttons] == ["Open card P6", "Open card P5"]
+
+
+def test_unavailable_assessment_is_pushed_as_such_never_as_none(
+    session_factory, session, bot_settings, sender
+):
+    from farmcore.apps.advisor.job import evaluate
+    from farmcore.core.manifest import JobContext
+    from farmcore.core.models.canonical import Asset
+
+    ids = seed(session, bot_settings)
+    session.add(Asset(farm_id=ids["farm"], kind="station", name="No readings", props={}))
+    session.flush()
+    evaluate(JobContext(session, NOW_LOCAL, bot_settings, (ids["farm"],)))
+    session.commit()
+
+    run(session_factory, bot_settings)
+
+    [msg] = sender.sent
+    assert msg.text.splitlines()[0] == "3 parcels → assessment unavailable"
+    assert "P1 Le Plateau: Assessment unavailable: missing hourly observations" in msg.text
+    assert "→ none" not in msg.text

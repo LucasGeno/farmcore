@@ -29,7 +29,13 @@ from fastapi.responses import HTMLResponse
 from farmcore.apps.advisor import service
 from farmcore.apps.advisor.engine.types import DATA_GAP
 from farmcore.apps.advisor.presenter import HOME_PATH, ParcelRow, _day, _when, parcel_row
-from farmcore.apps.advisor.routes import PARCEL_SCOPE, _now, _parcel, unavailable_view
+from farmcore.apps.advisor.routes import (
+    PARCEL_SCOPE,
+    _now,
+    _parcel,
+    status_chip_label,
+    unavailable_view,
+)
 from farmcore.apps.fields.seed import alias_number
 from farmcore.core.access import Repo
 from farmcore.core.models.canonical import Advice, Parcel
@@ -70,26 +76,36 @@ def _plural(n: int) -> str:
 
 @router.get("/map/farm", response_class=HTMLResponse)
 def farm_section(request: Request, repo: Repo) -> HTMLResponse:
-    if (unavailable := unavailable_view(request, repo)) is not None:
-        return unavailable
     tz = request.app.state.settings.display_tz
     now = _now(request, repo)
+    availability = service.current_availability(repo, now, tz)
+    if (unavailable := unavailable_view(request, repo, availability=availability)) is not None:
+        return unavailable
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
-    latest = service.latest_advice(repo, now)
+    latest = service.latest_advice(repo, now, tz=tz, availability=availability)
     rows = [parcel_row(p, latest.get(p.id), tz) for p in parcels]
     evaluated = [r for r in rows if r.has_advice]
     counts = [
         (d, NO_SPRAY_NEEDED if d == service.NO_ADVICE else None, _plural(n))
         for d in DECISIONS
-        if (n := sum(r.decision == d for r in evaluated))
+        if (
+            n := sum(
+                r.decision == d and r.assessment_status not in ("limited", "unavailable")
+                for r in evaluated
+            )
+        )
     ]
+    limited = [r for r in evaluated if r.assessment_status in ("limited", "unavailable")]
+    if limited:
+        counts.append(("none", "Assessment limited", _plural(len(limited))))
     waiting = len(rows) - len(evaluated)
     deadline = nearest_spray_deadline(rows, now)
     return render(
         request,
         "advisor/_map_farm.html",
+        limited=limited,
         total=len(rows),
         evaluated=len(evaluated),
         counts=counts,
@@ -138,13 +154,16 @@ def parcel_section(parcel_id: ParcelId, request: Request, repo: Repo) -> HTMLRes
         return unavailable
     tz = request.app.state.settings.display_tz
     now = _now(request, repo)
-    advice = service.latest_advice(repo, now, parcel_id=parcel.id).get(parcel.id)
+    advice = service.latest_advice(repo, now, tz=tz, parcel_id=parcel.id).get(parcel.id)
     row = parcel_row(parcel, advice, tz)
     view: dict[str, Any] = {"row": row, "card": row.card_path}
     if advice is not None:
         flags = (advice.props or {}).get("flags", [])
         view.update(
-            chip_label=NO_SPRAY_NEEDED if row.decision == service.NO_ADVICE else None,
+            chip_label=(
+                status_chip_label(row.decision, row.assessment_status)
+                or (NO_SPRAY_NEEDED if row.decision == service.NO_ADVICE else None)
+            ),
             rain=_rain_text(row.mm_since_spray, _rain_gap(advice)),
             weather_gap=DATA_GAP in flags,
             when=_window_text(row, advice.evaluated_at, now, tz),

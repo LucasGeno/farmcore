@@ -99,6 +99,7 @@ class Advice:
     # The recommended pass: 1 pass, one treatment per product (a tank-mix counts 2); 0 without one.
     passes: int = 0
     treatments: int = 0
+    assessment_status: Literal["evaluable", "limited", "unavailable"] = "evaluable"
 
     def reason(self, rule: str) -> RuleResult | None:
         """The first reason produced by `rule`, if any."""

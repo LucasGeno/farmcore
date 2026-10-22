@@ -22,11 +22,19 @@ explicitly bound to the grant. This also applies to intentionally public demo fa
 | Installation operator (`ADMIN_TOKEN`) | Installation controls, all configured farms, global model-call audit and legacy capture |
 | Farm owner | Read/export assigned farms, import machine operations, log and confirm sprays from the assistant panel on the selected farm, preview/confirm/cancel corrections of confirmed sprays, set production/inventory thresholds, assign/revoke existing local identities and recipient-bound grants |
 | Farm advisor | Read/export assigned farms and finalized correction history; no spray capture, corrections, arbitrary operation writes, membership administration or installation controls |
+| Farm owner or advisor: advisor parameters | Read the farm's parameter catalog and version history and saved assessment evidence; propose a bounded parameter version, record an approved/unsure/rejected opinion, and activate an approved version for that farm, crop, region and year. Each step needs CSRF and rechecks the membership under the farm lock |
 | Anonymous visitor | Health, static files and sign-in; no private farm reads or writes |
 | Explicit demo visitor | Read only explicitly designated demo farms; no model-call audit |
 | Tour visitor | Same farm read authority as the underlying identity; every mutation refused except leaving the tour (exit, sign-out) |
 | Grant recipient | Read only active explicitly bound grant resources; no farm membership, audit, raw transcripts or pending capture |
 | Numeric grantee URL | No authority without a valid authenticated recipient session |
+
+One member may propose, approve and activate their own parameter version: small farms often
+have a single owner, so a second reviewer is not required. History is append-only and records
+who did each step and when (`created_by` on the version, `reviewer` on each opinion, `actor` on
+each activation), so a self-approved version is visible as such. An approval is a recorded human
+opinion, not evidence of field accuracy. Advice-only or weather-only grants cannot read parameter
+history (`parameters:read`).
 
 Provision identities locally with `farmcore users create <login> --farm-id <id>`; this prompts
 for a hidden, confirmed password. Omit `--farm-id` to create an account without farm authority.

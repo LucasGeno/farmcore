@@ -36,7 +36,10 @@ router = APIRouter()
 def today_fragment(
     request: Request, repo: Repo, view: Literal["full", "attention", "calm"] = "full"
 ) -> HTMLResponse:
-    unavailable = service.unavailable_reason(repo)
+    tz = request.app.state.settings.display_tz
+    now = _now(request, repo)
+    availability = service.current_availability(repo, now, tz)
+    unavailable = availability[1]
     if unavailable and view == "full":
         return unavailable_view(request, repo)
     if unavailable:
@@ -46,7 +49,7 @@ def today_fragment(
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
-    latest = service.latest_advice(repo, now)
+    latest = service.latest_advice(repo, now, tz=tz, availability=availability)
     rows = [parcel_row(p, latest.get(p.id), tz) for p in parcels]
     return render(
         request,
@@ -71,7 +74,14 @@ def today_fragment(
         hero=present_farm_advice(rows, now, tz),
         act=by_priority(r for r in rows if r.decision in ("spray", "wait")),
         protected=[r for r in rows if r.decision == "protected"],
-        calm=[r for r in rows if r.has_advice and r.decision == service.NO_ADVICE],
+        calm=[
+            r
+            for r in rows
+            if r.has_advice
+            and r.decision == service.NO_ADVICE
+            and r.assessment_status not in ("limited", "unavailable")
+        ],
+        limited=[r for r in rows if r.assessment_status in ("limited", "unavailable")],
         unknown=[r for r in rows if not r.has_advice],
         washed=[r for r in rows if r.washed_off],
         bot_url=bot_url(request),

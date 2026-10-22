@@ -318,7 +318,7 @@ def test_live_loop_priority_contract_in_json_layer_and_presenter(
             assert props["priority"] is None and props["priority_label"] is None
 
     repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "test", "test")
-    latest = service.latest_advice(repo, local("2024-04-10 06:00"))
+    latest = service.latest_advice(repo, local("2024-04-10 06:00"), tz=settings.display_tz)
     p5 = session.scalar(select(Parcel).where(Parcel.farm_id == farm.id, Parcel.alias == "P5"))
     row = parcel_row(p5, latest[p5.id], settings.display_tz)
     assert (row.priority, row.priority_label, row.priority_assumption) == (2, "High", True)

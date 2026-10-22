@@ -8,6 +8,7 @@ from pydantic import SecretStr
 
 from farmcore.core.models.canonical import Farm
 from farmcore.main import create_app
+from tests.apps.advisor.review_fixtures import complete_station
 
 WRITES = (
     "/clock/step",
@@ -291,6 +292,7 @@ def test_tour_hides_configured_telegram_logging_actions(
     app = create_app(configured, session_factory=session_factory)
     with session_factory() as session:
         farm = ensure_default_farm(session, configured)
+        complete_station(session, farm.id, now)
         parcel = make_parcel(session, farm, 1)
         session.add(
             Advice(

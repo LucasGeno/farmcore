@@ -10,7 +10,7 @@ from farmcore.apps.advisor import service as advice
 from farmcore.apps.advisor.engine.types import ceil_hour, floor_hour
 from farmcore.apps.forecast import ranking, sources, store
 from farmcore.apps.forecast.weather import day_weather
-from farmcore.core.access import ScopedRepository
+from farmcore.core.access import ScopeDenied, ScopedRepository
 from farmcore.core.models.canonical import Farm, Parcel
 
 DAYS = 14
@@ -106,11 +106,21 @@ def plan_days(
     today = now.astimezone(zone).date()
     run = store.latest_run(repo, now)
     farm = repo.get(Farm, repo.farm_id, scope=store.SCOPE)
-    config = advice.config_for(farm, now, tz)
-    unavailable = (farm.props or {}).get("advisor_unavailable_reason")
+    from farmcore.apps.review.service import resolve
+
+    availability = advice.current_availability(repo, now, tz)
+    unavailable = availability[1]
+    try:
+        repo.check("parameters:read", "parameter_version")
+    except ScopeDenied:
+        config = advice.config_for(farm, now, tz)
+    else:
+        config = resolve(repo, now, tz).config
     band_start = config.calendar.window_day_start_hour_local.value
     band_end = config.calendar.window_day_end_hour_local.value
-    passed = not unavailable and now.astimezone(zone).hour >= band_end
+    # Observation coverage limits agronomy, not an independently known calendar fact.
+    withheld = (farm.props or {}).get("advisor_unavailable_reason")
+    passed = not withheld and now.astimezone(zone).hour >= band_end
     graded = (
         {
             d.day: d
@@ -170,11 +180,15 @@ def plan_days(
     undated = []
     rescheduled = []
     if not unavailable:
-        current = advice.latest_advice(repo, now)
+        current = advice.latest_advice(repo, now, tz=tz, availability=availability)
         by_day = {d["day"]: d for d in days}
         for parcel in repo.list(Parcel, scope="fields:read", order_by=Parcel.id):
             a = current.get(parcel.id)
-            if a is None or a.decision not in ("spray", "wait"):
+            if (
+                a is None
+                or a.decision not in ("spray", "wait")
+                or (a.props or {}).get("assessment_status") in ("limited", "unavailable")
+            ):
                 continue
             p = {"id": parcel.id, "label": f"{parcel.alias} {parcel.name}", "decision": a.decision}
             start, end = a.next_window_start, a.next_window_end

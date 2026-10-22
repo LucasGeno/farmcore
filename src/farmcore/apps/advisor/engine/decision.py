@@ -41,8 +41,9 @@ History: the caller loads the series from the season gate (3-10, incubation) and
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
+from math import isfinite
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -58,6 +59,7 @@ from farmcore.apps.advisor.engine.types import (
     Advice,
     Flag,
     HourlyObs,
+    RuleResult,
     Spray,
     aware_utc,
 )
@@ -113,8 +115,43 @@ def evaluate(
     if not started:
         return Advice(decision="none", reasons=[gate])
 
-    ordered = sorted(series, key=lambda o: o.ts)
+    rejected = 0
+    normalized = []
+    for obs in series:
+        invalid = {
+            name: None
+            for name in ("rr1_mm", "t_c", "rh_pct", "ff_kmh")
+            if getattr(obs, name) is not None and not isfinite(getattr(obs, name))
+        }
+        if obs.ts <= now:
+            rejected += len(invalid)
+        normalized.append(replace(obs, **invalid) if invalid else obs)
+    ordered = sorted(normalized, key=lambda o: o.ts)
     past = [o for o in ordered if o.ts <= now]
+    if not past:
+        return Advice(
+            decision="none",
+            assessment_status="unavailable",
+            flags={DATA_GAP},
+            reasons=[
+                gate,
+                config.explain(
+                    downy.RULE,
+                    downy.THRESHOLDS,
+                    {"observations": 0},
+                    "not evaluable",
+                    "Missing hourly rain and temperature observations",
+                ),
+                RuleResult(
+                    "input_availability",
+                    {"missing": ["hourly_rain_temperature"]},
+                    {},
+                    "unavailable",
+                    "Actual evaluation inputs",
+                    "Missing observations do not establish absence of infection risk",
+                ),
+            ],
+        )
     done = sorted((s for s in sprays if s.ts <= now), key=lambda s: s.ts)
     flags: set[Flag] = set()
 
@@ -131,8 +168,6 @@ def evaluate(
             flags.add(WASHED_OFF)
         if cover.expired:
             flags.add(EXPIRED)
-        if cover.data_gap:
-            flags.add(DATA_GAP)
 
     scan = downy.scan(past, config, gate_start(config), now)
     if scan.data_gap_hours:
@@ -142,6 +177,8 @@ def evaluate(
     downy_sprays = [s.ts for s in done if any("downy" in p.targets for p in s.products)]
     active = [e for e in recent if not any(ts >= e for ts in downy_sprays)]
     verdict = "risk" if active else ("covered" if recent else "no risk")
+    if scan.data_gap_hours and not active:
+        verdict = "not evaluable"
     event_at = max(active) if active else (max(recent) if recent else None)
     event_r48, event_t48 = _event_window(past, event_at, config)
     downy_reason = config.explain(
@@ -203,4 +240,48 @@ def evaluate(
     )
     for rule in EXTRA_RULES if extra_rules is None else extra_rules:
         rule(ctx)
+    powdery_cover = ctx.state.get("powdery_cover")
+    cover_gap = (downy_cover.data_gap and downy_cover.rain_required) or bool(
+        in_powdery and powdery_cover and powdery_cover.rain_required and covers["powdery"].data_gap
+    )
+    if scan.data_gap_hours or cover_gap:
+        flags.add(DATA_GAP)
+        advice.assessment_status = "limited"
+        advice.protected_until = None
+        if advice.decision == "protected":
+            advice.decision = "none"
+        advice.reasons = [
+            replace(r, verdict="not evaluable", note="Incomplete rain/temperature history")
+            if r.rule.startswith("protection_") and r.verdict == "protected"
+            else r
+            for r in advice.reasons
+        ]
+        advice.reasons.append(
+            RuleResult(
+                "input_availability",
+                {
+                    "missing": ["hourly_rain_temperature"],
+                    "incomplete_windows": len(scan.data_gap_hours),
+                },
+                {},
+                "limited",
+                "Actual evaluation inputs",
+                "Incomplete observations cannot establish no risk or protection",
+            )
+        )
+    if advice.assessment_status == "limited":
+        advice.protected_until = None
+        if advice.decision == "protected":
+            advice.decision = "none"
+    if rejected:
+        advice.reasons.append(
+            RuleResult(
+                "input_validation",
+                {"rejected_count": rejected},
+                {},
+                "rejected non-finite observations",
+                "Actual evaluation input validation",
+                "Non-finite measurements treated as missing, never zero",
+            )
+        )
     return advice

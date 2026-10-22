@@ -84,6 +84,23 @@ def priority(
     alert = _num((incubation.get("threshold") or {}).get("incub_alert_pct"))
     ends = _ts((incubation.get("inputs") or {}).get("expected_symptoms"))
     past_alert = pct is not None and alert is not None and pct >= alert
+    if (incubation.get("inputs") or {}).get("coverage") == "limited":
+        level = 3 if past_alert else 2 if hours >= UNCOVERED_HOURS else 1
+        stage = (
+            "observed-hours lower bound has reached the alert stage"
+            if past_alert
+            else "incubation stage is unknown"
+        )
+        window = (
+            "no spray window is currently known"
+            if next_window_start is None
+            else "a spray window is known, but its relation to incubation cannot be evaluated"
+        )
+        return Priority(
+            level,
+            f"Unprotected {hours} h after an infection risk; {stage}. "
+            f"Incubation timing is not evaluable; {window}.",
+        )
     late = ends is not None and (next_window_start is None or next_window_start >= ends)
     stage = "past the alert stage" if past_alert else "before the alert stage"
     lead = f"Unprotected {hours} h after an infection risk; incubation {stage}"

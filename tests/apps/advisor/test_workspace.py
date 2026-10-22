@@ -14,6 +14,7 @@ from farmcore.core.clock import set_replay
 from farmcore.core.models.canonical import Advice, Farm, Log
 from farmcore.core.models.kernel import AppModule, ClockState
 from farmcore.core.seed import ensure_default_farm
+from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.operations.conftest import make_parcel
 
 NOW = datetime(2024, 5, 10, 4, tzinfo=UTC)
@@ -26,6 +27,8 @@ def stored(session, settings):
     session.add(other)
     session.flush()
     ensure_owner_grant(session, other)
+    complete_station(session, farm.id, NOW)
+    complete_station(session, other.id, NOW)
     parcel = make_parcel(session, farm, 301, area="1.5", props={"variety": "Merlot"})
     foreign = make_parcel(session, other, 302, area="2", props={})
     advice = Advice(

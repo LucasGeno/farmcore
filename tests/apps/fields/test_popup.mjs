@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-async function fixture({ home = true, intercepted = false, insideDisclosure = false, rect = { left: 450, top: 280, right: 710, bottom: 500 } } = {}) {
+async function fixture({ info = null, home = true, intercepted = false, insideDisclosure = false, rect = { left: 450, top: 280, right: 710, bottom: 500 } } = {}) {
   const frame = { left: 284, top: 300, right: 818, bottom: 580 };
   const popups = [];
   const handlers = new Map();
@@ -25,6 +25,8 @@ async function fixture({ home = true, intercepted = false, insideDisclosure = fa
     closest(selector) { return selector === 'section' ? section : null; }
   }
   const section = new Element();
+  section.querySelector = (selector) => selector.startsWith('template[data-chip=') ?
+    { content: { firstElementChild: { cloneNode: () => ({textContent: 'No action'}) } } } : null;
   const element = new Element();
   const disclosure = new Element('details');
   disclosure.open = false;
@@ -33,6 +35,7 @@ async function fixture({ home = true, intercepted = false, insideDisclosure = fa
   element.isConnected = true;
   element.clientHeight = 280;
   element.dataset = { geojsonUrl: '/fields/parcels.geojson?farm=1',
+    ...(info ? {layers: JSON.stringify([{key: 'advice', kind: 'parcels', url: '/advisor/layer.geojson'}]), colouring: 'advice'} : {}),
     ...(home ? { workspaceOrigin: '/?farm=1#home-map' } : {}) };
   class MapAdapter {
     constructor() { this.sources = {}; this.canvasWidth = element.clientWidth; map = this; }
@@ -80,8 +83,8 @@ async function fixture({ home = true, intercepted = false, insideDisclosure = fa
   vm.runInNewContext(readFileSync(new URL('../../../src/farmcore/apps/fields/static/map.js', import.meta.url), 'utf8'),
     { window, document, maplibregl, URL, console, setTimeout, clearTimeout,
       requestAnimationFrame: (fn) => fn(), CustomEvent: class { constructor(name, options) { this.name = name; this.detail = options.detail; } },
-      fetch: async () => ({ ok: true, json: async () => ({ type: 'FeatureCollection', features: [
-        { properties: parcel, geometry: { coordinates: [[[0, 0], [1, 1]]] } },
+      fetch: async (url) => ({ ok: true, json: async () => ({ type: 'FeatureCollection', features: [
+        { properties: url.includes('/advisor/') ? {...parcel, ...info} : parcel, geometry: { coordinates: [[[0, 0], [1, 1]]] } },
       ] }) }),
     });
   await new Promise(setImmediate);
@@ -152,3 +155,14 @@ test('re-swapped Home map drops its disclosure listener instead of resizing a de
   assert.equal(f.map.canvasWidth, 933);
   assert.equal(f.disclosure.listeners?.has('toggle'), false);
 });
+
+for (const status of ['limited', 'unavailable']) {
+  test(`Popup uses explicit ${status} text even when decision template says no action`, async () => {
+    const f = await fixture({info: {decision: 'none', advised: true, assessment_status: status,
+      label: 'Assessment ' + status, card_url: '/advisor/parcels/2'}});
+    function text(el) { return (el.textContent || '') + (el.children || []).map(text).join(' '); }
+    const words = text(f.popups[0].content);
+    assert.ok(words.includes('Assessment ' + status), words);
+    assert.ok(!words.includes('No action'), words);
+  });
+}
