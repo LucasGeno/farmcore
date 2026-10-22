@@ -378,3 +378,12 @@ Tests now: +32 added, 3 changed, 0 deleted from `main`. Focused advisor/review/f
 notifications/push/tour: 723 passed, 119 deselected. `scripts/check.sh`: ruff clean;
 **2839 passed, 3 skipped, 281 deselected in 438.18s** (skips: optional SIGPAC/InfoRiego
 data).
+
+### Limited parcel at risk — 2026-10-22
+
+A limited or unavailable parcel with an observed risk keeps its action chip with a
+qualifier ("Spray · assessment limited") in the Crop protection list, the parcel card and
+the map panel; the status alone replaces the decision only when there is no action. Two
+consumer-table rows (list and map panel) fail without the change. Focused: 725 passed,
+119 deselected. `scripts/check.sh`: ruff clean; **2841 passed, 3 skipped, 281 deselected
+in 441.46s**.
