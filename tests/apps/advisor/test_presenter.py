@@ -226,11 +226,11 @@ def stored_spray(
         ),
         (stored_spray(0.0), NOW, None),  # no rain: the plain words
         (stored_spray(0.2, status="limited"), NOW, None),  # never reassure a limited assessment
-        # Closed at 06:00 by 0.8 mm, open from 08:00, viewed at 08:10: 0.8 mm is not this
-        # window's rain, so no note.
+        # Closed at 06:00 with 0.2 mm (under the limit), open from 07:00, viewed at 07:10,
+        # inside the look-ahead: the 06:00 rain is not this window's, so no note.
         (
-            stored_spray(0.8, verdict="closed", start=local("2024-04-10 08:00")),
-            local("2024-04-10 08:10"),
+            stored_spray(0.2, verdict="closed", start=local("2024-04-10 07:00")),
+            local("2024-04-10 07:10"),
             None,
         ),
     ],
