@@ -363,3 +363,45 @@ def test_saved_config_is_the_rows_own_version_and_a_hash_mismatch_is_unverifiabl
     assert body["config_verification"] == "unverifiable"
     assert body["effective_config"] is None
     assert body["assessment_status"] == "limited"
+
+
+@pytest.mark.parametrize(
+    "readings,saved,age,expected",
+    [
+        # Fresh saved rows are the current assessment, even when readings now look complete.
+        ("complete", "unavailable", timedelta(minutes=30), "unavailable"),
+        ("none", "evaluable", timedelta(minutes=30), "evaluable"),
+        # Rows older than one evaluation interval are rechecked against current readings.
+        ("none", "evaluable", timedelta(hours=2), "unavailable"),
+    ],
+)
+def test_current_availability_trusts_only_fresh_saved_assessments(
+    session, settings, readings, saved, age, expected
+):
+    from farmcore.apps.advisor.service import current_availability
+    from farmcore.core.access import repo_for_job
+    from tests.apps.advisor.review_fixtures import complete_station
+
+    ids = seed_farm(session, settings)
+    parcel = session.get(Parcel, ids["P1"])
+    if readings == "complete":
+        complete_station(session, parcel.farm_id, NOW + age)
+    else:
+        session.add(Asset(farm_id=parcel.farm_id, kind="station", name="No readings", props={}))
+    for pid in (ids["P1"], ids["P5"], ids["P6"]):
+        session.add(
+            Advice(
+                farm_id=parcel.farm_id,
+                parcel_id=pid,
+                evaluated_at=NOW,
+                decision="none",
+                reasons=[],
+                products=[],
+                props={"assessment_status": saved, "headline": f"Saved {saved}"},
+            )
+        )
+    session.flush()
+    repo = repo_for_job(session, parcel.farm_id, "advisor.evaluate")
+    status, reason = current_availability(repo, NOW + age, settings.display_tz)
+    assert status == expected
+    assert (reason is None) is (expected == "evaluable")
