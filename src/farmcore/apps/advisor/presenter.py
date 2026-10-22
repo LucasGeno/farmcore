@@ -77,7 +77,7 @@ class ParcelRow:
 
     @property
     def chip_label(self) -> str | None:
-        return _chip_label(self.has_advice, self.decision)
+        return _chip_label(self.has_advice, self.decision, self.assessment_status)
 
 
 def _open_ended(advice: Advice, by_rule: dict[str, dict[str, Any]]) -> bool:

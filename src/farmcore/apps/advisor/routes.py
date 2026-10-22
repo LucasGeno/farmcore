@@ -346,12 +346,15 @@ def _tankmix_outcome(reasons: list[dict[str, Any]]) -> str | None:
     return None
 
 
-def _chip_label(has_advice: bool, decision: str) -> str | None:
+def _chip_label(has_advice: bool, decision: str, status: str | None = None) -> str | None:
     """The label override for `core/_ui.html` `decision_chip(decision, label)`: None keeps the
     decision word. The core word for `none` is "No advice yet", true only without an advice row;
-    an evaluated parcel with nothing to spray says "No action", as its headline does."""
+    an evaluated parcel with nothing to spray says "No action", as its headline does. A limited
+    or unavailable assessment says so, as the map panel does, never "No action"."""
     if not has_advice:
         return NO_ADVICE_HEADLINE
+    if status in service.UNCERTAIN:
+        return f"Assessment {status}"
     return "No action" if decision == service.NO_ADVICE else None
 
 
@@ -645,7 +648,9 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
     flags = [f for f in advice["flags"] if debug or f != REPLAY_FLAG]
     view = {
         **advice,
-        "chip_label": _chip_label(advice["id"] is not None, advice["decision"]),
+        "chip_label": _chip_label(
+            advice["id"] is not None, advice["decision"], advice.get("assessment_status")
+        ),
         "reasons": [_reason_view(r, tz) for r in reasons],
         "flags": [(f, FLAG_LABELS.get(f, f)) for f in flags],
         # The flag code stays debug-only; farmers get the same fact in plain words.

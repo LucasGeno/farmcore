@@ -1,5 +1,6 @@
 """Synthetic job and HTTP missingness/provenance, independent of demo datasets."""
 
+import re
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -140,33 +141,48 @@ REASSURANCE = ("Nothing to spray today", "no infection risk right now", "No spra
 
 
 @pytest.mark.parametrize(
-    "path",
+    "path,state",
     [
-        "/advisor/today",
-        "/advisor/today?view=calm",
-        "/advisor/map/farm",
-        "/advisor/layer.geojson",
-        "/fields/parcels.geojson",
-        "/fields/list",
-        "/forecast/plan",
-        "/advisor/parcels/{id}.json",
+        ("/advisor/today", "unavailable"),
+        ("/advisor/today?view=calm", "unavailable"),
+        ("/advisor/map/farm", "unavailable"),
+        ("/advisor/layer.geojson", "unavailable"),
+        ("/fields/parcels.geojson", "unavailable"),
+        ("/fields/list", "unavailable"),
+        ("/forecast/plan", "unavailable"),
+        ("/advisor/parcels/{id}.json", "unavailable"),
+        ("/advisor/", "unavailable"),
+        # The farm's readings are complete, but this parcel's own saved assessment is limited.
+        ("/advisor/", "limited"),
+        ("/advisor/parcels/{id}", "limited"),
     ],
 )
-def test_consumers_show_saved_legacy_advice_as_unavailable_without_station_readings(
-    client, session, settings, path
+def test_consumers_never_reassure_about_an_unavailable_or_limited_assessment(
+    client, session, settings, path, state
 ):
+    from tests.apps.advisor.review_fixtures import complete_station
+
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
-    session.add(Asset(farm_id=parcel.farm_id, kind="station", name="No readings", props={}))
+    if state == "limited":
+        complete_station(session, parcel.farm_id, NOW)
+        props = {
+            "assessment_status": "limited",
+            "headline": "Assessment limited: incomplete required inputs; infection risk is unknown",
+        }
+        decision = "none"
+    else:  # legacy advice, and a station with no readings
+        session.add(Asset(farm_id=parcel.farm_id, kind="station", name="No readings", props={}))
+        props, decision = {"headline": "Protected until tomorrow"}, "protected"
     session.add(
         Advice(
             farm_id=parcel.farm_id,
             parcel_id=parcel.id,
             evaluated_at=NOW,
-            decision="protected",
+            decision=decision,
             reasons=[],
             products=[],
-            props={"headline": "Protected until tomorrow"},
+            props=props,
         )
     )
     session.flush()
@@ -192,9 +208,10 @@ def test_consumers_show_saved_legacy_advice_as_unavailable_without_station_readi
         )
         assert {key: props[key] for key in expected} == expected
         return
-    assert "unavailable" in response.text.lower()
+    assert f"assessment {state}" in response.text.lower()
     assert "Protected until tomorrow" not in response.text
     assert ">Protected<" not in response.text
+    assert not re.search(r">\s*No action\s*</span>", response.text)  # the decision chip
     assert not any(claim in response.text for claim in REASSURANCE)
 
 
