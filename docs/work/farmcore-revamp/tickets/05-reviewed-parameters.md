@@ -314,3 +314,53 @@ Follow-ups, not in this ticket:
 
 `scripts/check.sh` after this change: ruff clean; **2774 passed, 3 skipped, 281 deselected
 in 456.04s**. Focused advisor/review: 504 passed, 118 deselected.
+
+### Review changes — 2026-10-22
+
+Rebased onto `main` at `d401fc5`; pinned CSS rebuilt (38472 bytes, digest in the vendor
+README). No migration; single head `review_0001`.
+
+Blockers:
+
+- A limited or unavailable parcel is reported as `assessment limited` or
+  `assessment unavailable` in change notices and the Telegram digest, with its
+  headline, never as `none` (`test_unavailable_assessment_is_pushed_as_such_never_as_none`).
+- Advice records the digest of the configuration that ran. The saved-assessment read
+  accepts the named version only when its configuration has that digest; otherwise the
+  assessment is `unverifiable` and limited. Planting a read of the latest instead of the
+  named version fails `test_saved_config_is_the_rows_own_version_and_a_hash_mismatch_is_unverifiable`.
+- The assistant's version facts are exactly `{id, status}`; returning the full identity
+  fails the assistant test.
+
+Should-fix:
+
+- Availability is computed once per request and passed to `latest_advice`. When every
+  parcel's latest advice was evaluated within one job interval and saved its status,
+  those rows are used without re-evaluating; legacy or stale advice is still rechecked.
+  Scene B replayed to 15 Sep 06:00, 10 parcels, median of 15 requests:
+
+  | Route | Before | After (fresh advice) | After (advice 3 h old) |
+  |---|---|---|---|
+  | `/advisor/today` | 235 ms | 24 ms | 125 ms |
+  | `/advisor/map/farm` | 236 ms | 27 ms | 123 ms |
+  | `/advisor/layer.geojson` | 243 ms | 36 ms | 125 ms |
+  | `/forecast/plan` | 246 ms | 24 ms | 132 ms |
+  | `/notifications/` | 239 ms | 27 ms | 133 ms |
+
+  Limit: between two hourly evaluations, readings that disappear are only reflected at
+  the next evaluation. The stale path still loads the whole season once.
+- The map layer colours a limited or unavailable parcel with no action as uncertain; a
+  limited parcel with observed risk keeps its action colour and says so.
+- The bell names limited parcels while the farm is available.
+- Proposals, opinions and activations use the farm (replay) clock; each step records
+  who did it.
+- The reproduce test rebuilds spray inputs from the stored spray logs, quantities and
+  products and keeps a rejected non-finite reading raw.
+- SECURITY.md documents advisor-parameter authority, including self-approval by a single
+  member, and the recorded author of each step.
+
+Tests now: +31 added, 3 changed, 0 deleted from `main`.
+
+`scripts/check.sh` on this head: ruff clean; **2833 passed, 3 skipped, 281 deselected in
+431.36s** (skips: optional SIGPAC/InfoRiego data). Focused advisor/review/forecast/
+notifications/push/tour: 717 passed, 119 deselected.
