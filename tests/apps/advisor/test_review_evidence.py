@@ -155,6 +155,9 @@ REASSURANCE = ("Nothing to spray today", "no infection risk right now", "No spra
         # The farm's readings are complete, but this parcel's own saved assessment is limited.
         ("/advisor/", "limited"),
         ("/advisor/parcels/{id}", "limited"),
+        # A limited parcel with an observed risk keeps its action, qualified.
+        ("/advisor/", "limited spray"),
+        ("/advisor/map/parcels/{id}", "limited spray"),
     ],
 )
 def test_consumers_never_reassure_about_an_unavailable_or_limited_assessment(
@@ -164,13 +167,13 @@ def test_consumers_never_reassure_about_an_unavailable_or_limited_assessment(
 
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
-    if state == "limited":
+    if state.startswith("limited"):
         complete_station(session, parcel.farm_id, NOW)
         props = {
             "assessment_status": "limited",
             "headline": "Assessment limited: incomplete required inputs; infection risk is unknown",
         }
-        decision = "none"
+        decision = "spray" if state == "limited spray" else "none"
     else:  # legacy advice, and a station with no readings
         session.add(Asset(farm_id=parcel.farm_id, kind="station", name="No readings", props={}))
         props, decision = {"headline": "Protected until tomorrow"}, "protected"
@@ -207,6 +210,9 @@ def test_consumers_never_reassure_about_an_unavailable_or_limited_assessment(
             else {"assessment_status": "unavailable", "advised": True, "decision": "none"}
         )
         assert {key: props[key] for key in expected} == expected
+        return
+    if state == "limited spray":
+        assert re.search(r">\s*Spray · assessment limited\s*</span>", response.text)
         return
     assert f"assessment {state}" in response.text.lower()
     assert "Protected until tomorrow" not in response.text

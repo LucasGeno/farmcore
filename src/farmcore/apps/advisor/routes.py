@@ -349,13 +349,28 @@ def _tankmix_outcome(reasons: list[dict[str, Any]]) -> str | None:
 def _chip_label(has_advice: bool, decision: str, status: str | None = None) -> str | None:
     """The label override for `core/_ui.html` `decision_chip(decision, label)`: None keeps the
     decision word. The core word for `none` is "No advice yet", true only without an advice row;
-    an evaluated parcel with nothing to spray says "No action", as its headline does. A limited
-    or unavailable assessment says so, as the map panel does, never "No action"."""
+    an evaluated parcel with nothing to spray says "No action", as its headline does."""
     if not has_advice:
         return NO_ADVICE_HEADLINE
-    if status in service.UNCERTAIN:
-        return f"Assessment {status}"
-    return "No action" if decision == service.NO_ADVICE else None
+    return status_chip_label(decision, status) or (
+        "No action" if decision == service.NO_ADVICE else None
+    )
+
+
+ACTION_WORDS = {"spray": "Spray", "wait": "Wait"}
+
+
+def status_chip_label(decision: str, status: str | None) -> str | None:
+    """The chip label for a limited or unavailable assessment, or None for an evaluable one.
+
+    An observed risk keeps its action and gains a qualifier ("Spray · assessment limited"), so
+    missing inputs never mask a real risk; otherwise the status replaces the decision word,
+    never "No action" or "Protected"."""
+    if status not in service.UNCERTAIN:
+        return None
+    if decision in ACTION_WORDS:
+        return f"{ACTION_WORDS[decision]} · assessment {status}"
+    return f"Assessment {status}"
 
 
 def _when(d: datetime, ref: datetime) -> str:

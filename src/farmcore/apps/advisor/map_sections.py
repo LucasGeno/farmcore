@@ -29,7 +29,13 @@ from fastapi.responses import HTMLResponse
 from farmcore.apps.advisor import service
 from farmcore.apps.advisor.engine.types import DATA_GAP
 from farmcore.apps.advisor.presenter import HOME_PATH, ParcelRow, _day, _when, parcel_row
-from farmcore.apps.advisor.routes import PARCEL_SCOPE, _now, _parcel, unavailable_view
+from farmcore.apps.advisor.routes import (
+    PARCEL_SCOPE,
+    _now,
+    _parcel,
+    status_chip_label,
+    unavailable_view,
+)
 from farmcore.apps.fields.seed import alias_number
 from farmcore.core.access import Repo
 from farmcore.core.models.canonical import Advice, Parcel
@@ -155,11 +161,8 @@ def parcel_section(parcel_id: ParcelId, request: Request, repo: Repo) -> HTMLRes
         flags = (advice.props or {}).get("flags", [])
         view.update(
             chip_label=(
-                "Assessment " + row.assessment_status
-                if row.assessment_status in ("limited", "unavailable")
-                else NO_SPRAY_NEEDED
-                if row.decision == service.NO_ADVICE
-                else None
+                status_chip_label(row.decision, row.assessment_status)
+                or (NO_SPRAY_NEEDED if row.decision == service.NO_ADVICE else None)
             ),
             rain=_rain_text(row.mm_since_spray, _rain_gap(advice)),
             weather_gap=DATA_GAP in flags,
