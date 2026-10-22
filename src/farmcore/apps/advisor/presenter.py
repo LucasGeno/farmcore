@@ -55,6 +55,11 @@ class ParcelRow:
     window_end: datetime | None = None
     window_open_ended: bool = False  # the window runs to the forecast edge: no real deadline
     window_horizon_h: int | None = None  # the stored look-ahead (`window_horizon_h`), if any
+    # Rain the spray window let through now: the stored sum over the next hours and the limit
+    # and look-ahead the advice was evaluated with (None: not stored, e.g. an older row).
+    rain_next_mm: float | None = None
+    rain_next_max_mm: float | None = None
+    rain_lookahead_h: int | None = None
     protected_until: datetime | None = None
     reason: str = ""  # plain words, no rule codes
     replay: bool = False  # the observed weather stood in for the forecast
@@ -116,6 +121,9 @@ def parcel_row(parcel: Parcel, advice: Advice | None, tz: str) -> ParcelRow:
     flags = props.get("flags", [])
     by_rule = {r["rule"]: r for r in advice.reasons or []}
     horizon = _horizon_h(by_rule)
+    window = by_rule.get("spray_window", {})
+    limits = window.get("threshold", {})
+    lookahead = limits.get("window_rain_lookahead_h")
     return ParcelRow(
         **base,
         decision=advice.decision,
@@ -126,6 +134,9 @@ def parcel_row(parcel: Parcel, advice: Advice | None, tz: str) -> ParcelRow:
         window_end=advice.next_window_end,
         window_open_ended=_open_ended(advice, by_rule),
         window_horizon_h=None if horizon is None else int(horizon),
+        rain_next_mm=window.get("inputs", {}).get("rain_next_mm"),
+        rain_next_max_mm=limits.get("window_rain_next_max_mm"),
+        rain_lookahead_h=None if lookahead is None else int(lookahead),
         protected_until=advice.protected_until,
         reason=_plain_reason(advice, by_rule),
         replay=REPLAY_FLAG in flags,
@@ -225,6 +236,18 @@ def _until(r: ParcelRow, now: datetime, tz: str) -> str:
     return f"from {_day(r.window_start, tz)} until {stop}"
 
 
+def _rain_note(r: ParcelRow) -> str:
+    """The rain an open window still lets through, e.g. "· 0.2 mm rain in next 2 h (under the
+    0.5 mm limit)", so "spray now" beside the station's "Rain until …" reads as intended
+    (the window's limit, `window_rain_next_max_mm`, is wider than the station's rain flag);
+    "" when no rain or unknown."""
+    if not r.rain_next_mm or r.rain_next_mm <= 0:
+        return ""
+    span = f" in next {r.rain_lookahead_h} h" if r.rain_lookahead_h else " ahead"
+    limit = f" (under the {r.rain_next_max_mm:g} mm limit)" if r.rain_next_max_mm else ""
+    return f" · {round(r.rain_next_mm, 2):g} mm rain{span}{limit}"
+
+
 def _when(r: ParcelRow, now: datetime, tz: str) -> str:
     """spray -> "until <end>" ("from <start> until <end>" before it opens), or "window open from
     <start>" / "spray window open now" when the window runs to the forecast edge (its end is
@@ -240,7 +263,7 @@ def _when(r: ParcelRow, now: datetime, tz: str) -> str:
     if not r.window_open_ended:
         return _until(r, now, tz)
     if r.window_start is not None and r.window_start <= now:
-        return "spray window open now"
+        return "spray window open now" + _rain_note(r)
     return f"window open from {_day(r.window_start, tz)}" if r.window_start else ""
 
 

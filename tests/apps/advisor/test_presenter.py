@@ -7,7 +7,8 @@ import re
 from datetime import datetime
 from html import unescape
 
-from farmcore.apps.advisor.presenter import FarmAdvice, ParcelRow, present_farm_advice
+from farmcore.apps.advisor.presenter import FarmAdvice, ParcelRow, parcel_row, present_farm_advice
+from farmcore.core.models.canonical import Advice, Parcel
 from farmcore.web import templates
 from tests.apps.advisor.scenes import local
 
@@ -176,6 +177,37 @@ def test_a_window_to_the_forecast_edge_has_no_deadline() -> None:
 
     assert open_now.groups[0].when == "spray window open now"
     assert later.groups[0].when == "window open from Wed 10 Apr · 09:00"
+
+
+def test_an_open_window_names_the_rain_it_lets_through() -> None:
+    """The brief said "spray window open now" beside the station's "Rain until 07:00": the
+    window allows under 0.5 mm in the next 2 h, the station flags 0.2 mm as rain."""
+    edge = local("2024-04-13 06:00")
+    advice = Advice(
+        decision="spray",
+        props={},
+        products=[{"name": "copper"}],
+        next_window_start=NOW,
+        next_window_end=edge,
+        evaluated_at=NOW,
+        reasons=[
+            {
+                "rule": "spray_window",
+                "inputs": {"rain_next_mm": 0.2},
+                "threshold": {
+                    "window_horizon_h": 72,
+                    "window_rain_lookahead_h": 2,
+                    "window_rain_next_max_mm": 0.5,
+                },
+            }
+        ],
+    )
+    parcel = Parcel(id=1, alias="P1", name="Parcel 1", props={}, area_ha=1.0)
+
+    when = present_farm_advice([parcel_row(parcel, advice, TZ)], NOW, TZ).groups[0].when
+
+    assert "0.2 mm rain in next 2 h" in when
+    assert "0.5 mm limit" in when
 
 
 def test_wait_names_the_next_window_or_none() -> None:
