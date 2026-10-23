@@ -41,12 +41,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.16"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - run: uv sync --frozen --python 3.12
       - name: Lint, format and tests (without the dataset and Compose tests)
         shell: bash
         run: bash scripts/check.sh 2>&1 | tee pytest.log
         env:
-          PYTEST_ADDOPTS: "-m 'not data and not slow' -rs"
+          PYTEST_ADDOPTS: "-m 'not data and not slow' -rs --durations=25"
       - name: Fail if a test skipped for a missing tool
         shell: bash
         run: &no-tool-skips |
@@ -76,12 +78,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
         with:
           version: "0.12.16"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
       - run: uv sync --frozen --python 3.12
       - name: Free Docker networks left by earlier projects
         run: docker network prune -f
       - name: Slow tests
         shell: bash
-        run: uv run pytest -q -m slow -rs 2>&1 | tee pytest.log
+        run: uv run pytest -q -m slow -rs --durations=25 2>&1 | tee pytest.log
       - name: Fail if a test skipped for a missing tool
         shell: bash
         run: *no-tool-skips
@@ -105,4 +109,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - run: docker build -t farmcore:ci .
+      - uses: docker/setup-buildx-action@v3
+      - name: Build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: farmcore:ci
+          cache-from: type=gha,scope=farmcore-image
+          cache-to: type=gha,scope=farmcore-image,mode=max
