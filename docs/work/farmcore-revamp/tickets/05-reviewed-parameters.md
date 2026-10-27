@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Versioned agronomic parameters are reviewable"
 description: "Milestones 1–4: versioned agronomic parameters are reviewable."
-status: in_progress
+status: done
 blocked_by: ["02"]
 ---
 
@@ -35,7 +35,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -387,3 +387,14 @@ the map panel; the status alone replaces the decision only when there is no acti
 consumer-table rows (list and map panel) fail without the change. Focused: 725 passed,
 119 deselected. `scripts/check.sh`: ruff clean; **2841 passed, 3 skipped, 281 deselected
 in 441.46s**.
+
+### Fresh reviewer close-out — Staff, 2026-10-27 (main `9530045`)
+
+Merged as PR #26 (`b3e93f2`, 2026-10-22T01:30Z), satisfying this ticket's stated done
+condition ("PR reviewed by a fresh reviewer and merged"). Verified in `main`: the review
+app is present (`apps/review` manifest/models/routes/service), `review_0001_parameters`
+sits in the single linear migration chain, and config-digest verification with the
+explicit `unverifiable` state is live in `advisor/service.py`/`routes.py`. All four ACs
+and four of five verification boxes were already ticked with tier-3 evidence above.
+Status set to done. Storage follow-ups (option B, per-farm-run series) remain out of
+scope (eng-03).

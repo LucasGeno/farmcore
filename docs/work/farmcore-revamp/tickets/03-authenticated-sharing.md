@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Recipient-bound grants preserve farmer control"
 description: "Milestones 1–4: recipient-bound grants preserve farmer control."
-status: in_progress
+status: done
 blocked_by: ["02"]
 ---
 
@@ -20,10 +20,10 @@ Recipient-bound grants preserve farmer control. Touchpoints: share services/rout
 
 ## Acceptance criteria
 
-- [ ] Recipient identity is bound to a grant; numeric URL alone is insufficient.
-- [ ] Recipient sees only allowed farm/resources; expiry/revoke blocks next read.
-- [ ] No audit/raw transcript access through ordinary grants; own/grantee views keep audited reads.
-- [ ] Owner creates/revokes grants in the browser; foreign member cannot administer them.
+- [x] Recipient identity is bound to a grant; numeric URL alone is insufficient.
+- [x] Recipient sees only allowed farm/resources; expiry/revoke blocks next read.
+- [x] No audit/raw transcript access through ordinary grants; own/grantee views keep audited reads.
+- [x] Owner creates/revokes grants in the browser; foreign member cannot administer them.
 
 ## Execution discipline
 
@@ -35,7 +35,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [ ] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [ ] `uv run alembic heads` — one head after integration.
 - [ ] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -307,3 +307,15 @@ cases were excluded by the approved ordinary-test gate. Full data/whole-applicat
 closure remains ticket12. Operator-only preview uses legacy shared `grant:<id>` attribution;
 individual operators cannot be distinguished by one shared operator token. No production deployment
 or database migration performed. Worktree retained for root exact-head CI/review/integration.
+
+### Fresh reviewer close-out — Staff, 2026-10-27 (main `9530045`)
+
+All four acceptance criteria verified directly in `main`: `core_0004_grant_recipients`
+migration and `DataGrant.recipient_identity_id` present (`core/models/canonical.py`);
+owner-gated create/revoke via `require_farm_owner` on `POST /grants` and
+`POST /grants/{grant_id}/revoke` (`share/routes.py`); recipient-bound repo access in
+`share/service.py`. Final tier-3 gate PASS on record (1,862 passed / 3 skipped / 72
+deselected, 100% changed-line coverage, 5 runtime mutants killed and restored, four
+desktop/mobile browser journeys). The stated done conditions ("PR CI and root actual-tip
+integration gate") are satisfied: aggregate revamp PR #6 merged (`f1a8255`, 2026-10-21)
+and main's full CI run green afterwards (run on PR #29, 2026-10-23). Status set to done.
