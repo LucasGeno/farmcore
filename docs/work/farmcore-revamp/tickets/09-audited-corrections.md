@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Confirmed spray records can be corrected safely"
 description: "Milestones 1–4: confirmed spray records can be corrected safely."
-status: in_progress
+status: done
 blocked_by: ["02"]
 ---
 
@@ -35,7 +35,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -126,3 +126,12 @@ test owns one named failure mode above.
 
 Not tested (known limits): no live-browser smoke run; reachability is proven by following the
 rendered link through TestClient.
+
+### Fresh reviewer close-out — Staff, 2026-10-27 (main `9530045`)
+
+Merged as PR #23 (`9fdf2ff`, 2026-10-21T23:06Z). Verified in `main`:
+`operations/corrections.py`, the `operations_0002_corrections` migration in the single
+linear chain, and `"operation_correction": frozenset({"corrections:read"})` in
+`core/access.py`. All four ACs are ticked with named failure-mode tests on record
+(retries/concurrency single delta, rollback on failure, immutable weather receipts and
+provenance, explicit authority on original capture paths). Status set to done.

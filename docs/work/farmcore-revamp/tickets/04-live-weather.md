@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Live weather arrives with provenance and freshness"
 description: "Milestones 1–4: live weather arrives with provenance and freshness."
-status: in_progress
+status: done
 blocked_by: []
 ---
 
@@ -23,7 +23,7 @@ None — can start immediately.
 - [x] Scheduled bounded fetch ingests real forecast responses through the existing run store, preserving issued/fetched/available/location/unit semantics.
 - [x] Retries/duplicates/provider failure preserve prior valid data and report freshness/coverage.
 - [x] Replay never consumes runs not available as of its clock; no reanalysis masquerading as issued forecast.
-- [ ] Missing required observations/forecast inputs are explicitly unavailable; demo saved runs remain usable.
+- [x] Missing required observations/forecast inputs are explicitly unavailable; demo saved runs remain usable.
 
 ## Execution discipline
 
@@ -35,7 +35,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -97,3 +97,17 @@ Exact-head hosted [CI39281777500](https://github.com/LucasGeno/farmcore/actions/
 Actual-tip tier2 at f2630fa, real pre-merge base9cdf1bc, same selected directories/seed: **711 passed,3 skipped,136 deselected in273.62s**, changed coverage100%, lint/secrets/dependency audit clean (local package unavailable on PyPI), unconfigured types/smoke and tier2 mutation skipped. Report `/tmp/farmcore-post-weather-gate.json`. Single `inventory_0001` migration head, no weather migration.
 
 Forecast slice integrated; ticket04 remains in progress until ticket05's historical-observation missingness guard completes the final acceptance criterion. No full M1 or deployment claim.
+
+### Fresh reviewer close-out — Staff, 2026-10-27 (main `9530045`)
+
+AC-4 verified after ticket 05 landed (PR #26 merged, `b3e93f2`): the advisor returns
+explicit unavailable states — `unavailable_reason` in `advisor/service.py` ("no weather
+station attached to this farm"), the engine sets `assessment_status="unavailable"`
+(`engine/decision.py`, Literal in `engine/types.py`), and consumers never reassure:
+`test_consumers_never_reassure_about_an_unavailable_or_limited_assessment`
+(`tests/apps/advisor/test_review_evidence.py`) and
+`test_empty_observations_are_unavailable_in_season_and_a_gate_before_it`
+(`tests/apps/advisor/engine/test_invariants.py`) are the current successors of the
+handover-era AC-4 test name. Demo saved runs stay usable through the stored-assessment
+read (`test_exact_assessment_read_survives_station_detach_and_current_overlay`). Feature
+tier-3 PASS, exact-head CI and integration merge are on record above. Status set to done.
