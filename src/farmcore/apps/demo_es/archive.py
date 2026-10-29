@@ -34,6 +34,18 @@ def source_time(row: dict[str, str]) -> datetime:
 
 def summary(rows: list[dict[str, str]]) -> dict:
     times = sorted({source_time(row) for row in rows})
+    if not times:
+        return {
+            "rows": 0,
+            "duplicates": 0,
+            "first": "",
+            "last": "",
+            "missing_slots": 0,
+            "gaps": [],
+            "coverage_pct": 0.0,
+            "time_basis": "unverified",
+            "notice": NOTICE,
+        }
     gaps = []
     for a, b in zip(times[:-1], times[1:], strict=True):
         missing = int((b - a) / timedelta(minutes=30)) - 1

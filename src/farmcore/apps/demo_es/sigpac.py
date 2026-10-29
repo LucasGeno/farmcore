@@ -11,6 +11,7 @@ from pathlib import Path
 from zipfile import ZipFile
 
 FILE = "sigpac/47180_Valbuena_de_Duero_2024.zip"
+MAX_MEMBER_BYTES = 64_000_000
 SELECTED = (
     (250, 1),
     (245, 1),
@@ -35,11 +36,21 @@ class Plot:
 
 
 def _records(data: bytes):
+    if len(data) < 32:
+        raise ValueError("Truncated DBF header")
     count = struct.unpack_from("<I", data, 4)[0]
     header, width = struct.unpack_from("<HH", data, 8)
+    if header < 32 or width <= 0:
+        raise ValueError("Invalid DBF header")
+    if header + count * width > len(data):
+        raise ValueError("Truncated DBF records")
     fields = []
     offset = 32
-    while data[offset] != 13:
+    while True:
+        if offset + 32 > len(data):
+            raise ValueError("Truncated DBF field descriptor")
+        if data[offset] == 13:
+            break
         descriptor = data[offset : offset + 32]
         fields.append((descriptor[:11].split(b"\0")[0].decode(), descriptor[16]))
         offset += 32
@@ -57,18 +68,29 @@ def _records(data: bytes):
 def _shapes(data: bytes):
     offset, index = 100, 0
     while offset < len(data):
+        if offset + 8 > len(data):
+            raise ValueError("Truncated shapefile record header")
         _, words = struct.unpack_from(">ii", data, offset)
         offset += 8
-        shape = data[offset : offset + words * 2]
-        offset += words * 2
+        if words <= 0:
+            raise ValueError("Invalid shapefile record length")
+        end = offset + words * 2
+        if end > len(data):
+            raise ValueError("Truncated shapefile record")
+        shape = data[offset:end]
+        offset = end
         yield index, shape
         index += 1
 
 
 def _rings(shape: bytes) -> str:
+    if len(shape) < 44:
+        raise ValueError("Truncated shapefile record")
     if struct.unpack_from("<i", shape)[0] != 15:
         raise ValueError("Expected SIGPAC RECFE PolygonZ geometry")
     parts, points = struct.unpack_from("<ii", shape, 36)
+    if parts < 0 or points < 0 or 44 + 4 * parts + 16 * points > len(shape):
+        raise ValueError("Truncated polygon coordinates")
     starts = (*struct.unpack_from(f"<{parts}i", shape, 44), points)
     coords = [struct.unpack_from("<dd", shape, 44 + 4 * parts + i * 16) for i in range(points)]
     rings = [
@@ -82,7 +104,12 @@ def read(path: Path) -> list[Plot]:
     with ZipFile(path) as archive:
 
         def member(suffix):
-            return archive.read(next(n for n in archive.namelist() if n.endswith(suffix)))
+            info = next((i for i in archive.infolist() if i.filename.endswith(suffix)), None)
+            if info is None:
+                raise ValueError(f"SIGPAC archive is missing the expected {suffix} member")
+            if info.file_size > MAX_MEMBER_BYTES:
+                raise ValueError(f"SIGPAC archive member {suffix} is unexpectedly large")
+            return archive.read(info)
 
         attrs = dict(_records(member("47180_RECFE.dbf")))
         shapes = dict(_shapes(member("47180_RECFE.shp")))
