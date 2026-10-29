@@ -47,10 +47,14 @@ def _records(data: bytes):
     fields = []
     offset = 32
     while True:
-        if offset + 32 > len(data):
+        if offset >= len(data):
             raise ValueError("Truncated DBF field descriptor")
         if data[offset] == 13:
+            if offset >= header:
+                raise ValueError("DBF field descriptors overrun the declared header")
             break
+        if offset + 32 > header:
+            raise ValueError("DBF field descriptors overrun the declared header")
         descriptor = data[offset : offset + 32]
         fields.append((descriptor[:11].split(b"\0")[0].decode(), descriptor[16]))
         offset += 32

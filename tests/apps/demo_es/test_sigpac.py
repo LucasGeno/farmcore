@@ -6,6 +6,45 @@ import pytest
 from farmcore.apps.demo_es import archive, sigpac
 
 
+def dbf(header, count, width, body):
+    """A DBF file: 32-byte header + field descriptors/terminator + records."""
+    return b"\x03" + b"\0" * 3 + struct.pack("<IHH", count, header, width) + b"\0" * 20 + body
+
+
+def field_descriptor(name, length):
+    return name.ljust(11, b"\0") + b"C" + b"\0" * 4 + bytes([length]) + b"\0" * 15
+
+
+def test_valid_empty_dbf_is_accepted():
+    data = dbf(33, 0, 1, b"\x0d")
+    assert list(sigpac._records(data)) == []
+
+
+def test_minimal_dbf_record_is_parsed():
+    descriptor = field_descriptor(b"NAME", 5)
+    record = b" " + b"AB   "
+    data = dbf(32 + 32 + 1, 1, 6, descriptor + b"\x0d" + record)
+    assert list(sigpac._records(data)) == [(0, {"NAME": "AB"})]
+
+
+def test_dbf_missing_terminator_is_refused():
+    data = dbf(40, 0, 1, field_descriptor(b"NAME", 5) + b"\x0d")
+    with pytest.raises(ValueError, match="overrun the declared header"):
+        list(sigpac._records(data))
+
+
+def test_dbf_truncated_file_is_refused():
+    data = dbf(65, 0, 1, b"\x00" * 10)
+    with pytest.raises(ValueError, match="Truncated DBF records"):
+        list(sigpac._records(data))
+
+
+def test_dbf_non_terminator_body_is_refused():
+    data = dbf(33, 0, 1, b"\x00")
+    with pytest.raises(ValueError, match="overrun the declared header"):
+        list(sigpac._records(data))
+
+
 def test_empty_summary_reports_zero_coverage_without_crashing():
     result = archive.summary([])
     assert result["rows"] == 0
