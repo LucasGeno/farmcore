@@ -119,3 +119,22 @@ def test_duplicate_parcel_view_keys_rejected_inside_one_manifest():
     view = ParcelView("archive", "Archive", "/provider/{id}", "/provider/{id}")
     with pytest.raises(ValueError, match="duplicate parcel view"):
         Manifest(name="provider", version="1", parcel_views=(view, view))
+
+
+def test_resource_scopes_default_to_empty_and_accept_declarations() -> None:
+    assert Manifest(name="x", version="1").resource_scopes == ()
+    declared = Manifest(
+        name="x", version="1", resource_scopes=(("widget", ("fields:read", "logs:read")),)
+    )
+    assert declared.resource_scopes == (("widget", ("fields:read", "logs:read")),)
+
+
+def test_resource_scopes_reject_duplicates_and_empty_declarations() -> None:
+    with pytest.raises(ValueError, match="duplicate resource scopes"):
+        Manifest(
+            name="x",
+            version="1",
+            resource_scopes=(("widget", ("fields:read",)), ("widget", ("logs:read",))),
+        )
+    with pytest.raises(ValueError, match="non-empty scopes"):
+        Manifest(name="x", version="1", resource_scopes=(("widget", ()),))

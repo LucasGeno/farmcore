@@ -11,6 +11,10 @@ MANIFEST = Manifest(
     summary="The next five days ranked for spraying, from an imported forecast.",
     depends=("stations", "advisor"),
     scopes=("stations:read", "advice:read", "fields:read"),
+    resource_scopes=(
+        ("forecast_run", ("stations:read",)),
+        ("forecast_value", ("stations:read",)),
+    ),
     models=("farmcore.apps.forecast.models",),
     routes=("farmcore.apps.forecast.routes:router",),
     jobs=(
