@@ -18,9 +18,17 @@ from sqlalchemy import func, select
 from farmcore.apps.operations import isoxml, isoxml_demo, register
 from farmcore.core import clock
 from farmcore.core.access import ScopeDenied, ScopedRepository
-from farmcore.core.models.canonical import DataGrant, Event, Log, LogSource, Product, Quantity
+from farmcore.core.models.canonical import (
+    DataGrant,
+    Event,
+    Log,
+    LogSource,
+    Parcel,
+    Product,
+    Quantity,
+)
 from tests.apps.operations import isoxml_farm
-from tests.apps.operations.isoxml_farm import CLOCK, Farm, local, voice_spray
+from tests.apps.operations.isoxml_farm import CLOCK, SQUARE, TZ, Farm, local, voice_spray
 
 
 def test_parse_demo_file_returns_two_completed_tasks_at_machine_times():
@@ -327,3 +335,71 @@ def test_unknown_imported_product_survives_register_and_http_exports(
     assert [tuple(r[f] for f in fields) for r in json_rows] == [
         tuple(r[f] for f in fields) for r in csv_rows
     ]
+
+
+def test_import_refuses_two_parcels_sharing_a_name_after_folding(farm, session):
+    """A machine record must never be guessed onto one of two same-named parcels."""
+    session.add(
+        Parcel(
+            farm_id=farm.repo.farm_id,
+            name="Les Granges",
+            alias="P7",
+            area_ha=Decimal("1.0"),
+            geom=SQUARE,
+            props={},
+        )
+    )
+    session.flush()
+
+    with pytest.raises(isoxml.IsoxmlError, match="ambiguous partfield"):
+        isoxml.import_taskdata(
+            farm.repo, isoxml_demo.demo_taskdata(), now=local(CLOCK), actor="test", tz=TZ
+        )
+
+
+def test_import_refuses_aliases_that_collide_after_case_folding(farm, session):
+    """`parcel` is unique on (farm_id, alias) case-sensitively; folding can still collide."""
+    session.add(
+        Parcel(
+            farm_id=farm.repo.farm_id,
+            name="Other field",
+            alias="p5",
+            area_ha=Decimal("1.0"),
+            geom=SQUARE,
+            props={},
+        )
+    )
+    session.flush()
+    xml = MINIMAL.format(
+        tasks='<TSK A="TSK1" E="PFD1" G="4">'
+        '<TIM A="2024-04-10T07:00:00"/>'
+        '<PDV A="0006" B="20000" C="PDT1"/>'
+        "</TSK>"
+    ).replace('C="Les Granges"', 'C="P5"')
+
+    with pytest.raises(isoxml.IsoxmlError, match="ambiguous partfield"):
+        isoxml.import_taskdata(farm.repo, xml.encode(), now=local(CLOCK), actor="test", tz=TZ)
+
+
+def test_import_refuses_a_name_that_matches_another_parcels_alias(farm, session):
+    """Name and alias are separate namespaces; a cross-namespace hit must not be guessed."""
+    session.add(
+        Parcel(
+            farm_id=farm.repo.farm_id,
+            name="P5",
+            alias="P9",
+            area_ha=Decimal("1.0"),
+            geom=SQUARE,
+            props={},
+        )
+    )
+    session.flush()
+    xml = MINIMAL.format(
+        tasks='<TSK A="TSK1" E="PFD1" G="4">'
+        '<TIM A="2024-04-10T07:00:00"/>'
+        '<PDV A="0006" B="20000" C="PDT1"/>'
+        "</TSK>"
+    ).replace('C="Les Granges"', 'C="P5"')
+
+    with pytest.raises(isoxml.IsoxmlError, match="ambiguous partfield"):
+        isoxml.import_taskdata(farm.repo, xml.encode(), now=local(CLOCK), actor="test", tz=TZ)
