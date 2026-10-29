@@ -251,10 +251,11 @@ def _folded_index(parcels: list[Parcel], attribute: str) -> dict[str, list[Parce
 
 
 def _parcel_map(repo: ScopedRepository, tasks: list[TaskRecord]) -> dict[str, Parcel]:
-    """Partfield designator -> the farm's parcel (by name, then alias); all must map.
+    """Partfield designator -> the farm's parcel (by folded name or alias); all must map.
 
-    A designator that matches more than one parcel after case/accent folding is refused:
-    silently picking one would attribute a machine record to the wrong parcel.
+    Name and alias form one matching namespace: a designator that matches more than one parcel
+    after case/accent folding (including one parcel's name and another's alias) is refused,
+    because silently picking one would attribute a machine record to the wrong parcel.
     """
     parcels = repo.list(Parcel, scope=PARCEL_SCOPE, order_by=Parcel.id)
     by_name = _folded_index(parcels, "name")
