@@ -264,11 +264,16 @@ def _parcel_map(repo: ScopedRepository, tasks: list[TaskRecord]) -> dict[str, Pa
     ambiguous: list[tuple[str, list[Parcel]]] = []
     for t in tasks:
         key = _fold(t.partfield)
-        candidates = by_name.get(key) or by_alias.get(key) or ()
+        # Name and alias are separate namespaces: a designator matching one parcel's name and
+        # another parcel's alias is ambiguous too, so collect both before deciding.
+        candidates = list(by_name.get(key, ()))
+        for parcel in by_alias.get(key, ()):
+            if all(parcel is not known for known in candidates):
+                candidates.append(parcel)
         if not candidates:
             unknown.append(t.partfield)
         elif len(candidates) > 1:
-            ambiguous.append((t.partfield, list(candidates)))
+            ambiguous.append((t.partfield, candidates))
         else:
             out[t.partfield] = candidates[0]
     if ambiguous:
