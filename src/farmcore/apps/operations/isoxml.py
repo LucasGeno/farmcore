@@ -242,19 +242,45 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z]+", _fold(text)))
 
 
+def _folded_index(parcels: list[Parcel], attribute: str) -> dict[str, list[Parcel]]:
+    """`_fold(value)` -> every parcel with that folded name or alias (usually one)."""
+    index: dict[str, list[Parcel]] = {}
+    for parcel in parcels:
+        index.setdefault(_fold(getattr(parcel, attribute)), []).append(parcel)
+    return index
+
+
 def _parcel_map(repo: ScopedRepository, tasks: list[TaskRecord]) -> dict[str, Parcel]:
-    """Partfield designator -> the farm's parcel (by name, then alias); all must map."""
+    """Partfield designator -> the farm's parcel (by name, then alias); all must map.
+
+    A designator that matches more than one parcel after case/accent folding is refused:
+    silently picking one would attribute a machine record to the wrong parcel.
+    """
     parcels = repo.list(Parcel, scope=PARCEL_SCOPE, order_by=Parcel.id)
-    by_name = {_fold(p.name): p for p in parcels}
-    by_alias = {_fold(p.alias): p for p in parcels}
-    out, unknown = {}, []
+    by_name = _folded_index(parcels, "name")
+    by_alias = _folded_index(parcels, "alias")
+    out: dict[str, Parcel] = {}
+    unknown: list[str] = []
+    ambiguous: list[tuple[str, list[Parcel]]] = []
     for t in tasks:
         key = _fold(t.partfield)
-        parcel = by_name.get(key) or by_alias.get(key)
-        if parcel is None:
+        candidates = by_name.get(key) or by_alias.get(key) or ()
+        if not candidates:
             unknown.append(t.partfield)
+        elif len(candidates) > 1:
+            ambiguous.append((t.partfield, list(candidates)))
         else:
-            out[t.partfield] = parcel
+            out[t.partfield] = candidates[0]
+    if ambiguous:
+        detail = "; ".join(
+            f"{partfield!r} matches " + ", ".join(f"{p.alias} {p.name!r}" for p in candidates)
+            for partfield, candidates in ambiguous
+        )
+        raise IsoxmlError(
+            f"ambiguous partfield(s): {detail} — these parcels share a name or alias once "
+            "case and accents are folded; rename one so a machine record cannot be "
+            "attributed to the wrong parcel"
+        )
     if unknown:
         names = ", ".join(f"{p.alias} {p.name}" for p in parcels) or "none"
         raise IsoxmlError(
