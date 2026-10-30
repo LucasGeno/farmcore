@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 
-from farmcore.core import registry
+from farmcore.core import access, registry
 from farmcore.core.access import (
     RESOURCE_SCOPES,
     FarmNotSeeded,
@@ -389,6 +389,22 @@ def test_register_resource_scopes_is_idempotent_and_refuses_conflicts():
             register_resource_scopes("other-app", (("test_other", ("bogus:read",)),))
     finally:
         RESOURCE_SCOPES.pop("test_widget", None)
+        access._RESOURCE_OWNERS.pop("test_widget", None)
+
+
+def test_identical_scope_reregistration_keeps_the_first_owner_and_does_not_broaden():
+    """A second app declaring the same scopes is idempotent, but must not steal attribution."""
+    register_resource_scopes("first-app", (("test_widget", ("fields:read",)),))
+    try:
+        register_resource_scopes("second-app", (("test_widget", ("fields:read",)),))
+        assert access._RESOURCE_OWNERS["test_widget"] == "first-app"
+        assert RESOURCE_SCOPES["test_widget"] == frozenset({"fields:read"})
+        with pytest.raises(ValueError, match="already declared by first-app"):
+            register_resource_scopes("third-app", (("test_widget", ("fields:read", "logs:read")),))
+        assert RESOURCE_SCOPES["test_widget"] == frozenset({"fields:read"})
+    finally:
+        RESOURCE_SCOPES.pop("test_widget", None)
+        access._RESOURCE_OWNERS.pop("test_widget", None)
 
 
 def test_every_farm_scoped_table_has_a_declared_resource():

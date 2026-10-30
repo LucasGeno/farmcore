@@ -123,8 +123,9 @@ def register_resource_scopes(
 ) -> None:
     """Register an app manifest's resource -> scopes declarations (idempotent for equal sets).
 
-    Called by the registry at load. Conflicting redefinitions are refused so two apps cannot
-    silently widen each other's access.
+    Called by the registry at load. An identical re-declaration keeps the first owner so conflict
+    messages keep naming the app that actually declared the table; conflicting redefinitions are
+    refused so two apps cannot silently widen each other's access.
     """
     for resource, scopes in declarations:
         if not resource:
@@ -138,11 +139,15 @@ def register_resource_scopes(
                 f"app {owner!r}: resource {resource!r} declares unknown scope(s) {sorted(unknown)}"
             )
         existing = RESOURCE_SCOPES.get(resource)
-        if existing is not None and existing != allowed:
-            raise ValueError(
-                f"resource {resource!r} is already declared by {_RESOURCE_OWNERS[resource]} "
-                f"with {sorted(existing)}; {owner!r} asked for {sorted(allowed)}"
-            )
+        if existing is not None:
+            if existing != allowed:
+                raise ValueError(
+                    f"resource {resource!r} is already declared by {_RESOURCE_OWNERS[resource]} "
+                    f"with {sorted(existing)}; {owner!r} asked for {sorted(allowed)}"
+                )
+            # Identical re-declaration: keep the first owner so the conflict message keeps naming
+            # the app that actually declared the table, and do not broaden the scope set.
+            continue
         RESOURCE_SCOPES[resource] = allowed
         _RESOURCE_OWNERS[resource] = owner
 
