@@ -111,6 +111,7 @@ and anonymous farm access is closed. Public demo access requires explicit farm d
 
 - [Architecture](docs/architecture.md): core, apps, data model, AI boundary
 - [Self-hosting](docs/self-hosting.md): configuration, reverse proxy, Telegram, Vertex AI, backups
+- [Private pilot onboarding](docs/pilot-onboarding.md): operator provisioning, parcels and handoff
 - [Contributing](CONTRIBUTING.md): development setup, tests, writing an app
 - [Security](SECURITY.md): access model and reporting vulnerabilities
 - [Third-party licences and data sources](THIRD_PARTY_NOTICES.md)
