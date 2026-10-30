@@ -1,0 +1,42 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "alias": "DEMO1",
+        "name": "Fictional training parcel",
+        "area_ha": 1.2,
+        "eppo_crop": "VITVI",
+        "variety": "Merlot"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              2,
+              44
+            ],
+            [
+              2.001,
+              44
+            ],
+            [
+              2.001,
+              44.001
+            ],
+            [
+              2,
+              44.001
+            ],
+            [
+              2,
+              44
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}
