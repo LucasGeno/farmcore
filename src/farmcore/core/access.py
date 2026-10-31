@@ -6,8 +6,8 @@ A repository is bound to one farm, one grant, an actor and a purpose. Each read:
    holds `scope` (the owner grant holds `*`), else `ScopeDenied`;
 2. checks that `scope` covers the resource (`RESOURCE_SCOPES`: observations need
    `stations:read`, so a `logs:read` grant cannot read them by naming its own scope), else
-   `ScopeDenied`; farm, product and source are readable under any scope, and tables not listed
-   (app-owned) accept any known scope;
+   `ScopeDenied`; every farm table must be declared by core or by the owning app manifest —
+   an undeclared resource is denied;
 3. filters rows to the farm: directly (`farm_id`), via `log` (quantity, log_source,
    log_parcel) or via `asset` (observation); shared reference tables (product, source) are
    not farm-owned; any other table has no farm path and is read only through `execute`;
@@ -82,28 +82,74 @@ _SHARED: frozenset[type[Base]] = frozenset({Product, Source})
 
 _ANY = SCOPES
 _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
-# Which scopes may read which resource (table name). Unlisted tables accept any known scope.
+# Which scopes may read which resource (table name). Every farm table must be declared here or
+# by its app manifest (`Manifest.resource_scopes`); an undeclared resource is denied.
 RESOURCE_SCOPES: dict[str, frozenset[str]] = {
-    "operation_correction": frozenset({"corrections:read"}),
-    "farm": _ANY,
-    "product": _ANY,
-    "source": _ANY,
-    "parcel": frozenset({"fields:read", "register:read"}),
+    "access_log": frozenset({"audit:read"}),
+    "advice": frozenset({"advice:read"}),
+    "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
-    "observation": frozenset({"stations:read"}),
+    "clock_state": frozenset({"audit:read"}),
+    "data_grant": frozenset({"audit:read"}),
+    "event": frozenset({"logs:read", "advice:read"}),
+    "ext_id": _ANY,  # shared reference; callers filter by model/res_id
+    "farm": _ANY,
+    "farm_membership": frozenset({"audit:read"}),
+    "forecast_run": frozenset({"stations:read"}),
+    "forecast_value": frozenset({"stations:read"}),
+    "inventory_stock": frozenset({"logs:read"}),
+    "llm_audit": frozenset({"audit:read"}),
+    "local_identity": frozenset({"audit:read"}),
+    "local_session": frozenset({"audit:read"}),
     "log": _LOG_READS,
     "log_parcel": _LOG_READS,
-    "quantity": _LOG_READS,
     "log_source": _LOG_READS,
-    "event": frozenset({"logs:read", "advice:read"}),
-    "advice": frozenset({"advice:read"}),
-    "parameter_version": frozenset({"parameters:read"}),
-    "parameter_review": frozenset({"parameters:read"}),
+    "login_bucket": frozenset({"audit:read"}),
+    "observation": frozenset({"stations:read"}),
+    "operation_correction": frozenset({"corrections:read"}),
     "parameter_activation": frozenset({"parameters:read"}),
-    "llm_audit": frozenset({"audit:read"}),
-    "access_log": frozenset({"audit:read"}),
-    "data_grant": frozenset({"audit:read"}),
+    "parameter_review": frozenset({"parameters:read"}),
+    "parameter_version": frozenset({"parameters:read"}),
+    "parcel": frozenset({"fields:read", "register:read"}),
+    "product": _ANY,
+    "quantity": _LOG_READS,
+    "source": _ANY,
 }
+_RESOURCE_OWNERS: dict[str, str] = dict.fromkeys(RESOURCE_SCOPES, "core")
+
+
+def register_resource_scopes(
+    owner: str, declarations: tuple[tuple[str, tuple[str, ...]], ...]
+) -> None:
+    """Register an app manifest's resource -> scopes declarations (idempotent for equal sets).
+
+    Called by the registry at load. An identical re-declaration keeps the first owner so conflict
+    messages keep naming the app that actually declared the table; conflicting redefinitions are
+    refused so two apps cannot silently widen each other's access.
+    """
+    for resource, scopes in declarations:
+        if not resource:
+            raise ValueError(f"app {owner!r}: empty resource name")
+        allowed = frozenset(scopes)
+        if not allowed:
+            raise ValueError(f"app {owner!r}: resource {resource!r} declares no scopes")
+        unknown = allowed - SCOPES
+        if unknown:
+            raise ValueError(
+                f"app {owner!r}: resource {resource!r} declares unknown scope(s) {sorted(unknown)}"
+            )
+        existing = RESOURCE_SCOPES.get(resource)
+        if existing is not None:
+            if existing != allowed:
+                raise ValueError(
+                    f"resource {resource!r} is already declared by {_RESOURCE_OWNERS[resource]} "
+                    f"with {sorted(existing)}; {owner!r} asked for {sorted(allowed)}"
+                )
+            # Identical re-declaration: keep the first owner so the conflict message keeps naming
+            # the app that actually declared the table, and do not broaden the scope set.
+            continue
+        RESOURCE_SCOPES[resource] = allowed
+        _RESOURCE_OWNERS[resource] = owner
 
 
 class ScopeDenied(PermissionError):
@@ -163,11 +209,16 @@ class ScopedRepository:
             raise ScopeDenied("This resource is not available through ordinary grants.")
         if scope not in SCOPES:
             raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
-        if resource is not None and scope not in RESOURCE_SCOPES.get(resource, _ANY):
-            raise ScopeDenied(
-                f"scope {scope!r} does not cover {resource!r}; "
-                f"use one of {sorted(RESOURCE_SCOPES[resource])}"
-            )
+        if resource is not None:
+            allowed = RESOURCE_SCOPES.get(resource)
+            if allowed is None:
+                raise ScopeDenied(
+                    f"resource {resource!r} is not declared by core or any loaded app"
+                )
+            if scope not in allowed:
+                raise ScopeDenied(
+                    f"scope {scope!r} does not cover {resource!r}; use one of {sorted(allowed)}"
+                )
         g = self.grant
         if g.farm_id != self.farm_id:
             raise ScopeDenied(f"grant {g.id} is for farm {g.farm_id}, not farm {self.farm_id}")

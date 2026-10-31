@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -12,7 +13,9 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 
+from farmcore.core import access, registry
 from farmcore.core.access import (
+    RESOURCE_SCOPES,
     FarmNotSeeded,
     Repo,
     ScopeDenied,
@@ -20,8 +23,10 @@ from farmcore.core.access import (
     default_farm,
     ensure_owner_grant,
     get_repo,
+    register_resource_scopes,
     repo_for_job,
 )
+from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
     Advice,
@@ -357,3 +362,62 @@ def test_get_repo_must_be_function_scoped():
         @app.get("/wrong")
         def wrong(repo: ScopedRepository = Depends(get_repo)) -> None:
             return None
+
+
+def test_an_undeclared_resource_is_denied(session):
+    farm = _farm_with_data(session, "undeclared")
+    repo = _owner_repo(session, farm)
+    with pytest.raises(ScopeDenied, match="not declared"):
+        repo.execute(select(1), scope="audit:read", resource="not_a_resource")
+
+
+def test_a_declared_resource_rejects_a_scope_outside_its_map(session):
+    farm = _farm_with_data(session, "declared")
+    repo = _owner_repo(session, farm)
+    with pytest.raises(ScopeDenied, match="does not cover"):
+        repo.list(Observation, scope="logs:read")
+    assert len(repo.list(Observation, scope="stations:read")) == 1
+
+
+def test_register_resource_scopes_is_idempotent_and_refuses_conflicts():
+    register_resource_scopes("test-app", (("test_widget", ("fields:read",)),))
+    try:
+        register_resource_scopes("test-app", (("test_widget", ("fields:read",)),))
+        with pytest.raises(ValueError, match="already declared"):
+            register_resource_scopes("other-app", (("test_widget", ("logs:read",)),))
+        with pytest.raises(ValueError, match="unknown scope"):
+            register_resource_scopes("other-app", (("test_other", ("bogus:read",)),))
+    finally:
+        RESOURCE_SCOPES.pop("test_widget", None)
+        access._RESOURCE_OWNERS.pop("test_widget", None)
+
+
+def test_identical_scope_reregistration_keeps_the_first_owner_and_does_not_broaden():
+    """A second app declaring the same scopes is idempotent, but must not steal attribution."""
+    register_resource_scopes("first-app", (("test_widget", ("fields:read",)),))
+    try:
+        register_resource_scopes("second-app", (("test_widget", ("fields:read",)),))
+        assert access._RESOURCE_OWNERS["test_widget"] == "first-app"
+        assert RESOURCE_SCOPES["test_widget"] == frozenset({"fields:read"})
+        with pytest.raises(ValueError, match="already declared by first-app"):
+            register_resource_scopes("third-app", (("test_widget", ("fields:read", "logs:read")),))
+        assert RESOURCE_SCOPES["test_widget"] == frozenset({"fields:read"})
+    finally:
+        RESOURCE_SCOPES.pop("test_widget", None)
+        access._RESOURCE_OWNERS.pop("test_widget", None)
+
+
+def test_every_farm_scoped_table_has_a_declared_resource():
+    manifests = registry.discover()
+    for manifest in manifests:
+        for module in manifest.models:
+            importlib.import_module(module)
+    declared = set(RESOURCE_SCOPES)
+    for manifest in manifests:
+        declared.update(resource for resource, _ in manifest.resource_scopes)
+    missing = sorted(
+        name
+        for name, table in Base.metadata.tables.items()
+        if "farm_id" in table.c and name not in declared
+    )
+    assert missing == []

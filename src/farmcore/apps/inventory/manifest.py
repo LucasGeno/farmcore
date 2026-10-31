@@ -13,6 +13,7 @@ MANIFEST = Manifest(
     depends=("fields", "operations"),
     # logs:read: the sprays that use stock; fields:read: parcel areas for per-hectare doses.
     scopes=("logs:read", "fields:read"),
+    resource_scopes=(("inventory_stock", ("logs:read",)),),
     models=("farmcore.apps.inventory.models",),
     routes=("farmcore.apps.inventory.routes:router",),
     seed="farmcore.apps.inventory.seed:seed",

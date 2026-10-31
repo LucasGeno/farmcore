@@ -41,6 +41,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, configure_mappers, sessionmaker
 
+from farmcore.core.access import register_resource_scopes
 from farmcore.core.app_manifest import MANIFEST as CORE
 from farmcore.core.manifest import Manifest, collect_parcel_views, import_string
 from farmcore.core.models.kernel import AppModule
@@ -174,6 +175,8 @@ def load(
     manifests: list[Manifest] | None = None,
 ) -> list[Manifest]:
     ordered = resolve_order(discover() if manifests is None else list(manifests))
+    for manifest in ordered:
+        register_resource_scopes(manifest.name, manifest.resource_scopes)
     with session_factory() as session:
         states = sync_modules(session, ordered)
         session.commit()
