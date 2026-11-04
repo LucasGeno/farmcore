@@ -235,7 +235,7 @@ def _check_host(value: str) -> str:
 _Image = Annotated[
     str, AfterValidator(_matching(_IMAGE, "an image pinned as <repository>@sha256:<digest>"))
 ]
-_SecretReference = Annotated[
+_SecretPath = Annotated[
     str,
     AfterValidator(_matching(_SECRET_REFERENCE, "a relative path below the secrets folder")),
 ]
@@ -267,9 +267,9 @@ class Limits(_Strict):
 class Secrets(_Strict):
     """Where each secret is, relative to the operator's secrets folder; never a value."""
 
-    postgres_password: _SecretReference
-    runtime_database_password: _SecretReference
-    admin_token: _SecretReference
+    postgres_password: _SecretPath
+    runtime_database_password: _SecretPath
+    admin_token: _SecretPath
 
 
 class Declaration(_Strict):

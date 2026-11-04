@@ -48,6 +48,8 @@ ALLOWED = {
     ("core/commands/restore.py", "open"): "dump in the temporary directory",
     ("core/commands/restore.py", "write_text"): "entry list in the temporary directory",
     ("core/commands/restore.py", "TemporaryDirectory"): "plaintext dump, removed afterwards",
+    # The audited test in tests/core/test_fleet_plan.py fails if planning opens anything to write.
+    ("hosting/inventory.py", "os.open"): "read-only inventory reads (O_RDONLY | O_NOFOLLOW)",
 }
 
 

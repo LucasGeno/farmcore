@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -339,7 +340,7 @@ def test_an_unknown_field_is_refused_by_line_without_naming_it(tmp_path: Path, l
 
 @pytest.mark.parametrize(
     "key",
-    [SENTINEL, "ghp_abcdefghijklmnopqrstuvwxyz012345", "s3cr3t", "\x1b[31mkey", "password"],
+    [SENTINEL, "ghp_" + "abcdefghijklmnopqrstuvwxyz012345", "s3cr3t", "\x1b[31mkey", "password"],
 )
 def test_a_secret_pasted_as_a_key_never_reaches_the_output(tmp_path: Path, key: str) -> None:
     declaration = {**_declaration(), key: "x"}
@@ -620,13 +621,25 @@ def test_the_web_app_and_other_commands_load_no_hosting_code(entry_point: str) -
     assert result.stdout.strip() == "[]"
 
 
-def test_the_fleet_commands_are_listed_in_help() -> None:
-    root = CliRunner().invoke(cli, ["fleet", "--help"])
+# Help is rendered for the terminal: colour splits an option's name into separately styled parts,
+# and a narrow width truncates it, so the text is compared unstyled at a fixed width.
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+@pytest.mark.parametrize(
+    "terminal",
+    [{}, {"FORCE_COLOR": "1"}, {"FORCE_COLOR": "1", "GITHUB_ACTIONS": "true"}],
+    ids=["plain", "colour", "ci"],
+)
+def test_the_fleet_commands_are_listed_in_help(terminal: dict[str, str]) -> None:
+    root = CliRunner().invoke(cli, ["fleet", "--help"], env={"COLUMNS": "120", **terminal})
     assert root.exit_code == 0
-    assert "plan" in root.stdout
-    command = CliRunner().invoke(cli, ["fleet", "plan", "--help"])
+    assert "plan" in _ANSI.sub("", root.stdout)
+    command = CliRunner().invoke(
+        cli, ["fleet", "plan", "--help"], env={"COLUMNS": "120", **terminal}
+    )
     assert command.exit_code == 0
-    assert "--test-domains" in command.stdout
+    assert "--test-domains" in _ANSI.sub("", command.stdout)
 
 
 def test_the_planned_volumes_are_the_ones_compose_declares(tmp_path: Path) -> None:

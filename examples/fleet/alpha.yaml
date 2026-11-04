@@ -14,6 +14,6 @@ limits:
   database_memory_mib: 1024
   database_cpu_millis: 1000
 secrets:
-  postgres_password: alpha/postgres_password
-  runtime_database_password: alpha/runtime_database_password
-  admin_token: alpha/admin_token
+  postgres_password: alpha/postgres
+  runtime_database_password: alpha/runtime
+  admin_token: alpha/admin
