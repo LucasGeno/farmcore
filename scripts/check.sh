@@ -32,18 +32,14 @@ if leaked=$(git ls-files | grep -E '^(data|secrets|backups)/|(^|/)fleet-(invento
   exit 1
 fi
 
-# Fleet inventories are private (docs/hosted-fleet.md): the only declarations tracked here are the
-# synthetic examples, on the reserved fixture domain.
-leaked=$({
-  git grep --cached -lE '^schema_version:' -- '*.yaml' '*.yml' ':(exclude)examples/fleet/*'
-  git grep --cached -E '^domain:' -- 'examples/fleet/*' \
-    | grep -vE ':domain: *[a-z0-9.-]+\.example\.test *$'
-} || true)
-if [[ -n "$leaked" ]]; then
-  echo "data guard: fleet declarations must stay private; examples use <name>.example.test:" >&2
+# Fleet inventories are private (docs/hosted-fleet.md). A plain search also covers a declaration
+# the strict reader refuses; the reader covers every spelling it accepts. Names only, no content.
+if leaked=$(git grep --cached -lE '^schema_version:' -- '*.yaml' '*.yml' ':(exclude)examples/fleet/*'); then
+  echo "data guard: fleet declarations must stay private:" >&2
   echo "$leaked" >&2
   exit 1
 fi
+uv run python -m farmcore.hosting.data_guard
 
 if ! (exec 3<>/dev/tcp/127.0.0.1/55442) 2>/dev/null; then
   echo "hint: dev PostGIS is not reachable on localhost:55442;" \

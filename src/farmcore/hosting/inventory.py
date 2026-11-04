@@ -14,6 +14,7 @@ import re
 import stat
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
@@ -185,6 +186,14 @@ def _read_document(raw: bytes) -> tuple[dict[str, Any], dict[tuple[str | int, ..
     return value, reader.key_lines
 
 
+def read_root_mapping(raw: bytes) -> dict[str, Any] | None:
+    """A document's root mapping under the strict reader, or None if the reader refuses it."""
+    try:
+        return _read_document(raw)[0]
+    except _Refused:
+        return None
+
+
 def _matching(pattern: re.Pattern[str], expected: str) -> Callable[[str], str]:
     def check(value: str) -> str:
         if not pattern.fullmatch(value):
@@ -292,6 +301,14 @@ def _schema_problems(
 
 def _is_under(domain: str, suffix: str) -> bool:
     return domain.endswith(f".{suffix}")
+
+
+def is_fixture_domain(domain: str) -> bool:
+    try:
+        _check_domain(domain)
+    except ValueError:
+        return False
+    return _is_under(domain, _FIXTURE_SUFFIX)
 
 
 @dataclass(frozen=True)
@@ -412,7 +429,8 @@ def read_inventory(folder: Path, policy: DomainPolicy) -> list[Declaration]:
         raise InventoryError([f"cannot read the inventory folder: {exc.strerror}"]) from None
     try:
         try:
-            names = sorted(os.listdir(folder_fd))
+            with os.scandir(folder_fd) as entries:
+                names = sorted(entry.name for entry in islice(entries, MAX_INSTALLATIONS + 1))
         except OSError as exc:
             raise InventoryError([f"cannot read the inventory folder: {exc.strerror}"]) from None
         if not names:

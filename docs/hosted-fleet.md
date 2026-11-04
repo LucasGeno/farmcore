@@ -9,8 +9,9 @@ loads it, and it adds no database, portal or Docker socket.
 
 One folder holding one `<slug>.yaml` per installation and nothing else; [examples/fleet](../examples/fleet)
 is a synthetic one. Keep a real inventory in private storage, never in a public repository:
-`scripts/check.sh` refuses tracked `fleet-inventory/` or `fleet-state/` folders, and any tracked
-declaration outside `examples/fleet`.
+`scripts/check.sh` refuses tracked `fleet-inventory/` or `fleet-state/` folders, any tracked
+`.yaml` or `.yml` declaration outside `examples/fleet` in any spelling the plan accepts, and any
+example not on `<name>.example.test`. It names refused files and never prints their content.
 
 | Field | Rule |
 |---|---|
