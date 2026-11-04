@@ -83,3 +83,55 @@ def test_git_ignores_env_files_but_not_the_example() -> None:
     ]
     assert not_ignored == []
     assert _git(REPO, "check-ignore", "-q", "--no-index", ".env.example").returncode == 1
+
+
+DECLARATION = "schema_version: 1\nslug: alpha\ndomain: alpha.pilots.example.org\n"
+FIXTURE_DECLARATION = "schema_version: 1\nslug: alpha\ndomain: alpha.pilots.example.test\n"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "fleet-inventory/alpha.yaml",
+        "ops/fleet-inventory/notes.txt",
+        "fleet-state/secrets/alpha/admin_token",
+    ],
+)
+def test_the_data_guard_rejects_private_fleet_storage(scratch: Path, name: str) -> None:
+    _stage(scratch, name, "anything\n")
+    result = _check(scratch)
+    assert result.returncode == 1
+    assert "uv-stub" not in result.stdout
+    assert name in result.stderr
+
+
+@pytest.mark.parametrize("name", ["deploy/alpha.yaml", "alpha.yml", "tests/fixtures/alpha.yaml"])
+def test_the_data_guard_rejects_a_declaration_outside_the_examples(
+    scratch: Path, name: str
+) -> None:
+    _stage(scratch, name, FIXTURE_DECLARATION)
+    result = _check(scratch)
+    assert result.returncode == 1
+    assert "uv-stub" not in result.stdout
+    assert name in result.stderr
+
+
+def test_the_data_guard_rejects_a_real_domain_in_the_examples(scratch: Path) -> None:
+    _stage(scratch, "examples/fleet/alpha.yaml", DECLARATION)
+    result = _check(scratch)
+    assert result.returncode == 1
+    assert "uv-stub" not in result.stdout
+    assert "examples/fleet/alpha.yaml" in result.stderr
+
+
+def test_the_data_guard_allows_a_synthetic_example_and_other_yaml(scratch: Path) -> None:
+    _stage(scratch, "examples/fleet/alpha.yaml", FIXTURE_DECLARATION)
+    _stage(scratch, "docker-compose.yml", "services: {}\n")
+    result = _check(scratch)
+    assert "data guard" not in result.stderr
+    assert "uv-stub" in result.stdout
+
+
+def test_git_ignores_private_fleet_storage() -> None:
+    for name in ["fleet-inventory/alpha.yaml", "ops/fleet-state/secrets/alpha/admin_token"]:
+        assert _git(REPO, "check-ignore", "-q", "--no-index", name).returncode == 0, name

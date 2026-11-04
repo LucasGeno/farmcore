@@ -21,5 +21,8 @@ build/
 data/
 backups/
 secrets/
+# Private operator storage (docs/hosted-fleet.md): kept outside any checkout, ignored if it slips in
+fleet-inventory/
+fleet-state/
 *.sqlite
 *.db

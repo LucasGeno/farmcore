@@ -25,9 +25,22 @@ done
 # Data guard: raw datasets, spreadsheets, archives and credentials are never tracked or staged.
 # Env files: `.env`, `.env.*`, per-installation `<name>.env` and `<name>.env.*`; only `.env.example`
 # is committed.
-if leaked=$(git ls-files | grep -E '^(data|secrets|backups)/|\.(xlsx|zip|gz|dump)$|\.env(\.[^/]*)?$' \
+if leaked=$(git ls-files | grep -E '^(data|secrets|backups)/|(^|/)fleet-(inventory|state)/|\.(xlsx|zip|gz|dump)$|\.env(\.[^/]*)?$' \
   | grep -vE '(^|/)\.env\.example$'); then
   echo "data guard: these tracked/staged files must not be committed:" >&2
+  echo "$leaked" >&2
+  exit 1
+fi
+
+# Fleet inventories are private (docs/hosted-fleet.md): the only declarations tracked here are the
+# synthetic examples, on the reserved fixture domain.
+leaked=$({
+  git grep --cached -lE '^schema_version:' -- '*.yaml' '*.yml' ':(exclude)examples/fleet/*'
+  git grep --cached -E '^domain:' -- 'examples/fleet/*' \
+    | grep -vE ':domain: *[a-z0-9.-]+\.example\.test *$'
+} || true)
+if [[ -n "$leaked" ]]; then
+  echo "data guard: fleet declarations must stay private; examples use <name>.example.test:" >&2
   echo "$leaked" >&2
   exit 1
 fi

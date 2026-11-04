@@ -1,0 +1,19 @@
+# Synthetic. A real inventory is private: see docs/hosted-fleet.md.
+schema_version: 1
+slug: beta
+domain: beta.pilots.example.test
+images:
+  app: registry.example.test/farmcore/app@sha256:1111111111111111111111111111111111111111111111111111111111111111
+  database: registry.example.test/farmcore/postgis@sha256:2222222222222222222222222222222222222222222222222222222222222222
+binding:
+  host: 127.0.0.1
+  port: 3402
+limits:
+  app_memory_mib: 1024
+  app_cpu_millis: 1000
+  database_memory_mib: 1024
+  database_cpu_millis: 1000
+secrets:
+  postgres_password: beta/postgres_password
+  runtime_database_password: beta/runtime_database_password
+  admin_token: beta/admin_token
