@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
-import functools
 import hashlib
 import http.client
 import json
@@ -19,7 +18,7 @@ import socket
 import stat
 import subprocess
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -55,9 +54,7 @@ _CONTAINER_FACTS = (
     '"ports":{{json .HostConfig.PortBindings}},"status":{{json .State.Status}},'
     '"health":{{json (index .State "Health")}},"image":{{json .Image}},'
     '"memory":{{json .HostConfig.Memory}},"cpus":{{json .HostConfig.NanoCpus}},'
-    '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
-    '"one_off":{{json (index .Config.Labels "com.docker.compose.oneoff")}},'
-    '"config_hash":{{json (index .Config.Labels "com.docker.compose.config-hash")}}}'
+    '"service":{{json (index .Config.Labels "com.docker.compose.service")}}}'
 )
 _MISMATCH = "/health says another "
 _RECORD_DRAFT = re.compile(r"\.ownership\.[0-9a-f]{8}")
@@ -280,17 +277,12 @@ class _Compose:
     def __call__(self, step: str, *args: str) -> str:
         result = _docker(*self._base, *args)
         if result.returncode != 0:
-            said = result.stderr[-_MAX_DIAGNOSTIC_CHARACTERS:]
-            for value in self._hidden:
+            said = result.stderr
+            for value in self._hidden:  # first: a cut could leave part of a value unrecognizable
                 said = said.replace(value, "<redacted>")
-            raise StepFailed(f"{step}: docker compose exit {result.returncode}: {said.strip()}")
+            said = said[-_MAX_DIAGNOSTIC_CHARACTERS:].strip()
+            raise StepFailed(f"{step}: docker compose exit {result.returncode}: {said}")
         return result.stdout
-
-    @functools.cache  # noqa: B019 - one short-lived instance per run
-    def config_hashes(self) -> dict[str, str]:
-        """Each service's configuration hash, which is all `config` is ever asked for."""
-        said = self("read configuration hash", "config", "--hash", "*")
-        return dict(line.split(maxsplit=1) for line in said.splitlines() if line.strip())
 
     def one_shot(self, step: str, *command: str) -> str:
         return self(step, "run", "--rm", "--no-deps", "-T", "migrate", *command)
@@ -353,32 +345,11 @@ def _read_live(project: str) -> _Live:
     return _Live(volumes, network, containers)
 
 
-def _started_by_this_apply(
-    facts: dict[str, Any], project: str, hashes: Callable[[], dict[str, str]]
-) -> bool:
-    """Compose stamps each container with a hash of its resolved configuration, secrets included.
-    Agreeing with the hash from this installation's env file is what a container a killed apply
-    started can show, and a stranger made with the same labels cannot."""
-    return (
-        facts["one_off"] == "False"  # Compose writes the word
-        and set(facts["networks"] or ()) == {f"{project}_default"}
-        and facts["config_hash"] == hashes().get(facts["service"])
-    )
-
-
-def _no_hashes() -> dict[str, str]:
-    return {}
-
-
-def _ownership_problems(
-    project: str,
-    record: dict[str, Any] | None,
-    live: _Live,
-    hashes: Callable[[], dict[str, str]] = _no_hashes,
-) -> list[str]:
+def _ownership_problems(project: str, record: dict[str, Any] | None, live: _Live) -> list[str]:
     """Why this state root may not act on what Docker holds. Labels can be copied, so they never
-    prove anything alone: a volume also has the creation time saved when it was claimed, a network
-    its id, a container its id. A killed apply's containers are the one exception, see above."""
+    prove anything alone: each resource must also match what was saved about it, a volume's creation
+    time, a network's id, a container's id. A resource with nothing saved is not adopted, even if
+    it is what a killed apply had just made: nothing can tell it from a replacement."""
     if record is None:
         return [
             f"{kind} {name} exists and this state root has no record of it: not adopting"
@@ -393,18 +364,17 @@ def _ownership_problems(
     for name, facts in live.volumes.items():
         if (facts["labels"] or {}).get(OWNER_LABEL) != owner:
             problems.append(f"volume {name} is not this installation's: not adopting")
-        elif saved_volumes.get(name, facts["created"]) != facts["created"]:
-            problems.append(f"volume {name} was replaced since it was claimed: not adopting")
-    if live.network and live.network[1].get(OWNER_LABEL) != owner:
-        problems.append(f"network {project}_default is not this installation's: not adopting")
+        elif saved_volumes.get(name) != facts["created"]:
+            problems.append(f"volume {name} is not the one saved when claimed: not adopting")
+    if live.network and (
+        live.network[1].get(OWNER_LABEL) != owner or live.network[0] != record.get("network_id")
+    ):
+        problems.append(f"network {project}_default is not the one saved: not adopting")
     known = set(record.get("containers", ()))
     for item, facts in live.containers.items():
-        if item in known or (
-            record.get("starting") and _started_by_this_apply(facts, project, hashes)
-        ):
-            continue
-        name = facts["name"].lstrip("/")
-        problems.append(f"container {name} is not one this installation started: not adopting")
+        if item not in known:
+            name = facts["name"].lstrip("/")
+            problems.append(f"container {name} is not one this installation made: not adopting")
     if problems or not record.get("claimed"):
         return problems
     missing = [
@@ -511,8 +481,10 @@ def _create_owned(project: str, record: dict[str, Any], paths: _Paths) -> None:
         if created.returncode != 0:
             raise StepFailed(f"create network: docker exit {created.returncode}")
         live = _read_live(project)
-    assert live.network is not None
-    record.update(claimed=True, network_id=live.network[0])
+        assert live.network is not None
+        record["network_id"] = live.network[0]
+        _write_private(paths.record, json.dumps(record, indent=2))
+    record["claimed"] = True
     _write_private(paths.record, json.dumps(record, indent=2))
 
 
@@ -606,12 +578,22 @@ def _report(
 def _start(
     declaration: Declaration, paths: _Paths, saved: dict[str, Any], hidden: tuple[str, ...]
 ) -> None:
-    """Database, then effects paused and read back, then the schema; only then the app, so an
-    interrupted first run can never leave an unpaused app. Pausing stops once confirmed: after
+    """Containers made, and their ids saved, before any of them starts. Then the database, effects
+    paused and read back, the schema; only then the app, so an interrupted first run can never leave
+    an unpaused app. Pausing stops once confirmed: after
     that the setting is the operator's, and a repeated apply reports it instead."""
     compose = _Compose(declaration, paths, hidden)
     start = ("--no-build", "--pull", "never")
     saved["starting"] = True
+    _write_private(paths.record, json.dumps(saved, indent=2))
+    compose("create containers", "create", *start)
+    project = _project(declaration)
+    saved["containers"] = sorted(
+        item
+        for item, facts in _read_live(project).containers.items()
+        # Compose has just made or kept these names, which the daemon gives to one container only.
+        if facts["name"] == f"/{project}-{facts['service']}-1"
+    )
     _write_private(paths.record, json.dumps(saved, indent=2))
     compose("database start", "up", "-d", *start, "--wait", "--wait-timeout", "120", "db")
     if not saved.get("effects_paused_once"):
@@ -634,14 +616,6 @@ def _start(
     saved.setdefault("heads", pinned["heads"])
     _write_private(paths.record, json.dumps(saved, indent=2))
     compose("start", "up", "-d", *start)
-    project = _project(declaration)
-    live = _read_live(project)
-    known = set(saved.get("containers", ()))
-    saved["containers"] = sorted(
-        item
-        for item, facts in live.containers.items()
-        if item in known or _started_by_this_apply(facts, project, compose.config_hashes)
-    )
     saved["starting"] = False
     _write_private(paths.record, json.dumps(saved, indent=2))
 
@@ -749,14 +723,7 @@ def _apply_locked(
         raise Refused("; ".join(problems))
     images = _image_ids(declaration)
     live = _read_live(project)
-
-    def hashes() -> dict[str, str]:
-        try:
-            return _Compose(declaration, paths, _secret_values(declaration, root)).config_hashes()
-        except StepFailed as exc:
-            raise Refused(str(exc)) from None
-
-    problems = _ownership_problems(project, existing, live, hashes)
+    problems = _ownership_problems(project, existing, live)
     if existing:
         problems += _runtime_drift(declaration, existing, live)
     if problems:

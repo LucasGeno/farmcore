@@ -101,8 +101,13 @@ binding. Creation is not readiness. A healthy-looking answer that disagrees with
 Applying again keeps credentials, ids and data, and leaves running containers alone. Stopping
 one installation does not touch another, and `apply` starts it again.
 
-If an apply is killed, run it again; it finishes the same installation. While a killed apply's Compose is
-still running, the retry is refused until that Compose exits. `status` says `not ready` until an apply has finished.
+If an apply is killed, run it again. It usually finishes the same installation, with the same
+credentials, ids and data. While a killed apply's Compose is still running, the retry is refused
+until that Compose exits. `status` says `not ready` until an apply has finished.
+
+A kill in the moment between creating a volume, network or containers and saving what identifies
+them leaves things a retry cannot tell from a replacement, so it refuses them: see the table below.
+Nothing has started by then and nothing there holds data; look, then remove what it names.
 
 ## Private state and ownership
 
@@ -129,9 +134,9 @@ never makes a resource the fleet's:
 
 - `pgdata` is created first, with a random owner id from the record, and read back. Of two state
   roots racing for one slug, exactly one finds its own id; the other stops.
-- `ownership.json` saves each volume's creation time, the network's id and each container's id.
-- A killed apply saved no container ids, so its containers also have to match the configuration
-  hash Compose computes from this installation's env file.
+- `ownership.json` saves each volume's creation time and the network's id as soon as they exist,
+  and each container's id after Compose creates them and before any starts.
+- Whatever has nothing saved about it is refused, however well its labels match.
 
 ### What `apply` refuses
 
@@ -140,13 +145,14 @@ Each of these stops before anything changes, and the resource stays as it was:
 | Found | What to do |
 |---|---|
 | A volume, network or container of that name or Compose project, with no record | Move it away, or use the state root that owns it |
+| A volume or network with nothing saved about it, or not what was saved | If you know a killed apply just made it, remove it and apply again; never if it may hold data |
 | Unknown files in `installations/<slug>/` with no record | Move them away |
 | A declared port something else is listening on | Free the port or change the declaration before the first apply |
 | A declared image not on this host | `docker pull` it |
 | A changed declaration or Compose file | Restore it: upgrades and moves are not supported here |
 | A missing or changed secret file | Restore it: the database still expects the original |
 | A missing or replaced volume or network | Restore it from backup, or investigate; it is never recreated empty |
-| A container this installation did not start | Remove it yourself once you know what it is; `apply` then recreates the service |
+| A container this installation did not make, or a killed apply just made | Remove it yourself once you know what it is; `apply` then recreates the service |
 | Changed limits, another image, another network or a wider binding on a container | Put it back, or remove the container; `apply` then recreates the service |
 | A record from another Docker daemon | Use that daemon |
 | Another apply running | Wait |

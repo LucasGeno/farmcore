@@ -70,7 +70,7 @@ def pinned(image) -> Iterator[tuple[str, str]]:
         yield app, digests[0]
     finally:
         docker("rm", "-f", "-v", registry, check=False)
-        for name in made:
+        for name in [*made, *DERIVED]:
             docker("image", "rm", "-f", name, check=False)
         if not known:
             docker("image", "rm", "-f", "registry:2", check=False)
@@ -1016,6 +1016,9 @@ def test_status_of_an_installation_never_applied_says_so_and_touches_nothing(tmp
     assert not (tmp_path / "state" / "installations").exists()
 
 
+DERIVED: list[str] = []
+
+
 def derived_image(pinned_app: str, name: str, directory: Path, dockerfile: str) -> str:
     """Another release in this run's registry: built from the one under test, pinned by digest."""
     repository = pinned_app.split("@")[0]
@@ -1023,9 +1026,12 @@ def derived_image(pinned_app: str, name: str, directory: Path, dockerfile: str) 
     (directory / "Dockerfile").write_text(f"FROM {pinned_app}\n{dockerfile}")
     tag = f"{repository}:{name}"
     docker("build", "-q", "-t", tag, str(directory))
+    DERIVED.append(tag)
     docker("push", tag)
     digests = json.loads(docker("image", "inspect", tag, "-f", "{{json .RepoDigests}}").stdout)
-    return next(digest for digest in digests if digest.startswith(f"{repository}@"))
+    pinned = next(digest for digest in digests if digest.startswith(f"{repository}@"))
+    DERIVED.append(pinned)
+    return pinned
 
 
 FORGED_SERVER = """
@@ -1178,20 +1184,29 @@ def test_runtime_drift_is_not_ready_and_apply_refuses_it_without_repair(
 
 
 def docker_failing_noisily(directory: Path, env_file: Path) -> dict[str, str]:
-    """A Compose that fails and, as a bad error message might, repeats the whole env file."""
+    """A Compose that fails and, as a bad error message might, repeats the whole env file, then
+    one secret again exactly where keeping only the output's last 2000 characters would cut it."""
     shim = directory / "noisy"
     shim.mkdir()
+    line = "the operator can act on this line\n"
+    padding = 2000 - 24 - len(line)  # 24 of the 48-character secret stay inside the window
     (shim / "docker").write_text(
         "#!/bin/sh\n"
         'if [ "$1" = compose ]; then\n'
         f'  cat "{env_file}" >&2\n'
-        "  echo 'the operator can act on this line' >&2\n"
+        f"  sed -n 's/^ADMIN_TOKEN=//p' \"{env_file}\" | tr -d '\\n' >&2\n"
+        f"  printf '%{padding}s' '' >&2\n"
+        f"  printf '{line.strip()}\\n' >&2\n"
         "  exit 1\n"
         "fi\n"
         f'exec "{shutil.which("docker")}" "$@"\n'
     )
     (shim / "docker").chmod(0o755)
     return {**os.environ, "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
+
+
+def fragments(value: str, size: int = 12) -> set[str]:
+    return {value[start : start + size] for start in range(len(value) - size + 1)}
 
 
 @pytest.mark.slow
@@ -1213,9 +1228,10 @@ def test_a_failed_step_is_diagnosed_without_a_secret_in_any_output_or_receipt(
     last = json.loads(receipts.read_text().splitlines()[-1])
     assert last["state"] == "not ready" and last["at"]
     record = (fleet.state / "installations" / slug / "ownership.json").read_text()
+    outputs = (result.stdout, result.stderr, receipts.read_text(), planned.stdout, record)
     for value in secret_bytes(fleet, slug).values():
-        for output in (result.stdout, result.stderr, receipts.read_text(), planned.stdout, record):
-            assert value not in output
+        for fragment in fragments(value):
+            assert not any(fragment in output for output in outputs)
     for private in (env_file, fleet.state / "secrets" / slug / "postgres"):
         assert stat.S_IMODE(private.stat().st_mode) == 0o600
 
@@ -1238,6 +1254,12 @@ def docker_killing_the_cli(directory: Path, when: str) -> dict[str, str]:
     return {**os.environ, "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
 
 
+def running(slug: str) -> list[str]:
+    return docker(
+        "ps", "-q", "--filter", f"label=com.docker.compose.project=farmcore-fleet-{slug}"
+    ).stdout.split()
+
+
 def effects_setting(slug: str) -> str:
     return docker(
         "exec", container(slug, "db"), "psql", "-U", "farmcore", "-d", "farmcore", "-Atc",
@@ -1255,17 +1277,17 @@ def test_interrupted_at_each_boundary_a_retry_converges_on_the_same_owned_instal
     killed = fleet.cli("apply", slug, env=docker_killing_the_cli(tmp_path, "before-database"))
     assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
     credentials, owner = secret_bytes(fleet, slug), record_of(fleet, slug)["owner_id"]
-    assert containers(slug) == []
+    assert running(slug) == []
 
     killed = fleet.cli("apply", slug, env=docker_killing_the_cli(tmp_path, "before-app"))
     assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
-    assert containers(slug, "app") == []
+    assert container(slug, "app") not in running(slug)
     assert "paused" in effects_setting(slug)
     identity = record_of(fleet, slug)["installation_id"]
 
     killed = fleet.cli("apply", slug, env=docker_killing_the_cli(tmp_path, "after-app"))
     assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
-    assert containers(slug, "app") != []
+    assert container(slug, "app") in running(slug)
     assert "paused" in effects_setting(slug)
 
     done = fleet.cli("apply", slug)
@@ -1291,14 +1313,14 @@ def test_interrupted_at_each_boundary_a_retry_converges_on_the_same_owned_instal
     assert len(docker("volume", "ls", "-q", "--filter", f"name={project}_").stdout.split()) == 3
 
 
-def run_foreign_app(project: str, image: str, name: str) -> None:
+def run_foreign_app(project: str, image: str, name: str) -> str:
     """A running stranger carrying every public mark of this project's app, on its own network."""
-    docker(
+    return docker(
         "run", "-d", "--name", name, "--entrypoint", "sleep",
         "--label", f"{COMPOSE_PROJECT}={project}",
         "--label", "com.docker.compose.service=app",
         "--network", f"{project}_default", image, "300",
-    )  # fmt: skip
+    ).stdout.strip()  # fmt: skip
 
 
 def docker_logging_exec(directory: Path) -> tuple[dict[str, str], Path]:
@@ -1344,8 +1366,7 @@ def test_an_unknown_container_with_this_projects_labels_on_its_network_is_never_
     slug = fleet.declare("c", pinned)
     project = f"farmcore-fleet-{slug}"
     assert fleet.cli("apply", slug, env=docker_without_compose(tmp_path)).returncode == 3
-    run_foreign_app(project, pinned[1], f"unrelated-{slug}")
-    stranger = container(slug, "app")
+    stranger = run_foreign_app(project, pinned[1], f"unrelated-{slug}")
     env, execs = docker_logging_exec(tmp_path)
     applied = fleet.cli("apply", slug, "--readiness-seconds", "1", env=env)
     assert applied.returncode == 1, applied.stdout + applied.stderr
@@ -1354,7 +1375,7 @@ def test_an_unknown_container_with_this_projects_labels_on_its_network_is_never_
     assert status.returncode == 3, status.stdout + status.stderr
     assert receipt(status)["effects"] is None
     assert not execs.exists()
-    assert container(slug, "app") == stranger  # neither replaced nor stopped
+    assert containers(slug, "app") == [stranger[:12]]  # neither replaced nor stopped
     assert inspect(stranger, ".State.Status") == "running"
 
 
@@ -1368,8 +1389,7 @@ def test_a_stranger_arriving_during_an_interrupted_apply_is_not_taken_for_its_co
     project = f"farmcore-fleet-{slug}"
     killed = fleet.cli("apply", slug, env=docker_killing_the_cli(tmp_path, "before-app"))
     assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
-    run_foreign_app(project, pinned[1], f"unrelated-{slug}")
-    stranger = container(slug, "app")
+    stranger = run_foreign_app(project, pinned[1], f"unrelated-{slug}")
     env, execs = docker_logging_exec(tmp_path)
     interrupted = fleet.cli("status", slug, env=env)
     assert interrupted.returncode == 3 and receipt(interrupted)["effects"] is None
@@ -1488,3 +1508,125 @@ def test_a_missing_or_changed_secret_of_a_recorded_installation_is_refused_never
     assert status.returncode == 3 and "secrets." in " ".join(receipt(status)["problems"])
     receipts = (fleet.state / "installations" / slug / "receipts.jsonl").read_text()
     assert original not in receipts + result.stdout + result.stderr + status.stdout
+
+
+def docker_killing_after(directory: Path, *command: str) -> dict[str, str]:
+    """A real `docker` that SIGKILLs the CLI right after `command` ran for real: a resource exists,
+    and the apply never got to save anything about it."""
+    shim = directory / "kill-after"
+    shim.mkdir(exist_ok=True)
+    real = shutil.which("docker")
+    prefix = " ".join(command)
+    (shim / "docker").write_text(
+        "#!/bin/sh\n"
+        f'"{real}" "$@"\n'
+        "rc=$?\n"
+        f'case "$*" in "{prefix}"*) kill -9 $PPID ;; esac\n'
+        "exit $rc\n"
+    )
+    (shim / "docker").chmod(0o755)
+    return {**os.environ, "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
+
+
+def _swap_volume(project: str) -> str:
+    """Replaced by something else wearing the same labels."""
+    name = f"{project}_pgdata"
+    labels = inspect(name, ".Labels")
+    arguments = [item for key, value in labels.items() for item in ("--label", f"{key}={value}")]
+    created = inspect(name, ".CreatedAt")
+    while inspect(name, ".CreatedAt") == created:
+        docker("volume", "rm", name)
+        docker("volume", "create", *arguments, name)
+    return name
+
+
+def _swap_network(project: str) -> str:
+    name = f"{project}_default"
+    labels = inspect(name, ".Labels")
+    docker("network", "rm", name)
+    arguments = [item for key, value in labels.items() for item in ("--label", f"{key}={value}")]
+    docker("network", "create", *arguments, name)
+    return name
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("command", "swap", "kind"),
+    [
+        (("volume", "create"), _swap_volume, "volume"),
+        (("network", "create"), _swap_network, "network"),
+    ],
+)
+def test_a_resource_created_but_not_yet_saved_when_apply_was_killed_is_not_adopted(
+    command, swap, kind, pinned, own_fleet, tmp_path
+):
+    """Nothing saved tells it from a replacement with copied labels, so a retry must refuse."""
+    fleet = own_fleet
+    slug = fleet.declare("g", pinned)
+    project = f"farmcore-fleet-{slug}"
+    killed = fleet.cli("apply", slug, env=docker_killing_after(tmp_path, *command))
+    assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
+    name = swap(project)
+    before = docker(kind, "inspect", name).stdout
+    result = fleet.cli("apply", slug, "--readiness-seconds", "1")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "not adopting" in result.stderr and name in result.stderr
+    assert docker(kind, "inspect", name).stdout == before
+    assert containers(slug) == []
+    status = fleet.cli("status", slug)
+    assert status.returncode == 3, status.stdout + status.stderr
+
+
+@pytest.mark.slow
+def test_a_stranger_copying_every_public_mark_of_the_app_during_a_killed_repeat_is_not_adopted(
+    pinned, own_fleet, tmp_path
+):
+    """Project, service, one-off and configuration-hash labels, network, image, limits and binding:
+    all of it readable by anyone, so none of it may stand in for the saved container id."""
+    fleet = own_fleet
+    slug = fleet.declare("h", pinned)
+    assert fleet.cli("apply", slug).returncode == 0
+    known = set(record_of(fleet, slug)["containers"])
+    app = container(slug, "app")
+    killed = fleet.cli("apply", slug, env=docker_killing_the_cli(tmp_path, "before-database"))
+    assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
+    labels = inspect(app, ".Config.Labels")
+    docker("stop", app)
+    docker("rm", app)
+    arguments = [item for key, value in labels.items() for item in ("--label", f"{key}={value}")]
+    stranger = docker(
+        "run", "-d", "--name", f"farmcore-fleet-{slug}-app-1", "--entrypoint", "sleep",
+        "--memory", f"{LIMITS['app_memory_mib']}m", "--cpus", "1.5",
+        "-p", f"127.0.0.1:{fleet.declared(slug)['binding']['port']}:8000",
+        "--network", f"farmcore-fleet-{slug}_default", *arguments, pinned[0], "300",
+    ).stdout.strip()  # fmt: skip
+    env, execs = docker_logging_exec(tmp_path)
+    result = fleet.cli("apply", slug, "--readiness-seconds", "1", env=env)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "not adopting" in result.stderr
+    assert not execs.exists()
+    assert inspect(stranger, ".State.Status") == "running"
+    assert stranger not in record_of(fleet, slug)["containers"]
+    assert set(record_of(fleet, slug)["containers"]) == known
+
+
+@pytest.mark.slow
+def test_containers_created_but_not_yet_saved_when_apply_was_killed_are_refused_until_removed(
+    pinned, own_fleet, tmp_path
+):
+    """Safe refusal, not convergence, in this one small window; nothing has started in it."""
+    fleet = own_fleet
+    slug = fleet.declare("w", pinned)
+    project = f"farmcore-fleet-{slug}"
+    env = docker_killing_after(tmp_path, "compose", "-p", project)
+    killed = fleet.cli("apply", slug, env=env)
+    assert killed.returncode == -signal.SIGKILL, killed.stdout + killed.stderr
+    made = sorted(containers(slug))
+    assert made and running(slug) == []
+    refused = fleet.cli("apply", slug, "--readiness-seconds", "1")
+    assert refused.returncode == 1 and "not adopting" in refused.stderr, refused.stderr
+    assert sorted(containers(slug)) == made and running(slug) == []
+    for item in made:  # what the doc tells an operator to do once they have looked
+        docker("rm", item)
+    done = fleet.cli("apply", slug)
+    assert done.returncode == 0, done.stdout + done.stderr
