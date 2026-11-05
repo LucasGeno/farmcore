@@ -50,6 +50,12 @@ ALLOWED = {
     ("core/commands/restore.py", "TemporaryDirectory"): "plaintext dump, removed afterwards",
     # The audited test in tests/core/test_fleet_plan.py fails if planning opens anything to write.
     ("hosting/inventory.py", "os.open"): "read-only inventory reads (O_RDONLY | O_NOFOLLOW)",
+    # Operator credentials and ownership state, outside the database by design: they must exist
+    # before it does. Below an operator-chosen state root, mode 0700, never farm data.
+    ("hosting/apply.py", "os.mkdir"): "private state-root folders, mode 0700",
+    ("hosting/apply.py", "os.open"): "state-root files, mode 0600; secrets read with O_NOFOLLOW",
+    ("hosting/apply.py", "os.link"): "a generated secret or new record takes its name exclusively",
+    ("hosting/apply.py", "os.replace"): "the env file or record takes its name atomically",
 }
 
 

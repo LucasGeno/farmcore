@@ -634,7 +634,8 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 def test_the_fleet_commands_are_listed_in_help(terminal: dict[str, str]) -> None:
     root = CliRunner().invoke(cli, ["fleet", "--help"], env={"COLUMNS": "120", **terminal})
     assert root.exit_code == 0
-    assert "plan" in _ANSI.sub("", root.stdout)
+    for name in ("plan", "apply", "status"):
+        assert name in _ANSI.sub("", root.stdout)
     command = CliRunner().invoke(
         cli, ["fleet", "plan", "--help"], env={"COLUMNS": "120", **terminal}
     )
