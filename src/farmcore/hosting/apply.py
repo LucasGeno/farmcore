@@ -22,7 +22,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
+
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from farmcore.hosting.inventory import Declaration
 
@@ -59,6 +61,8 @@ _CONTAINER_FACTS = (
 _MISMATCH = "/health says another "
 _RECORD_DRAFT = re.compile(r"\.ownership\.[0-9a-f]{8}")
 _inherited_locks: list[int] = []
+# A record holds digests, ids and the declaration: kilobytes. Anything near this is not one.
+MAX_RECORD_BYTES = 1024 * 1024
 _ID_LINE = re.compile(r"^installation (\S+)$", re.MULTILINE)
 
 
@@ -610,6 +614,12 @@ def _start(
         raise StepFailed("migrate: the database holds another installation id than was saved")
     try:
         pinned = json.loads(compose.one_shot("read release", "python", "-c", _RELEASE_PROBE))
+        if not isinstance(pinned, dict) or {"release", "heads"} - pinned.keys():
+            raise ValueError
+        # What is saved must read back as a record.
+        _RecordShape.model_validate(
+            {**saved, "release": pinned["release"], "heads": pinned["heads"]}
+        )
     except ValueError:
         raise StepFailed("read release: the pinned image did not say what it is") from None
     saved.setdefault("release", pinned["release"])
@@ -628,15 +638,84 @@ def _declared_facts(declaration: Declaration) -> dict[str, Any]:
     }
 
 
+class _Images(BaseModel):
+    model_config = ConfigDict(strict=True)
+    app: str
+    database: str
+
+
+class _RecordShape(BaseModel):
+    """What later steps read from ownership.json. Each stage an interrupted apply can leave is
+    valid, so what is only written later is optional; but nothing present has another type."""
+
+    model_config = ConfigDict(strict=True)
+    slug: str
+    project: str
+    owner_id: Annotated[str, Field(pattern=r"^[0-9a-f]{32}$")]
+    daemon_id: str
+    declared: dict[str, Any]
+    images: _Images
+    claimed: bool
+    secrets: dict[str, str] = {}
+    volumes: dict[str, str] = {}
+    network_id: str = ""
+    containers: list[str] = []
+    starting: bool = False
+    effects: str = ""
+    effects_paused_once: bool = False
+    installation_id: str = ""
+    release: str = ""
+    heads: list[str] = []
+
+
 def _read_record(paths: _Paths, declaration: Declaration) -> dict[str, Any] | None:
+    """The saved record, or None if there is none yet. Read only through private real folders,
+    never through a symlink, never from anything but a bounded regular file of the operator's."""
     try:
-        record = json.loads(paths.record.read_text())
+        for folder in (paths.directory.parent, paths.directory):
+            _check_private_directory(os.lstat(folder), str(folder.relative_to(paths.root)))
+        fd = os.open(paths.record, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as source:
+            found = os.fstat(source.fileno())
+            if (
+                not stat.S_ISREG(found.st_mode)
+                or stat.S_IMODE(found.st_mode) != 0o600
+                or found.st_uid != os.getuid()
+            ):
+                raise Refused(
+                    "ownership.json must be a regular file of the operator's with mode 0600; "
+                    "fix or restore it"
+                )
+            raw = source.read(MAX_RECORD_BYTES + 1)
     except FileNotFoundError:
         return None
-    except (OSError, ValueError):
-        raise Refused("ownership.json cannot be read; fix or restore it") from None
-    if record.get("slug") != declaration.slug or record.get("project") != _project(declaration):
+    except OSError:
+        raise Refused(
+            "ownership.json cannot be read as a regular file; fix or restore it"
+        ) from None
+    if len(raw) > MAX_RECORD_BYTES:
+        raise Refused("ownership.json is too large to be a record; fix or restore it")
+    try:
+        record = json.loads(raw)
+        _RecordShape.model_validate(record)
+    except ValidationError as exc:
+        # Field names only: a value is never repeated.
+        fields = sorted({str(error["loc"][0]) for error in exc.errors() if error["loc"]})
+        raise Refused(
+            f"ownership.json has a missing or malformed {', '.join(fields) or 'record'}; "
+            "fix or restore it"
+        ) from None
+    except (ValueError, RecursionError):
+        raise Refused("ownership.json is not a JSON record; fix or restore it") from None
+    if record["slug"] != declaration.slug or record["project"] != _project(declaration):
         raise Refused("ownership.json names another installation; fix or restore it")
+    if record["claimed"] and not (
+        record.get("network_id")
+        and set(record.get("volumes", {})) >= {f"{record['project']}_{name}" for name in _VOLUMES}
+    ):
+        raise Refused(
+            "ownership.json is claimed without its volumes and network; fix or restore it"
+        )
     return record
 
 

@@ -112,14 +112,19 @@ class Fleet:
         return json.loads((self.inventory / f"{slug}.yaml").read_text())
 
     def cli(
-        self, command: str, slug: str, *options: str, env: dict[str, str] | None = None
+        self,
+        command: str,
+        slug: str,
+        *options: str,
+        env: dict[str, str] | None = None,
+        timeout: float = 600,
     ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [
                 FARMCORE, "fleet", command, str(self.inventory), slug,
                 "--state-root", str(self.state), "--test-domains", *options,
             ],
-            capture_output=True, text=True, timeout=600, env=env or dict(os.environ),
+            capture_output=True, text=True, timeout=timeout, env=env or dict(os.environ),
         )  # fmt: skip
 
     def start(self, command: str, slug: str, env: dict[str, str]) -> subprocess.Popen[str]:
@@ -1436,6 +1441,212 @@ def test_a_state_directory_with_unknown_content_and_no_record_is_refused_untouch
     assert "not adopting" in result.stderr and "Traceback" not in result.stderr
     assert not called.exists()
     assert {path.name: path.read_text() for path in (folder / "alpha").iterdir()} == planted
+
+
+# --- ownership.json: the tool's own private file, bounded and well formed -----------------------
+
+
+def stage_record(slug: str, stage: str) -> dict:
+    """ownership.json as each stage of an apply leaves it, written out here by hand."""
+    project = f"farmcore-fleet-{slug}"
+    record = {
+        "slug": slug,
+        "project": project,
+        "owner_id": "0123456789abcdef" * 2,
+        "daemon_id": "some-daemon",
+        "declared": {"domain": f"{slug}.example.test"},
+        "images": {"app": f"sha256:{'1' * 64}", "database": f"sha256:{'2' * 64}"},
+        "claimed": False,
+    }
+    if stage == "saved":
+        return record
+    record["secrets"] = {"postgres_password": "d" * 64}
+    record["volumes"] = {f"{project}_pgdata": "2026-11-05T10:00:00Z"}
+    if stage == "claiming":
+        return record
+    record["volumes"].update(
+        {f"{project}_{name}": "2026-11-05T10:00:01Z" for name in ("whisper-cache", "backups")}
+    )
+    record.update(network_id="e" * 64, claimed=True, starting=True)
+    if stage == "starting":
+        return record
+    record.update(
+        containers=["f" * 64],
+        effects="paused",
+        effects_paused_once=True,
+        installation_id="an-installation",
+        release="0.1.0",
+        heads=["review_0001"],
+        starting=False,
+    )
+    return record
+
+
+def plant_record(fleet: Fleet, slug: str, content: str) -> Path:
+    folder = fleet.state / "installations" / slug
+    folder.mkdir(parents=True, mode=0o700)
+    (fleet.state / "installations").chmod(0o700)
+    path = folder / "ownership.json"
+    path.write_text(content)
+    path.chmod(0o600)
+    return path
+
+
+def state_snapshot(state: Path) -> dict[str, tuple[int, int, int]]:
+    found = {}
+    for folder, names, files in os.walk(state):
+        for name in names + files:
+            facts = os.lstat(Path(folder) / name)
+            # A folder's own times change when apply adds its lock beside the record.
+            kept = (0, 0) if stat.S_ISDIR(facts.st_mode) else (facts.st_size, facts.st_mtime_ns)
+            found[str((Path(folder) / name).relative_to(state))] = (facts.st_mode, *kept)
+    return found
+
+
+@pytest.mark.parametrize("stage", ["saved", "claiming", "starting", "finished"])
+def test_a_record_at_any_stage_an_apply_leaves_is_accepted_and_docker_is_asked_next(
+    stage, tmp_path
+):
+    fleet = new_fleet(tmp_path)
+    fleet.write("alpha", FAKE_DIGESTS, port=free_port())
+    plant_record(fleet, "alpha", json.dumps(stage_record("alpha", stage)))
+    env, called = docker_that_must_not_run(tmp_path)
+    for command in ("status", "apply"):
+        result = fleet.cli(command, "alpha", env=env, timeout=30)
+        assert result.returncode == 1, result.stdout + result.stderr
+        assert "cannot read Docker" in result.stderr, result.stderr
+        assert called.exists()
+        called.unlink()
+
+
+def _not_an_object(fleet: Fleet, slug: str, outside: Path) -> None:
+    plant_record(fleet, slug, "[]")
+
+
+def _without_its_daemon(fleet: Fleet, slug: str, outside: Path) -> None:
+    record = stage_record(slug, "finished")
+    del record["daemon_id"]
+    plant_record(fleet, slug, json.dumps(record))
+
+
+def _a_flag_of_the_wrong_type(fleet: Fleet, slug: str, outside: Path) -> None:
+    """A string is truthy: taken as it is, apply would never pause effects."""
+    record = {**stage_record(slug, "claiming"), "effects_paused_once": "SENTINEL-IN-RECORD"}
+    plant_record(fleet, slug, json.dumps(record))
+
+
+def _claimed_without_its_network(fleet: Fleet, slug: str, outside: Path) -> None:
+    record = stage_record(slug, "starting")
+    del record["network_id"]
+    plant_record(fleet, slug, json.dumps(record))
+
+
+def _oversized(fleet: Fleet, slug: str, outside: Path) -> None:
+    record = {**stage_record(slug, "finished"), "padding": "x" * (2 * 1024 * 1024)}
+    plant_record(fleet, slug, json.dumps(record))
+
+
+def _nested_too_deep(fleet: Fleet, slug: str, outside: Path) -> None:
+    plant_record(fleet, slug, "[" * 200_000)
+
+
+def _a_fifo(fleet: Fleet, slug: str, outside: Path) -> None:
+    path = plant_record(fleet, slug, "")
+    path.unlink()
+    os.mkfifo(path, 0o600)
+
+
+def _a_symlink(fleet: Fleet, slug: str, outside: Path) -> None:
+    target = outside / "ownership.json"
+    target.write_text(json.dumps(stage_record(slug, "finished")))
+    target.chmod(0o600)
+    path = plant_record(fleet, slug, "")
+    path.unlink()
+    path.symlink_to(target)
+
+
+def _readable_by_others(fleet: Fleet, slug: str, outside: Path) -> None:
+    plant_record(fleet, slug, json.dumps(stage_record(slug, "finished"))).chmod(0o644)
+
+
+def _in_a_loose_folder(fleet: Fleet, slug: str, outside: Path) -> None:
+    plant_record(fleet, slug, json.dumps(stage_record(slug, "finished"))).parent.chmod(0o755)
+
+
+def _in_a_symlinked_folder(fleet: Fleet, slug: str, outside: Path) -> None:
+    folder = plant_record(fleet, slug, json.dumps(stage_record(slug, "finished"))).parent
+    folder.rename(outside / slug)
+    folder.symlink_to(outside / slug)
+
+
+@pytest.mark.parametrize(
+    ("plant", "says"),
+    [
+        (_not_an_object, "malformed record"),
+        (_without_its_daemon, "malformed daemon_id"),
+        (_a_flag_of_the_wrong_type, "malformed effects_paused_once"),
+        (_claimed_without_its_network, "claimed without its volumes and network"),
+        (_oversized, "too large"),
+        (_nested_too_deep, "not a JSON record"),
+        (_a_fifo, "must be a regular file"),
+        (_a_symlink, "cannot be read as a regular file"),
+        (_readable_by_others, "mode 0600"),
+        (_in_a_loose_folder, "installations/alpha must be a private real directory"),
+        (_in_a_symlinked_folder, "installations/alpha must be a private real directory"),
+    ],
+)
+def test_an_unsafe_or_malformed_record_is_refused_before_docker_and_left_as_it_is(
+    plant, says, tmp_path
+):
+    fleet = new_fleet(tmp_path)
+    fleet.write("alpha", FAKE_DIGESTS, port=free_port())
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    plant(fleet, "alpha", outside)
+    env, called = docker_that_must_not_run(tmp_path)
+    before = state_snapshot(fleet.state)
+    for command in ("status", "apply"):
+        result = fleet.cli(command, "alpha", env=env, timeout=30)
+        said = result.stdout + result.stderr
+        assert result.returncode == 1, said
+        assert says in result.stderr, result.stderr
+        assert "Traceback" not in said and "SENTINEL-IN-RECORD" not in said
+        assert not called.exists()
+        if command == "status":
+            assert state_snapshot(fleet.state) == before
+    after = state_snapshot(fleet.state)
+    assert {name: after[name] for name in before} == before
+    made_by_apply = {"installations/alpha/apply.lock", "installations/alpha/receipts.jsonl"}
+    assert set(after) - set(before) <= made_by_apply
+
+
+def docker_misreporting_the_release(directory: Path) -> dict[str, str]:
+    """A real Docker whose pinned image answers the release probe with the wrong types."""
+    shim = directory / "misreporting"
+    shim.mkdir()
+    (shim / "docker").write_text(
+        "#!/bin/sh\n"
+        'case "$*" in *farmcore.__version__*)\n'
+        """  echo '{"release": 1, "heads": "review_0001"}'; exit 0;;\n"""
+        "esac\n"
+        f'exec "{shutil.which("docker")}" "$@"\n'
+    )
+    (shim / "docker").chmod(0o755)
+    return {**os.environ, "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
+
+
+@pytest.mark.slow
+def test_a_release_answer_of_the_wrong_shape_is_not_ready_and_never_saved(
+    pinned, own_fleet, tmp_path
+):
+    fleet = own_fleet
+    slug = fleet.declare("r", pinned)
+    result = fleet.cli("apply", slug, env=docker_misreporting_the_release(tmp_path))
+    assert result.returncode == 3, result.stdout + result.stderr
+    assert "read release" in " ".join(receipt(result)["problems"])
+    assert "release" not in record_of(fleet, slug) and "heads" not in record_of(fleet, slug)
+    status = fleet.cli("status", slug)
+    assert status.returncode == 3, status.stdout + status.stderr
 
 
 def _secrets_folder_is_a_symlink(state: Path, slug: str, outside: Path) -> None:

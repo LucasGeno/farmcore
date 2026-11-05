@@ -155,6 +155,7 @@ Each of these stops before anything changes, and the resource stays as it was:
 | A container this installation did not make, or a killed apply just made | Remove it yourself once you know what it is; `apply` then recreates the service |
 | Changed limits, another image, another network or a wider binding on a container | Put it back, or remove the container; `apply` then recreates the service |
 | A record from another Docker daemon | Use that daemon |
+| An `ownership.json` that is not a regular file of yours with mode `0600` in private real folders, is over 1 MiB, or is not a well-formed record (`status` refuses it too) | Restore it from where you keep the state root; it is never rewritten or adopted around |
 | Another apply running | Wait |
 
 There is no fleet command to upgrade, move, or delete an installation. For an upgrade, see
