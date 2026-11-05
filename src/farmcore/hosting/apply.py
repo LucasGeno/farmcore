@@ -668,6 +668,13 @@ class _RecordShape(BaseModel):
     heads: list[str] = []
 
 
+# Written only after the secret fingerprints.
+_AFTER_SECRETS = (
+    "volumes", "network_id", "starting", "containers", "effects", "effects_paused_once",
+    "installation_id", "release", "heads",
+)  # fmt: skip
+
+
 def _read_record(paths: _Paths, declaration: Declaration) -> dict[str, Any] | None:
     """The saved record, or None if there is none yet. Read only through private real folders,
     never through a symlink, never from anything but a bounded regular file of the operator's."""
@@ -716,6 +723,14 @@ def _read_record(paths: _Paths, declaration: Declaration) -> dict[str, Any] | No
         raise Refused(
             "ownership.json is claimed without its volumes and network; fix or restore it"
         )
+    # Saved together before any resource exists: a missing one would let a secret be regenerated.
+    after_secrets = record["claimed"] or any(field in record for field in _AFTER_SECRETS)
+    if (
+        set(record["secrets"]) != set(declaration.secrets.model_dump())
+        if "secrets" in record
+        else after_secrets
+    ):
+        raise Refused("ownership.json lacks some secret fingerprints; fix or restore it")
     return record
 
 
@@ -755,12 +770,25 @@ def _drift_problems(
     ]
 
 
-def _append_receipt(paths: _Paths, report: dict[str, Any]) -> None:
-    """One line per run: what it concluded, never a secret."""
+def _os_problem(exc: OSError) -> str:
+    """A failed write or call, by file name and reason only: never a path's content."""
+    name = Path(exc.filename2 or exc.filename or "a file").name
+    return f"{name}: {exc.strerror or type(exc).__name__}"
+
+
+def _append_receipt(paths: _Paths, report: dict[str, Any]) -> str | None:
+    """One line per run: what it concluded, never a secret. Why it could not be saved, or None."""
     line = json.dumps({"at": datetime.now(UTC).isoformat(timespec="seconds"), **report})
-    fd = os.open(paths.receipts, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "a") as out:
-        out.write(line + "\n")
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        fd = os.open(paths.receipts, flags, 0o600)
+        with os.fdopen(fd, "a") as out:
+            if not stat.S_ISREG(os.fstat(out.fileno()).st_mode):
+                return "receipt not saved: receipts.jsonl is not a regular file"
+            out.write(line + "\n")
+    except OSError as exc:
+        return f"receipt not saved: {_os_problem(exc)}"
+    return None
 
 
 def _check_not_someone_elses_directory(paths: _Paths) -> None:
@@ -786,9 +814,12 @@ def apply_installation(declaration: Declaration, root: Path, readiness_seconds: 
         with _installation_lock(paths):
             report = _apply_locked(declaration, root, paths, readiness_seconds)
     except Refused as exc:
-        _append_receipt(paths, {"slug": declaration.slug, "state": REFUSED, "problems": [str(exc)]})
+        refused = {"slug": declaration.slug, "state": REFUSED, "problems": [str(exc)]}
+        if unsaved := _append_receipt(paths, refused):
+            raise Refused(f"{exc}; {unsaved}") from None
         raise
-    _append_receipt(paths, report)
+    if unsaved := _append_receipt(paths, report):
+        return {**report, "receipt": unsaved}
     return report
 
 
@@ -833,6 +864,8 @@ def _apply_locked(
             _create_owned(project, record, paths)
     except StepFailed as exc:
         return _report(declaration, record, NOT_READY, [str(exc)])
+    except OSError as exc:  # a volume may exist by now; it is kept for the retry to find
+        return _report(declaration, record, NOT_READY, [f"claim: {_os_problem(exc)}"])
     try:  # from here something may have started: a failed read is `not ready`, never a refusal
         _start(declaration, paths, record, hidden)
         deadline = time.monotonic() + readiness_seconds
@@ -843,6 +876,8 @@ def _apply_locked(
             time.sleep(1)
     except (StepFailed, Refused) as exc:
         return _report(declaration, record, NOT_READY, [str(exc)])
+    except OSError as exc:
+        return _report(declaration, record, NOT_READY, [f"start: {_os_problem(exc)}"])
     return _report(declaration, record, READY, [])
 
 

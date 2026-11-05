@@ -83,13 +83,14 @@ The stock Compose file leaves them off unless set, so a self-hosted installation
 JSON on standard output: the slug, the state, the installation id, release and Alembic heads, the
 external-effects setting, and any problems. Secrets are never in it; a failed step's Compose error
 is bounded and redacted, and resolved Compose configuration is never read. Each `apply` that
-gets past the state-root checks also appends one such line, with a timestamp, to `receipts.jsonl`.
+gets past the state-root checks also appends one such line, with a timestamp, to `receipts.jsonl`;
+if that line cannot be saved, the report says why in `receipt`, and a refusal's message says so.
 
 | Exit | State | Meaning |
 |---|---|---|
 | 0 | `ready` | Answering on the binding as the saved installation, and Docker agrees |
 | 1 | refused, on standard error | No Docker resource was started or changed; the message says why |
-| 3 | `not ready` or `not provisioned` | Provisioned or started as far as the problems say; run `apply` again once fixed |
+| 3 | `not ready` or `not provisioned` | Provisioned or started as far as the problems say, including a file that could not be written once a volume may exist: what was made is kept; run `apply` again once fixed |
 
 `ready` needs all of this: the app and database running and healthy; `/health` on the binding
 answering with the saved installation id, release and Alembic heads and state `ok`; and each

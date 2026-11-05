@@ -889,6 +889,20 @@ def test_two_state_roots_racing_for_one_slug_end_with_one_owner_and_the_loser_re
         one.remove_everything_this_run_made()
 
 
+def owned_resources(slug: str) -> tuple[str, ...]:
+    """Every volume, network and container id under this slug's names, as Docker holds them now."""
+    project = f"farmcore-fleet-{slug}"
+    return tuple(
+        sorted(
+            [
+                *docker("volume", "ls", "-q", "--filter", f"name={project}_").stdout.split(),
+                *docker("network", "ls", "-q", "--filter", f"name={project}_").stdout.split(),
+                *docker("ps", "-aq", "--no-trunc", "--filter", f"name={project}-").stdout.split(),
+            ]
+        )
+    )
+
+
 def secret_bytes(fleet: Fleet, slug: str) -> dict[str, str]:
     return {
         name: (fleet.state / "secrets" / slug / name).read_text()
@@ -1460,7 +1474,12 @@ def stage_record(slug: str, stage: str) -> dict:
     }
     if stage == "saved":
         return record
-    record["secrets"] = {"postgres_password": "d" * 64}
+    record["secrets"] = {
+        name: digit * 64
+        for name, digit in (
+            ("postgres_password", "d"), ("runtime_database_password", "c"), ("admin_token", "b")
+        )
+    }  # fmt: skip
     record["volumes"] = {f"{project}_pgdata": "2026-11-05T10:00:00Z"}
     if stage == "claiming":
         return record
@@ -1541,6 +1560,12 @@ def _claimed_without_its_network(fleet: Fleet, slug: str, outside: Path) -> None
     plant_record(fleet, slug, json.dumps(record))
 
 
+def _volumes_without_secret_fingerprints(fleet: Fleet, slug: str, outside: Path) -> None:
+    record = stage_record(slug, "claiming")
+    del record["secrets"]
+    plant_record(fleet, slug, json.dumps(record))
+
+
 def _oversized(fleet: Fleet, slug: str, outside: Path) -> None:
     record = {**stage_record(slug, "finished"), "padding": "x" * (2 * 1024 * 1024)}
     plant_record(fleet, slug, json.dumps(record))
@@ -1586,6 +1611,7 @@ def _in_a_symlinked_folder(fleet: Fleet, slug: str, outside: Path) -> None:
         (_without_its_daemon, "malformed daemon_id"),
         (_a_flag_of_the_wrong_type, "malformed effects_paused_once"),
         (_claimed_without_its_network, "claimed without its volumes and network"),
+        (_volumes_without_secret_fingerprints, "secret fingerprints"),
         (_oversized, "too large"),
         (_nested_too_deep, "not a JSON record"),
         (_a_fifo, "must be a regular file"),
@@ -1649,6 +1675,20 @@ def test_a_release_answer_of_the_wrong_shape_is_not_ready_and_never_saved(
     assert status.returncode == 3, status.stdout + status.stderr
 
 
+def test_a_receipt_that_is_not_a_regular_file_never_holds_up_a_refusal(tmp_path):
+    fleet = new_fleet(tmp_path)
+    fleet.write("alpha", FAKE_DIGESTS, port=free_port())
+    record = plant_record(fleet, "alpha", "[]")
+    os.mkfifo(record.with_name("receipts.jsonl"), 0o600)
+    env, called = docker_that_must_not_run(tmp_path)
+    result = fleet.cli("apply", "alpha", env=env, timeout=30)
+    said = result.stdout + result.stderr
+    assert result.returncode == 1, said
+    assert "malformed record" in result.stderr and "receipt not saved" in result.stderr
+    assert "Traceback" not in said and not called.exists()
+    assert stat.S_ISFIFO(os.lstat(record.with_name("receipts.jsonl")).st_mode)
+
+
 def _secrets_folder_is_a_symlink(state: Path, slug: str, outside: Path) -> None:
     (state / "secrets").mkdir(mode=0o700)
     (state / "secrets" / slug).symlink_to(outside)
@@ -1696,12 +1736,27 @@ def _rewritten(path: Path) -> None:
     path.write_text("b" * 48)
 
 
+def _deleted_with_its_fingerprint(path: Path) -> None:
+    """The file and its salted digest both gone: nothing saved would say a value is missing."""
+    path.unlink()
+    record = path.parents[2] / "installations" / path.parent.name / "ownership.json"
+    saved = json.loads(record.read_text())
+    del saved["secrets"]["runtime_database_password"]
+    record.write_text(json.dumps(saved, indent=2))
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize(
-    ("name", "change"), [("admin", _deleted), ("runtime", _deleted), ("postgres", _rewritten)]
+    ("name", "change", "says", "status_code"),
+    [
+        ("admin", _deleted, "drift", 3),
+        ("runtime", _deleted, "drift", 3),
+        ("postgres", _rewritten, "drift", 3),
+        ("runtime", _deleted_with_its_fingerprint, "secret fingerprints", 1),
+    ],
 )
 def test_a_missing_or_changed_secret_of_a_recorded_installation_is_refused_never_regenerated(
-    name, change, pinned, own_fleet, tmp_path
+    name, change, says, status_code, pinned, own_fleet, tmp_path
 ):
     fleet = own_fleet
     slug = fleet.declare("z", pinned)
@@ -1712,15 +1767,75 @@ def test_a_missing_or_changed_secret_of_a_recorded_installation_is_refused_never
     env_file = fleet.state / "installations" / slug / "compose.env"
     before = env_file.read_text()
     change(path)
+    record = (fleet.state / "installations" / slug / "ownership.json").read_bytes()
+    resources = owned_resources(slug)
     result = fleet.cli("apply", slug, env=env)
     assert result.returncode == 1, result.stdout + result.stderr
-    assert "drift" in result.stderr and "secrets." in result.stderr
+    assert says in result.stderr and "secret" in result.stderr
     assert env_file.read_text() == before
-    assert not path.exists() if change is _deleted else path.read_text() == "b" * 48
+    assert not path.exists() if change is not _rewritten else path.read_text() == "b" * 48
+    assert (fleet.state / "installations" / slug / "ownership.json").read_bytes() == record
+    assert owned_resources(slug) == resources
     status = fleet.cli("status", slug, env=env)
-    assert status.returncode == 3 and "secrets." in " ".join(receipt(status)["problems"])
+    assert status.returncode == status_code, status.stdout + status.stderr
+    assert "secret" in (
+        status.stderr if status_code == 1 else " ".join(receipt(status)["problems"])
+    )
     receipts = (fleet.state / "installations" / slug / "receipts.jsonl").read_text()
     assert original not in receipts + result.stdout + result.stderr + status.stdout
+
+
+def docker_breaking_the_record_after_a_volume(directory: Path, record: Path) -> dict[str, str]:
+    """A real `docker` that, right after the first volume is really created, turns the record's
+    path into a folder: the next save of the record fails as a full or broken disk would."""
+    shim = directory / "break-record"
+    shim.mkdir()
+    real = shutil.which("docker")
+    (shim / "docker").write_text(
+        "#!/bin/sh\n"
+        f'if [ "$1 $2" = "volume create" ] && [ ! -d "{record}" ]; then\n'
+        f'  "{real}" "$@"; made=$?\n'
+        f'  mv "{record}" "{record}.aside"; mkdir -p "{record}/held"\n'
+        "  exit $made\n"
+        "fi\n"
+        'if [ "$1" = compose ]; then exit 98; fi\n'
+        f'exec "{real}" "$@"\n'
+    )
+    (shim / "docker").chmod(0o755)
+    return {**os.environ, "PATH": f"{shim}{os.pathsep}{os.environ['PATH']}"}
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("fault", ["record", "receipt"])
+def test_a_write_failing_once_a_volume_exists_is_not_ready_safely_and_keeps_it(
+    fault, pinned, own_fleet, tmp_path
+):
+    fleet = own_fleet
+    slug = fleet.declare("w", pinned)
+    folder = fleet.state / "installations" / slug
+    if fault == "record":
+        env = docker_breaking_the_record_after_a_volume(tmp_path, folder / "ownership.json")
+    else:
+        folder.mkdir(parents=True, mode=0o700)
+        (fleet.state / "installations").chmod(0o700)
+        (folder / "receipts.jsonl").mkdir()
+        env = docker_without_compose(tmp_path)
+    result = fleet.cli("apply", slug, env=env)
+    said = result.stdout + result.stderr
+    assert result.returncode == 3, said
+    assert "Traceback" not in said
+    report = receipt(result)
+    assert report["state"] == "not ready"
+    project = f"farmcore-fleet-{slug}"
+    kept = docker("volume", "ls", "-q", "--filter", f"name={project}_").stdout.split()
+    if fault == "record":
+        assert "ownership.json" in " ".join(report["problems"])
+        assert kept == [f"{project}_pgdata"]  # it failed right after the first creation
+    else:
+        assert "not saved" in report["receipt"]
+        assert len(kept) == 3
+    for value in secret_bytes(fleet, slug).values():
+        assert not any(fragment in said for fragment in fragments(value))
 
 
 def docker_killing_after(directory: Path, *command: str) -> dict[str, str]:
