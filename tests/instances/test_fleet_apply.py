@@ -1055,6 +1055,8 @@ def test_a_docker_healthy_app_with_a_forged_health_is_not_ready_and_b_stays_heal
 ):
     (tmp_path / "forged").mkdir()
     (tmp_path / "forged" / "forged.py").write_text(FORGED_SERVER)
+    # COPY keeps the mode, and the image runs as a non-root user: readable whatever the umask.
+    (tmp_path / "forged" / "forged.py").chmod(0o644)
     forged = derived_image(
         pinned[0], "forged", tmp_path / "forged",
         'COPY forged.py /tmp/forged.py\nCMD ["python", "/tmp/forged.py"]\n',
