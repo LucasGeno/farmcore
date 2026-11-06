@@ -51,7 +51,7 @@ def test_each_cell_has_date_word_icon_and_opens_the_availability_panel(
     assert "/forecast/plan?day=2024-04-10" in cell
     opened = _plan(client, session, settings, farm, "&day=2024-04-10")
     detail = opened.split('id="plan-detail"', 1)[1]
-    assert 'id="plan-busy-2024-04-10"' in detail and 'method="get"' in detail
+    assert 'id="plan-busy-2024-04-10"' in detail and 'method="post"' in detail
     assert "/forecast/busy" in detail
     assert re.search(r"data-plan-word[^>]*>\s*(Best|Good|Maybe|Avoid)\s*<", cell)
     no_forecast = re.search(r'<li [^>]*data-day="2024-04-22".*?</li>', html, re.S).group(0)
@@ -99,7 +99,7 @@ def test_home_window_skips_busy_days_when_choosing_the_top_three(
     _plan(client, session, settings, farm)
     first = _days(client.get("/forecast/today").text)
     best = first[0][0]
-    client.get("/forecast/busy", params={"day": best, "busy": "1"})
+    client.post("/forecast/busy", params={"day": best, "busy": "1"})
     after = _days(client.get("/forecast/today").text)
     assert best not in [d for d, _ in after] and len(after) == 3
 
@@ -117,7 +117,7 @@ def test_cell_busy_control_is_a_fixed_label_toggle_with_state(
     assert 'aria-pressed="false"' in button and 'aria-label="Busy on Thu 11 Apr"' in button
     assert "<svg" not in button and ">Busy<" in button
     assert "text-spray" in button
-    client.get("/forecast/busy", params={"day": "2024-04-11", "busy": "1"})
+    client.post("/forecast/busy", params={"day": "2024-04-11", "busy": "1"})
     html = client.get(f"/forecast/plan?farm={farm.id}&day=2024-04-11").text
     cell = _cell(html, "2024-04-11")
     detail = html.split('id="plan-detail"', 1)[1]

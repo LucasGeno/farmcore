@@ -111,6 +111,7 @@ def test_forecast_avoid_reuses_ranking_and_respects_busy_and_available_time(
 ):
     from farmcore.apps.advisor.service import config_for
     from farmcore.apps.forecast import sources, store
+    from farmcore.apps.forecast.models import ForecastAvailability
     from farmcore.apps.forecast.ranking import rank_days
     from tests.apps.forecast.conftest import FIXTURE
 
@@ -140,9 +141,19 @@ def test_forecast_avoid_reuses_ranking_and_respects_busy_and_available_time(
         assert day.reason in response.text
     assert f"/?farm={farm.id}#spray-window-{farm.id}-today" in response.text
     assert "hail" not in response.text.lower() and "storm" not in response.text.lower()
-    client.cookies.set(
-        f"farmcore_forecast_busy_{farm.id}", ",".join(d.day.isoformat() for d in avoid)
+    session.add_all(
+        [
+            ForecastAvailability(
+                farm_id=farm.id,
+                day=day.day,
+                available=False,
+                created_by="test",
+                updated_by="test",
+            )
+            for day in avoid
+        ]
     )
+    session.commit()
     assert "Spray window: avoid" not in client.get("/notifications").text
     set_replay(session, local("2024-04-07 06:00"), settings)
     session.commit()

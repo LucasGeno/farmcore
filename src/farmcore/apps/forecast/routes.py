@@ -4,12 +4,13 @@
   panel's parcel section), with the parcel's protection and planned sulphur from its latest
   advice row; unknown parcel: 404.
 - `GET /forecast/today`: the farm's next five days (a Today widget), weather only.
-- `GET /forecast/busy`: remember a browser-local, per-farm availability preference and redirect.
+- `POST /forecast/busy`: record this farm's Free/Busy choice for one local day and redirect.
 
 Both read the latest run issued by clock now (`store.latest_run`) and grade it with the advisor's
 own rules (`ranking.rank_days`); no run → a "No forecast loaded" note. With the app switched off
 on `/apps` (routes stay mounted until the next start) both return an empty fragment.
-Availability changes only a cookie, never the database; no route fetches weather.
+Availability is farm-scoped server state (`forecast_availability`); changing it never fetches
+weather or rewrites a stored assessment.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from farmcore.apps.advisor import service as advice
 from farmcore.apps.advisor.navigation import parcel_link
 from farmcore.apps.forecast import availability, planning, store
-from farmcore.core.access import Repo, selected_farm
+from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import Parcel
 from farmcore.core.models.kernel import ClockState
@@ -45,10 +46,7 @@ _day_label = planning.day_label
 def _plan_view(request: Request, repo: Repo, *, sulphur=False):
     tz = request.app.state.settings.display_tz
     now = get_clock(repo.session, request.app.state.settings).now()
-    busy = availability.parse(
-        request.cookies.get(availability.COOKIE.format(farm_id=repo.farm_id)),
-        now.astimezone(ZoneInfo(tz)).date(),
-    )
+    busy = availability.busy_days(repo, now.astimezone(ZoneInfo(tz)).date())
     return planning.plan_days(repo, now, tz, busy, sulphur=sulphur)
 
 
@@ -119,53 +117,34 @@ def _off(request: Request) -> bool:
     return not any(m.name == APP for m in visible_manifests(request))
 
 
-@router.get("/busy")
+@router.post("/busy")
 def set_busy(
-    request: Request, day: date, busy: Literal["0", "1"], next: str = "/forecast/today"
+    request: Request, repo: Repo, day: date, busy: Literal["0", "1"], next: str = "/forecast/today"
 ) -> RedirectResponse:
-    """Set a browser preference only. No Repo: its reads would commit audit rows."""
+    """Record this farm's Free/Busy choice for one local day; owner/admin only."""
     if _off(request):
         raise HTTPException(status_code=404, detail="Not found.")
+    require_farm_owner(request, repo)
     settings = request.app.state.settings
     zone = ZoneInfo(settings.display_tz)
-    with request.app.state.session_factory() as session:
-        farm_id = selected_farm(request, session, settings).id
-        # get_clock creates a missing clock row. For this cookie-only route, use
-        # the configured initial clock instead when the DB has no clock yet.
-        row = session.get(ClockState, 1)
-        if row is not None:
-            now = get_clock(session, settings).now()
-        elif settings.clock_mode == "live":
-            now = datetime.now(UTC)
-        else:
-            now = settings.replay_start
-            if now.tzinfo is None:
-                now = now.replace(tzinfo=zone)
-    today = now.astimezone(zone).date()
-    name = availability.COOKIE.format(farm_id=farm_id)
-    days = availability.parse(request.cookies.get(name), today)
-    if day >= today:
-        if busy == "1":
-            days.add(day)
-        else:
-            days.discard(day)
-    if len(days) > availability.MAX_DATES:
-        raise HTTPException(status_code=422, detail="Too many busy dates saved in this browser.")
-    response = RedirectResponse(safe_next(next), status_code=303)
-    if days:
-        response.set_cookie(
-            name,
-            availability.serialize(days),
-            max_age=availability.ONE_YEAR,
-            httponly=True,
-            samesite="lax",
-            secure=request.url.scheme == "https",
-        )
+    # Do not initialize a missing clock just to validate a day: use the configured
+    # initial clock instead.
+    row = repo.session.get(ClockState, 1)
+    if row is not None:
+        now = get_clock(repo.session, settings).now()
+    elif settings.clock_mode == "live":
+        now = datetime.now(UTC)
     else:
-        response.delete_cookie(
-            name, httponly=True, samesite="lax", secure=request.url.scheme == "https"
-        )
-    return response
+        now = settings.replay_start
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=zone)
+    today = now.astimezone(zone).date()
+    if day.year < 2000 or day.year > 2200:
+        raise HTTPException(status_code=422, detail="Choose a day between 2000 and 2200.")
+    if day < today:
+        raise HTTPException(status_code=422, detail="Past days cannot be changed.")
+    availability.set_day(repo, day, available=busy == "0", now=now)
+    return RedirectResponse(safe_next(next), status_code=303)
 
 
 @router.get("/parcels/{parcel_id}", response_class=HTMLResponse)

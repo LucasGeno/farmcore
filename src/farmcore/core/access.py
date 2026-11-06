@@ -59,12 +59,14 @@ SCOPES = frozenset(
         "corrections:read",
         "advice:read",
         "parameters:read",
+        "planning:read",
+        "planning:write",
         "register:read",
         "audit:read",
     }
 )
 GRANT_READ_SCOPES = frozenset(
-    {"fields:read", "stations:read", "logs:read", "register:read", "advice:read"}
+    {"fields:read", "stations:read", "logs:read", "register:read", "advice:read", "planning:read"}
 )
 ALL_SCOPES = "*"
 OWNER = "owner"
@@ -100,6 +102,10 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "parameter_version": frozenset({"parameters:read"}),
     "parameter_review": frozenset({"parameters:read"}),
     "parameter_activation": frozenset({"parameters:read"}),
+    "planning_job": frozenset({"planning:read", "planning:write"}),
+    "planning_job_parcel": frozenset({"planning:read", "planning:write"}),
+    "planning_job_revision": frozenset({"planning:read", "planning:write"}),
+    "forecast_availability": frozenset({"fields:read", "planning:read", "planning:write"}),
     "llm_audit": frozenset({"audit:read"}),
     "access_log": frozenset({"audit:read"}),
     "data_grant": frozenset({"audit:read"}),

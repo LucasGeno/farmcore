@@ -7,8 +7,15 @@ MANIFEST = Manifest(
     version="0.1.0",
     summary="Planned spray jobs from stored advice, with revisions and farmer availability.",
     category="Crop protection",
-    # Schema scaffold only: declaring real dependencies (fields, operations, advisor, forecast,
-    # review) blocks switching those apps off, so it lands with the routes and their tests.
+    depends=("fields", "operations", "advisor", "forecast"),
+    scopes=("planning:read", "planning:write", "fields:read", "logs:read", "advice:read"),
     models=("farmcore.apps.planning.models",),
+    routes=("farmcore.apps.planning.routes:router",),
+    demo_reset=("farmcore.apps.planning.demo:reset",),
     title="Planned jobs",
+    nav=("Planned jobs", "/planning/"),
+    nav_group="apps",
+    nav_order=15,
+    nav_icon="calendar",
+    maturity="alpha",
 )

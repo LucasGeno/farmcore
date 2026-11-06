@@ -59,6 +59,7 @@ database, a small core and installable apps, in the style of Odoo.
 | Map & parcels | Aerial map (MapLibre) with layers and panel sections contributed by apps |
 | Records | Spray logs, ISOXML import, Reg. (EU) 2023/564 register with record checks |
 | Crop protection | Downy/powdery mildew rules (3-10 rule, Goidanich incubation, Gubler–Thomas, wash-off, intervals): spray / wait / protected, with reasons |
+| Planned jobs | Persistent spray jobs from stored advice: parcels, product, duration, revisions and cancellation; never completed work or stock movement |
 | Weather | Météo-France station ingest, spray conditions, charts |
 | Forecast | Saved forecast runs and live Open-Meteo receipts ranked into a spray plan |
 | Sharing | Grants, revoke, access log, NGSI-LD export, grantee view |

@@ -190,7 +190,12 @@ def plan_days(
                 or (a.props or {}).get("assessment_status") in ("limited", "unavailable")
             ):
                 continue
-            p = {"id": parcel.id, "label": f"{parcel.alias} {parcel.name}", "decision": a.decision}
+            p = {
+                "id": parcel.id,
+                "label": f"{parcel.alias} {parcel.name}",
+                "decision": a.decision,
+                "assessment": a.id,
+            }
             start, end = a.next_window_start, a.next_window_end
             if start is None:
                 undated.append(p)

@@ -49,7 +49,7 @@ def scheduled(session, settings, farm, parcel):
 
 
 def _mark(client, farm, day, busy="1"):
-    return client.get(
+    return client.post(
         "/forecast/busy",
         params={
             "farm": farm.id,

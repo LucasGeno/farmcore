@@ -7,12 +7,13 @@ from __future__ import annotations
 
 import html
 import re
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from urllib.parse import urlsplit
 
 import pytest
 from sqlalchemy import select
 
+from farmcore.apps.forecast.models import ForecastAvailability
 from farmcore.core.access import FARM_COOKIE, ensure_owner_grant
 from farmcore.core.models.canonical import AccessLog, Asset, Farm
 from farmcore.core.seed import ensure_default_farm
@@ -159,11 +160,16 @@ def test_overflowing_farm_selector_falls_back_without_poisoning_the_request(
         client.cookies.set(FARM_COOKIE, selector)
 
     since = _last_access_id(session)
-    response = client.get(path, params=params, follow_redirects=False)
+    request = client.post if path == "/forecast/busy" else client.get
+    response = request(path, params=params, follow_redirects=False)
 
     if path == "/forecast/busy":
         assert response.status_code == 303
-        assert client.cookies[f"farmcore_forecast_busy_{chateau.id}"] == "2024-04-09"
+        session.expire_all()
+        row = session.scalar(
+            select(ForecastAvailability).where(ForecastAvailability.farm_id == chateau.id)
+        )
+        assert row is not None and row.day == date(2024, 4, 9) and row.available is False
         assert response.headers["location"] == "/forecast/today"
     else:
         assert response.status_code == 200

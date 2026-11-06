@@ -197,10 +197,7 @@ def ask(
         if tool.name == "assistant_plan":
             args["busy_days"] = tuple(
                 d.isoformat()
-                for d in availability.parse(
-                    request.cookies.get(availability.COOKIE.format(farm_id=repo.farm_id)),
-                    ctx.now.astimezone(ctx.tz).date(),
-                )
+                for d in availability.busy_days(repo, ctx.now.astimezone(ctx.tz).date())
             )
         with repo.session.begin_nested():
             if tool.name.startswith("advisor_"):

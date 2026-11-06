@@ -143,9 +143,14 @@ def test_tour_shell_has_no_demo_admin_or_app_mutations(client):
 
 
 def test_optional_daily_apps_disappear_from_navigation_and_home(client):
+    # Planned jobs reads forecast availability, so it must be switched off first.
+    refused = client.post("/apps/forecast/uninstall")
+    assert refused.status_code == 409 and "Planned jobs" in refused.json()["detail"]
+    assert client.post("/apps/planning/uninstall").status_code == 200
     assert client.post("/apps/forecast/uninstall").status_code == 200
     page = client.get("/today/").text
     assert 'href="/forecast/plan"' not in page
+    assert 'href="/planning/"' not in page
     assert 'hx-get="/forecast/' not in page
     assert client.post("/apps/activity/uninstall").status_code == 200
     bottom = client.get("/today/").text.split('id="bottom-nav"', 1)[1].split("</nav>", 1)[0]

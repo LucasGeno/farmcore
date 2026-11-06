@@ -27,9 +27,8 @@ def notifications(request: Request, repo: Repo):
         now,
         settings.display_tz,
         visible,
-        busy_days=availability.parse(
-            request.cookies.get(availability.COOKIE.format(farm_id=repo.farm_id)),
-            now.astimezone(ZoneInfo(settings.display_tz)).date(),
+        busy_days=availability.busy_days(
+            repo, now.astimezone(ZoneInfo(settings.display_tz)).date()
         ),
     )
     cookie_name = preferences.COOKIE.format(farm_id=repo.farm_id)
