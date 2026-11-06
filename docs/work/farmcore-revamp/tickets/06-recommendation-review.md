@@ -131,3 +131,7 @@ only. No review note enters a prompt, and no declared review tool writes.
 
 A no-JS owner can open `/review/assessments/{advice_id}` (tested) and use the same request form;
 the card keeps the fragment for the normal path.
+
+Draft PR: https://github.com/LucasGeno/farmcore/pull/52 (base `main`, branch
+`feat/06-recommendation-review`). No deployment, no merge, no background jobs. The fresh-reviewer
+item stays open for independent QA.
