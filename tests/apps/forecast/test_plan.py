@@ -41,11 +41,12 @@ def test_busy_toggles_keep_unknown_weather_honest_and_rerank_home_identically(
     for day in ("2024-04-09", "2024-04-22"):
         response = client.post(
             "/forecast/busy",
-            params={
+            params={"farm": farm.id},
+            data={
                 "day": day,
                 "busy": "1",
-                "farm": farm.id,
                 "next": f"/forecast/plan?farm={farm.id}&day={day}",
+                "farm": str(farm.id),
             },
         )
         assert response.status_code == 200
@@ -209,11 +210,12 @@ def test_plan_tour_reads_and_busy_remain_farm_local_and_app_off_hides_the_page(
     denied = client.post(
         "/forecast/busy",
         follow_redirects=False,
-        params={
-            "farm": es.id,
+        params={"farm": es.id},
+        data={
             "day": "2024-04-09",
             "busy": "1",
             "next": f"/forecast/plan?farm={es.id}",
+            "farm": str(es.id),
         },
     )
     assert denied.status_code == 403

@@ -26,7 +26,7 @@ from pydantic import (
 from farmcore.apps.advisor import service as advice_service
 from farmcore.apps.planning import service
 from farmcore.apps.planning.models import PlanningJob
-from farmcore.core.access import Repo, require_farm_owner
+from farmcore.core.access import Repo, require_farm_member, require_farm_owner
 from farmcore.core.clock import get_clock, parse_local
 from farmcore.core.models.canonical import Advice
 from farmcore.web import render
@@ -113,12 +113,12 @@ def _detail(repo: Repo, job_id: int, tz: str):
     return service.job_json(repo, job, tz=tz)
 
 
-@router.get("/jobs.json")
+@router.get("/jobs.json", dependencies=[Depends(require_farm_member)])
 def jobs_json(request: Request, repo: Repo):
     return {"jobs": service.list_jobs(repo, tz=_tz(request))}
 
 
-@router.get("/jobs/{job_id}.json")
+@router.get("/jobs/{job_id}.json", dependencies=[Depends(require_farm_member)])
 def job_detail(request: Request, repo: Repo, job_id: int):
     return _detail(repo, job_id, _tz(request))
 
@@ -225,12 +225,12 @@ def _page(request: Request, repo: Repo, *, form: dict[str, object] | None = None
     )
 
 
-@router.get("/")
+@router.get("/", dependencies=[Depends(require_farm_member)])
 def page(request: Request, repo: Repo, error: str | None = None):
     return _page(request, repo, error=error)
 
 
-@router.get("/new")
+@router.get("/new", dependencies=[Depends(require_farm_member)])
 def new_job(
     request: Request,
     repo: Repo,

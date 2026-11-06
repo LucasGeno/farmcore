@@ -16,10 +16,10 @@ weather or rewrites a stored assessment.
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from farmcore.apps.advisor import service as advice
@@ -119,7 +119,11 @@ def _off(request: Request) -> bool:
 
 @router.post("/busy")
 def set_busy(
-    request: Request, repo: Repo, day: date, busy: Literal["0", "1"], next: str = "/forecast/today"
+    request: Request,
+    repo: Repo,
+    day: Annotated[date, Form()],
+    busy: Annotated[Literal["0", "1"], Form()],
+    next: Annotated[str, Form()] = "/forecast/today",
 ) -> RedirectResponse:
     """Record this farm's Free/Busy choice for one local day; owner/admin only."""
     if _off(request):

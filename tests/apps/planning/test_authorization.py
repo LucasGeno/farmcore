@@ -224,3 +224,34 @@ def test_a_grant_without_planning_read_cannot_read_planned_jobs(session, farm):
     grant.scopes = ["planning:read"]
     session.flush()
     assert repo.list(PlanningJob, scope="planning:read") == []
+
+
+def test_anonymous_demo_visitors_cannot_read_planned_jobs(settings, committed_session_factory):
+    farm, parcel, products, advice = _planning_farm(committed_session_factory, settings)
+    app = create_app(settings, session_factory=committed_session_factory)
+    headers = {"X-Admin-Token": settings.admin_token.get_secret_value()}
+    with TestClient(app, headers=headers) as owner:
+        created = owner.post(
+            "/planning/jobs",
+            params={"farm": farm.id},
+            json=job_payload([parcel], products, advice, notes="Anonymous secret note"),
+        )
+        assert created.status_code == 201
+        job_id = created.json()["id"]
+
+    demo = create_app(
+        settings.model_copy(update={"demo_mode": True, "demo_farm_ids": [farm.id]}),
+        session_factory=committed_session_factory,
+    )
+    with TestClient(demo) as anonymous:
+        for path in (
+            "/planning/",
+            "/planning/jobs.json",
+            f"/planning/jobs/{job_id}.json",
+            "/planning/new",
+        ):
+            response = anonymous.get(path, params={"farm": farm.id})
+            assert response.status_code == 403, (path, response.status_code)
+            assert "Spray block A" not in response.text
+            assert "Anonymous secret note" not in response.text
+            assert "created_by" not in response.text

@@ -299,7 +299,7 @@ def test_a_job_records_the_farmer_availability_at_each_revision(
 
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "0", "next": "/planning/"},
+        data={"day": "2024-04-09", "busy": "0", "next": "/planning/"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -354,6 +354,16 @@ def test_demo_reset_removes_planned_jobs_before_deleting_their_assessments(
     from farmcore.core.models.canonical import Advice
 
     created = _created(client, farm, parcels, products, advice)
+    session.add(
+        ForecastAvailability(
+            farm_id=farm.id,
+            day=date(2024, 4, 9),
+            available=False,
+            created_by="test",
+            updated_by="test",
+        )
+    )
+    session.flush()
     session.expire_all()
     demo_control._clear(session, farm, registry.discover())
     session.flush()
@@ -369,5 +379,13 @@ def test_demo_reset_removes_planned_jobs_before_deleting_their_assessments(
     )
     assert (
         session.scalar(select(func.count()).select_from(Advice).where(Advice.farm_id == farm.id))
+        == 0
+    )
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(ForecastAvailability)
+            .where(ForecastAvailability.farm_id == farm.id)
+        )
         == 0
     )

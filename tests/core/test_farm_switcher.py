@@ -153,15 +153,20 @@ def test_overflowing_farm_selector_falls_back_without_poisoning_the_request(
     client, farms, session, path, transport, selector
 ):
     chateau, _ = farms
-    params = {"day": "2024-04-09", "busy": "1"} if path == "/forecast/busy" else {}
+    params = {}
+    data = None
+    if path == "/forecast/busy":
+        data = {"day": "2024-04-09", "busy": "1"}
     if transport == "query":
         params["farm"] = selector
     else:
         client.cookies.set(FARM_COOKIE, selector)
 
     since = _last_access_id(session)
-    request = client.post if path == "/forecast/busy" else client.get
-    response = request(path, params=params, follow_redirects=False)
+    if path == "/forecast/busy":
+        response = client.post(path, params=params, data=data, follow_redirects=False)
+    else:
+        response = client.get(path, params=params, follow_redirects=False)
 
     if path == "/forecast/busy":
         assert response.status_code == 303

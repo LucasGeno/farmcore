@@ -99,7 +99,7 @@ def test_home_window_skips_busy_days_when_choosing_the_top_three(
     _plan(client, session, settings, farm)
     first = _days(client.get("/forecast/today").text)
     best = first[0][0]
-    client.post("/forecast/busy", params={"day": best, "busy": "1"})
+    client.post("/forecast/busy", data={"day": best, "busy": "1"})
     after = _days(client.get("/forecast/today").text)
     assert best not in [d for d, _ in after] and len(after) == 3
 
@@ -117,7 +117,7 @@ def test_cell_busy_control_is_a_fixed_label_toggle_with_state(
     assert 'aria-pressed="false"' in button and 'aria-label="Busy on Thu 11 Apr"' in button
     assert "<svg" not in button and ">Busy<" in button
     assert "text-spray" in button
-    client.post("/forecast/busy", params={"day": "2024-04-11", "busy": "1"})
+    client.post("/forecast/busy", data={"day": "2024-04-11", "busy": "1"})
     html = client.get(f"/forecast/plan?farm={farm.id}&day=2024-04-11").text
     cell = _cell(html, "2024-04-11")
     detail = html.split('id="plan-detail"', 1)[1]

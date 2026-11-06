@@ -71,7 +71,7 @@ def test_busy_preference_round_trip_reranks_today_and_parcel_as_farm_state(
     _get(client, session, settings, "/forecast/today", _utc(9, 4))
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "1", "next": "/forecast/today"},
+        data={"day": "2024-04-09", "busy": "1", "next": "/forecast/today"},
         follow_redirects=False,
     )
 
@@ -107,12 +107,36 @@ def test_each_day_has_a_native_form_and_a_scoped_htmx_busy_free_button(
     assert 'aria-pressed="false"' in html and ">Busy<" in html
     assert "every signed-in device" in html
 
-    client.post("/forecast/busy", params={"day": "2024-04-09", "busy": "1"})
+    client.post("/forecast/busy", data={"day": "2024-04-09", "busy": "1"})
     busy_html = client.get(f"/forecast/parcels/{parcel.id}").text
     assert 'aria-pressed="true"' in busy_html and ">Free<" in busy_html
     assert re.findall(r'aria-label="(Busy on [^"]+)"', html) == re.findall(
         r'aria-label="(Busy on [^"]+)"', busy_html
     )
+
+
+def test_busy_form_fields_are_read_from_the_post_body(
+    client, session, settings, farm, parcel, imported
+):
+    _get(client, session, settings, "/forecast/today", _utc(9, 4))
+    response = client.post(
+        "/forecast/busy",
+        params={"farm": farm.id},
+        data={
+            "day": "2024-04-09",
+            "busy": "1",
+            "next": "/forecast/plan",
+            "farm": str(farm.id),
+        },
+        follow_redirects=False,
+    )
+    assert response.status_code == 303
+    assert response.headers["location"] == "/forecast/plan"
+    session.expire_all()
+    row = session.scalar(
+        select(ForecastAvailability).where(ForecastAvailability.farm_id == farm.id)
+    )
+    assert row is not None and row.day == date(2024, 4, 9) and row.available is False
 
 
 def test_busy_free_is_idempotent_and_all_busy_has_no_best(
@@ -123,7 +147,7 @@ def test_busy_free_is_idempotent_and_all_busy_has_no_best(
         for _ in range(2):
             response = client.post(
                 "/forecast/busy",
-                params={"day": f"2024-04-{d:02}", "busy": "1", "next": "/forecast/plan"},
+                data={"day": f"2024-04-{d:02}", "busy": "1", "next": "/forecast/plan"},
             )
             assert response.status_code == 200
     assert all(grade == "busy" for _, grade in _days(response.text)[:5])
@@ -139,7 +163,7 @@ def test_busy_free_is_idempotent_and_all_busy_has_no_best(
     for _ in range(2):
         response = client.post(
             "/forecast/busy",
-            params={"day": "2024-04-10", "busy": "0", "next": "/forecast/plan"},
+            data={"day": "2024-04-10", "busy": "0", "next": "/forecast/plan"},
         )
     assert dict(_days(response.text))["2024-04-10"] == "best"
     assert dict(_days(client.get(f"/forecast/parcels/{parcel.id}").text))["2024-04-09"] == "busy"
@@ -158,11 +182,12 @@ def test_busy_state_is_per_farm_and_explicit_farm_beats_the_global_cookie(
     client.cookies.set(FARM_COOKIE, str(other.id))
     response = client.post(
         "/forecast/busy",
-        params={
-            "farm": farm.id,
+        params={"farm": farm.id},
+        data={
             "day": "2024-04-09",
             "busy": "1",
             "next": f"/forecast/parcels/{parcel.id}?farm={farm.id}",
+            "farm": str(farm.id),
         },
     )
     assert dict(_days(response.text))["2024-04-09"] == "busy"
@@ -186,13 +211,13 @@ def test_availability_rejects_past_and_invalid_days(client, session, settings, f
     _get(client, session, settings, "/forecast/today", _utc(8, 22))  # 9 Apr local
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-08", "busy": "1"},
+        data={"day": "2024-04-08", "busy": "1"},
         follow_redirects=False,
     )
     assert response.status_code == 422
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "1"},
+        data={"day": "2024-04-09", "busy": "1"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -203,7 +228,7 @@ def test_availability_rejects_past_and_invalid_days(client, session, settings, f
     assert row.day == date(2024, 4, 9) and row.available is False
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "0"},
+        data={"day": "2024-04-09", "busy": "0"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -216,16 +241,30 @@ def test_availability_rejects_past_and_invalid_days(client, session, settings, f
     )
 
 
-@pytest.mark.parametrize("next_", ["//evil.example", "https://evil.example", "/\\evil", "oops", ""])
+@pytest.mark.parametrize("next_", ["//evil.example", "https://evil.example", "/\\evil", "oops"])
 def test_busy_preference_safe_next(client, session, settings, farm, next_):
     clock.set_replay(session, _utc(9, 4), settings)
     session.commit()
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "1", "next": next_},
+        data={"day": "2024-04-09", "busy": "1", "next": next_},
         follow_redirects=False,
     )
     assert response.status_code == 303 and response.headers["location"] == "/"
+
+
+def test_busy_preference_missing_or_empty_next_uses_the_safe_default(
+    client, session, settings, farm
+):
+    clock.set_replay(session, _utc(9, 4), settings)
+    session.commit()
+    for data in (
+        {"day": "2024-04-09", "busy": "1"},
+        {"day": "2024-04-09", "busy": "1", "next": ""},
+    ):
+        response = client.post("/forecast/busy", data=data, follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/forecast/today"
 
 
 @pytest.mark.parametrize(
@@ -238,7 +277,7 @@ def test_busy_preference_safe_next(client, session, settings, farm, next_):
     ],
 )
 def test_busy_preference_invalid_form_has_no_state(client, session, farm, params):
-    response = client.post("/forecast/busy", params=params, follow_redirects=False)
+    response = client.post("/forecast/busy", data=params, follow_redirects=False)
     assert response.status_code == 422
     assert "set-cookie" not in response.headers
     assert (
@@ -255,7 +294,7 @@ def test_busy_preference_app_off_has_no_state(client, session, farm):
     session.get(AppModule, "forecast").state = "uninstalled"
     session.commit()
     response = client.post(
-        "/forecast/busy", params={"day": "2024-04-09", "busy": "1"}, follow_redirects=False
+        "/forecast/busy", data={"day": "2024-04-09", "busy": "1"}, follow_redirects=False
     )
     assert response.status_code == 404
     assert "set-cookie" not in response.headers
@@ -284,7 +323,7 @@ def test_busy_preference_does_not_initialize_a_missing_clock(
     event.listen(connection, "before_cursor_execute", record)
     try:
         response = client.post(
-            "/forecast/busy", params={"day": "2024-04-09", "busy": "1"}, follow_redirects=False
+            "/forecast/busy", data={"day": "2024-04-09", "busy": "1"}, follow_redirects=False
         )
     finally:
         event.remove(connection, "before_cursor_execute", record)
@@ -306,13 +345,13 @@ def test_busy_is_idempotent_and_https_sets_no_cookie(client, session, settings, 
     session.commit()
     response = client.post(
         "https://testserver/forecast/busy",
-        params={"day": "2024-04-09", "busy": "1"},
+        data={"day": "2024-04-09", "busy": "1"},
         follow_redirects=False,
     )
     assert response.status_code == 303
     assert "set-cookie" not in response.headers
     assert not any(name.startswith("farmcore_forecast_busy") for name in client.cookies)
-    client.post("/forecast/busy", params={"day": "2024-04-09", "busy": "1"})
+    client.post("/forecast/busy", data={"day": "2024-04-09", "busy": "1"})
     session.expire_all()
     rows = session.scalars(
         select(ForecastAvailability).where(ForecastAvailability.farm_id == farm.id)

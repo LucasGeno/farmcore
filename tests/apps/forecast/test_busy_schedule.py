@@ -51,11 +51,12 @@ def scheduled(session, settings, farm, parcel):
 def _mark(client, farm, day, busy="1"):
     return client.post(
         "/forecast/busy",
-        params={
-            "farm": farm.id,
+        params={"farm": farm.id},
+        data={
             "day": f"2024-04-{day:02}",
             "busy": busy,
             "next": f"/forecast/plan?farm={farm.id}&day=2024-04-{day:02}",
+            "farm": str(farm.id),
         },
     ).text
 

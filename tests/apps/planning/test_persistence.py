@@ -62,8 +62,9 @@ def test_a_planned_job_and_availability_survive_a_new_app_instance(
         assert (
             second.post(
                 "/forecast/busy",
-                params={
-                    "farm": farm_id,
+                params={"farm": farm_id},
+                data={
+                    "farm": str(farm_id),
                     "day": "2024-04-09",
                     "busy": "1",
                     "next": "/forecast/plan",

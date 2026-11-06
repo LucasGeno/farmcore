@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 
 from farmcore.apps.forecast.models import ForecastAvailability
@@ -75,3 +76,8 @@ def set_day(
         )
     )
     repo.session.flush()
+
+
+def reset(session, farm) -> None:
+    """Demo reset clears the demo farm's shared availability days."""
+    session.execute(delete(ForecastAvailability).where(ForecastAvailability.farm_id == farm.id))

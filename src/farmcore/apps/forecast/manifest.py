@@ -19,6 +19,7 @@ MANIFEST = Manifest(
         ),
     ),
     seed="farmcore.apps.forecast.seed:seed",
+    demo_reset=("farmcore.apps.forecast.availability:reset",),
     widgets=(
         Widget("/forecast/home-weather", 21, label="Forecast weather"),
         Widget("/forecast/today", 50, label="Spray window"),

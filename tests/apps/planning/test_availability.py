@@ -27,7 +27,7 @@ def _state(session, farm_id, day="2024-04-09"):
 def test_busy_and_free_are_persisted_per_farm_and_shared_by_the_plan(client, session, farm):
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "1", "next": "/forecast/plan"},
+        data={"day": "2024-04-09", "busy": "1", "next": "/forecast/plan"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -41,7 +41,7 @@ def test_busy_and_free_are_persisted_per_farm_and_shared_by_the_plan(client, ses
     assert (
         client.post(
             "/forecast/busy",
-            params={"day": "2024-04-09", "busy": "1", "next": "/forecast/plan"},
+            data={"day": "2024-04-09", "busy": "1", "next": "/forecast/plan"},
             follow_redirects=False,
         ).status_code
         == 303
@@ -56,7 +56,7 @@ def test_busy_and_free_are_persisted_per_farm_and_shared_by_the_plan(client, ses
 
     response = client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "0", "next": "/forecast/plan"},
+        data={"day": "2024-04-09", "busy": "0", "next": "/forecast/plan"},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -72,7 +72,8 @@ def test_availability_does_not_leak_between_farms(client, session, farm):
     ensure_owner_grant(session, other)
     client.post(
         "/forecast/busy",
-        params={"day": "2024-04-09", "busy": "1", "farm": farm.id},
+        params={"farm": farm.id},
+        data={"day": "2024-04-09", "busy": "1", "farm": str(farm.id)},
         follow_redirects=False,
     )
     assert _state(session, farm.id) is False
@@ -89,7 +90,7 @@ def test_availability_validation_and_owner_authority(client, session, settings, 
         {"day": "2024-04-09", "busy": "yes"},
         {"day": "2024-04-09"},
     ):
-        assert client.post("/forecast/busy", params=params).status_code == 422
+        assert client.post("/forecast/busy", data=params).status_code == 422
 
     demo = create_app(
         settings.model_copy(update={"demo_mode": True, "demo_farm_ids": [farm.id]}),
@@ -98,7 +99,7 @@ def test_availability_validation_and_owner_authority(client, session, settings, 
     with TestClient(demo) as anonymous:
         denied = anonymous.post(
             "/forecast/busy",
-            params={"day": "2024-04-09", "busy": "1"},
+            data={"day": "2024-04-09", "busy": "1"},
             follow_redirects=False,
         )
         assert denied.status_code == 403
