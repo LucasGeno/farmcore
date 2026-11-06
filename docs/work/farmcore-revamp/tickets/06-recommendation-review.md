@@ -42,3 +42,62 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 Claim 2026-11-06 19:40 CET: implementer `fc06-deepseek` (OpenCode Go `opencode-go/deepseek-v4.1-flash`, M1), worktree `~/dev/farmcore-worktrees/06-recommendation-review`, branch `feat/06-recommendation-review`. Coordinator and migration author: `fleet-head-opus` (M1). Reviewer: Dell Codex. Stuck deadline 2026-11-07 09:00 CET.
 
 Pending implementation.
+
+Implementation 2026-11-06/07 (fc06-deepseek). No schema change: a recommendation review is an
+append-only event on the exact saved advice row (`res_model="advice"`, kinds
+`advice.review_requested` / `advice.reviewed`), not new advice state. No Alembic revision was
+authored; the chain stays at `review_0001`.
+
+- Owner asks from the saved advice card fragment (`/review/assessments/{id}/card`, owner-only
+  request form); an assigned advisor answers from `/review/recommendations/` or the same fragment
+  with an opinion (`agree|disagree|unsure`), required note, and reviewer/time from the farm clock.
+  The answer is final; a second answer is `409`, and a new request is allowed only after an answer.
+- The held assessment id is checked against this farm and the replay clock (unknown, foreign or
+  future rows are `404`). Reads require owner/advisor membership; requests require an owner,
+  answers require an advisor role that is still active. Owner-cookie mutations need Origin and
+  the server nonce. A logs-only consent cannot read the review note: the read names the
+  `recommendation_review` resource, scoped to `advice:read` (test in `test_scope_policy.py`).
+- The advice row, its reasons, products and props are never written. A review of an older saved
+  check does not touch, or appear on, a newer assessment; the response says which saved check it
+  belongs to and whether a newer one exists.
+- The bell reports an open check and, for 7 clock days, its answer with reviewer/time. It never
+  repeats the note. Private review events are excluded from the shared Activity feed.
+- The assistant's read-only `review_assessment_status` tool answers golden questions through the
+  deterministic keyword fallback (no model configured): reviewer/time/opinion/note for the exact
+  saved check, an explicit limited-assessment line when inputs are missing, and `403` with no
+  data for a foreign farm. No question writes a review; the conversation store keeps only the
+  question/tool/parcel, never the note. Review declares no write tool.
+
+TDD observations (working evidence, not final verification):
+
+- First journey RED: owner `POST /review/assessments/1/request` returned `404` (route absent);
+  minimum GREEN `1 passed in 3.08s`.
+- Consent policy RED with the resource mapping removed: `DID NOT RAISE ScopeDenied`; GREEN
+  `5 passed in 1.19s`.
+- Bell RED: `"Advisor check requested"` absent from the feed; GREEN
+  `10 passed, 1 skipped in 5.43s`.
+- Golden-question RED: `4 failed` (`KeyError: 'advice_id'`; tool not declared); GREEN
+  `5 passed in 8.65s`.
+- Activity privacy RED: private review row appeared in the shared feed; GREEN
+  `14 passed in 2.09s`.
+- Older-check RED: `KeyError: 'current'`; GREEN `9 passed in 14.27s`.
+
+Verification commands and results:
+
+- `timeout 600 uv run pytest tests/apps/advisor tests/apps/assistant tests/apps/notifications -m "not data" -q`
+  → `555 passed, 3 skipped, 120 deselected in 133.41s`.
+- `timeout 600 uv run pytest tests/apps/review tests/core -m "not data" -q`
+  → `794 passed, 2 deselected in 261.70s`.
+- `uv run ruff check src tests` → pass; `uv run ruff format --check src tests` → `509 files
+  already formatted`.
+- `uv run alembic heads` → `review_0001 (head)` (one head; no revision authored here).
+
+Tier 3 failure model for the auth/concurrency/public-contract slice: a stale or revoked
+membership must fail closed on the next request; two answers must never create two opinions; a
+foreign numeric id must resolve to nothing, not to another farm's row; a logs-only consent must
+not read advice-review notes; a model-chosen tool must not write. Covered by
+`test_recommendation_review.py` (roles, CSRF, foreign/future ids, revocation, concurrent answers),
+`test_scope_policy.py`, and `test_recommendation_golden.py`; mutation fallback recorded below once
+the full gate returns.
+
+Full non-data/non-slow regression is running through `fleet-build` (see final evidence).

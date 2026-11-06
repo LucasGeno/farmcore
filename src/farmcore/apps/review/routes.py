@@ -554,6 +554,32 @@ def respond_to_request(request: Request, repo: Repo, request_id: int, body: Chec
     )
 
 
+@router.get("/assessments/{advice_id}")
+def assessment_page(request: Request, repo: Repo, advice_id: int):
+    """The same check block as a full page, for a browser without the card fragment."""
+    from farmcore.web import render
+
+    authorized_review(request, repo)
+    now = farm_now(request, repo)
+    row, parcel = assessment(repo, advice_id, now)
+    latest = latest_advice_ids(repo, now)
+    return render(
+        request,
+        "review/assessment.html",
+        review=recommendation_json(
+            row,
+            parcel,
+            recommendations.state(repo, row.id),
+            _tz(request),
+            current=latest.get(row.parcel_id) == row.id,
+        ),
+        can_request=can_request(request, repo),
+        can_respond=can_respond(request, repo),
+        opinions=recommendations.OPINIONS,
+        opinion_words=recommendations.OPINION_WORDS,
+    )
+
+
 @router.get("/assessments/{advice_id}/card")
 def assessment_card(request: Request, repo: Repo, advice_id: int):
     from farmcore.web import render

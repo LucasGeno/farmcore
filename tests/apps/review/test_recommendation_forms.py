@@ -37,6 +37,13 @@ def test_owner_requests_from_the_card_and_advisor_answers_from_the_list(
         card = owner.get(f"/advisor/parcels/{parcel_id}", params=params)
         assert card.status_code == 200
         assert f"/review/assessments/{advice_id}/card" in card.text
+        # No-JS fallback: a full page with the same request form.
+        assert f'href="/review/assessments/{advice_id}?farm={farm_id}"' in card.text
+        full = owner.get(f"/review/assessments/{advice_id}", params=params)
+        assert full.status_code == 200
+        assert f'action="/review/assessments/{advice_id}/request-form?farm={farm_id}"' in (
+            full.text.replace("&amp;", "&")
+        )
         check = owner.get(f"/review/assessments/{advice_id}/card", params=params)
         assert check.status_code == 200
         assert f'action="/review/assessments/{advice_id}/request-form?farm={farm_id}"' in (

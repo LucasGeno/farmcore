@@ -34,7 +34,8 @@
 {% endcall %}
 
 {% if advice.id is not none and not is_tour and (is_farm_owner or member_role == 'advisor') and manifests|selectattr("name", "equalto", "review")|list %}
-{{ fragment_slot("advisor-check-" ~ advice.id, "Advisor check", farm_url("/review/assessments/" ~ advice.id ~ "/card"), wrapper_class="mt-4") }}
+<div class="fc-script-only">{{ fragment_slot("advisor-check-" ~ advice.id, "Advisor check", farm_url("/review/assessments/" ~ advice.id ~ "/card"), wrapper_class="mt-4") }}</div>
+<noscript><p class="mt-4"><a class="inline-flex min-h-[44px] items-center rounded-lg border border-line px-4 font-semibold" href="{{ farm_url('/review/assessments/' ~ advice.id) }}">Advisor check</a></p></noscript>
 {% endif %}
 
 {% if not workspace %}{{ parcel_aerial(parcel.id, "advice") }}{% endif %}
