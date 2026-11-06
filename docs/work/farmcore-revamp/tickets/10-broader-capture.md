@@ -63,11 +63,18 @@ TDD evidence (observed RED before minimum GREEN, through public seams):
 - Review-round RED 2 (exact amount and missing date): `uv run pytest tests/apps/chat/test_broader_capture.py -m "not data" -q` → `4 failed, 17 passed` before the Decimal/missing-date fixes (large amount rounded to `...992`; a fact without a date previewed with now instead of asking).
 - Vertex schema/parse test added to `tests/apps/chat/test_extractor_vertex.py`; inventory guard added to `tests/apps/inventory/test_usage.py`.
 
+Review round 2 (re-review of `0cb3660` = FAIL), fixed 2026-11-07:
+
+- HIGH — two concurrent POSTs with one key could rewrite the draft: `logs.create_pending_once` now returns whether this call created the row; the handler writes `props` only for a row it created, echoes the held draft unchanged otherwise, refuses a different transcript under the same key with `Outgoing(status=409)` (the web route answers 409), and never mutates a held confirmed fact. The existing per-farm `pg_advisory_xact_lock` in `record_operation` already serializes the held-source check across sessions and instances, so the second writer sees the first and no duplicate is inserted. No schema change was needed: `log_source` has no farm column, and a farm-scoped unique index would duplicate the advisory lock's guarantee; the new concurrency test proves the behaviour.
+- MED — the web request key was optional: `POST /assistant/message` now requires `request_key` (missing → 422), and every existing panel test sends one; the panel always did.
+- Tests: `test_concurrent_captures_with_one_key_keep_one_draft` uses a rendezvous extractor so two threads pass the initial lookup together; it covers the same text (two 200s, one draft) and a different text (one 200, one 409, and the draft keeps the 200 writer's amount). `test_the_panel_capture_requires_a_request_key` asserts the 422.
+- RED (fix stashed back to `0cb3660`, tests kept): `uv run pytest tests/apps/assistant/test_member_capture_binding.py::test_concurrent_captures_with_one_key_keep_one_draft tests/apps/assistant/test_web_facts_capture.py::test_the_panel_capture_requires_a_request_key -m "not data" -q` → **2 failed, 1 passed** (the differing-text case returned 200/200 and rewrote the props; the keyless POST answered 200 with a draft). GREEN after the fix → **3 passed**.
+
 Verification commands and exact results (heavy suite run through the M1 build lock):
 
 ```sh
 ~/.local/bin/fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD -- uv run pytest tests/apps/chat tests/apps/operations tests/apps/assistant -m 'not data' -q
-# 726 passed, 3 skipped, 66 deselected in 185.44s (0:03:05)
+# 729 passed, 3 skipped, 66 deselected in 188.62s (0:03:08)
 
 node --test tests/apps/assistant/test_capture_csrf.mjs
 # 3 passed (includes the retry request-key test)

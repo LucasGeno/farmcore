@@ -63,6 +63,10 @@ REPLY_ALREADY_LOGGED = "This spray is already logged."
 REPLY_ALREADY_RECORDED = "This record is already logged."
 REPLY_GONE = "This spray was cancelled or no longer exists."
 REPLY_GONE_RECORD = "This record was cancelled or no longer exists."
+REPLY_KEY_CONFLICT = (
+    "This message is already saved as a different record. Nothing was changed; "
+    "send the new note as a new message."
+)
 REPLY_UNKNOWN_BUTTON = "I did not understand that button."
 REPLY_NO_FARM = "The farm is not set up yet. Run `farmcore seed` first."
 REPLY_DEMO_CHANGED = "The demo changed while I was reading. Please send this spray again."
@@ -167,6 +171,28 @@ def _from_chat(log: Log, chat_id: int, deps=None) -> bool:
     binding = deps.capture_binding if deps is not None else None
     prefixes = binding.prefixes if binding is not None else (_chat_key(chat_id),)
     return any(s.external_key.startswith(prefixes) for s in log.sources)
+
+
+def _own_source(log: Log, chat_id: int, deps=None):
+    binding = deps.capture_binding if deps is not None else None
+    prefixes = binding.prefixes if binding is not None else (_chat_key(chat_id),)
+    return next((s for s in log.sources if s.external_key.startswith(prefixes)), None)
+
+
+def _same_message(log: Log, chat_id: int, transcript: str, deps=None) -> bool:
+    """Whether this chat's held source carries the same transcript as the current message.
+
+    The request key identifies one submission: a different text under it is a conflict, never a
+    silent rewrite of the draft (or confirmed fact) the key already holds."""
+    source = _own_source(log, chat_id, deps)
+    stored = (source.raw_payload or {}).get("transcript") if source is not None else None
+    return stored is None or stored == transcript
+
+
+def _stored_notes(log: Log, chat_id: int, deps=None) -> list[str]:
+    source = _own_source(log, chat_id, deps)
+    notes = (source.raw_payload or {}).get("notes") if source is not None else None
+    return list(notes or [])
 
 
 def _echo(summary: str, log_id: int, notes: Sequence[str] = (), *, details="") -> Outgoing:
@@ -308,6 +334,8 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             LogSource, LogSource.external_key == ref, scope="logs:write", limit=1
         ) or [None]
         if seen is not None:
+            if not _same_message(seen.log, incoming.chat_id, transcript, deps):
+                return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
             if seen.log.status != "pending":
                 return Outgoing(
                     text=(
@@ -318,6 +346,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             return _echo(
                 service.log_summary(seen.log, tz),
                 seen.log_id,
+                _stored_notes(seen.log, incoming.chat_id, deps),
                 details=_preview(repo, seen.log, deps.clock(session, deps.settings).now(), str(tz)),
             )
         now = deps.clock(session, deps.settings).now()
@@ -361,7 +390,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         if not conversation.unchanged(session, farm_id, epoch):
             return Outgoing(text=REPLY_DEMO_CHANGED)
         repo = _repo(session, deps, incoming.chat_id)
-        log = logs.create_pending(
+        log, held = logs.create_pending_once(
             session,
             farm_id=repo.farm_id,
             type=log_type,
@@ -387,13 +416,28 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             occurred_at=now,
             source_app=SOURCE_APP,
         )
-        if props is not None:
-            log.props = props
-        log_id = log.id
+        if held:
+            # A replay or a concurrent duplicate: never rewrite the draft or fact this key
+            # already holds. A different message under it is refused.
+            if not _same_message(log, incoming.chat_id, transcript, deps):
+                return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
+            if log.status != "pending":
+                return Outgoing(
+                    text=REPLY_ALREADY_LOGGED if log.type == "spray" else REPLY_ALREADY_RECORDED
+                )
+            log_id = log.id
+            stored_notes = _stored_notes(log, incoming.chat_id, deps)
+            summary = service.log_summary(log, ctx.tz)
+        else:
+            if props is not None:
+                log.props = props
+            log_id = log.id
+            stored_notes = checked.notes
+            summary = service.checked_summary(checked, ctx.tz)
         details = _preview(repo, log, now, deps.settings.display_tz)
         conversation.clear(session, repo.farm_id, _state_key(deps, incoming.chat_id))
 
-    return _echo(service.checked_summary(checked, ctx.tz), log_id, checked.notes, details=details)
+    return _echo(summary, log_id, stored_notes, details=details)
 
 
 def _record_fields(checked: service.Checked):

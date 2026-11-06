@@ -23,7 +23,6 @@ import os
 import re
 import shutil
 import tempfile
-import time
 from contextlib import suppress
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -249,16 +248,16 @@ def message(
     repo: Repo,
     q: str = Form(min_length=1, max_length=500),
     conversation: str | None = Form(default=None, min_length=1, max_length=64),
-    request_key: str | None = Form(default=None, min_length=1, max_length=128),
+    request_key: str = Form(min_length=1, max_length=128),
 ):
     """The signed-in farmer's panel: a spray/irrigation/observation report (or the reply to its
     clarifying question) takes the chat app's draft → ✅ path; anything else is answered exactly
     like `GET /ask`.
 
-    `request_key` is the client's idempotency key for one submission. It is hashed into the
-    draft's message id, and the chat key already carries the farm and member, so a retried POST
-    returns the same draft instead of writing a second one. Without a key (older clients) every
-    POST still gets a fresh id."""
+    `request_key` is required: it is the client's idempotency key for one submission. It is
+    hashed into the draft's message id, and the chat key already carries the farm and member, so
+    a retried POST returns the same draft instead of writing a second one, and a different
+    message under the same key is refused."""
     names = {m.name for m in visible_manifests(request)}
     if "assistant" not in names:
         raise HTTPException(404)
@@ -279,17 +278,15 @@ def message(
     conversations.save(
         request.app, key, generation, [*history, conversations.Turn(text, SPRAY_TURN, None)]
     )
-    return response(request, token, _web_reply(request, repo, out))
+    return response(request, token, _web_reply(request, repo, out), out.status)
 
 
-def _submission_id(request_key: str | None) -> int:
-    """The draft's idempotency id: a client key hashed to a positive bigint, else a fresh id.
+def _submission_id(request_key: str) -> int:
+    """The draft's idempotency id: the client key hashed to a positive bigint.
 
     The chat's external key binds this id to the farm and member (`CaptureBinding.prefix`), so
     the same key from another farm or member is another draft.
     """
-    if request_key is None:
-        return time.time_ns() // 1000
     digest = hashlib.blake2b(request_key.encode(), digest_size=8).digest()
     return max(1, int.from_bytes(digest, "big") >> 1)
 
@@ -334,7 +331,7 @@ def confirm(
     _end_request_transaction(repo)
     out = chat.on_callback(deps, Callback(chat.WEB_CHAT_ID, action))
     token = request.cookies.get(limits.COOKIE) or ""
-    return response(request, token, _web_reply(request, repo, out))
+    return response(request, token, _web_reply(request, repo, out), out.status)
 
 
 def _spray_turn(request: Request, repo: Repo, text: str) -> bool:

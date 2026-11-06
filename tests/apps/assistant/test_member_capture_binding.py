@@ -1,5 +1,7 @@
 """Authenticated original spray capture stays bound to the selected farm and principal."""
 
+import uuid
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -39,13 +41,19 @@ def test_owners_cancel_and_confirm_only_their_own_drafts_and_a_double_confirm_lo
         for name, browser in (("alice", alice), ("bob", bob)):
             reply = browser.post(
                 f"/assistant/message?farm={farm_id}",
-                data={"q": "I sprayed P1 copper 2 kg this morning"},
+                data={
+                    "q": "I sprayed P1 copper 2 kg this morning",
+                    "request_key": uuid.uuid4().hex,
+                },
             )
             assert reply.status_code == 200 and reply.json()["kind"] == "draft", reply.text
             actions[name] = reply.json()["actions"][0]["action"]
         denied = bob.post(f"/assistant/confirm?farm={farm_id}", data={"action": actions["alice"]})
         assert denied.status_code == 200 and denied.json()["kind"] == "reply"
-        cancelled = alice.post(f"/assistant/message?farm={farm_id}", data={"q": "cancel"})
+        cancelled = alice.post(
+            f"/assistant/message?farm={farm_id}",
+            data={"q": "cancel", "request_key": uuid.uuid4().hex},
+        )
         assert cancelled.json()["kind"] == "done"
         with ThreadPoolExecutor(max_workers=2) as pool:
             replies = list(
@@ -92,18 +100,31 @@ def test_selected_private_farm_and_clarification_are_not_shared(settings, pooled
     with member_browser(app, "alice") as alice, member_browser(app, "bob") as bob:
         first = alice.post(
             f"/assistant/message?farm={private_id}",
-            data={"q": "I sprayed copper 2 kg this morning"},
+            data={"q": "I sprayed copper 2 kg this morning", "request_key": uuid.uuid4().hex},
         )
         assert first.status_code == 200 and first.json()["kind"] == "clarify"
         assert (
-            bob.post(f"/assistant/message?farm={default_id}", data={"q": "P1"}).json().get("kind")
+            bob.post(
+                f"/assistant/message?farm={default_id}",
+                data={"q": "P1", "request_key": uuid.uuid4().hex},
+            )
+            .json()
+            .get("kind")
             != "draft"
         )
         assert (
-            alice.post(f"/assistant/message?farm={default_id}", data={"q": "P1"}).json().get("kind")
+            alice.post(
+                f"/assistant/message?farm={default_id}",
+                data={"q": "P1", "request_key": uuid.uuid4().hex},
+            )
+            .json()
+            .get("kind")
             != "draft"
         )
-        draft = alice.post(f"/assistant/message?farm={private_id}", data={"q": "P1"})
+        draft = alice.post(
+            f"/assistant/message?farm={private_id}",
+            data={"q": "P1", "request_key": uuid.uuid4().hex},
+        )
         assert draft.status_code == 200 and draft.json()["kind"] == "draft"
         assert "Private P1" in draft.json()["text"]
         action = draft.json()["actions"][0]["action"]
@@ -164,7 +185,10 @@ def test_member_capture_and_confirmation_fail_closed(settings, pooled_session_fa
         assert (
             browser.post(
                 f"/assistant/message?farm={farm_id}",
-                data={"q": "I sprayed P1 copper 2 kg this morning"},
+                data={
+                    "q": "I sprayed P1 copper 2 kg this morning",
+                    "request_key": uuid.uuid4().hex,
+                },
             ).status_code
             == 403
         )
@@ -225,7 +249,8 @@ def test_authority_lost_during_external_extraction_writes_nothing(
     app.state.assistant_chat_deps = ChatDeps(pooled_session_factory, ExternalReader(), settings)
     with member_browser(app, "alice") as browser:
         reply = browser.post(
-            f"/assistant/message?farm={farm_id}", data={"q": "I sprayed P1 copper this morning"}
+            f"/assistant/message?farm={farm_id}",
+            data={"q": "I sprayed P1 copper this morning", "request_key": uuid.uuid4().hex},
         )
         assert reply.status_code == 403
     with pooled_session_factory() as session:
@@ -324,7 +349,10 @@ def test_original_shared_web_draft_is_claimable_only_by_the_default_farm_operato
         browser = TestClient(app, base_url="https://testserver", headers={"X-Admin-Token": token})
     with browser:
         if via == "message":
-            reply = browser.post(f"/assistant/message?farm={farm_id}", data={"q": "/confirm"})
+            reply = browser.post(
+                f"/assistant/message?farm={farm_id}",
+                data={"q": "/confirm", "request_key": uuid.uuid4().hex},
+            )
         else:
             action = old.buttons[0][1]
             reply = browser.post(f"/assistant/confirm?farm={farm_id}", data={"action": action})
@@ -384,7 +412,7 @@ def test_no_model_selected_farm_uses_local_capture_without_mutating_enabled_extr
         operator.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         control = operator.post(
             f"/assistant/message?farm={default}",
-            data={"q": "I sprayed P1 copper 2 kg this morning"},
+            data={"q": "I sprayed P1 copper 2 kg this morning", "request_key": uuid.uuid4().hex},
         )
         assert control.status_code == 200, control.text
         assert len(sent) == 1, "External adapter positive control did not run"
@@ -395,11 +423,14 @@ def test_no_model_selected_farm_uses_local_capture_without_mutating_enabled_extr
             {"Origin": "https://testserver", "X-CSRF-Token": member.cookies["farmcore_csrf"]}
         )
         first = member.post(
-            f"/assistant/message?farm={fid}", data={"q": "I sprayed copper 2 kg this morning"}
+            f"/assistant/message?farm={fid}",
+            data={"q": "I sprayed copper 2 kg this morning", "request_key": uuid.uuid4().hex},
         )
         assert first.status_code == 200 and first.json()["kind"] == "clarify"
         assert sent == [], "Clarification sent protected context externally"
-        r = member.post(f"/assistant/message?farm={fid}", data={"q": "P1"})
+        r = member.post(
+            f"/assistant/message?farm={fid}", data={"q": "P1", "request_key": uuid.uuid4().hex}
+        )
         assert r.status_code == 200, r.text
         restricted = list(sent)
         assert r.json()["kind"] == "draft", r.text
@@ -412,7 +443,7 @@ def test_no_model_selected_farm_uses_local_capture_without_mutating_enabled_extr
         operator.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
         control = operator.post(
             f"/assistant/message?farm={default}",
-            data={"q": "I sprayed P1 copper 2 kg this morning"},
+            data={"q": "I sprayed P1 copper 2 kg this morning", "request_key": uuid.uuid4().hex},
         )
         assert control.status_code == 200 and len(sent) == 1, (
             "Enabled farm adapter failed after restricted-farm capture"
@@ -455,7 +486,7 @@ def test_members_capture_irrigation_bound_to_their_farm_and_only_the_owner_confi
     with member_browser(app, "alice") as alice, member_browser(app, "bob") as bob:
         reply = alice.post(
             f"/assistant/message?farm={farm_id}",
-            data={"q": "Irrigated P1 20 mm gross at 6"},
+            data={"q": "Irrigated P1 20 mm gross at 6", "request_key": uuid.uuid4().hex},
         )
         assert reply.status_code == 200 and reply.json()["kind"] == "draft", reply.text
         action = reply.json()["actions"][0]["action"]
@@ -488,7 +519,7 @@ def test_concurrent_irrigation_confirms_create_one_record_and_one_event(
     with member_browser(app, "alice") as browser:
         draft = browser.post(
             f"/assistant/message?farm={farm_id}",
-            data={"q": "Irrigated P1 20 mm gross at 6"},
+            data={"q": "Irrigated P1 20 mm gross at 6", "request_key": uuid.uuid4().hex},
         )
         assert draft.status_code == 200 and draft.json()["kind"] == "draft", draft.text
         action = draft.json()["actions"][0]["action"]
@@ -508,3 +539,68 @@ def test_concurrent_irrigation_confirms_create_one_record_and_one_event(
         [saved] = session.scalars(select(Log)).all()
         assert (saved.type, saved.status) == ("irrigate", "done")
         assert len(session.scalars(select(Event).where(Event.kind == "log.confirmed")).all()) == 1
+
+
+@pytest.mark.parametrize(
+    ("second", "expected"),
+    [
+        ("Irrigated P1 20 mm gross at 6", [200, 200]),
+        ("Irrigated P1 30 mm net at 6", [200, 409]),
+    ],
+)
+def test_concurrent_captures_with_one_key_keep_one_draft(
+    settings, pooled_session_factory, second, expected
+):
+    """Two sessions pass the initial lookup together; the farm lock makes the second see the
+    first's source. It must return that draft unchanged, never rewrite its props, and a
+    different message under the same key is refused."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from farmcore.apps.chat.dto import Incoming
+    from farmcore.apps.chat.extractor import RegexExtractor
+    from farmcore.apps.chat.handlers import CaptureBinding, ChatDeps, on_message
+
+    with pooled_session_factory() as session:
+        ids = seed_farm(session, settings)
+        farm_id = session.get(Parcel, ids["P1"]).farm_id
+
+    barrier = threading.Barrier(2)
+
+    class Rendezvous:
+        """Both threads finish extraction before either writes: the real race window."""
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        def extract(self, request):
+            draft = self.inner.extract(request)
+            barrier.wait(timeout=10)
+            return draft
+
+    deps = ChatDeps(
+        pooled_session_factory,
+        Rendezvous(RegexExtractor()),
+        settings,
+        capture_binding=CaptureBinding(farm_id=farm_id, operator=True),
+    )
+    first = "Irrigated P1 20 mm gross at 6"
+
+    def send(text):
+        return text, on_message(deps, Incoming(0, text, None, 987654))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(send, [first, second]))
+
+    statuses = sorted(getattr(out, "status", 200) for _, out in results)
+    assert statuses == expected
+    with pooled_session_factory() as session:
+        [log] = session.scalars(select(Log)).all()
+        assert (log.type, log.status) == ("irrigate", "pending")
+        amount = log.props["irrigation"]["amount"]
+        assert amount in {"20", "30"}
+    if expected == [200, 409]:
+        winner = next(text for text, out in results if getattr(out, "status", 200) == 200)
+        reply = next(out for _, out in results if getattr(out, "status", 200) == 409)
+        assert amount == ("20" if "20 mm" in winner else "30")
+        assert "different record" in reply.text

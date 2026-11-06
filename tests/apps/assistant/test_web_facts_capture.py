@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 from sqlalchemy import select
 
@@ -27,8 +29,15 @@ def local_parser(client):
     )
 
 
-def _say(client, q, conversation="one"):
-    return client.post("/assistant/message", data={"q": q, "conversation": conversation})
+def _say(client, q, conversation="one", request_key=None):
+    return client.post(
+        "/assistant/message",
+        data={
+            "q": q,
+            "conversation": conversation,
+            "request_key": request_key or f"test-{uuid.uuid4().hex}",
+        },
+    )
 
 
 def _pending(session) -> list[Log]:
@@ -163,3 +172,12 @@ def test_a_retried_panel_submission_creates_one_draft_and_one_record(
     assert len(web_keys) == 1
     saved = session.scalars(select(Log).where(Log.id == pending.id)).all()
     assert len(saved) == 1 and saved[0].status == "done"
+
+
+def test_the_panel_capture_requires_a_request_key(client, seeded, step):
+    seeded("B")
+    step("2024-04-10 06:00")
+
+    response = client.post("/assistant/message", data={"q": "Irrigated P5 20 mm gross at 6"})
+
+    assert response.status_code == 422, response.text
