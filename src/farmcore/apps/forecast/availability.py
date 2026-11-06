@@ -19,8 +19,10 @@ SCOPE = "fields:read"
 WRITE_SCOPE = "planning:write"
 
 
-def busy_days(repo: ScopedRepository, today: date) -> set[date]:
-    """Local days the farmer marked Busy, from `today` on."""
+def busy_days(repo: ScopedRepository, today: date, *, member: bool) -> set[date]:
+    """Local Busy days from `today` on, for a farm member. Non-members see none."""
+    if not member:
+        return set()
     rows = repo.list(
         ForecastAvailability,
         ForecastAvailability.available.is_(False),

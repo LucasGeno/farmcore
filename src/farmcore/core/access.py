@@ -454,35 +454,42 @@ def repo_for_job(session: Session, farm_id: int, job_name: str) -> ScopedReposit
 Repo = Annotated[ScopedRepository, Depends(get_repo, scope="function")]
 
 
-def require_farm_member(request: Request, repo: Repo) -> None:
-    """Private planning reads need a current farm membership, not demo/tour access.
-
-    The installation operator keeps break-glass authority; an anonymous demo visitor never
-    becomes a member and a tour never authorizes private data.
-    """
+def has_farm_membership(request: Request, repo: Repo) -> bool:
+    """True for an active member (or installation operator); false for demo, tour, anonymous."""
     from farmcore.core.identity import principal_for
     from farmcore.core.models.identity import FarmMembership, LocalIdentity
     from farmcore.core.tour import is_tour
     from farmcore.web import is_admin
 
     if is_admin(request):
-        return
+        return True
     if is_tour(request):
-        raise HTTPException(403, "Farm member required.")
+        return False
     principal = principal_for(request)
     if principal is None:
-        raise HTTPException(403, "Farm member required.")
-    active = repo.session.scalar(
-        select(FarmMembership.id)
-        .join(LocalIdentity)
-        .where(
-            FarmMembership.farm_id == repo.farm_id,
-            FarmMembership.identity_id == principal.identity_id,
-            FarmMembership.revoked_at.is_(None),
-            LocalIdentity.disabled_at.is_(None),
+        return False
+    return (
+        repo.session.scalar(
+            select(FarmMembership.id)
+            .join(LocalIdentity)
+            .where(
+                FarmMembership.farm_id == repo.farm_id,
+                FarmMembership.identity_id == principal.identity_id,
+                FarmMembership.revoked_at.is_(None),
+                LocalIdentity.disabled_at.is_(None),
+            )
         )
+        is not None
     )
-    if active is None:
+
+
+def require_farm_member(request: Request, repo: Repo) -> None:
+    """Private planning reads need a current farm membership, not demo/tour access.
+
+    The installation operator keeps break-glass authority; an anonymous demo visitor never
+    becomes a member and a tour never authorizes private data.
+    """
+    if not has_farm_membership(request, repo):
         raise HTTPException(403, "Farm member required.")
 
 

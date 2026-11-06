@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from farmcore.apps.advisor import service as advice
 from farmcore.apps.advisor.navigation import parcel_link
 from farmcore.apps.forecast import availability, planning, store
-from farmcore.core.access import Repo, require_farm_owner
+from farmcore.core.access import Repo, has_farm_membership, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import Parcel
 from farmcore.core.models.kernel import ClockState
@@ -46,7 +46,11 @@ _day_label = planning.day_label
 def _plan_view(request: Request, repo: Repo, *, sulphur=False):
     tz = request.app.state.settings.display_tz
     now = get_clock(repo.session, request.app.state.settings).now()
-    busy = availability.busy_days(repo, now.astimezone(ZoneInfo(tz)).date())
+    busy = availability.busy_days(
+        repo,
+        now.astimezone(ZoneInfo(tz)).date(),
+        member=has_farm_membership(request, repo),
+    )
     return planning.plan_days(repo, now, tz, busy, sulphur=sulphur)
 
 
