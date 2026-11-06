@@ -6,7 +6,7 @@
   <h2 id="{{ window_id }}-title" class="text-[13px] font-semibold uppercase tracking-wider text-muted">Spray window · {% if top %}best 3 days{% else %}next 5 days{% endif %}</h2>
   {% if planned_treatment %}
   <aside class="mt-3 rounded-lg border border-line bg-ground p-3" aria-live="polite">
-    {% if planned_treatment.to_day %}<p data-planned-treatment="{{ planned_treatment.to_day }}" class="text-sm font-semibold">Planned treatment: {{ planned_treatment.to_label }} · {{ planned_treatment.window }}</p><p class="mt-1 text-[13px] text-muted">Rescheduled from {{ planned_treatment.from_label }} because of Busy. This calendar window replaces the original window above for your availability in this browser.</p>
+    {% if planned_treatment.to_day %}<p data-planned-treatment="{{ planned_treatment.to_day }}" class="text-sm font-semibold">Planned treatment: {{ planned_treatment.to_label }} · {{ planned_treatment.window }}</p><p class="mt-1 text-[13px] text-muted">Rescheduled from {{ planned_treatment.from_label }} because of Busy. This calendar window replaces the original window above for this farm's shared availability.</p>
     {% else %}<p class="text-sm font-semibold text-spray">{{ planned_treatment.schedule_reason }}</p><p class="mt-1 text-[13px] text-muted">The original window above is unavailable because of Busy. Update availability or review the parcel advice.</p>{% endif %}
   </aside>
   {% endif %}
