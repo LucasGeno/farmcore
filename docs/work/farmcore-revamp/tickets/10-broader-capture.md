@@ -70,11 +70,16 @@ Review round 2 (re-review of `0cb3660` = FAIL), fixed 2026-11-07:
 - Tests: `test_concurrent_captures_with_one_key_keep_one_draft` uses a rendezvous extractor so two threads pass the initial lookup together; it covers the same text (two 200s, one draft) and a different text (one 200, one 409, and the draft keeps the 200 writer's amount). `test_the_panel_capture_requires_a_request_key` asserts the 422.
 - RED (fix stashed back to `0cb3660`, tests kept): `uv run pytest tests/apps/assistant/test_member_capture_binding.py::test_concurrent_captures_with_one_key_keep_one_draft tests/apps/assistant/test_web_facts_capture.py::test_the_panel_capture_requires_a_request_key -m "not data" -q` → **2 failed, 1 passed** (the differing-text case returned 200/200 and rewrote the props; the keyless POST answered 200 with a draft). GREEN after the fix → **3 passed**.
 
+Review round 3 (re-review of `a34edc6` = FAIL), fixed 2026-11-07:
+
+- MED — a merged spray's replay compared the wrong source: `_held_source` now matches the exact `external_key` of the replayed message in both replay paths (the early `seen` lookup and the concurrent held draft), never the first source of the chat prefix. A confirmed spray holding two same-chat sources (a merge) replays either one as the existing record.
+- RED: `uv run pytest tests/apps/chat/test_handlers.py::test_replaying_either_source_of_a_merged_spray_returns_the_record -m "not data" -q` → **1 failed, 1 passed** (replaying source `tg:<chat>:102` got the 409 conflict text because it was compared with source 101's transcript). GREEN after the fix → **2 passed**.
+
 Verification commands and exact results (heavy suite run through the M1 build lock):
 
 ```sh
 ~/.local/bin/fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD -- uv run pytest tests/apps/chat tests/apps/operations tests/apps/assistant -m 'not data' -q
-# 729 passed, 3 skipped, 66 deselected in 188.62s (0:03:08)
+# 731 passed, 3 skipped, 66 deselected in 183.27s (0:03:03)
 
 node --test tests/apps/assistant/test_capture_csrf.mjs
 # 3 passed (includes the retry request-key test)

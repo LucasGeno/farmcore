@@ -173,24 +173,24 @@ def _from_chat(log: Log, chat_id: int, deps=None) -> bool:
     return any(s.external_key.startswith(prefixes) for s in log.sources)
 
 
-def _own_source(log: Log, chat_id: int, deps=None):
-    binding = deps.capture_binding if deps is not None else None
-    prefixes = binding.prefixes if binding is not None else (_chat_key(chat_id),)
-    return next((s for s in log.sources if s.external_key.startswith(prefixes)), None)
+def _held_source(log: Log, external_key: str):
+    """The source written by this exact message, never another source of the same chat (a merged
+    spray holds one source per contributing message)."""
+    return next((s for s in log.sources if s.external_key == external_key), None)
 
 
-def _same_message(log: Log, chat_id: int, transcript: str, deps=None) -> bool:
-    """Whether this chat's held source carries the same transcript as the current message.
+def _same_message(log: Log, external_key: str, transcript: str) -> bool:
+    """Whether the held source carries the same transcript as the current message.
 
-    The request key identifies one submission: a different text under it is a conflict, never a
+    The request key identifies one source: a different text under it is a conflict, never a
     silent rewrite of the draft (or confirmed fact) the key already holds."""
-    source = _own_source(log, chat_id, deps)
+    source = _held_source(log, external_key)
     stored = (source.raw_payload or {}).get("transcript") if source is not None else None
     return stored is None or stored == transcript
 
 
-def _stored_notes(log: Log, chat_id: int, deps=None) -> list[str]:
-    source = _own_source(log, chat_id, deps)
+def _stored_notes(log: Log, external_key: str) -> list[str]:
+    source = _held_source(log, external_key)
     notes = (source.raw_payload or {}).get("notes") if source is not None else None
     return list(notes or [])
 
@@ -334,7 +334,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             LogSource, LogSource.external_key == ref, scope="logs:write", limit=1
         ) or [None]
         if seen is not None:
-            if not _same_message(seen.log, incoming.chat_id, transcript, deps):
+            if not _same_message(seen.log, seen.external_key, transcript):
                 return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
             if seen.log.status != "pending":
                 return Outgoing(
@@ -346,7 +346,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             return _echo(
                 service.log_summary(seen.log, tz),
                 seen.log_id,
-                _stored_notes(seen.log, incoming.chat_id, deps),
+                _stored_notes(seen.log, seen.external_key),
                 details=_preview(repo, seen.log, deps.clock(session, deps.settings).now(), str(tz)),
             )
         now = deps.clock(session, deps.settings).now()
@@ -419,14 +419,14 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         if held:
             # A replay or a concurrent duplicate: never rewrite the draft or fact this key
             # already holds. A different message under it is refused.
-            if not _same_message(log, incoming.chat_id, transcript, deps):
+            if not _same_message(log, ref, transcript):
                 return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
             if log.status != "pending":
                 return Outgoing(
                     text=REPLY_ALREADY_LOGGED if log.type == "spray" else REPLY_ALREADY_RECORDED
                 )
             log_id = log.id
-            stored_notes = _stored_notes(log, incoming.chat_id, deps)
+            stored_notes = _stored_notes(log, ref)
             summary = service.log_summary(log, ctx.tz)
         else:
             if props is not None:
