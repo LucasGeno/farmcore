@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Farmer requests and receives an advisor check"
 description: "Milestones 1–4: farmer requests and receives an advisor check."
-status: approved
+status: in-progress
 blocked_by: ["05"]
 ---
 
@@ -38,5 +38,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
+
+Claim 2026-11-06 19:40 CET: implementer `fc06-deepseek` (OpenCode Go `opencode-go/deepseek-v4.1-flash`, M1), worktree `~/dev/farmcore-worktrees/06-recommendation-review`, branch `feat/06-recommendation-review`. Coordinator and migration author: `fleet-head-opus` (M1). Reviewer: Dell Codex. Stuck deadline 2026-11-07 09:00 CET.
 
 Pending implementation.
