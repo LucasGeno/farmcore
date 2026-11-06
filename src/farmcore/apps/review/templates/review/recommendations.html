@@ -1,0 +1,37 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, card, empty_state, pill %}
+{% block title %}Recommendation review · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Recommendation review", "A human opinion about one saved assessment. It never changes the model output and never carries over to a newer assessment.") %}{% endcall %}
+{% if error %}<p role="alert" class="mb-4 rounded-lg border border-line bg-wait-soft p-4 text-wait">{{ error }}</p>{% endif %}
+{% if not reviews %}{{ empty_state("No advisor check requested yet. Open a parcel's advice card and ask an assigned advisor to check the saved assessment.") }}{% endif %}
+{% for review in reviews %}
+{% set req = review.request %}
+{% set ans = review.response %}
+{% call card("mt-4", {"data-advisor-check": "", "data-advice-id": review.advice_id}) %}
+  <div class="flex flex-wrap items-start justify-between gap-2">
+    <h2 class="text-lg font-semibold">{{ review.parcel.alias }} · {{ review.parcel.name }}</h2>
+    {% if ans %}{{ pill("Answered", "ok") }}{% else %}{{ pill("Awaiting advisor", "warn") }}{% endif %}
+  </div>
+  <p class="mt-2 text-sm text-muted">Saved check {{ review.evaluated_label }} · decision {{ review.decision }} · {{ review.headline or review.assessment_status }}. <a class="underline underline-offset-2" href="{{ farm_url('/advisor/parcels/' ~ review.parcel.id) }}">Open the advice card</a></p>
+  {% if req %}
+  <p class="mt-3">Requested by <strong>{{ req.requested_by }}</strong> · {{ req.requested_label }}</p>
+  {% if req.note %}<p class="mt-1 break-words">“{{ req.note }}”</p>{% endif %}
+  {% endif %}
+  {% if ans %}
+  <p class="mt-3">Reviewed by <strong data-reviewer>{{ ans.reviewer }}</strong> · <time data-reviewed-at datetime="{{ ans.reviewed_at }}">{{ ans.reviewed_label }}</time> · {{ ans.opinion|capitalize }}</p>
+  <p class="mt-1 break-words" data-review-note>{{ ans.note }}</p>
+  <p class="mt-2 text-[13px] text-muted">This is a human opinion about the saved check; the model output is unchanged.</p>
+  {% elif can_respond and req %}
+  <form method="post" action="{{ farm_url('/review/requests/' ~ req.id ~ '/response-form') }}" class="mt-3 grid gap-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="grid gap-1">Your opinion
+      <select name="opinion" required class="min-h-[44px] rounded-lg border border-line bg-surface px-3"><option value="agree">Agree with this saved check</option><option value="disagree">Disagree with this saved check</option><option value="unsure">Unsure about this saved check</option></select>
+    </label>
+    <label class="grid gap-1">Note <textarea name="note" required maxlength="10000" rows="3" class="rounded-lg border border-line bg-surface p-3"></textarea></label>
+    <button class="min-h-[44px] justify-self-start rounded-lg bg-brand-700 px-4 text-surface hover:bg-brand-900 focus-visible:ring-2 focus-visible:ring-brand-700">Record opinion</button>
+  </form>
+  {% endif %}
+{% endcall %}
+{% endfor %}
+{% endblock %}

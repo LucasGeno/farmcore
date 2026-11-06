@@ -1,18 +1,22 @@
 """Explicit parameter version/review actions bound to a currently assigned farm member."""
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
-from farmcore.apps.review import service
+from farmcore.apps.review import recommendations, service
 from farmcore.apps.review.models import ParameterActivation, ParameterReview, ParameterVersion
 from farmcore.apps.review.parameters import catalog
-from farmcore.core.access import Repo
+from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.identity import principal_for
+from farmcore.core.models.canonical import Advice, Parcel
 from farmcore.core.models.identity import FarmMembership, LocalIdentity
 from farmcore.core.tour import is_tour
-from farmcore.web import is_admin
+from farmcore.web import LOCAL_FORMAT, is_admin
 
 router = APIRouter()
 
@@ -312,3 +316,290 @@ def activate_form(request: Request, repo: Repo, version_id: int):
             raise
         return form_redirect(repo, version_id, str(exc.detail))
     return form_redirect(repo, version_id)
+
+
+# --- recommendation review: one exact saved assessment, one human opinion -------------------
+
+
+class CheckRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    note: str = Field(default="", max_length=2000)
+
+
+class CheckAnswer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    opinion: str
+    note: str = Field(min_length=1, max_length=10000)
+
+
+def farm_now(request: Request, repo: Repo):
+    return get_clock(repo.session, request.app.state.settings).now()
+
+
+def _tz(request: Request) -> str:
+    return request.app.state.settings.display_tz
+
+
+def require_assigned_advisor(request: Request, repo: Repo) -> None:
+    """Only an advisor currently assigned to this farm answers a check; owners ask."""
+    if is_admin(request):
+        return
+    principal = principal_for(request)
+    if is_tour(request) or principal is None:
+        raise HTTPException(403, "Assigned advisor required")
+    member = repo.session.scalar(
+        select(FarmMembership.id)
+        .join(LocalIdentity)
+        .where(
+            FarmMembership.farm_id == repo.farm_id,
+            FarmMembership.identity_id == principal.identity_id,
+            FarmMembership.role == "advisor",
+            FarmMembership.revoked_at.is_(None),
+            LocalIdentity.disabled_at.is_(None),
+        )
+    )
+    if member is None:
+        raise HTTPException(403, "Assigned advisor required")
+
+
+def actor_name(request: Request) -> str:
+    if is_admin(request):
+        return "operator"
+    principal = principal_for(request)
+    return principal.login if principal else "operator"
+
+
+def role_on_farm(request: Request, repo: Repo) -> str | None:
+    principal = principal_for(request)
+    return principal.memberships.get(repo.farm_id) if principal else None
+
+
+def can_request(request: Request, repo: Repo) -> bool:
+    return is_admin(request) or role_on_farm(request, repo) == "owner"
+
+
+def can_respond(request: Request, repo: Repo) -> bool:
+    return is_admin(request) or role_on_farm(request, repo) == "advisor"
+
+
+def assessment(repo: Repo, advice_id: int, now):
+    """One stored assessment on this farm, never a future row (the replay clock hides those)."""
+    if not 0 < advice_id < 2**63:
+        raise HTTPException(404, "Assessment unavailable")
+    row = repo.get(Advice, advice_id, scope="advice:read")
+    if row is None or row.evaluated_at > now:
+        raise HTTPException(404, "Assessment unavailable")
+    parcel = repo.get(Parcel, row.parcel_id, scope="fields:read")
+    if parcel is None:
+        raise HTTPException(404, "Assessment unavailable")
+    return row, parcel
+
+
+def _label(value: str, tz: str) -> str:
+    return datetime.fromisoformat(value).astimezone(ZoneInfo(tz)).strftime(LOCAL_FORMAT)
+
+
+def recommendation_json(advice, parcel, state, tz: str):
+    def request_payload(event):
+        payload = event.payload or {}
+        at = event.occurred_at.isoformat()
+        return {
+            "id": event.id,
+            "requested_by": payload.get("requested_by"),
+            "requested_at": at,
+            "requested_label": _label(at, tz),
+            "note": payload.get("note") or "",
+        }
+
+    def response_payload(event):
+        payload = event.payload or {}
+        at = event.occurred_at.isoformat()
+        return {
+            "id": event.id,
+            "request_id": payload.get("request_id"),
+            "reviewer": payload.get("reviewer"),
+            "reviewed_at": at,
+            "reviewed_label": _label(at, tz),
+            "opinion": payload.get("opinion"),
+            "note": payload.get("note") or "",
+        }
+
+    evaluated = advice.evaluated_at.isoformat()
+    return {
+        "advice_id": advice.id,
+        "parcel": {"id": parcel.id, "alias": parcel.alias, "name": parcel.name},
+        "evaluated_at": evaluated,
+        "evaluated_label": _label(evaluated, tz),
+        "decision": advice.decision,
+        "assessment_status": (advice.props or {}).get("assessment_status", "legacy-unknown"),
+        "headline": (advice.props or {}).get("headline"),
+        "request": request_payload(state.request) if state.request else None,
+        "response": response_payload(state.response) if state.response else None,
+        "open": state.open,
+        "accuracy_claim": False,
+        "model_output_unchanged": True,
+    }
+
+
+def farm_reviews(request: Request, repo: Repo):
+    """Resolve each request/answer event to its stored assessment, newest request first."""
+    now = farm_now(request, repo)
+    out = []
+    for state in recommendations.states(repo):
+        row = repo.get(Advice, state.advice_id, scope="advice:read")
+        if row is None or row.evaluated_at > now:
+            continue
+        parcel = repo.get(Parcel, row.parcel_id, scope="fields:read")
+        if parcel is None:
+            continue
+        out.append(recommendation_json(row, parcel, state, _tz(request)))
+    return out
+
+
+@router.get("/recommendations.json")
+def recommendations_json(request: Request, repo: Repo):
+    authorized_review(request, repo)
+    return {"reviews": farm_reviews(request, repo), "accuracy_claim": False}
+
+
+@router.get("/assessments/{advice_id}.json")
+def assessment_state(request: Request, repo: Repo, advice_id: int):
+    authorized_review(request, repo)
+    row, parcel = assessment(repo, advice_id, farm_now(request, repo))
+    return recommendation_json(row, parcel, recommendations.state(repo, row.id), _tz(request))
+
+
+@router.post("/assessments/{advice_id}/request", status_code=201)
+def request_check(request: Request, repo: Repo, advice_id: int, body: CheckRequest):
+    require_farm_owner(request, repo)
+    now = farm_now(request, repo)
+    row, parcel = assessment(repo, advice_id, now)
+    try:
+        state = recommendations.request_check(
+            repo,
+            now,
+            row,
+            parcel,
+            note=body.note.strip(),
+            requested_by=actor_name(request),
+        )
+    except recommendations.ReviewConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    return recommendation_json(row, parcel, state, _tz(request))
+
+
+@router.post("/requests/{request_id}/response", status_code=201)
+def respond_to_request(request: Request, repo: Repo, request_id: int, body: CheckAnswer):
+    require_assigned_advisor(request, repo)
+    if body.opinion not in recommendations.OPINIONS:
+        raise HTTPException(422, "Use agree, disagree or unsure with a note")
+    if not body.note.strip():
+        raise HTTPException(422, "A review note is required")
+    now = farm_now(request, repo)
+    try:
+        asked = recommendations.request(repo, request_id)
+    except recommendations.ReviewNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    row, parcel = assessment(repo, asked.res_id, now)
+    try:
+        state = recommendations.respond(
+            repo,
+            now,
+            row,
+            parcel,
+            asked.id,
+            opinion=body.opinion,
+            note=body.note.strip(),
+            reviewer=actor_name(request),
+        )
+    except recommendations.ReviewNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    except recommendations.ReviewConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    return recommendation_json(row, parcel, state, _tz(request))
+
+
+@router.get("/assessments/{advice_id}/card")
+def assessment_card(request: Request, repo: Repo, advice_id: int):
+    from farmcore.web import render
+
+    authorized_review(request, repo)
+    row, parcel = assessment(repo, advice_id, farm_now(request, repo))
+    return render(
+        request,
+        "review/_check.html",
+        review=recommendation_json(row, parcel, recommendations.state(repo, row.id), _tz(request)),
+        can_request=can_request(request, repo),
+        can_respond=can_respond(request, repo),
+        opinions=recommendations.OPINIONS,
+        opinion_words=recommendations.OPINION_WORDS,
+    )
+
+
+def recommendations_redirect(repo, *, error=None, requested=None):
+    from urllib.parse import urlencode
+
+    from fastapi.responses import RedirectResponse
+
+    values = {"farm": repo.farm_id}
+    if error:
+        values["error"] = error
+    if requested:
+        values["requested"] = requested
+    return RedirectResponse("/review/recommendations/?" + urlencode(values), status_code=303)
+
+
+@router.post("/assessments/{advice_id}/request-form")
+async def request_check_form(request: Request, repo: Repo, advice_id: int):
+    require_farm_owner(request, repo)
+    form = await request.form()
+    note = str(form.get("note", ""))[:2000]
+    now = farm_now(request, repo)
+    try:
+        row, parcel = assessment(repo, advice_id, now)
+        recommendations.request_check(
+            repo,
+            now,
+            row,
+            parcel,
+            note=note.strip(),
+            requested_by=actor_name(request),
+        )
+    except recommendations.ReviewConflict as exc:
+        return recommendations_redirect(repo, error=str(exc))
+    return recommendations_redirect(repo, requested=advice_id)
+
+
+@router.post("/requests/{request_id}/response-form")
+async def respond_to_request_form(request: Request, repo: Repo, request_id: int):
+    require_assigned_advisor(request, repo)
+    form = await request.form()
+    try:
+        respond_to_request(
+            request,
+            repo,
+            request_id,
+            CheckAnswer(
+                opinion=str(form.get("opinion", "")),
+                note=str(form.get("note", "")),
+            ),
+        )
+    except HTTPException as exc:
+        if exc.status_code in (403, 404):
+            raise
+        return recommendations_redirect(repo, error=str(exc.detail))
+    return recommendations_redirect(repo)
+
+
+@router.get("/recommendations/")
+def recommendations_page(request: Request, repo: Repo, error: str | None = None):
+    from farmcore.web import render
+
+    authorized_review(request, repo)
+    return render(
+        request,
+        "review/recommendations.html",
+        reviews=farm_reviews(request, repo),
+        can_respond=can_respond(request, repo),
+        error=error,
+    )
