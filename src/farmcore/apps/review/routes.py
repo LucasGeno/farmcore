@@ -655,10 +655,14 @@ async def respond_to_request_form(request: Request, repo: Repo, request_id: int)
                 note=str(form.get("note", "")),
             ),
         )
-    except HTTPException as exc:
-        if exc.status_code in (403, 404):
-            raise
-        return recommendations_redirect(repo, error=str(exc.detail))
+    except (ValueError, HTTPException) as exc:
+        if isinstance(exc, HTTPException):
+            if exc.status_code in (403, 404):
+                raise
+            error = str(exc.detail)
+        else:
+            error = "Choose an opinion and provide a note"
+        return recommendations_redirect(repo, error=error)
     return recommendations_redirect(repo)
 
 

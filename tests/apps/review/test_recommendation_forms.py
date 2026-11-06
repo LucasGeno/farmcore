@@ -98,3 +98,40 @@ def test_advisor_view_has_no_request_form_and_anonymous_view_has_no_check_block(
         card = visitor.get(f"/advisor/parcels/{parcel_id}", params=params)
         assert card.status_code in (403, 200)
         assert "/review/assessments/" not in card.text
+
+
+def test_an_invalid_form_answer_redirects_with_an_error_and_stays_open(
+    committed_session_factory, settings
+):
+    farm_id, _, advice_id = _farm_with_assessment(committed_session_factory)
+    app = create_app(settings, session_factory=committed_session_factory)
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        params = {"farm": farm_id}
+        asked = _post(
+            owner,
+            f"/review/assessments/{advice_id}/request-form",
+            {"note": "", "csrf_token": _csrf(owner)},
+        )
+        assert asked.status_code == 303
+        page = advisor.get("/review/recommendations/", params=params)
+        request_id = int(re.search(r"/review/requests/(\d+)/response-form", page.text).group(1))
+        for data in (
+            {"opinion": "agree", "note": ""},
+            {"opinion": "agree", "note": "   "},
+            {"opinion": "maybe", "note": "Checked"},
+        ):
+            response = _post(
+                advisor,
+                f"/review/requests/{request_id}/response-form",
+                {**data, "csrf_token": _csrf(advisor)},
+            )
+            assert response.status_code == 303
+            assert "error=" in response.headers["location"]
+        state = owner.get(f"/review/assessments/{advice_id}.json", params=params).json()
+        assert state["open"] is True
+        assert state["response"] is None
