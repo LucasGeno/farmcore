@@ -1,5 +1,6 @@
 """Reviewed agronomic parameter versions; opinions never imply field accuracy."""
 
+from farmcore.apps.review.tools import TOOLS
 from farmcore.core.manifest import Manifest, NavItem
 
 MANIFEST = Manifest(
@@ -18,4 +19,5 @@ MANIFEST = Manifest(
     ),
     nav_group="more",
     nav_order=35,
+    tools=TOOLS,
 )

@@ -66,6 +66,7 @@ ALLOWED = {
     "operations_last_spray",
     "advisor_today",
     "advisor_parcel_status",
+    "review_assessment_status",
     "fields_list_parcels",
     "operations_recent_sprays",
 }
