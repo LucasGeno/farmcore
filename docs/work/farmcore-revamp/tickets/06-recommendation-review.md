@@ -20,10 +20,10 @@ Farmer requests and receives an advisor check. Touchpoints: review app routes/te
 
 ## Acceptance criteria
 
-- [ ] Owner requests review of an exact stored assessment; assigned advisor responds with note and reviewer/time.
-- [ ] Review does not mutate model output or automatically endorse newer assessments.
-- [ ] Golden questions test facts, missing inputs and unauthorized farm requests; deterministic fallback retained.
-- [ ] No automatic training/few-shot ingestion of private feedback; no model-authorized write.
+- [x] Owner requests review of an exact stored assessment; assigned advisor responds with note and reviewer/time.
+- [x] Review does not mutate model output or automatically endorse newer assessments.
+- [x] Golden questions test facts, missing inputs and unauthorized farm requests; deterministic fallback retained.
+- [x] No automatic training/few-shot ingestion of private feedback; no model-authorized write.
 
 ## Execution discipline
 
@@ -31,10 +31,10 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 
 ## Verification
 
-- [ ] `uv run pytest tests/apps/advisor tests/apps/assistant tests/apps/notifications -m "not data"` — focused relevant regression passes. Adapt test directories only when real repo names differ; record exact commands.
-- [ ] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
-- [ ] `uv run alembic heads` — one head after integration.
-- [ ] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
+- [x] `uv run pytest tests/apps/advisor tests/apps/assistant tests/apps/notifications -m "not data"` — focused relevant regression passes. Adapt test directories only when real repo names differ; record exact commands.
+- [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
+- [x] `uv run alembic heads` — one head after integration.
+- [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
 - [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
@@ -85,22 +85,30 @@ TDD observations (working evidence, not final verification):
 Verification commands and results:
 
 - `timeout 600 uv run pytest tests/apps/advisor tests/apps/assistant tests/apps/notifications -m "not data" -q`
-  → `555 passed, 3 skipped, 120 deselected in 133.41s`.
+  → `555 passed, 3 skipped, 120 deselected in 139.83s` (final tip re-run).
 - `timeout 600 uv run pytest tests/apps/review tests/core -m "not data" -q`
-  → `794 passed, 2 deselected in 261.70s`.
+  → `796 passed, 2 deselected in 273.02s` (final tip re-run).
 - `uv run ruff check src tests` → pass; `uv run ruff format --check src tests` → `509 files
   already formatted`.
 - `uv run alembic heads` → `review_0001 (head)` (one head; no revision authored here).
+- `timeout 300 node --test tests/core/*.mjs tests/apps/fields/*.mjs` → `32 pass, 0 fail`.
+- Full non-data/non-slow regression through
+  `~/.local/bin/fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD --`
+  split into two shards because one pytest process exceeds the required 600 s cap:
+  `timeout 600 uv run pytest -q tests/core -m 'not data and not slow'` →
+  `746 passed, 2 deselected in 232.87s`; `timeout 600 uv run pytest -q tests/apps -m 'not data
+  and not slow'` → `1985 passed, 3 skipped, 262 deselected in 415.97s`. Both `EXIT=0`.
+- The first combined run was stopped by the 600 s per-pytest cap at 87 % (not a pass); the
+  split run above is the green result. It exposed one stale contract test: the assistant tool
+  registry expected six tools; `review_assessment_status` is now the seventh and the expectation
+  was updated (`tests/apps/chat/assistant/test_collect_tools.py`).
 
 Tier 3 failure model for the auth/concurrency/public-contract slice: a stale or revoked
 membership must fail closed on the next request; two answers must never create two opinions; a
 foreign numeric id must resolve to nothing, not to another farm's row; a logs-only consent must
 not read advice-review notes; a model-chosen tool must not write. Covered by
 `test_recommendation_review.py` (roles, CSRF, foreign/future ids, revocation, concurrent answers),
-`test_scope_policy.py`, and `test_recommendation_golden.py`; mutation fallback recorded below once
-the full gate returns.
-
-Full non-data/non-slow regression is running through `fleet-build` (see final evidence).
+`test_scope_policy.py`, and `test_recommendation_golden.py`; manual mutants below.
 
 Manual mutants (each planted in source, focused tests rerun, original source restored; `git diff`
 clean afterwards):
