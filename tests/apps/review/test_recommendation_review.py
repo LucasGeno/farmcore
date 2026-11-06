@@ -448,9 +448,11 @@ def test_a_review_never_follows_a_newer_assessment(committed_session_factory, se
         ).json()
         assert newer_state["request"] is None
         assert newer_state["response"] is None
+        assert newer_state["current"] is True
         older_state = owner.get(
             f"/review/assessments/{advice_id}.json", params={"farm": farm_id}
         ).json()
         assert older_state["response"]["note"] == "First answer"
+        assert older_state["current"] is False
         listed = owner.get("/review/recommendations.json", params={"farm": farm_id}).json()
         assert [r["advice_id"] for r in listed["reviews"]] == [advice_id]

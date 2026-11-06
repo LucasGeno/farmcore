@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import distinct_on
 
 from farmcore.apps.review import recommendations, service
 from farmcore.apps.review.models import ParameterActivation, ParameterReview, ParameterVersion
@@ -399,7 +400,7 @@ def _label(value: str, tz: str) -> str:
     return datetime.fromisoformat(value).astimezone(ZoneInfo(tz)).strftime(LOCAL_FORMAT)
 
 
-def recommendation_json(advice, parcel, state, tz: str):
+def recommendation_json(advice, parcel, state, tz: str, *, current: bool):
     def request_payload(event):
         payload = event.payload or {}
         at = event.occurred_at.isoformat()
@@ -436,14 +437,30 @@ def recommendation_json(advice, parcel, state, tz: str):
         "request": request_payload(state.request) if state.request else None,
         "response": response_payload(state.response) if state.response else None,
         "open": state.open,
+        "current": current,
         "accuracy_claim": False,
         "model_output_unchanged": True,
+    }
+
+
+def latest_advice_ids(repo: Repo, now):
+    """parcel id -> the latest stored assessment up to the clock, in one farm-scoped read."""
+    stmt = (
+        select(Advice)
+        .where(Advice.farm_id == repo.farm_id, Advice.evaluated_at <= now)
+        .order_by(Advice.parcel_id, Advice.evaluated_at.desc(), Advice.id.desc())
+        .ext(distinct_on(Advice.parcel_id))
+    )
+    return {
+        row.parcel_id: row.id
+        for row in repo.execute(stmt, scope="advice:read", resource="advice").scalars()
     }
 
 
 def farm_reviews(request: Request, repo: Repo):
     """Resolve each request/answer event to its stored assessment, newest request first."""
     now = farm_now(request, repo)
+    latest = latest_advice_ids(repo, now)
     out = []
     for state in recommendations.states(repo):
         row = repo.get(Advice, state.advice_id, scope="advice:read")
@@ -452,7 +469,11 @@ def farm_reviews(request: Request, repo: Repo):
         parcel = repo.get(Parcel, row.parcel_id, scope="fields:read")
         if parcel is None:
             continue
-        out.append(recommendation_json(row, parcel, state, _tz(request)))
+        out.append(
+            recommendation_json(
+                row, parcel, state, _tz(request), current=latest.get(row.parcel_id) == row.id
+            )
+        )
     return out
 
 
@@ -465,8 +486,16 @@ def recommendations_json(request: Request, repo: Repo):
 @router.get("/assessments/{advice_id}.json")
 def assessment_state(request: Request, repo: Repo, advice_id: int):
     authorized_review(request, repo)
-    row, parcel = assessment(repo, advice_id, farm_now(request, repo))
-    return recommendation_json(row, parcel, recommendations.state(repo, row.id), _tz(request))
+    now = farm_now(request, repo)
+    row, parcel = assessment(repo, advice_id, now)
+    latest = latest_advice_ids(repo, now)
+    return recommendation_json(
+        row,
+        parcel,
+        recommendations.state(repo, row.id),
+        _tz(request),
+        current=latest.get(row.parcel_id) == row.id,
+    )
 
 
 @router.post("/assessments/{advice_id}/request", status_code=201)
@@ -485,7 +514,10 @@ def request_check(request: Request, repo: Repo, advice_id: int, body: CheckReque
         )
     except recommendations.ReviewConflict as exc:
         raise HTTPException(409, str(exc)) from None
-    return recommendation_json(row, parcel, state, _tz(request))
+    latest = latest_advice_ids(repo, now)
+    return recommendation_json(
+        row, parcel, state, _tz(request), current=latest.get(row.parcel_id) == row.id
+    )
 
 
 @router.post("/requests/{request_id}/response", status_code=201)
@@ -516,7 +548,10 @@ def respond_to_request(request: Request, repo: Repo, request_id: int, body: Chec
         raise HTTPException(404, str(exc)) from None
     except recommendations.ReviewConflict as exc:
         raise HTTPException(409, str(exc)) from None
-    return recommendation_json(row, parcel, state, _tz(request))
+    latest = latest_advice_ids(repo, now)
+    return recommendation_json(
+        row, parcel, state, _tz(request), current=latest.get(row.parcel_id) == row.id
+    )
 
 
 @router.get("/assessments/{advice_id}/card")
@@ -524,11 +559,19 @@ def assessment_card(request: Request, repo: Repo, advice_id: int):
     from farmcore.web import render
 
     authorized_review(request, repo)
-    row, parcel = assessment(repo, advice_id, farm_now(request, repo))
+    now = farm_now(request, repo)
+    row, parcel = assessment(repo, advice_id, now)
+    latest = latest_advice_ids(repo, now)
     return render(
         request,
         "review/_check.html",
-        review=recommendation_json(row, parcel, recommendations.state(repo, row.id), _tz(request)),
+        review=recommendation_json(
+            row,
+            parcel,
+            recommendations.state(repo, row.id),
+            _tz(request),
+            current=latest.get(row.parcel_id) == row.id,
+        ),
         can_request=can_request(request, repo),
         can_respond=can_respond(request, repo),
         opinions=recommendations.OPINIONS,
@@ -553,7 +596,9 @@ def recommendations_redirect(repo, *, error=None, requested=None):
 async def request_check_form(request: Request, repo: Repo, advice_id: int):
     require_farm_owner(request, repo)
     form = await request.form()
-    note = str(form.get("note", ""))[:2000]
+    note = str(form.get("note", ""))
+    if len(note) > 2000:
+        return recommendations_redirect(repo, error="Keep the request under 2000 characters")
     now = farm_now(request, repo)
     try:
         row, parcel = assessment(repo, advice_id, now)

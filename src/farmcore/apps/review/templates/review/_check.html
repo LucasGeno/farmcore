@@ -36,5 +36,5 @@
   </form>
   {% endif %}
   {% endif %}
-  <p class="mt-2 text-[13px] text-muted">This request is tied to the saved check at {{ review.evaluated_label }}; a later evaluation is a different check.</p>
+  <p class="mt-2 text-[13px] text-muted">This review is tied to the saved check at {{ review.evaluated_label }}; a later evaluation is a different check.{% if not review.current %} A newer saved check exists for this parcel, and this review does not apply to it.{% endif %}</p>
 </section>

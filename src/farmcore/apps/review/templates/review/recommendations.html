@@ -13,7 +13,7 @@
     <h2 class="text-lg font-semibold">{{ review.parcel.alias }} · {{ review.parcel.name }}</h2>
     {% if ans %}{{ pill("Answered", "ok") }}{% else %}{{ pill("Awaiting advisor", "warn") }}{% endif %}
   </div>
-  <p class="mt-2 text-sm text-muted">Saved check {{ review.evaluated_label }} · decision {{ review.decision }} · {{ review.headline or review.assessment_status }}. <a class="underline underline-offset-2" href="{{ farm_url('/advisor/parcels/' ~ review.parcel.id) }}">Open the advice card</a></p>
+  <p class="mt-2 text-sm text-muted">Saved check {{ review.evaluated_label }} · decision {{ review.decision }} · {{ review.headline or review.assessment_status }}.{% if not review.current %} A newer check exists for this parcel; this review applies only to the saved check above.{% endif %} <a class="underline underline-offset-2" href="{{ farm_url('/advisor/parcels/' ~ review.parcel.id) }}">Open the advice card</a></p>
   {% if req %}
   <p class="mt-3">Requested by <strong>{{ req.requested_by }}</strong> · {{ req.requested_label }}</p>
   {% if req.note %}<p class="mt-1 break-words">“{{ req.note }}”</p>{% endif %}
