@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Confirm field observations and irrigation facts"
 description: "Milestones 1–4: confirm field observations and irrigation facts."
-status: approved
+status: in-progress
 blocked_by: ["09"]
 ---
 
@@ -38,5 +38,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
+
+Claim 2026-11-06 18:55 CET: implementer `fc10-deepseek` (OpenCode Go `opencode-go/deepseek-v4.1-flash`, M1), worktree `~/dev/farmcore-worktrees/10-broader-capture`, branch `feat/10-broader-capture`. Coordinator and migration author: `fleet-head-opus` (M1). Reviewer: Dell Codex. Stuck deadline 2026-11-07 07:00 CET.
 
 Pending implementation.
