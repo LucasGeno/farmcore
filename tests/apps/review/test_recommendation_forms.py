@@ -37,7 +37,9 @@ def test_owner_requests_from_the_card_and_advisor_answers_from_the_list(
         card = owner.get(f"/advisor/parcels/{parcel_id}", params=params)
         assert card.status_code == 200
         assert f"/review/assessments/{advice_id}/card" in card.text
-        # No-JS fallback: a full page with the same request form.
+        # No-JS fallback: the fragment is hidden and a plain link remains.
+        assert "fc-script-only { display: none; }" in card.text
+        # A full page with the same request form.
         assert f'href="/review/assessments/{advice_id}?farm={farm_id}"' in card.text
         full = owner.get(f"/review/assessments/{advice_id}", params=params)
         assert full.status_code == 200
