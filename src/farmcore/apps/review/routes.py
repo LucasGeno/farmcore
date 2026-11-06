@@ -462,7 +462,7 @@ def farm_reviews(request: Request, repo: Repo):
     now = farm_now(request, repo)
     latest = latest_advice_ids(repo, now)
     out = []
-    for state in recommendations.states(repo):
+    for state in recommendations.states(repo, now):
         row = repo.get(Advice, state.advice_id, scope="advice:read")
         if row is None or row.evaluated_at > now:
             continue
@@ -492,7 +492,7 @@ def assessment_state(request: Request, repo: Repo, advice_id: int):
     return recommendation_json(
         row,
         parcel,
-        recommendations.state(repo, row.id),
+        recommendations.state(repo, now, row.id),
         _tz(request),
         current=latest.get(row.parcel_id) == row.id,
     )
@@ -529,7 +529,7 @@ def respond_to_request(request: Request, repo: Repo, request_id: int, body: Chec
         raise HTTPException(422, "A review note is required")
     now = farm_now(request, repo)
     try:
-        asked = recommendations.request(repo, request_id)
+        asked = recommendations.request(repo, now, request_id)
     except recommendations.ReviewNotFound as exc:
         raise HTTPException(404, str(exc)) from None
     row, parcel = assessment(repo, asked.res_id, now)
@@ -569,7 +569,7 @@ def assessment_page(request: Request, repo: Repo, advice_id: int):
         review=recommendation_json(
             row,
             parcel,
-            recommendations.state(repo, row.id),
+            recommendations.state(repo, now, row.id),
             _tz(request),
             current=latest.get(row.parcel_id) == row.id,
         ),
@@ -594,7 +594,7 @@ def assessment_card(request: Request, repo: Repo, advice_id: int):
         review=recommendation_json(
             row,
             parcel,
-            recommendations.state(repo, row.id),
+            recommendations.state(repo, now, row.id),
             _tz(request),
             current=latest.get(row.parcel_id) == row.id,
         ),

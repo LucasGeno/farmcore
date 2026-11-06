@@ -1,7 +1,8 @@
 """One read-only assistant tool: has an assigned advisor checked this saved assessment?
 
 It quotes the stored review events for the parcel's latest advice row: reviewer, farm clock time,
-opinion and note. It never writes, never decides and never turns a review into a treatment.
+opinion and note. Only an owner/advisor context reads them; an anonymous, tour, grant-only or bot
+context gets no note. It never writes, never decides and never turns a review into a treatment.
 """
 
 from __future__ import annotations
@@ -62,6 +63,12 @@ def status(ctx: ToolContext, parcel: str = "") -> ToolResult:
         return fields_tools.unknown_parcel(ctx)
     label = fields_tools.label(found)
     links = ((f"Open card {found.alias}", CARD.format(id=found.id)),)
+    if not (ctx.is_admin or ctx.member_role in ("owner", "advisor")):
+        return ToolResult(
+            {"parcel": label, "available": False},
+            "Advisor review notes are available to this farm's owner or assigned advisor.",
+            links,
+        )
     row = advisor.latest_advice(ctx.repo, ctx.now, tz=ctx.tz.key, parcel_id=found.id).get(found.id)
     if row is None:
         text = (
@@ -75,7 +82,7 @@ def status(ctx: ToolContext, parcel: str = "") -> ToolResult:
 
     props = row.props or {}
     status = props.get("assessment_status", "legacy-unknown")
-    state = recommendations.state(ctx.repo, row.id)
+    state = recommendations.state(ctx.repo, ctx.now, row.id)
     asked, answered = state.request, state.response
     asked_payload = (asked.payload or {}) if asked else {}
     answer = (answered.payload or {}) if answered else {}

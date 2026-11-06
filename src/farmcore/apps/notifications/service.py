@@ -163,7 +163,7 @@ def review_items(repo, now, tz):
     from farmcore.apps.review import recommendations
 
     try:
-        states = recommendations.states(repo)
+        states = recommendations.states(repo, now)
     except ScopeDenied:
         return []
     href = with_farm("/review/recommendations/", repo.farm_id)

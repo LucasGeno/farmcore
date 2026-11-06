@@ -485,3 +485,85 @@ def test_the_review_list_puts_the_newest_request_first(committed_session_factory
         assert _request_check(owner, farm_id, second_advice).status_code == 201
         listed = owner.get("/review/recommendations.json", params={"farm": farm_id}).json()
         assert [r["advice_id"] for r in listed["reviews"]] == [second_advice, first_advice]
+
+
+def test_review_events_are_bounded_by_the_farm_clock(committed_session_factory, settings):
+    """Rewinding the clock hides later requests/answers and a later open request cannot block."""
+    from datetime import timedelta
+
+    from farmcore.apps.review import recommendations
+    from farmcore.core.access import ScopedRepository, ensure_owner_grant
+    from farmcore.core.models.canonical import Farm
+
+    farm_id, _, first_advice = _farm_with_assessment(committed_session_factory)
+    with committed_session_factory.begin() as session:
+        from tests.apps.share.conftest import make_parcel
+
+        farm = session.get(Farm, farm_id)
+        parcel = make_parcel(session, farm, 2)
+        second = Advice(
+            farm_id=farm_id,
+            parcel_id=parcel.id,
+            evaluated_at=NOW,
+            decision="none",
+            reasons=[],
+            products=[],
+            props={"headline": "Second stored check"},
+        )
+        session.add(second)
+        session.flush()
+        second_advice = second.id
+        first = session.get(Advice, first_advice)
+        first_parcel = session.get(type(parcel), first.parcel_id)
+        repo = ScopedRepository(
+            session, farm_id, ensure_owner_grant(session, farm), "owner", "test"
+        )
+        mid = NOW + timedelta(minutes=30)
+        later = NOW + timedelta(hours=2)
+        seen = recommendations.request_check(
+            repo, mid, first, first_parcel, note="Mid request", requested_by="owner"
+        )
+        recommendations.respond(
+            repo,
+            later,
+            first,
+            first_parcel,
+            seen.request.id,
+            opinion="agree",
+            note="Later answer",
+            reviewer="expert",
+        )
+        future = recommendations.request_check(
+            repo,
+            later,
+            second,
+            parcel,
+            note="Future request",
+            requested_by="owner",
+        )
+        assert future.open
+    app = create_app(settings, session_factory=committed_session_factory)
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        with committed_session_factory.begin() as session:
+            set_replay(session, NOW + timedelta(hours=1))
+        first_state = _state(owner, farm_id, first_advice).json()
+        assert first_state["request"]["note"] == "Mid request"
+        assert first_state["response"] is None  # the later answer is hidden
+        second_state = _state(owner, farm_id, second_advice).json()
+        assert second_state["request"] is None  # the future request is hidden
+        # A later open request must not block a request made at this clock time.
+        assert _request_check(owner, farm_id, second_advice, "Present request").status_code == 201
+        with committed_session_factory() as session:
+            from farmcore.core.models.canonical import Event
+
+            assert (
+                session.query(Event)
+                .filter(Event.kind.in_(("advice.review_requested", "advice.reviewed")))
+                .count()
+                == 4
+            )

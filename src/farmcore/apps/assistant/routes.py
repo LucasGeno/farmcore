@@ -52,6 +52,7 @@ from farmcore.core.models.canonical import Farm
 from farmcore.core.registry import visible_manifests
 from farmcore.core.routes_clock import require_admin
 from farmcore.core.tools import ToolContext, ToolResult, call_tool, collect_tools
+from farmcore.core.tour import is_tour
 from farmcore.core.urls import with_farm
 from farmcore.web import is_admin, templates
 
@@ -106,13 +107,30 @@ def ask(
         private_member=repo.private_member,
     )
     settings = request.app.state.settings
+    from farmcore.core.identity import principal_for
+
+    principal = principal_for(request)
+    member_role = (
+        principal.memberships.get(repo.farm_id) if principal and not is_tour(request) else None
+    )
     ctx = ToolContext(
-        scoped, get_clock(repo.session, settings).now(), ZoneInfo(settings.display_tz)
+        scoped,
+        get_clock(repo.session, settings).now(),
+        ZoneInfo(settings.display_tz),
+        member_role=member_role,
+        is_admin=is_admin(request),
     )
     generation = epoch(repo.session)
     key = _conversation_key(request, repo, token, conversation)
     history = conversations.load(request.app, key, generation)
-    tools = [t for t in collect_tools(manifests) if t.name in ALLOWED and t.scope.endswith(":read")]
+    review_reader = is_admin(request) or member_role in ("owner", "advisor")
+    tools = [
+        t
+        for t in collect_tools(manifests)
+        if t.name in ALLOWED
+        and t.scope.endswith(":read")
+        and (t.name != "review_assessment_status" or review_reader)
+    ]
     if any(m.name == "forecast" for m in manifests):
         tools.append(PLAN)
     has_fields = any(m.name == "fields" for m in manifests)

@@ -6,7 +6,8 @@ event log is already the farm's append-only audit trail, so no new table is need
 
 Reads go through `repo.execute(..., scope="advice:read", resource="recommendation_review")`:
 the note is advice-review material, so a consent limited to records (`logs:read`) cannot read it
-by naming the generic `event` table.
+by naming the generic `event` table. Every read is bounded by the farm clock: replaying an earlier
+time never shows a later request or answer.
 """
 
 from __future__ import annotations
@@ -53,11 +54,13 @@ class ReviewState:
         return self.request is not None and self.response is None
 
 
-def _events(repo: ScopedRepository, advice_id: int | None = None) -> list[Event]:
+def _events(repo: ScopedRepository, now: datetime, advice_id: int | None = None) -> list[Event]:
+    """Review events this farm has up to the farm clock; later ones are not visible yet."""
     where = [
         Event.farm_id == repo.farm_id,
         Event.res_model == "advice",
         Event.kind.in_(KINDS),
+        Event.occurred_at <= now,
     ]
     if advice_id is not None:
         where.append(Event.res_id == advice_id)
@@ -69,7 +72,8 @@ def _state_from(events: list[Event], advice_id: int) -> ReviewState:
     requests = [e for e in events if e.kind == REQUEST_KIND and e.res_id == advice_id]
     if not requests:
         return ReviewState(advice_id, None, None)
-    request = requests[-1]
+    # Farm time, not insertion order: a replayed clock may have written events out of order.
+    request = max(requests, key=lambda e: (e.occurred_at, e.id))
     answered = [
         e
         for e in events
@@ -77,30 +81,35 @@ def _state_from(events: list[Event], advice_id: int) -> ReviewState:
         and e.res_id == advice_id
         and (e.payload or {}).get("request_id") == request.id
     ]
-    return ReviewState(advice_id, request, answered[-1] if answered else None)
+    return ReviewState(
+        advice_id,
+        request,
+        max(answered, key=lambda e: (e.occurred_at, e.id)) if answered else None,
+    )
 
 
-def state(repo: ScopedRepository, advice_id: int) -> ReviewState:
-    return _state_from(_events(repo, advice_id), advice_id)
+def state(repo: ScopedRepository, now: datetime, advice_id: int) -> ReviewState:
+    return _state_from(_events(repo, now, advice_id), advice_id)
 
 
-def states(repo: ScopedRepository) -> list[ReviewState]:
-    """Every reviewed or requested assessment on this farm, newest request first."""
-    events = _events(repo)
+def states(repo: ScopedRepository, now: datetime) -> list[ReviewState]:
+    """Every reviewed or requested assessment visible at the farm clock, newest request first."""
+    events = _events(repo, now)
     found = [_state_from(events, advice_id) for advice_id in {e.res_id for e in events}]
     return sorted(
         (state for state in found if state.request is not None),
-        key=lambda state: state.request.id,
+        key=lambda state: (state.request.occurred_at, state.request.id),
         reverse=True,
     )
 
 
-def request(repo: ScopedRepository, request_id: int) -> Event:
+def request(repo: ScopedRepository, now: datetime, request_id: int) -> Event:
     stmt = select(Event).where(
         Event.farm_id == repo.farm_id,
         Event.id == request_id,
         Event.res_model == "advice",
         Event.kind == REQUEST_KIND,
+        Event.occurred_at <= now,
     )
     event = repo.execute(stmt, scope=SCOPE, resource=RESOURCE).scalar_one_or_none()
     if event is None:
@@ -118,7 +127,7 @@ def request_check(
     requested_by: str,
 ) -> ReviewState:
     """Ask an assigned advisor about this exact saved row; one open request at a time."""
-    current = state(repo, advice.id)
+    current = state(repo, now, advice.id)
     if current.open:
         raise ReviewConflict("This saved check already awaits an advisor")
     event = post_event(
@@ -159,12 +168,12 @@ def respond(
     reviewer: str,
 ) -> ReviewState:
     """The assigned advisor's opinion and note on one request; an answer is final."""
-    asked = request(repo, request_id)
+    asked = request(repo, now, request_id)
     if asked.res_id != advice.id:
         raise ReviewNotFound("Advisor check unavailable")
     answered = any(
         event.kind == RESPONSE_KIND and (event.payload or {}).get("request_id") == asked.id
-        for event in _events(repo, advice.id)
+        for event in _events(repo, now, advice.id)
     )
     if answered:
         raise ReviewConflict("This advisor check already has an answer")

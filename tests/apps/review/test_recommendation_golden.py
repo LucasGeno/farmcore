@@ -183,3 +183,137 @@ def test_questions_never_write_a_review_or_feed_one_back(committed_session_facto
         assert not any(
             word in tool.name for tool in TOOLS for word in ("request", "answer", "approve")
         )
+
+
+def test_anonymous_demo_visitor_cannot_read_the_review_note(committed_session_factory, settings):
+    farm_id, _, advice_id = _farm_with_assessment(committed_session_factory)
+    app = create_app(settings, session_factory=committed_session_factory)
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        request_id = _request_check(owner, farm_id, advice_id).json()["request"]["id"]
+        assert _answer(advisor, farm_id, request_id, "Private advisor note").status_code == 201
+    demo = settings.model_copy(update={"demo_mode": True, "demo_farm_ids": [farm_id]})
+    with TestClient(
+        create_app(demo, session_factory=committed_session_factory), base_url="https://testserver"
+    ) as visitor:
+        # Anonymous demo reads of ordinary farm facts still work...
+        assert visitor.get("/advisor/", params={"farm": farm_id}).status_code == 200
+        # ...but the private human review does not travel through the assistant or the routes.
+        asked = visitor.get(
+            "/assistant/ask", params={"q": "Has an advisor reviewed P1?", "farm": farm_id}
+        )
+        assert asked.status_code == 200
+        body = asked.json()
+        assert body["tool"] != "review_assessment_status"
+        assert "Private advisor note" not in str(body)
+        assert "expert" not in str(body.get("facts"))
+        for path in (
+            f"/review/assessments/{advice_id}.json",
+            f"/review/assessments/{advice_id}/card",
+            f"/review/assessments/{advice_id}",
+            "/review/recommendations.json",
+            "/review/recommendations/",
+        ):
+            denied = visitor.get(path, params={"farm": farm_id})
+            assert denied.status_code == 403, path
+            assert "Private advisor note" not in denied.text
+
+
+def test_a_member_of_another_farm_cannot_read_the_review(committed_session_factory, settings):
+    farm_id, _, advice_id = _farm_with_assessment(committed_session_factory)
+    other_id, _, _ = _farm_with_assessment(
+        committed_session_factory, owner="other-owner", advisor="other-advisor"
+    )
+    app = create_app(settings, session_factory=committed_session_factory)
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+        TestClient(app, base_url="https://testserver") as other,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        assert _login(other, login="other-owner").status_code == 303
+        request_id = _request_check(owner, farm_id, advice_id).json()["request"]["id"]
+        assert _answer(advisor, farm_id, request_id, "Private advisor note").status_code == 201
+        asked = other.get(
+            "/assistant/ask", params={"q": "Has an advisor reviewed P1?", "farm": farm_id}
+        )
+        assert asked.status_code == 403
+        assert "Private advisor note" not in asked.text
+        for path in (
+            f"/review/assessments/{advice_id}.json",
+            f"/review/assessments/{advice_id}/card",
+            f"/review/assessments/{advice_id}",
+            "/review/recommendations/",
+        ):
+            assert other.get(path, params={"farm": farm_id}).status_code == 403, path
+        assert (
+            other.get(
+                "/assistant/ask", params={"q": "Has an advisor reviewed P1?", "farm": other_id}
+            ).status_code
+            == 200
+        )
+
+
+def test_tour_mode_never_authorises_a_review_read(committed_session_factory, settings):
+    farm_id, _, advice_id = _farm_with_assessment(committed_session_factory)
+    app = create_app(settings, session_factory=committed_session_factory)
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        request_id = _request_check(owner, farm_id, advice_id).json()["request"]["id"]
+        assert _answer(advisor, farm_id, request_id, "Private advisor note").status_code == 201
+        owner.cookies.set("farmcore_tour", "1")
+        asked = owner.get(
+            "/assistant/ask", params={"q": "Has an advisor reviewed P1?", "farm": farm_id}
+        )
+        assert asked.status_code == 200
+        assert asked.json()["tool"] != "review_assessment_status"
+        assert "Private advisor note" not in asked.text
+        assert "Private advisor note" not in str(asked.json().get("facts"))
+        assert (
+            owner.get(f"/review/assessments/{advice_id}.json", params={"farm": farm_id}).status_code
+            == 403
+        )
+
+
+def test_the_review_tool_itself_denies_a_context_without_a_member(
+    committed_session_factory, settings
+):
+    """Defence in depth: even a direct tool call from a bot/anonymous context gets no note."""
+    from zoneinfo import ZoneInfo
+
+    from farmcore.apps.review import tools as review_tools
+    from farmcore.core.access import ScopedRepository, ensure_owner_grant
+    from farmcore.core.clock import get_clock
+
+    farm_id, _, advice_id = _farm_with_assessment(committed_session_factory)
+    app = create_app(settings, session_factory=committed_session_factory)
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        request_id = _request_check(owner, farm_id, advice_id).json()["request"]["id"]
+        assert _answer(advisor, farm_id, request_id, "Private advisor note").status_code == 201
+    with committed_session_factory() as session:
+        from farmcore.core.models.canonical import Farm
+        from farmcore.core.tools import ToolContext
+
+        farm = session.get(Farm, farm_id)
+        repo = ScopedRepository(
+            session, farm_id, ensure_owner_grant(session, farm), "web:assistant", "assistant"
+        )
+        ctx = ToolContext(repo, get_clock(session, settings).now(), ZoneInfo(settings.display_tz))
+        result = review_tools.status(ctx, parcel="P1")
+        assert result.facts["available"] is False
+        assert "Private advisor note" not in result.text
+        assert "expert" not in result.text
