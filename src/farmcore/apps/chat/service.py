@@ -7,6 +7,7 @@ replayed "this morning" lands on the replay day.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -18,7 +19,14 @@ from farmcore.apps.chat.extractor import (
     ParcelRef,
     ProductRef,
 )
-from farmcore.apps.chat.extractor.base import DOSE_UNITS, NOTE_TIME_CLAMPED, fold
+from farmcore.apps.chat.extractor.base import (
+    DOSE_UNITS,
+    IRRIGATION_BASES,
+    IRRIGATION_UNITS,
+    NOTE_TIME_CLAMPED,
+    fold,
+)
+from farmcore.apps.operations import facts
 from farmcore.apps.operations.catalogue import products_for_farm
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.canonical import Log, Parcel
@@ -27,6 +35,10 @@ from farmcore.core.models.canonical import Log, Parcel
 # logging a mis-heard number.
 DOSE_MIN = 0.1
 DOSE_MAX = 20.0
+# `conversation.MAX_CHARS` bounds the transcript; an observation keeps that bound in props.
+MAX_OBSERVATION_CHARS = 2000
+# The echo truncates a long observation; the record keeps it whole.
+OBSERVATION_SUMMARY_CHARS = 160
 # Note prefixes the extractor's `finalize` writes for names it could not match (06's seam).
 NOTE_UNKNOWN_PARCEL = "dropped unknown parcel:"
 NOTE_UNKNOWN_PRODUCT = "dropped unknown product:"
@@ -109,6 +121,27 @@ class CheckedSpray:
     product_doses: tuple[tuple[ProductInfo, float, str], ...] = ()
 
 
+@dataclass(frozen=True)
+class CheckedIrrigation:
+    parcels: list[ParcelInfo]
+    amount_value: float
+    amount_unit: str
+    basis: str | None
+    ts_start: datetime
+    notes: list[str]
+
+
+@dataclass(frozen=True)
+class CheckedObservation:
+    parcels: list[ParcelInfo]
+    text: str
+    ts_start: datetime
+    notes: list[str]
+
+
+Checked = CheckedSpray | CheckedIrrigation | CheckedObservation
+
+
 class Unclear(ValueError):
     """The draft cannot become a log; `reply` asks the farmer for what is missing."""
 
@@ -130,24 +163,59 @@ def _product_list(ctx: FarmContext) -> str:
     return f"Products on your list: {names}."
 
 
-def check(draft: DraftOperation, ctx: FarmContext) -> CheckedSpray:
-    """Map the draft onto the farm's parcels and shortlist, clamp its start to now, and check
-    the dose; raise `Unclear` with a clarifying reply when it cannot be logged."""
+def check(draft: DraftOperation, ctx: FarmContext) -> Checked:
+    """Map the draft onto the farm, clamp its start to now, and check what its type needs;
+    raise `Unclear` with a clarifying reply when it cannot be logged."""
+    if draft.type == "irrigate":
+        return _check_irrigation(draft, ctx)
+    if draft.type == "observation":
+        return _check_observation(draft, ctx)
+    if draft.type != "spray":
+        raise Unclear("I can only record a spray, an irrigation or a field observation.")
+    return _check_spray(draft, ctx)
+
+
+def _parcel_question(kind: str) -> str:
+    if kind == "irrigate":
+        return "Which parcel did you irrigate?"
+    if kind == "observation":
+        return "Which parcel is this about?"
+    return "Which parcel did you spray?"
+
+
+def _checked_parcels(draft: DraftOperation, ctx: FarmContext, kind: str) -> list[ParcelInfo]:
     by_alias = {fold(p.alias): p for p in ctx.parcels}
     by_alias.update({fold(p.name): p for p in ctx.parcels})
-    by_name = {fold(p.name): p for p in ctx.products}
     notes = list(draft.notes)
-
-    unknown_parcels = _dropped(notes, NOTE_UNKNOWN_PARCEL)
-    unknown_parcels += [a for a in draft.parcels if fold(a) not in by_alias]
-    if unknown_parcels:
+    unknown = _dropped(notes, NOTE_UNKNOWN_PARCEL)
+    unknown += [a for a in draft.parcels if fold(a) not in by_alias]
+    if unknown:
         raise Unclear(
-            f"I don't know parcel {', '.join(dict.fromkeys(unknown_parcels))}. "
-            f"{_parcel_list(ctx)} Which parcel did you spray?"
+            f"I don't know parcel {', '.join(dict.fromkeys(unknown))}. "
+            f"{_parcel_list(ctx)} {_parcel_question(kind)}"
         )
     parcels = list(dict.fromkeys(by_alias[fold(a)] for a in draft.parcels))
     if not parcels:
-        raise Unclear(f"Which parcel did you spray? {_parcel_list(ctx)}")
+        raise Unclear(f"{_parcel_question(kind)} {_parcel_list(ctx)}")
+    return parcels
+
+
+def _checked_ts(draft: DraftOperation, ctx: FarmContext, notes: list[str]) -> datetime:
+    ts = draft.ts_start or ctx.now_local
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=ctx.tz)
+    if ts > ctx.now_utc:  # a draft never starts after the clock's now
+        ts = ctx.now_utc
+        if NOTE_TIME_CLAMPED not in notes:
+            notes.append(NOTE_TIME_CLAMPED)
+    return ts.astimezone(ctx.now_utc.tzinfo)
+
+
+def _check_spray(draft: DraftOperation, ctx: FarmContext) -> CheckedSpray:
+    """The existing spray path: parcels, shortlist products, dose and start time."""
+    by_name = {fold(p.name): p for p in ctx.products}
+    notes = list(draft.notes)
+    parcels = _checked_parcels(draft, ctx, "spray")
 
     unknown_products = _dropped(notes, NOTE_UNKNOWN_PRODUCT)
     unknown_products += [n for n in draft.products if fold(n) not in by_name]
@@ -180,21 +248,65 @@ def check(draft: DraftOperation, ctx: FarmContext) -> CheckedSpray:
 
     if not rates:
         rates = [(product, float(draft.dose_value), draft.dose_unit) for product in products]
-    ts = draft.ts_start or ctx.now_local
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=ctx.tz)
-    if ts > ctx.now_utc:  # a draft never starts after the clock's now
-        ts = ctx.now_utc
-        if NOTE_TIME_CLAMPED not in notes:
-            notes.append(NOTE_TIME_CLAMPED)
     return CheckedSpray(
         parcels=parcels,
         products=products,
         dose_value=rates[0][1],
         dose_unit=rates[0][2],
-        ts_start=ts.astimezone(ctx.now_utc.tzinfo),
+        ts_start=_checked_ts(draft, ctx, notes),
         notes=notes,
         product_doses=tuple(rates),
+    )
+
+
+def _check_irrigation(draft: DraftOperation, ctx: FarmContext) -> CheckedIrrigation:
+    """Parcels, an explicit amount and unit, and the gross/net basis only when stated. No unit
+    conversion and no efficiency: a net amount is never turned into a gross one."""
+    notes = list(draft.notes)
+    parcels = _checked_parcels(draft, ctx, "irrigate")
+    unit = (draft.amount_unit or "").strip()
+    if unit.casefold() in ("l", "litre", "liter", "litres", "liters"):
+        unit = "L"
+    if (
+        draft.amount_value is None
+        or not math.isfinite(draft.amount_value)
+        or draft.amount_value <= 0
+        or not unit
+    ):
+        raise Unclear(
+            "How much water, and in which unit? Say the amount with mm, m3 or L, "
+            'for example "20 mm".'
+        )
+    if unit not in IRRIGATION_UNITS:
+        raise Unclear(
+            "I only record irrigation in mm, m3 or L. Say the amount with one of those units, "
+            "as it was entered."
+        )
+    basis = (draft.basis or "").strip().casefold() or None
+    if basis is not None and basis not in IRRIGATION_BASES:
+        raise Unclear('Was that gross or net? Say "gross" or "net"; I never assume an efficiency.')
+    return CheckedIrrigation(
+        parcels=parcels,
+        amount_value=float(draft.amount_value),
+        amount_unit=unit,
+        basis=basis,
+        ts_start=_checked_ts(draft, ctx, notes),
+        notes=notes,
+    )
+
+
+def _check_observation(draft: DraftOperation, ctx: FarmContext) -> CheckedObservation:
+    """Parcels and the sentence of what was seen."""
+    notes = list(draft.notes)
+    parcels = _checked_parcels(draft, ctx, "observation")
+    text = (draft.observation or "").strip()[:MAX_OBSERVATION_CHARS]
+    if not text:
+        raise Unclear("What did you observe? Describe what you saw, and on which parcel.")
+    return CheckedObservation(
+        parcels=parcels,
+        text=text,
+        ts_start=_checked_ts(draft, ctx, notes),
+        notes=notes,
     )
 
 
@@ -223,8 +335,58 @@ def summary(spray: CheckedSpray, tz: ZoneInfo) -> str:
     )
 
 
+def _names(parcels: list[ParcelInfo]) -> str:
+    return ", ".join(
+        f"{p.alias} {p.name}" for p in sorted(parcels, key=lambda p: _alias_key(p.alias))
+    )
+
+
+def _fact_line(parcels: list[ParcelInfo], detail: str, ts_start: datetime, tz: ZoneInfo) -> str:
+    when = ts_start.astimezone(tz).strftime("%d %b %H:%M")
+    return f"{_names(parcels)} · {detail} · {when}"
+
+
+def irrigation_detail(amount_value: float, unit: str, basis: str | None) -> str:
+    """`irrigation 20 mm gross`, or `irrigation 12 m3, basis not stated` (never an assumed one)."""
+    detail = f"irrigation {facts.amount_text(amount_value)} {unit}"
+    return f"{detail} {basis}" if basis else f"{detail}, basis not stated"
+
+
+def observation_detail(text: str) -> str:
+    short = (
+        text
+        if len(text) <= OBSERVATION_SUMMARY_CHARS
+        else text[: OBSERVATION_SUMMARY_CHARS - 1] + "…"
+    )
+    return f"observation: {short}"
+
+
+def checked_summary(checked: Checked, tz: ZoneInfo) -> str:
+    """The preview line for any checked operation type."""
+    if isinstance(checked, CheckedSpray):
+        return summary(checked, tz)
+    if isinstance(checked, CheckedIrrigation):
+        detail = irrigation_detail(checked.amount_value, checked.amount_unit, checked.basis)
+    else:
+        detail = observation_detail(checked.text)
+    return _fact_line(checked.parcels, detail, checked.ts_start, tz)
+
+
 def log_summary(log: Log, tz: ZoneInfo) -> str:
-    """The same line for a stored log (its rate quantities give products and dose)."""
+    """The same line for a stored log: a spray's rate quantities, or a fact's validated props."""
+    if log.type in ("irrigate", "observation"):
+        if log.type == "irrigate":
+            fact = facts.irrigation(log.props)
+            detail = (
+                irrigation_detail(float(fact.amount), fact.unit, fact.basis)
+                if fact is not None
+                else "irrigation"
+            )
+        else:
+            fact = facts.observation(log.props)
+            detail = observation_detail(fact.text) if fact is not None else "observation"
+        parcels = [ParcelInfo(p.id, p.alias, p.name) for p in log.parcels]
+        return _fact_line(parcels, detail, log.ts_start, tz)
     rates = [q for q in log.quantities if q.measure == "rate"]
     doses = list(dict.fromkeys(f"{q.value.normalize():f} {q.unit}" for q in rates))
     return _summary(

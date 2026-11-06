@@ -37,6 +37,7 @@ from farmcore.apps.assistant import conversations, limits, llm
 from farmcore.apps.assistant.tools import PLAN
 from farmcore.apps.chat import conversation as clarification
 from farmcore.apps.chat import handlers as chat
+from farmcore.apps.chat import service as chat_service
 from farmcore.apps.chat.assistant import router as intent
 from farmcore.apps.chat.assistant.fallback import choose
 from farmcore.apps.chat.audit import DbAuditSink, audit_ref
@@ -71,11 +72,17 @@ ALLOWED = {
 }
 # Anonymous visitors and tour visitors never write: a spray report gets this instead of a guess.
 LOG_ELSEWHERE = (
-    "Logging a spray is for the signed-in farmer, or send it to the farm's Telegram bot. "
-    "Here you can ask about your records."
+    "Logging a spray, an irrigation or an observation is for the signed-in farmer, "
+    "or send it to the farm's Telegram bot. Here you can ask about your records."
 )
 LOG_OTHER_FARM = "Spray logging here is set up for the main demo farm only."
 CANCEL_WORDS = {"/cancel", "cancel", "start over"}
+# An irrigation amount without a verb ("P5 20 mm") is still a capture; a bare "P1" is not.
+IRRIGATION_NOTE = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s*"
+    r"(?:mm|millimetres?|millimeters?|m3|cubic\s+met(?:re|er)s?|met(?:re|er)s?\s+cubed?)\b",
+    re.I,
+)
 SPRAY_TURN = "spray_log"  # routing metadata only: a follow-up never re-runs a write
 
 
@@ -311,7 +318,9 @@ def confirm(
 
 
 def _spray_turn(request: Request, repo: Repo, text: str) -> bool:
-    """A spray report, a cancel, or any non-question while a web clarification is open."""
+    """A capture turn: a spray/irrigation/observation report, a cancel, any non-question while a
+    web clarification is open, or a fresh irrigation amount naming one of the farm's parcels
+    ("P5 20 mm": the bot's own reading, without turning a bare "P1" into a draft)."""
     said = intent.intent(text)
     if said == intent.LOG or text.casefold() == "/confirm":
         return True
@@ -321,9 +330,12 @@ def _spray_turn(request: Request, repo: Repo, text: str) -> bool:
     open_draft = clarification.load(
         repo.session, repo.farm_id, _capture_binding(request, repo).state_key, now
     )
-    return open_draft is not None or (
-        text.casefold() in CANCEL_WORDS and _has_pending(repo, request)
-    )
+    if open_draft is not None or (text.casefold() in CANCEL_WORDS and _has_pending(repo, request)):
+        return True
+    if said != intent.OTHER or not IRRIGATION_NOTE.search(text):
+        return False
+    settings = request.app.state.settings
+    return chat.names_a_parcel(text, chat_service.load_context(repo, now, settings.display_tz))
 
 
 def _has_pending(repo, request) -> bool:

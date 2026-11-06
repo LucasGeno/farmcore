@@ -436,3 +436,75 @@ def test_signed_in_quota_follows_the_identity_not_the_browser_cookie(
         browser.cookies.delete("farmcore_assistant_browser")
         limited = browser.get(f"/assistant/ask?q=hello&farm={farm_id}")
         assert limited.status_code == 429
+
+
+def test_members_capture_irrigation_bound_to_their_farm_and_only_the_owner_confirms(
+    settings, pooled_session_factory
+):
+    """An irrigation is a farm/member-bound record like a spray: another member cannot confirm
+    it, and the saved log keeps the sender's farm and capture key."""
+    from farmcore.apps.chat.extractor import RegexExtractor
+
+    with pooled_session_factory() as session:
+        ids = seed_farm(session, settings)
+        farm_id = session.get(Parcel, ids["P1"]).farm_id
+    alice_id, _ = _account(pooled_session_factory, login="alice", farm_id=farm_id)
+    _account(pooled_session_factory, login="bob", farm_id=farm_id)
+    app = create_app(settings, session_factory=pooled_session_factory)
+    app.state.assistant_chat_deps = ChatDeps(pooled_session_factory, RegexExtractor(), settings)
+    with member_browser(app, "alice") as alice, member_browser(app, "bob") as bob:
+        reply = alice.post(
+            f"/assistant/message?farm={farm_id}",
+            data={"q": "Irrigated P1 20 mm gross at 6"},
+        )
+        assert reply.status_code == 200 and reply.json()["kind"] == "draft", reply.text
+        action = reply.json()["actions"][0]["action"]
+        denied = bob.post(f"/assistant/confirm?farm={farm_id}", data={"action": action})
+        assert denied.status_code == 200 and denied.json()["kind"] == "reply", denied.text
+        done = alice.post(f"/assistant/confirm?farm={farm_id}", data={"action": action})
+        assert done.status_code == 200 and done.json()["kind"] == "done", done.text
+    with pooled_session_factory() as session:
+        [saved] = session.scalars(select(Log)).all()
+        assert saved.farm_id == farm_id and (saved.type, saved.status) == ("irrigate", "done")
+        assert saved.props == {"irrigation": {"amount": "20", "unit": "mm", "basis": "gross"}}
+        assert saved.sources[0].external_key.startswith(f"web:farm:{farm_id}:identity:{alice_id}:")
+
+
+def test_concurrent_irrigation_confirms_create_one_record_and_one_event(
+    settings, pooled_session_factory
+):
+    """Two taps on ✅ race on the farm lock: one writes, the other reads it as already logged."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from farmcore.apps.chat.extractor import RegexExtractor
+    from farmcore.core.models.canonical import Event
+
+    with pooled_session_factory() as session:
+        ids = seed_farm(session, settings)
+        farm_id = session.get(Parcel, ids["P1"]).farm_id
+    _account(pooled_session_factory, login="alice", farm_id=farm_id)
+    app = create_app(settings, session_factory=pooled_session_factory)
+    app.state.assistant_chat_deps = ChatDeps(pooled_session_factory, RegexExtractor(), settings)
+    with member_browser(app, "alice") as browser:
+        draft = browser.post(
+            f"/assistant/message?farm={farm_id}",
+            data={"q": "Irrigated P1 20 mm gross at 6"},
+        )
+        assert draft.status_code == 200 and draft.json()["kind"] == "draft", draft.text
+        action = draft.json()["actions"][0]["action"]
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            replies = list(
+                pool.map(
+                    lambda _: browser.post(
+                        f"/assistant/confirm?farm={farm_id}", data={"action": action}
+                    ),
+                    range(2),
+                )
+            )
+        assert [r.status_code for r in replies] == [200, 200]
+        kinds = sorted(r.json()["kind"] for r in replies)
+        assert kinds == ["done", "reply"], [r.text for r in replies]
+    with pooled_session_factory() as session:
+        [saved] = session.scalars(select(Log)).all()
+        assert (saved.type, saved.status) == ("irrigate", "done")
+        assert len(session.scalars(select(Event).where(Event.kind == "log.confirmed")).all()) == 1

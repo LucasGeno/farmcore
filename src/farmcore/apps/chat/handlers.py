@@ -1,4 +1,5 @@
-"""Chat handlers: a message becomes a pending spray log; a button confirms or cancels it.
+"""Chat handlers: a message becomes a pending spray, irrigation or observation; a button
+confirms or cancels it.
 
 Transport-free: `on_message(deps, Incoming) -> Outgoing`, `on_callback(deps, Callback) ->
 Outgoing`. The bot runtime maps Telegram updates to these DTOs and sends the replies.
@@ -22,7 +23,7 @@ from farmcore.apps.chat.audit import DbAuditSink, audit_ref
 from farmcore.apps.chat.dto import Callback, Incoming, Outgoing
 from farmcore.apps.chat.extractor import Extractor, RegexExtractor, get_extractor
 from farmcore.apps.chat.extractor.base import NOTE_TIME_CLAMPED, NOTE_TIME_MISSING
-from farmcore.apps.operations import corrections, spray_weather
+from farmcore.apps.operations import corrections, facts, spray_weather
 from farmcore.apps.operations.checks import summary as checks_summary
 from farmcore.apps.operations.register import preview_checks, register_rows
 from farmcore.core import jobs, logs
@@ -53,12 +54,15 @@ WEB_CHAT_ID = 0
 WEB_ACTOR = "web:farmer"
 
 REPLY_EMPTY = (
-    "Tell me what you sprayed: the parcel, the product, the dose and when. "
-    'For example: "P1 copper, 2 kg, this morning".'
+    "Tell me what you sprayed, irrigated or observed: the parcel, what happened and when. "
+    'For example: "P1 copper, 2 kg, this morning", "P1 20 mm irrigation" '
+    'or "P5 powdery mildew this morning".'
 )
 REPLY_CANCELLED = "❌ Cancelled. Nothing was logged."
 REPLY_ALREADY_LOGGED = "This spray is already logged."
+REPLY_ALREADY_RECORDED = "This record is already logged."
 REPLY_GONE = "This spray was cancelled or no longer exists."
+REPLY_GONE_RECORD = "This record was cancelled or no longer exists."
 REPLY_UNKNOWN_BUTTON = "I did not understand that button."
 REPLY_NO_FARM = "The farm is not set up yet. Run `farmcore seed` first."
 REPLY_DEMO_CHANGED = "The demo changed while I was reading. Please send this spray again."
@@ -66,6 +70,16 @@ REPLY_DATED_LATER = (
     "This spray is dated after the current time (the clock was moved back), "
     "so nothing was logged. Please send it again."
 )
+REPLY_DATED_LATER_RECORD = (
+    "This record is dated after the current time (the clock was moved back), "
+    "so nothing was logged. Please send it again."
+)
+NO_STOCK = {
+    "irrigate": "No spray stock is used and no advice is calculated for irrigation.",
+    "observation": "No spray stock is used and no advice is calculated for observations.",
+}
+NO_STOCK_CONFIRMED = "No spray stock was used and no advice was calculated."
+FACT_LINKS: tuple[tuple[str, str], ...] = (("Open operations", "/operations/"),)
 
 # After ✅: where the farmer sees the result (`public_base_url` + path).
 CONFIRM_LINKS: tuple[tuple[str, str], ...] = (
@@ -168,6 +182,8 @@ def _echo(summary: str, log_id: int, notes: Sequence[str] = (), *, details="") -
 
 
 def _preview(repo, log, now, tz):
+    if log.type in NO_STOCK:
+        return f"{NO_STOCK[log.type]}\nPreview only; nothing is recorded until you confirm."
     lines = [f"{q.label}: {q.value.normalize():f} {q.unit}" for q in log.quantities]
     try:
         checks = preview_checks(repo, log, now, tz=tz)
@@ -240,6 +256,12 @@ def _names_the_farm(transcript: str, ctx: service.FarmContext) -> bool:
     return router.mentions(transcript, phrases)
 
 
+def names_a_parcel(transcript: str, ctx: service.FarmContext) -> bool:
+    """Whether the message names one of the farm's parcels (alias or name)."""
+    phrases = [p.alias for p in ctx.parcels] + [p.name for p in ctx.parcels]
+    return router.mentions(transcript, phrases)
+
+
 def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
     is_voice = incoming.transcript is not None
     transcript = ((incoming.transcript if is_voice else incoming.text) or "").strip()
@@ -287,7 +309,11 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         ) or [None]
         if seen is not None:
             if seen.log.status != "pending":
-                return Outgoing(text=REPLY_ALREADY_LOGGED)
+                return Outgoing(
+                    text=(
+                        REPLY_ALREADY_LOGGED if seen.log.type == "spray" else REPLY_ALREADY_RECORDED
+                    )
+                )
             tz = ZoneInfo(deps.settings.display_tz)
             return _echo(
                 service.log_summary(seen.log, tz),
@@ -315,7 +341,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         extractor = RegexExtractor() if local_only else deps.extractor
         draft = conversation.continue_draft(extractor.extract(request), state)
     try:
-        spray = service.check(draft, ctx)
+        checked = service.check(draft, ctx)
     except service.Unclear as unclear:
         history += [
             {"role": "user", "content": request.transcript},
@@ -330,6 +356,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             )
         return Outgoing(text=unclear.reply)
 
+    log_type, quantities, props = _record_fields(checked)
     with session_scope(deps.session_factory) as session:
         if not conversation.unchanged(session, farm_id, epoch):
             return Outgoing(text=REPLY_DEMO_CHANGED)
@@ -337,20 +364,11 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         log = logs.create_pending(
             session,
             farm_id=repo.farm_id,
-            type="spray",
-            parcel_ids=[p.id for p in spray.parcels],
-            ts_start=spray.ts_start,
+            type=log_type,
+            parcel_ids=[p.id for p in checked.parcels],
+            ts_start=checked.ts_start,
             ts_end=None,
-            quantities=[
-                QuantityInput(
-                    measure="rate",
-                    value=Decimal(str(value)),
-                    unit=unit,
-                    product_id=p.id,
-                    label=p.name,
-                )
-                for p, value, unit in spray.product_doses
-            ],
+            quantities=quantities,
             source=SourceInput(
                 source_type="voice",
                 external_key=ref,
@@ -360,7 +378,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
                     # message is a `voice` source marked here.
                     "input": "voice" if is_voice else "text",
                     "adapter": draft.adapter,
-                    "notes": spray.notes,
+                    "notes": checked.notes,
                 },
                 confidence=draft.confidence,
                 precision_rank=logs.RANK_VOICE,
@@ -369,11 +387,41 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             occurred_at=now,
             source_app=SOURCE_APP,
         )
+        if props is not None:
+            log.props = props
         log_id = log.id
         details = _preview(repo, log, now, deps.settings.display_tz)
         conversation.clear(session, repo.farm_id, _state_key(deps, incoming.chat_id))
 
-    return _echo(service.summary(spray, ctx.tz), log_id, spray.notes, details=details)
+    return _echo(service.checked_summary(checked, ctx.tz), log_id, checked.notes, details=details)
+
+
+def _record_fields(checked: service.Checked):
+    """(log type, canonical quantities, validated app props) for a checked operation."""
+    if isinstance(checked, service.CheckedSpray):
+        return (
+            "spray",
+            [
+                QuantityInput(
+                    measure="rate",
+                    value=Decimal(str(value)),
+                    unit=unit,
+                    product_id=product.id,
+                    label=product.name,
+                )
+                for product, value, unit in checked.product_doses
+            ],
+            None,
+        )
+    if isinstance(checked, service.CheckedIrrigation):
+        fact = facts.IrrigationFact(
+            amount=facts.amount_text(checked.amount_value),
+            unit=checked.amount_unit,
+            basis=checked.basis,
+        )
+        return "irrigate", [], {facts.IRRIGATION: fact.model_dump(exclude_none=True)}
+    fact = facts.ObservationFact(text=checked.text)
+    return "observation", [], {facts.OBSERVATION: fact.model_dump()}
 
 
 def _later_merge_target(session: Session, pending: Log, now: datetime) -> Log | None:
@@ -398,8 +446,9 @@ def _parcel_names(log: Log) -> str:
 
 
 def on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
-    """`confirm:<id>` makes the pending log done (or merges it), commits, then re-runs
-    `advisor.evaluate` so the advice reflects it at once; `cancel:<id>` discards it."""
+    """`confirm:<id>` makes the pending log done (or merges a spray), commits, then re-runs
+    `advisor.evaluate` for a spray so the advice reflects it at once; an irrigation or
+    observation is confirmed without advice or stock work. `cancel:<id>` discards it."""
     try:
         return _on_callback(deps, callback)
     except FarmNotSeeded:
@@ -420,10 +469,13 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
         now = deps.clock(session, deps.settings).now()
         log = repo.get(Log, log_id, scope="logs:write")  # farm-scoped: another farm's is None
         # Log ids are sequential: only the chat that sent the message may act on its draft.
-        if log is None or not _from_chat(log, callback.chat_id, deps):
+        if log is None:
             return Outgoing(text=REPLY_GONE)
+        if not _from_chat(log, callback.chat_id, deps):
+            return Outgoing(text=REPLY_GONE if log.type == "spray" else REPLY_GONE_RECORD)
+        is_spray = log.type == "spray"
         if log.status != "pending":
-            return Outgoing(text=REPLY_ALREADY_LOGGED)
+            return Outgoing(text=REPLY_ALREADY_LOGGED if is_spray else REPLY_ALREADY_RECORDED)
         try:
             if action == CANCEL:
                 logs.cancel(session, log_id, actor, now, source_app=SOURCE_APP)
@@ -432,22 +484,26 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
             # stepped back since the echo, past the draft or past a spray it would merge into.
             if log.ts_start > now:
                 logs.cancel(session, log_id, actor, now, source_app=SOURCE_APP)
-                return Outgoing(text=REPLY_DATED_LATER)
-            later = _later_merge_target(session, log, now)
+                return Outgoing(text=REPLY_DATED_LATER if is_spray else REPLY_DATED_LATER_RECORD)
+            later = _later_merge_target(session, log, now) if is_spray else None
             # Saved weather belongs to this draft's own receipt: its time and parcels, before a
             # merge moves the source onto a log with another time and parcel union.
             # A draft with no stated time got "now" (NOTE_TIME_MISSING): its weather time is
             # unknown, never the replay hour.
-            receipts = [
-                spray_weather.Receipt(
-                    s.id,
-                    None
-                    if NOTE_TIME_MISSING in (s.raw_payload or {}).get("notes", [])
-                    else log.ts_start,
-                    tuple(p.id for p in log.parcels),
-                )
-                for s in log.sources
-            ]
+            receipts = (
+                [
+                    spray_weather.Receipt(
+                        s.id,
+                        None
+                        if NOTE_TIME_MISSING in (s.raw_payload or {}).get("notes", [])
+                        else log.ts_start,
+                        tuple(p.id for p in log.parcels),
+                    )
+                    for s in log.sources
+                ]
+                if is_spray
+                else []
+            )
             if later is not None:
                 return Outgoing(
                     text=(
@@ -460,26 +516,31 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
                 )
             log, merged = logs.confirm(session, log_id, actor, now, source_app=SOURCE_APP)
         except LookupError:  # a concurrent cancel won the row lock
-            return Outgoing(text=REPLY_GONE)
+            return Outgoing(text=REPLY_GONE if is_spray else REPLY_GONE_RECORD)
         except ValueError:  # a concurrent confirm won the row lock
-            return Outgoing(text=REPLY_ALREADY_LOGGED)
-        # Outside the race handlers, before this transaction commits: a capture error rolls the
-        # confirm back instead of reading as "already logged". Only receipts that survived.
-        kept = {s.id for s in log.sources}
-        spray_weather.capture(
-            repo,
-            [r for r in receipts if r.source_id in kept],
-            reader=deps.weather_reader,
-            data_now=now,
-            captured_at=datetime.now(UTC),
-        )
-        lead = "✅ Added to the spray already logged" if merged else "✅ Logged"
-        text = f"{lead}: {service.log_summary(log, tz)}."
-        if not merged:
-            text += _duplicate_note(repo, log, tz)
+            return Outgoing(text=REPLY_ALREADY_LOGGED if is_spray else REPLY_ALREADY_RECORDED)
         saved_id = log.id
         farm_id = repo.farm_id
         grant_id = repo.grant.id
+        if is_spray:
+            # Outside the race handlers, before this transaction commits: a capture error rolls
+            # the confirm back instead of reading as "already logged". Only receipts that kept.
+            kept = {s.id for s in log.sources}
+            spray_weather.capture(
+                repo,
+                [r for r in receipts if r.source_id in kept],
+                reader=deps.weather_reader,
+                data_now=now,
+                captured_at=datetime.now(UTC),
+            )
+            lead = "✅ Added to the spray already logged" if merged else "✅ Logged"
+            text = f"{lead}: {service.log_summary(log, tz)}."
+            if not merged:
+                text += _duplicate_note(repo, log, tz)
+        else:
+            text = f"✅ Logged: {service.log_summary(log, tz)}.\n{NO_STOCK_CONFIRMED}"
+    if not is_spray:
+        return _with_links(text, deps.settings.public_base_url, farm_id, FACT_LINKS)
     # Presentation is best effort, after the save committed, in a separate transaction.
     try:
         with session_scope(deps.session_factory) as session:
@@ -534,12 +595,13 @@ def _duplicate_note(repo: ScopedRepository, log: Log, tz: ZoneInfo) -> str:
     return f"\n{' + '.join(names)} was already logged at {target.ts_start.astimezone(tz):%H:%M}."
 
 
-def _with_links(text: str, base_url: str, farm_id: int) -> Outgoing:
+def _with_links(
+    text: str, base_url: str, farm_id: int, links: Sequence[tuple[str, str]] = CONFIRM_LINKS
+) -> Outgoing:
     """The confirm reply with "Open map" / "Open register" URL buttons; on a local base URL
-    (Telegram rejects such buttons, see `push`) the links go in the text instead."""
-    links = [
-        (label, base_url.rstrip("/") + with_farm(path, farm_id)) for label, path in CONFIRM_LINKS
-    ]
+    (Telegram rejects such buttons, see `push`) the links go in the text instead. A confirmed
+    fact links to operations, where its amount and basis are shown."""
+    links = [(label, base_url.rstrip("/") + with_farm(path, farm_id)) for label, path in links]
     if push.button_ok(base_url):
         return Outgoing(text=text, url_buttons=links)
     return Outgoing(text="\n".join([text, *(f"{label}: {url}" for label, url in links)]))

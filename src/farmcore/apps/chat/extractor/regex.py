@@ -57,6 +57,32 @@ _DOSE = re.compile(
     rf"(?<![\w.,])(\d+(?:[.,]\d+)?|(?:{_NUMBER})\s)\s*"
     r"(kg|kilos?|kilogrammes?|kilograms?|l|litres?|liters?)\b(?:\s*/\s*ha\b)?"
 )
+# Irrigation: an amount and the unit it was entered in (never converted).
+_IRRIGATION_AMOUNT = re.compile(
+    r"(?<![\w.,])(\d+(?:[.,]\d+)?)\s*"
+    r"(mm|millimetres?|millimeters?|m3|cubic\s+met(?:re|er)s?|met(?:re|er)s?\s+cubed?|"
+    r"l|litres?|liters?)\b"
+)
+_GROSS = re.compile(r"\b(gross|brut|brute|bruts|brutes)\b")
+_NET = re.compile(r"\b(net|nette|nets|nettes)\b")
+_SPRAY_WORDS = frozenset(
+    {
+        *("sprayed", "spray", "treated", "applied", "passe", "pulverise", "pulverisee"),
+        *("traite", "traitee", "traites", "traitees"),
+    }
+)
+_IRRIGATION_WORDS = frozenset(
+    {
+        *("irrigated", "irrigate", "irrigues", "irrigue", "irriguee", "irriguees"),
+        *("watered", "watering", "arrose", "arrosee", "arroses", "arrosees", "arrosage"),
+    }
+)
+_OBSERVATION_WORDS = frozenset(
+    {
+        *("observed", "observe", "observee", "observes", "saw", "seen", "notice", "noticed"),
+        *("spotted", "vu", "vue", "vus", "signale", "signalee", "repere", "reperee"),
+    }
+)
 # "at 6", "at 17:30", "à 6h", "à 6h30", "vers 7 heures", "at 6 am". A bare "à 6" is not a time
 # (French "à 2 kilos" is a dose), and neither is any number followed by a dose unit.
 _CLOCK = re.compile(
@@ -74,17 +100,60 @@ def _word(phrase: str) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w){re.escape(fold(phrase))}(?!\w)")
 
 
+def _type(text: str) -> str:
+    """The operation the note reports. Explicit verbs win; without one, a per-hectare dose or a
+    kilogram/litre amount is a spray and a millimetre/m³ amount an irrigation (the default stays
+    a spray, as before)."""
+    words = set(re.findall(r"[a-z0-9]+", text))
+    if words & _SPRAY_WORDS:
+        return "spray"
+    if words & _IRRIGATION_WORDS:
+        return "irrigate"
+    if words & _OBSERVATION_WORDS:
+        return "observation"
+    amount = _IRRIGATION_AMOUNT.search(text)
+    if amount and _unit(amount.group(2)) in ("mm", "m3"):
+        return "irrigate"
+    return "spray"
+
+
+def _unit(said: str) -> str:
+    if said.startswith("mm") or said.startswith("milli"):
+        return "mm"
+    if said.startswith("m3") or "cubic" in said or "cube" in said:
+        return "m3"
+    return "L"
+
+
+def _irrigation(text: str, draft: DraftOperation) -> None:
+    amount = _IRRIGATION_AMOUNT.search(text)
+    if amount:
+        draft.amount_value = float(amount.group(1).replace(",", "."))
+        draft.amount_unit = _unit(amount.group(2))
+    if _GROSS.search(text):
+        draft.basis = "gross"
+    elif _NET.search(text):
+        draft.basis = "net"
+
+
 class RegexExtractor:
     def extract(self, req: ExtractRequest) -> DraftOperation:
         text = fold(req.transcript)
+        kind = _type(text)
         draft = DraftOperation(
-            type="spray",
+            type=kind,
             parcels=_parcels(text, req),
-            products=_products(text, req),
+            products=_products(text, req) if kind == "spray" else [],
             ts_start=_ts_start(text, req),
             confidence=CONFIDENCE,
             adapter=ADAPTER,
         )
+        if kind == "irrigate":
+            _irrigation(text, draft)
+            return finalize(draft, req)
+        elif kind == "observation":
+            draft.observation = req.transcript.strip()
+            return finalize(draft, req)
         dose = _DOSE.search(text)
         if dose:
             number = dose.group(1).strip()

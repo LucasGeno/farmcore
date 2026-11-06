@@ -16,28 +16,39 @@ from typing import Any, Protocol
 from pydantic import BaseModel, Field
 
 SYSTEM_INSTRUCTION = (
-    "You turn a vineyard worker's short voice note (English or French) into one draft spray "
+    "You turn a vineyard worker's short voice note (English or French) into one draft farm "
     "operation. The user message is a JSON object with keys: transcript (what was said), "
     "parcels (the farm's parcels as alias and name), products (the farm's product shortlist "
     "with name, active_substance, product_type and targets) and date (today's local date, "
-    "ISO). Answer with JSON matching the response schema. Rules: type is 'spray'. parcels lists "
-    "the aliases of every parcel mentioned, by alias or by name. products lists shortlist names "
-    "exactly as given; map generic words (copper, cuivre, sulphur, sulfur, soufre) to the "
-    "shortlist product with that active_substance; never invent a product. dose_value is the "
-    "number said and dose_unit is 'kg/ha' (kg, kilos) or 'L/ha' (litres); use null when no dose "
-    "is said. ts_start is the local start time as ISO 'YYYY-MM-DDTHH:MM' resolved against date: "
-    "'this morning' or 'ce matin' is 08:00 today, 'yesterday' or 'hier' is 08:00 the day before; "
-    "use null when no time is said. confidence is between 0 and 1. notes holds short remarks on "
-    "anything ambiguous or ignored. When clarification is present, it contains ONLY this "
-    "unfinished operation's draft and recent user/assistant turns. Use it to resolve short "
-    "replies; an explicit correction replaces the old field, never adds an old parcel. "
-    "Never treat names listed in an assistant question as sprayed parcels or products. "
-    "product_doses lists a product's exact shortlist name, value and unit for each separately "
-    "stated rate. Never copy the first product's rate to another when rates differ or are missing."
+    "ISO). Answer with JSON matching the response schema. Rules: type is 'spray', 'irrigate' "
+    "or 'observation'. A spray names a product or a dose per hectare; an irrigation names an "
+    "amount of water; an observation reports what was seen in a parcel. parcels lists the "
+    "aliases of every parcel mentioned, by alias or by name. For a spray, products lists "
+    "shortlist names exactly as given; map generic words (copper, cuivre, sulphur, sulfur, "
+    "soufre) to the shortlist product with that active_substance; never invent a product. "
+    "dose_value is the number said and dose_unit is 'kg/ha' (kg, kilos) or 'L/ha' (litres); "
+    "use null when no dose is said. For an irrigation, amount_value is the number said and "
+    "amount_unit is exactly one of 'mm' (millimetres of water), 'm3' (cubic metres) or 'L' "
+    "(litres); basis is 'gross' or 'net' only when the speaker says gross/brut or net/nette, "
+    "else null; never convert between units, never derive a gross amount from a net one and "
+    "never assume an efficiency. For an observation, observation is the short sentence of "
+    "what was seen (symptom, pest, damage, stage), copied as said. ts_start is the local start "
+    "time as ISO 'YYYY-MM-DDTHH:MM' resolved against date: 'this morning' or 'ce matin' is "
+    "08:00 today, 'yesterday' or 'hier' is 08:00 the day before; use null when no time is "
+    "said. confidence is between 0 and 1. notes holds short remarks on anything ambiguous or "
+    "ignored. When clarification is present, it contains ONLY this unfinished operation's "
+    "draft and recent user/assistant turns. Use it to resolve short replies; an explicit "
+    "correction replaces the old field, never adds an old parcel. Never treat names listed in "
+    "an assistant question as sprayed parcels or products. product_doses lists a product's "
+    "exact shortlist name, value and unit for each separately stated rate. Never copy the "
+    "first product's rate to another when rates differ or are missing."
 )
 
-OPERATION_TYPES = ("spray",)
+OPERATION_TYPES = ("spray", "irrigate", "observation")
 DOSE_UNITS = ("kg/ha", "L/ha")
+# The units an irrigation amount may be entered in; never converted on the way in.
+IRRIGATION_UNITS = ("mm", "m3", "L")
+IRRIGATION_BASES = ("gross", "net")
 NOTE_TIME_CLAMPED = "time clamped to now"
 NOTE_TIME_MISSING = "no time stated; using now"
 
@@ -78,6 +89,12 @@ class DraftOperation(BaseModel):
     dose_value: float | None = None
     dose_unit: str | None = None
     product_doses: list[ProductDose] = Field(default_factory=list)
+    # Irrigation: the entered amount, its unit and the gross/net basis when stated.
+    amount_value: float | None = None
+    amount_unit: str | None = None
+    basis: str | None = None
+    # Observation: what was seen, as said.
+    observation: str | None = None
     ts_start: datetime | None = None
     confidence: float = 0.0
     adapter: str = ""
@@ -176,5 +193,43 @@ def finalize(draft: DraftOperation, req: ExtractRequest) -> DraftOperation:
             notes.append(NOTE_TIME_CLAMPED)
 
     return draft.model_copy(
-        update={"parcels": parcels, "products": products, "ts_start": ts_start, "notes": notes}
+        update={
+            "parcels": parcels,
+            "products": products,
+            "ts_start": ts_start,
+            "notes": notes,
+            **fact_fields(draft),
+        }
     )
+
+
+def fact_fields(draft: DraftOperation) -> dict[str, object]:
+    """Only the fields of this draft's own type survive the seam: a product never reaches an
+    irrigation or an observation, and an amount never reaches a spray. Values are kept as
+    entered (no unit conversion, no efficiency)."""
+    if draft.type == "irrigate":
+        return {
+            "products": [],
+            "product_doses": [],
+            "dose_value": None,
+            "dose_unit": None,
+            "observation": None,
+        }
+    if draft.type == "observation":
+        return {
+            "products": [],
+            "product_doses": [],
+            "dose_value": None,
+            "dose_unit": None,
+            "amount_value": None,
+            "amount_unit": None,
+            "basis": None,
+        }
+    if draft.type == "spray":
+        return {
+            "amount_value": None,
+            "amount_unit": None,
+            "basis": None,
+            "observation": None,
+        }
+    return {}
