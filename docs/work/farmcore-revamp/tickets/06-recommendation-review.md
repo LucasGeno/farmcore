@@ -174,7 +174,8 @@ Focused checks after the fixes (final source before the full re-run):
 
 Manual mutants for the review fixes (planted, focused tests rerun, source restored):
 
-- Removed the `member_role`/admin gate in `review.tools.status` → anonymous demo test failed.
+- Removed the `member_role`/admin gate in `review.tools.status` → direct-tool-context test failed
+  (the HTTP anonymous test still passed because the route filter had already withheld the tool).
 - Removed the assistant's review-tool filter → anonymous demo test failed (tool selected).
 - Removed `Event.occurred_at <= now` from `recommendations._events` → clock-bound test failed.
 
