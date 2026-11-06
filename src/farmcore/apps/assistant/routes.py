@@ -16,6 +16,7 @@ capped by Content-Length and while streaming, before any parsing; the clip by si
 An unreadable clip is a 422; no speech model on the host → 503 "Voice needs the speech service."
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -248,9 +249,16 @@ def message(
     repo: Repo,
     q: str = Form(min_length=1, max_length=500),
     conversation: str | None = Form(default=None, min_length=1, max_length=64),
+    request_key: str | None = Form(default=None, min_length=1, max_length=128),
 ):
-    """The signed-in farmer's panel: a spray report (or the reply to its clarifying question)
-    takes the chat app's draft → ✅ path; anything else is answered exactly like `GET /ask`."""
+    """The signed-in farmer's panel: a spray/irrigation/observation report (or the reply to its
+    clarifying question) takes the chat app's draft → ✅ path; anything else is answered exactly
+    like `GET /ask`.
+
+    `request_key` is the client's idempotency key for one submission. It is hashed into the
+    draft's message id, and the chat key already carries the farm and member, so a retried POST
+    returns the same draft instead of writing a second one. Without a key (older clients) every
+    POST still gets a fresh id."""
     names = {m.name for m in visible_manifests(request)}
     if "assistant" not in names:
         raise HTTPException(404)
@@ -260,7 +268,7 @@ def message(
     token, allowed = _take_quota(request)
     if not allowed:
         return response(request, token, {"text": "Too many messages. Try again in a minute."}, 429)
-    message_id = time.time_ns() // 1000  # unique per message: the draft's idempotency key
+    message_id = _submission_id(request_key)
     deps = bound_chat_deps(request, repo)
     _end_request_transaction(repo)
     out = chat.on_message(deps, Incoming(chat.WEB_CHAT_ID, text, None, message_id))
@@ -272,6 +280,18 @@ def message(
         request.app, key, generation, [*history, conversations.Turn(text, SPRAY_TURN, None)]
     )
     return response(request, token, _web_reply(request, repo, out))
+
+
+def _submission_id(request_key: str | None) -> int:
+    """The draft's idempotency id: a client key hashed to a positive bigint, else a fresh id.
+
+    The chat's external key binds this id to the farm and member (`CaptureBinding.prefix`), so
+    the same key from another farm or member is another draft.
+    """
+    if request_key is None:
+        return time.time_ns() // 1000
+    digest = hashlib.blake2b(request_key.encode(), digest_size=8).digest()
+    return max(1, int.from_bytes(digest, "big") >> 1)
 
 
 def _conversation_key(request: Request, repo: Repo, token: str, conversation: str | None):

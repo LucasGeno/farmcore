@@ -20,6 +20,7 @@ import subprocess
 import time
 from collections.abc import Callable
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 import google.auth
@@ -61,7 +62,7 @@ RESPONSE_SCHEMA: dict[str, Any] = {
         "products": {"type": "ARRAY", "items": {"type": "STRING"}},
         "dose_value": {"type": "NUMBER", "nullable": True},
         "dose_unit": {"type": "STRING", "enum": list(DOSE_UNITS), "nullable": True},
-        "amount_value": {"type": "NUMBER", "nullable": True},
+        "amount_value": {"type": "STRING", "nullable": True},
         "amount_unit": {"type": "STRING", "enum": list(IRRIGATION_UNITS), "nullable": True},
         "basis": {"type": "STRING", "enum": list(IRRIGATION_BASES), "nullable": True},
         "observation": {"type": "STRING", "nullable": True},
@@ -106,7 +107,7 @@ class _ModelDraft(BaseModel):
     dose_value: float | None = None
     dose_unit: str | None = None
     product_doses: list[ProductDose] = []
-    amount_value: float | None = None
+    amount_value: Decimal | None = None
     amount_unit: str | None = None
     basis: str | None = None
     observation: str | None = None

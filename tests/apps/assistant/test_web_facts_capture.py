@@ -125,3 +125,41 @@ def test_asking_the_panel_never_pretends_to_record_an_irrigation(client, seeded,
 
     assert body["tool"] is None
     assert "irrigation" in body["text"] and "Telegram" in body["text"]
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        "I sprayed P5 copper 2 kg this morning",
+        "Irrigated P5 20 mm gross at 6",
+    ],
+)
+def test_a_retried_panel_submission_creates_one_draft_and_one_record(
+    client, session, seeded, step, q
+):
+    """The same client request key is the draft's idempotency key: a retry never duplicates."""
+    seeded("B")
+    step("2024-04-10 06:00")
+    data = {"q": q, "request_key": "retry-6f1c"}
+
+    first = client.post("/assistant/message", data=data).json()
+    again = client.post("/assistant/message", data=data).json()
+
+    assert first["kind"] == again["kind"] == "draft", (first, again)
+    assert first["actions"] == again["actions"]
+    [pending] = _pending(session)
+
+    done = client.post("/assistant/confirm", data={"action": first["actions"][0]["action"]})
+    assert done.json()["kind"] == "done", done.text
+
+    later = client.post("/assistant/message", data=data).json()
+    assert later["kind"] == "reply" and "already logged" in later["text"], later
+    session.expire_all()
+    from farmcore.core.models.canonical import LogSource
+
+    web_keys = session.scalars(
+        select(LogSource.external_key).where(LogSource.external_key.like("web:%"))
+    ).all()
+    assert len(web_keys) == 1
+    saved = session.scalars(select(Log).where(Log.id == pending.id)).all()
+    assert len(saved) == 1 and saved[0].status == "done"

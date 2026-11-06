@@ -1,4 +1,4 @@
-"""Deterministic fallback parser for short spray notes in English and French.
+"""Deterministic fallback parser for short farm notes in English and French.
 
 Covers the demo sentences: parcel aliases ("P1", "P-1") and names ("Les Granges"), several per
 sentence; copper/cuivre/(bouillie) bordelaise and sulphur/sulfur/soufre, or any other shortlist
@@ -6,13 +6,16 @@ active substance said verbatim, mapped to the shortlist product with that active
 shortlist name said in full or by its distinctive first word ("Microthiol"); a dose number, in
 digits or spelled out (one..ten, un..dix), + kg|kilos|L (optionally /ha); "this morning"/"ce
 matin" (08:00 today) and "yesterday"/"hier" (08:00 the day before), overridden by a clock time
-("at 6", "à 6h", "17:30"). Nothing leaves the host.
+("at 6", "à 6h", "17:30"). Irrigation verbs and an amount in mm|m3|L (with gross/brut or
+net/nette when said) and observation verbs give those record types; the entered amount stays an
+exact Decimal, never a float. Nothing leaves the host.
 """
 
 from __future__ import annotations
 
 import re
 from datetime import datetime, time, timedelta
+from decimal import Decimal
 
 from farmcore.apps.chat.extractor.base import (
     DraftOperation,
@@ -128,7 +131,7 @@ def _unit(said: str) -> str:
 def _irrigation(text: str, draft: DraftOperation) -> None:
     amount = _IRRIGATION_AMOUNT.search(text)
     if amount:
-        draft.amount_value = float(amount.group(1).replace(",", "."))
+        draft.amount_value = Decimal(amount.group(1).replace(",", "."))
         draft.amount_unit = _unit(amount.group(2))
     if _GROSS.search(text):
         draft.basis = "gross"

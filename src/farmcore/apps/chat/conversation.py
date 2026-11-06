@@ -99,6 +99,9 @@ def continue_draft(current: DraftOperation, state):
     for key in ("amount_value", "amount_unit", "basis", "observation"):
         value = getattr(current, key)
         values[key] = value if value not in (None, "") else getattr(previous, key)
+    # A short reply does not restate the date: keep the unfinished operation's own start time.
+    if current.ts_start is None and previous.ts_start is not None:
+        values["ts_start"] = previous.ts_start
     if values["type"] == "irrigate":
         values.update(
             products=[], product_doses=[], dose_value=None, dose_unit=None, observation=None

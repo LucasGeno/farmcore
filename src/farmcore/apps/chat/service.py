@@ -7,10 +7,10 @@ replayed "this morning" lands on the replay day.
 
 from __future__ import annotations
 
-import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 from farmcore.apps.chat.extractor import (
@@ -124,7 +124,7 @@ class CheckedSpray:
 @dataclass(frozen=True)
 class CheckedIrrigation:
     parcels: list[ParcelInfo]
-    amount_value: float
+    amount_value: Decimal
     amount_unit: str
     basis: str | None
     ts_start: datetime
@@ -200,7 +200,19 @@ def _checked_parcels(draft: DraftOperation, ctx: FarmContext, kind: str) -> list
     return parcels
 
 
-def _checked_ts(draft: DraftOperation, ctx: FarmContext, notes: list[str]) -> datetime:
+def _when_question(kind: str) -> str:
+    said = "observe this" if kind == "observation" else "irrigate"
+    return (
+        f"When did you {said}? Say the date and time, "
+        'for example "this morning" or "yesterday at 6".'
+    )
+
+
+def _checked_ts(
+    draft: DraftOperation, ctx: FarmContext, notes: list[str], kind: str = "spray"
+) -> datetime:
+    if draft.ts_start is None and kind in ("irrigate", "observation"):
+        raise Unclear(_when_question(kind))
     ts = draft.ts_start or ctx.now_local
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=ctx.tz)
@@ -267,12 +279,8 @@ def _check_irrigation(draft: DraftOperation, ctx: FarmContext) -> CheckedIrrigat
     unit = (draft.amount_unit or "").strip()
     if unit.casefold() in ("l", "litre", "liter", "litres", "liters"):
         unit = "L"
-    if (
-        draft.amount_value is None
-        or not math.isfinite(draft.amount_value)
-        or draft.amount_value <= 0
-        or not unit
-    ):
+    value = draft.amount_value
+    if value is None or not value.is_finite() or value <= 0 or not unit:
         raise Unclear(
             "How much water, and in which unit? Say the amount with mm, m3 or L, "
             'for example "20 mm".'
@@ -287,10 +295,10 @@ def _check_irrigation(draft: DraftOperation, ctx: FarmContext) -> CheckedIrrigat
         raise Unclear('Was that gross or net? Say "gross" or "net"; I never assume an efficiency.')
     return CheckedIrrigation(
         parcels=parcels,
-        amount_value=float(draft.amount_value),
+        amount_value=value,
         amount_unit=unit,
         basis=basis,
-        ts_start=_checked_ts(draft, ctx, notes),
+        ts_start=_checked_ts(draft, ctx, notes, "irrigate"),
         notes=notes,
     )
 
@@ -305,7 +313,7 @@ def _check_observation(draft: DraftOperation, ctx: FarmContext) -> CheckedObserv
     return CheckedObservation(
         parcels=parcels,
         text=text,
-        ts_start=_checked_ts(draft, ctx, notes),
+        ts_start=_checked_ts(draft, ctx, notes, "observation"),
         notes=notes,
     )
 
@@ -346,7 +354,7 @@ def _fact_line(parcels: list[ParcelInfo], detail: str, ts_start: datetime, tz: Z
     return f"{_names(parcels)} · {detail} · {when}"
 
 
-def irrigation_detail(amount_value: float, unit: str, basis: str | None) -> str:
+def irrigation_detail(amount_value: Decimal | str, unit: str, basis: str | None) -> str:
     """`irrigation 20 mm gross`, or `irrigation 12 m3, basis not stated` (never an assumed one)."""
     detail = f"irrigation {facts.amount_text(amount_value)} {unit}"
     return f"{detail} {basis}" if basis else f"{detail}, basis not stated"
@@ -378,7 +386,7 @@ def log_summary(log: Log, tz: ZoneInfo) -> str:
         if log.type == "irrigate":
             fact = facts.irrigation(log.props)
             detail = (
-                irrigation_detail(float(fact.amount), fact.unit, fact.basis)
+                irrigation_detail(fact.amount, fact.unit, fact.basis)
                 if fact is not None
                 else "irrigation"
             )

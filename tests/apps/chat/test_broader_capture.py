@@ -303,20 +303,6 @@ def test_an_irrigation_belongs_to_the_farm_bound_to_the_capture(session_factory,
     assert log.sources[0].external_key.startswith(f"web:farm:{other.id}:")
 
 
-def test_an_irrigation_without_a_time_uses_now_and_says_so(session_factory, session, settings):
-    from farmcore.apps.chat.extractor.base import NOTE_TIME_MISSING
-
-    seed_farm(session, settings)
-    d = deps(session_factory, settings, RegexExtractor())
-
-    out = on_message(d, voice("Irrigated P1 20 mm", 19))
-
-    [log] = logs_of(session)
-    assert log.ts_start == NOW_LOCAL
-    assert NOTE_TIME_MISSING in log.sources[0].raw_payload["notes"]
-    assert "No time was said, so I used now." in out.text
-
-
 def test_an_irrigation_dated_after_the_clock_is_clamped_to_now(session_factory, session, settings):
     seed_farm(session, settings)
     d = deps(
@@ -336,3 +322,54 @@ def test_an_irrigation_dated_after_the_clock_is_clamped_to_now(session_factory, 
     assert log.ts_start == NOW_LOCAL
     assert "time clamped to now" in log.sources[0].raw_payload["notes"]
     assert "The time you said is later than now, so I used now." in out.text
+
+
+def test_regex_extractor_keeps_a_large_irrigation_amount_exact():
+    draft = RegexExtractor().extract(request("Irrigated P5 9007199254740993 L gross at 6"))
+
+    assert draft.amount_value == Decimal("9007199254740993")
+    assert draft.amount_unit == "L"
+    assert draft.basis == "gross"
+
+
+def test_a_large_irrigation_amount_is_previewed_and_stored_exactly(
+    session_factory, session, settings
+):
+    seed_farm(session, settings)
+    d = deps(session_factory, settings, RegexExtractor())
+    amount = "9007199254740993"
+
+    echo = on_message(d, voice(f"Irrigated P5 {amount} L gross at 6", 23))
+
+    [log] = logs_of(session)
+    assert log.props == {"irrigation": {"amount": amount, "unit": "L", "basis": "gross"}}
+    assert f"irrigation {amount} L gross" in echo.text
+    out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
+    assert f"irrigation {amount} L gross" in out.text
+
+
+@pytest.mark.parametrize(
+    ("text", "question"),
+    [
+        ("Irrigated P1 20 mm gross", "When did you irrigate?"),
+        ("Observed powdery mildew on P1", "When did you observe this?"),
+    ],
+)
+def test_a_fact_without_a_date_asks_before_preview_and_then_logs(
+    session_factory, session, settings, text, question
+):
+    seed_farm(session, settings)
+    d = deps(session_factory, settings, RegexExtractor())
+
+    first = on_message(d, voice(text, 24))
+
+    assert first.text.startswith(question)
+    assert first.buttons == []
+    assert count(session, Log) == 0
+
+    reply = on_message(d, voice("yesterday", 25))
+
+    assert reply.buttons, reply.text
+    [log] = logs_of(session)
+    assert log.ts_start == NOW_LOCAL.replace(day=9, hour=8)
+    assert reply.text.splitlines()[0].endswith("· 09 Apr 08:00 — confirm?")

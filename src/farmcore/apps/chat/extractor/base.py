@@ -11,6 +11,7 @@ import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
@@ -27,8 +28,9 @@ SYSTEM_INSTRUCTION = (
     "shortlist names exactly as given; map generic words (copper, cuivre, sulphur, sulfur, "
     "soufre) to the shortlist product with that active_substance; never invent a product. "
     "dose_value is the number said and dose_unit is 'kg/ha' (kg, kilos) or 'L/ha' (litres); "
-    "use null when no dose is said. For an irrigation, amount_value is the number said and "
-    "amount_unit is exactly one of 'mm' (millimetres of water), 'm3' (cubic metres) or 'L' "
+    "use null when no dose is said. For an irrigation, amount_value is the amount said as a "
+    'string, kept exactly as entered (for example "20" or "12.5") and amount_unit is '
+    "exactly one of 'mm' (millimetres of water), 'm3' (cubic metres) or 'L' "
     "(litres); basis is 'gross' or 'net' only when the speaker says gross/brut or net/nette, "
     "else null; never convert between units, never derive a gross amount from a net one and "
     "never assume an efficiency. For an observation, observation is the short sentence of "
@@ -45,6 +47,7 @@ SYSTEM_INSTRUCTION = (
 )
 
 OPERATION_TYPES = ("spray", "irrigate", "observation")
+FACT_TYPES = ("irrigate", "observation")
 DOSE_UNITS = ("kg/ha", "L/ha")
 # The units an irrigation amount may be entered in; never converted on the way in.
 IRRIGATION_UNITS = ("mm", "m3", "L")
@@ -89,8 +92,9 @@ class DraftOperation(BaseModel):
     dose_value: float | None = None
     dose_unit: str | None = None
     product_doses: list[ProductDose] = Field(default_factory=list)
-    # Irrigation: the entered amount, its unit and the gross/net basis when stated.
-    amount_value: float | None = None
+    # Irrigation: the entered amount kept exact (never rounded through a float), its unit and
+    # the gross/net basis when stated.
+    amount_value: Decimal | None = None
     amount_unit: str | None = None
     basis: str | None = None
     # Observation: what was seen, as said.
@@ -155,7 +159,9 @@ def fold(text: str) -> str:
 
 def finalize(draft: DraftOperation, req: ExtractRequest) -> DraftOperation:
     """Hold every adapter's draft to the seam: parcels are known aliases, products are exact
-    shortlist names (others dropped with a note) and `ts_start <= now_local`."""
+    shortlist names (others dropped with a note) and `ts_start <= now_local`. A spray with no
+    stated time gets now with a note (as before); an irrigation or observation keeps `None`, so
+    the service asks for the date before any preview."""
     notes = list(draft.notes)
 
     parcels_by_key: dict[str, str] = {}
@@ -181,6 +187,17 @@ def finalize(draft: DraftOperation, req: ExtractRequest) -> DraftOperation:
 
     ts_start = draft.ts_start
     if ts_start is None:
+        if draft.type in FACT_TYPES:
+            # A fact is not previewed on an assumed date: `service.check` asks for it first.
+            return draft.model_copy(
+                update={
+                    "parcels": parcels,
+                    "products": products,
+                    "ts_start": None,
+                    "notes": notes,
+                    **fact_fields(draft),
+                }
+            )
         ts_start = req.now_local
         notes.append(NOTE_TIME_MISSING)
     else:

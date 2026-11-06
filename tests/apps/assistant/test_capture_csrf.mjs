@@ -7,7 +7,7 @@ import vm from 'node:vm';
 const source = new URL('../../../src/farmcore/apps/assistant/static/assistant.js', import.meta.url);
 
 // DOM and fetch are platform boundaries. Run the actual shipped script through UI events.
-function fixture({ messageUrl = '/assistant/message?farm=7', nonce = 'session-bound-nonce' } = {}) {
+function fixture({ messageUrl = '/assistant/message?farm=7', nonce = 'session-bound-nonce', fetchImpl } = {}) {
   class Element {
     constructor(tag = 'div') { this.tag = tag; this.children = []; this.listeners = {}; this.dataset = {}; }
     addEventListener(name, fn) { this.listeners[name] = fn; }
@@ -38,12 +38,12 @@ function fixture({ messageUrl = '/assistant/message?farm=7', nonce = 'session-bo
     querySelector: selector => selector === 'meta[name="csrf-token"]' && nonce ? { content: nonce } : null };
   vm.runInNewContext(readFileSync(source, 'utf8'), { document, window: {}, URL, FormData,
     AbortController, crypto: webcrypto, location: new URL('https://farm.example/operations/?farm=7'),
-    fetch: async (url, options) => {
+    fetch: fetchImpl || (async (url, options) => {
       calls.push({ url: new URL(url), options });
       return { ok: true, json: async () => calls.length === 1
         ? { kind: 'draft', text: 'Preview', actions: [{ label: 'Confirm', action: 'confirm:42' }] }
         : { kind: 'done', text: '✅ Logged', links: [] } };
-    } });
+    }) });
   return { ids, calls, submit: () => ids['assistant-form'].listeners.submit({ preventDefault() {} }),
     settle: () => new Promise(resolve => setImmediate(resolve)) };
 }
@@ -72,4 +72,29 @@ test('a foreign mutation URL receives neither the nonce nor a request', async ()
   f.submit(); await f.settle();
   assert.equal(f.calls.length, 0);
   assert.match(f.ids['assistant-status'].textContent, /Could not read/);
+});
+
+test('a retried submission reuses its request key; a new submission gets a new one', async () => {
+  const calls = [];
+  let fail = true;
+  const f = fixture({ fetchImpl: async (url, options) => {
+    calls.push({ url: new URL(url), options });
+    if (fail) { fail = false; throw new Error('network down'); }
+    return { ok: true, json: async () => (
+      { kind: 'draft', text: 'Preview', actions: [{ label: 'Confirm', action: 'confirm:42' }] }
+    ) };
+  } });
+  f.submit(); await f.settle();
+  assert.match(f.ids['assistant-status'].textContent, /Could not/);
+  f.submit(); await f.settle();
+  assert.equal(calls.length, 2);
+  const first = calls[0].options.body.get('request_key');
+  const retry = calls[1].options.body.get('request_key');
+  assert.ok(first, 'the submission carries a request key');
+  assert.equal(retry, first, 'a retry keeps the key');
+  f.ids['assistant-question'].value = 'I sprayed P6 copper 2 kg at 6';
+  f.submit(); await f.settle();
+  const fresh = calls[2].options.body.get('request_key');
+  assert.ok(fresh);
+  assert.notEqual(fresh, first, 'a new submission gets a new key');
 });
