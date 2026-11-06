@@ -179,5 +179,15 @@ Manual mutants for the review fixes (planted, focused tests rerun, source restor
 - Removed the assistant's review-tool filter → anonymous demo test failed (tool selected).
 - Removed `Event.occurred_at <= now` from `recommendations._events` → clock-bound test failed.
 
-Full non-data/non-slow regression re-run through `fleet-build` (same split as above) is pending
-below.
+Full non-data/non-slow regression re-run through `~/.local/bin/fleet-build --min-free-gib 30.15
+--wait 21600 --timeout 3600 --workdir $PWD --` with each pytest capped at 600 s:
+
+- `timeout 600 uv run pytest -q tests/core -m 'not data and not slow'` →
+  `746 passed, 2 deselected in 224.93s`.
+- `timeout 600 uv run pytest -q tests/apps -m 'not data and not slow'` →
+  `1990 passed, 3 skipped, 262 deselected in 418.78s`.
+- Combined `EXIT=0`.
+
+Because the current `.venv` reports 1990 apps tests, the earlier full-pass count of 1985 plus the
+five review-fix tests added here (anonymous demo, other-farm member, tour, direct tool context,
+clock-bound review) is consistent.
