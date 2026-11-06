@@ -114,30 +114,30 @@ def test_golden_question_crosses_no_farm_boundary(committed_session_factory, set
         committed_session_factory, owner="other-owner", advisor="other-advisor"
     )
     with committed_session_factory.begin() as session:
+        from farmcore.apps.review import recommendations
+        from farmcore.core.access import ScopedRepository, ensure_owner_grant
+        from farmcore.core.models.canonical import Parcel
+
         farm = session.get(Farm, other_id)
-        parcel_id = session.get(Advice, other_advice).parcel_id
-        session.add(
-            Event(
-                farm_id=other_id,
-                res_model="advice",
-                res_id=other_advice,
-                kind="advice.reviewed",
-                body="Foreign answer",
-                payload={
-                    "request_id": 1,
-                    "advice_id": other_advice,
-                    "parcel_id": parcel_id,
-                    "opinion": "agree",
-                    "note": "Foreign private note",
-                    "reviewer": "other-advisor",
-                },
-                actor="user:0",
-                source_app="review",
-                occurred_at=NOW,
-            )
+        row = session.get(Advice, other_advice)
+        parcel = session.get(Parcel, row.parcel_id)
+        repo = ScopedRepository(
+            session, other_id, ensure_owner_grant(session, farm), "other-owner", "test"
+        )
+        asked = recommendations.request_check(
+            repo, NOW, row, parcel, note="Foreign question", requested_by="other-owner"
+        )
+        recommendations.respond(
+            repo,
+            NOW,
+            row,
+            parcel,
+            asked.request.id,
+            opinion="agree",
+            note="Foreign private note",
+            reviewer="other-advisor",
         )
         set_replay(session, NOW)
-        assert farm.id == other_id
     app = create_app(settings, session_factory=committed_session_factory)
     with TestClient(app, base_url="https://testserver") as owner:
         assert _login(owner, login="owner").status_code == 303
