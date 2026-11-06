@@ -208,7 +208,7 @@ def test_a_restore_kept_from_creating_its_copy_or_loader_says_nothing_was_restor
     result, _, env, untouched = restore_at(**{step: lambda _t: server_list.lock()})
     server_list.unlock()
 
-    refused(result, "busy", "nothing restored")
+    refused(result, "busy", "busy catalog", "nothing restored")  # true for either catalog
     untouched.check()
     again = restore(member_bundle, key, env)
     assert again.exit_code == 0, again.output
