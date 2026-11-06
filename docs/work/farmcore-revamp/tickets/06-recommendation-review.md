@@ -101,3 +101,25 @@ not read advice-review notes; a model-chosen tool must not write. Covered by
 the full gate returns.
 
 Full non-data/non-slow regression is running through `fleet-build` (see final evidence).
+
+Manual mutants (each planted in source, focused tests rerun, original source restored; `git diff`
+clean afterwards):
+
+- Removed `require_farm_owner` from the JSON request route → owner/advisor role test failed
+  (`1 failed, 8 deselected`). Killed.
+- Removed the advisor-role predicate from `require_assigned_advisor` → same role test failed.
+  Killed.
+- Removed the "already answered" guard in `recommendations.respond` → duplicate-answer and
+  concurrent-answer tests failed (`2 failed, 7 deselected`). Killed.
+- Removed the one-open-request guard in `recommendations.request_check` → duplicate-request test
+  failed. Killed.
+- Removed the `evaluated_at > now` guard in the assessment lookup → future-assessment test failed.
+  Killed.
+
+The assistant model boundary was re-read: `llm.VertexToolChooser` receives only the question and
+the declared tool schemas, before the tool runs; the tool's facts/text are returned to the
+browser, never fed back to the model. The conversation store keeps `(question, tool, parcel)`
+only. No review note enters a prompt, and no declared review tool writes.
+
+A no-JS owner can open `/review/assessments/{advice_id}` (tested) and use the same request form;
+the card keeps the fragment for the normal path.
