@@ -135,3 +135,48 @@ the card keeps the fragment for the normal path.
 Draft PR: https://github.com/LucasGeno/farmcore/pull/52 (base `main`, branch
 `feat/06-recommendation-review`). No deployment, no merge, no background jobs. The fresh-reviewer
 item stays open for independent QA.
+
+## Independent review disposition of PR #52 at `6cbec1d`
+
+FAIL with two findings; fixed at `ad8f07f` (TDD, RED observed first).
+
+**HIGH — anonymous demo visitor could read a review note through the assistant.** `GET
+/assistant/ask` offered `review_assessment_status` to every demo-mode viewer, and the tool
+returned the advisor note; an anonymous demo visitor therefore reached private review material.
+Fix: `ToolContext` now carries the viewer's active `member_role` and `is_admin`. The assistant
+offers the review tool only to an owner/advisor on the selected farm (never anonymous, grant-only,
+tour or bot contexts), and the tool itself refuses such a context as defence in depth (the bot
+constructs a context with no role). All review routes already called `authorized_review`.
+RED: `test_anonymous_demo_visitor_cannot_read_the_review_note` selected
+`review_assessment_status` for an anonymous demo visitor. GREEN after the fix:
+`tests/apps/review/test_recommendation_golden.py` → `8 passed`. Added coverage for an anonymous
+demo visitor (assistant and all five review routes are denied), a member of another farm, tour
+mode, owner/advisor access (existing golden questions), and a direct tool call with no member
+role.
+
+**MED — review reads were not bounded by the farm clock.** `_events` ignored `occurred_at`, so
+rewinding the clock showed later requests/answers, and a later open request made a request at the
+earlier clock time return `409`. Fix: `state`, `states` and `request` take the farm clock; `_events`
+filters `occurred_at <= now`; request/answer selection and list order use farm time
+(`occurred_at`, then id), not insertion order. RED: the rewind test saw a later answer. GREEN:
+`test_review_events_are_bounded_by_the_farm_clock` → `1 passed`, covering a hidden later answer, a
+hidden future request, a successful request at the earlier clock time, and all four events still
+stored. Notifications, the card/page routes and the assistant tool all pass their clock through.
+
+Focused checks after the fixes (final source before the full re-run):
+
+- `timeout 600 uv run pytest tests/apps/advisor tests/apps/assistant tests/apps/notifications -m
+  "not data" -q` → `555 passed, 3 skipped, 120 deselected in 132.71s`.
+- `timeout 600 uv run pytest tests/apps/review tests/apps/notifications tests/apps/chat/assistant
+  tests/apps/assistant -q -m "not data"` → `256 passed, 3 skipped, 53 deselected in 140.09s`.
+- `uv run ruff check src tests` → pass; `uv run ruff format --check src tests` → `509 files
+  already formatted`.
+
+Manual mutants for the review fixes (planted, focused tests rerun, source restored):
+
+- Removed the `member_role`/admin gate in `review.tools.status` → anonymous demo test failed.
+- Removed the assistant's review-tool filter → anonymous demo test failed (tool selected).
+- Removed `Event.occurred_at <= now` from `recommendations._events` → clock-bound test failed.
+
+Full non-data/non-slow regression re-run through `fleet-build` (same split as above) is pending
+below.
