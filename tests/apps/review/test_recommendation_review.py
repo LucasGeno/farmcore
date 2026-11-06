@@ -456,3 +456,32 @@ def test_a_review_never_follows_a_newer_assessment(committed_session_factory, se
         assert older_state["current"] is False
         listed = owner.get("/review/recommendations.json", params={"farm": farm_id}).json()
         assert [r["advice_id"] for r in listed["reviews"]] == [advice_id]
+
+
+def test_the_review_list_puts_the_newest_request_first(committed_session_factory, settings):
+    farm_id, _, first_advice = _farm_with_assessment(committed_session_factory)
+    with committed_session_factory.begin() as session:
+        from farmcore.core.models.canonical import Farm
+        from tests.apps.share.conftest import make_parcel
+
+        farm = session.get(Farm, farm_id)
+        parcel = make_parcel(session, farm, 2)
+        second = Advice(
+            farm_id=farm_id,
+            parcel_id=parcel.id,
+            evaluated_at=NOW,
+            decision="none",
+            reasons=[],
+            products=[],
+            props={"headline": "Second stored check"},
+        )
+        session.add(second)
+        session.flush()
+        second_advice = second.id
+    app = create_app(settings, session_factory=committed_session_factory)
+    with TestClient(app, base_url="https://testserver") as owner:
+        assert _login(owner, login="owner").status_code == 303
+        assert _request_check(owner, farm_id, first_advice).status_code == 201
+        assert _request_check(owner, farm_id, second_advice).status_code == 201
+        listed = owner.get("/review/recommendations.json", params={"farm": farm_id}).json()
+        assert [r["advice_id"] for r in listed["reviews"]] == [second_advice, first_advice]

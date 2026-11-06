@@ -87,8 +87,12 @@ def state(repo: ScopedRepository, advice_id: int) -> ReviewState:
 def states(repo: ScopedRepository) -> list[ReviewState]:
     """Every reviewed or requested assessment on this farm, newest request first."""
     events = _events(repo)
-    ids = sorted({e.res_id for e in events if e.kind == REQUEST_KIND}, reverse=True)
-    return [_state_from(events, advice_id) for advice_id in ids]
+    found = [_state_from(events, advice_id) for advice_id in {e.res_id for e in events}]
+    return sorted(
+        (state for state in found if state.request is not None),
+        key=lambda state: state.request.id,
+        reverse=True,
+    )
 
 
 def request(repo: ScopedRepository, request_id: int) -> Event:
