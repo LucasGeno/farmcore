@@ -54,7 +54,7 @@ def item(
     )
 
 
-def items(repo, now, tz, visible, *, busy_days=()):
+def items(repo, now, tz, visible, *, busy_days=(), review_reader=False):
     out = []
     farm = repo.get(Farm, repo.farm_id, scope="fields:read")
     availability = advisor.current_availability(repo, now, tz)
@@ -148,7 +148,9 @@ def items(repo, now, tz, visible, *, busy_days=()):
         station = station_for_farm(repo)
         if not station or not station.props.get("archive_only"):
             out.extend(forecast_items(repo, now, tz, farm, busy_days))
-    if "review" in visible:
+    # Review items name the parcel, requester/reviewer, time and opinion: only an owner or
+    # assigned advisor on this farm may see them, never an anonymous demo or other member.
+    if "review" in visible and review_reader:
         out.extend(review_items(repo, now, tz))
     return sorted(
         out, key=lambda i: ({"red": 0, "amber": 1, "info": 2}[i.severity], -(i.priority or 0))

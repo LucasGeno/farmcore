@@ -7,9 +7,11 @@ from farmcore.apps.forecast import availability
 from farmcore.apps.notifications import preferences, service
 from farmcore.core.access import Repo
 from farmcore.core.clock import get_clock
+from farmcore.core.identity import principal_for
 from farmcore.core.registry import visible_manifests
+from farmcore.core.tour import is_tour
 from farmcore.core.urls import with_farm
-from farmcore.web import render
+from farmcore.web import is_admin, render
 
 router = APIRouter()
 
@@ -22,11 +24,16 @@ def notifications(request: Request, repo: Repo):
         return HTMLResponse("")
     settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
+    principal = principal_for(request)
+    member_role = (
+        principal.memberships.get(repo.farm_id) if principal and not is_tour(request) else None
+    )
     items = service.items(
         repo,
         now,
         settings.display_tz,
         visible,
+        review_reader=is_admin(request) or member_role in ("owner", "advisor"),
         busy_days=availability.parse(
             request.cookies.get(availability.COOKIE.format(farm_id=repo.farm_id)),
             now.astimezone(ZoneInfo(settings.display_tz)).date(),

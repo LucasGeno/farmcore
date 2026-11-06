@@ -191,3 +191,40 @@ Full non-data/non-slow regression re-run through `~/.local/bin/fleet-build --min
 Because the current `.venv` reports 1990 apps tests, the earlier full-pass count of 1985 plus the
 five review-fix tests added here (anonymous demo, other-farm member, tour, direct tool context,
 clock-bound review) is consistent.
+
+## Re-review of PR #52 at `d9f0316`
+
+FAIL with one MED finding, fixed at the commit after `d9f0316`: the bell still listed review
+metadata (parcel alias, requester/reviewer, time, opinion) to an anonymous visitor of an enabled
+demo farm. `GET /notifications` had no member check and `notifications/service.items` always
+added `review_items`.
+
+Fix: `items(..., review_reader=False)` is now opt-in and only adds review items when the caller
+proves the viewer is an owner or assigned advisor on that farm. `notifications/routes.py`
+computes that from the fresh principal and passes it (`is_admin` or an active `owner`/`advisor`
+role, never in tour mode). Every other `items` caller, including tests and widgets, keeps the
+safe default and cannot list review items.
+
+RED: `test_the_bell_hides_review_metadata_from_an_anonymous_demo_visitor` found "Advisor check"
+in the anonymous demo bell, and `test_review_items_need_an_explicit_member_capability` raised
+`TypeError` because the capability did not exist. GREEN: `tests/apps/notifications` →
+`13 passed, 1 deselected`; the new tests cover the anonymous demo visitor, a member of another
+farm (`403`, no leak), and the service default versus `review_reader=True`.
+
+Mutants (planted, focused tests rerun, source restored):
+
+- Removed `and review_reader` from `items` → anonymous-demo and capability tests failed.
+- Removed the route's `review_reader=` pass-through → the owner bell test failed.
+
+Focused checks after this fix:
+
+- `timeout 600 uv run pytest tests/apps/advisor tests/apps/assistant tests/apps/notifications -m
+  "not data" -q` → `558 passed, 3 skipped, 120 deselected in 145.85s`.
+- `timeout 600 uv run pytest tests/apps/review tests/apps/notifications tests/apps/chat/assistant
+  tests/apps/assistant -q -m "not data"` → `259 passed, 3 skipped, 53 deselected in 142.29s`.
+- `uv run ruff check src tests` → pass; `uv run ruff format --check src tests` → `509 files
+  already formatted`.
+
+No full split re-run: this round changes only app-owned notifications code/tests, not shared
+`src/farmcore/core`; the last full split at this branch ran the shared code green
+(`746` core + `1990` apps).
