@@ -56,3 +56,15 @@ def test_weather_only_consent_preserves_forecast_without_parameter_or_observatio
     assert "not authorized" in plan["unavailable"]
     assert all(not day["parcels"] for day in plan["days"])
     assert notifications
+
+
+def test_a_record_only_consent_cannot_read_recommendation_review_notes():
+    """Review notes are advice material, not generic timeline rows: logs:read must not see them."""
+    grant = DataGrant(id=1, farm_id=1, grantee="recipient", scopes=["logs:read", "fields:read"])
+    repo = ScopedRepository(None, 1, grant, "recipient", "consent-policy")
+    with pytest.raises(ScopeDenied):
+        repo.check("logs:read", "recommendation_review")
+    with pytest.raises(ScopeDenied):
+        repo.check("advice:read", "recommendation_review")
+    grant.scopes = ["advice:read"]
+    repo.check("advice:read", "recommendation_review")
