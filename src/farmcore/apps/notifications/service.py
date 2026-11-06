@@ -148,9 +148,66 @@ def items(repo, now, tz, visible, *, busy_days=()):
         station = station_for_farm(repo)
         if not station or not station.props.get("archive_only"):
             out.extend(forecast_items(repo, now, tz, farm, busy_days))
+    if "review" in visible:
+        out.extend(review_items(repo, now, tz))
     return sorted(
         out, key=lambda i: ({"red": 0, "amber": 1, "info": 2}[i.severity], -(i.priority or 0))
     )
+
+
+REVIEW_WINDOW = timedelta(days=7)  # how long a finished check stays in the bell
+
+
+def review_items(repo, now, tz):
+    """Open advisor checks and their answers; the note itself stays on the review page/card."""
+    from farmcore.apps.review import recommendations
+
+    try:
+        states = recommendations.states(repo)
+    except ScopeDenied:
+        return []
+    href = with_farm("/review/recommendations/", repo.farm_id)
+    zone = ZoneInfo(tz)
+    out = []
+    for state in states:
+        asked = state.request
+        if asked is None:
+            continue
+        payload = asked.payload or {}
+        alias = payload.get("alias") or "A parcel"
+        if state.response is not None:
+            answered = state.response
+            if now - answered.occurred_at > REVIEW_WINDOW:
+                continue
+            answer = answered.payload or {}
+            at = answered.occurred_at.astimezone(zone)
+            opinion = recommendations.OPINION_WORDS.get(answer.get("opinion"), "Reviewed")
+            out.append(
+                item(
+                    "review-answered",
+                    state.advice_id,
+                    "info",
+                    f"Advisor check answered · {alias}",
+                    f"{answer.get('reviewer')} · {at:%d %b %H:%M} · {opinion}. "
+                    "Open to read the note.",
+                    href,
+                    answered.occurred_at,
+                )
+            )
+        else:
+            out.append(
+                item(
+                    "review-requested",
+                    state.advice_id,
+                    "info",
+                    f"Advisor check requested · {alias}",
+                    f"{payload.get('requested_by')} asked for a human check on the saved "
+                    "assessment. No answer yet.",
+                    href,
+                    asked.occurred_at,
+                )
+            )
+    return out
 
 
 def forecast_items(repo, now, tz, farm, busy_days):
