@@ -1,8 +1,10 @@
-"""Planned jobs (migration `planning_0001`) and their resources (migration `planning_0002`).
+"""Planned jobs (migration `planning_0001`), their resources (migration `planning_0002`) and
+their completion into a confirmed operation (migration `planning_0003`).
 
 `planning_job` is intended work frozen from one stored assessment (`advice`) and its parameter
 version; `planning_job_parcel` lists its parcels; `planning_job_revision` is the append-only
-snapshot history (creation, each edit, cancellation). Every relation is farm-scoped through a
+snapshot history (creation, each edit, cancellation, completion). A completed job links the
+confirmed canonical `log` it produced. Every relation is farm-scoped through a
 composite `(id, farm_id)` foreign key. Revision updates are refused by a database trigger;
 deletes stay possible for demo reset.
 
@@ -39,8 +41,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from farmcore.core.models.base import Base
 
-JOB_STATUSES = ("planned", "cancelled")
-REVISION_ACTIONS = ("created", "edited", "cancelled")
+JOB_STATUSES = ("planned", "cancelled", "completed")
+REVISION_ACTIONS = ("created", "edited", "cancelled", "completed")
 MACHINE_KINDS = ("sprayer", "tractor", "other")
 RESOURCES = ("machine", "operator")
 
@@ -72,8 +74,40 @@ class PlanningJob(Base):
             "OR (status <> 'cancelled' AND cancelled_at IS NULL AND cancelled_by IS NULL)",
             name="cancel_metadata",
         ),
+        CheckConstraint(
+            "cancelled_by IS NULL OR length(btrim(cancelled_by)) > 0", name="cancelled_by"
+        ),
+        ForeignKeyConstraint(("operation_log_id", "farm_id"), ("log.id", "log.farm_id")),
+        CheckConstraint(
+            "completed_by IS NULL OR length(btrim(completed_by)) > 0", name="completed_by"
+        ),
+        CheckConstraint(
+            "operation_request_key IS NULL "
+            "OR length(btrim(operation_request_key)) BETWEEN 1 AND 128",
+            name="operation_request_key",
+        ),
+        CheckConstraint(
+            "(status = 'completed' AND completed_at IS NOT NULL AND completed_by IS NOT NULL "
+            "AND operation_log_id IS NOT NULL AND operation_request_key IS NOT NULL) "
+            "OR (status <> 'completed' AND completed_at IS NULL AND completed_by IS NULL "
+            "AND operation_log_id IS NULL AND operation_request_key IS NULL)",
+            name="complete_metadata",
+        ),
         Index("ix_planning_job_farm_start", "farm_id", "scheduled_start", "id"),
         Index("ix_planning_job_assessment", "assessment_id"),
+        Index(
+            "ix_planning_job_operation_log",
+            "operation_log_id",
+            postgresql_where=text("operation_log_id IS NOT NULL"),
+        ),
+        # One idempotency key per farm: a retried double tap cannot become a second completion.
+        Index(
+            "ix_planning_job_farm_request_key",
+            "farm_id",
+            "operation_request_key",
+            unique=True,
+            postgresql_where=text("operation_request_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -99,6 +133,12 @@ class PlanningJob(Base):
     )
     cancelled_by: Mapped[str | None] = mapped_column(Text)
     cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_by: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # The confirmed canonical operation this completion created or merged into (same farm).
+    operation_log_id: Mapped[int | None] = mapped_column(BigInteger)
+    # Client idempotency key of the completion request; unique per farm.
+    operation_request_key: Mapped[str | None] = mapped_column(Text)
     props: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default=text("'{}'::jsonb"), default=dict
     )
@@ -129,6 +169,12 @@ class PlanningJobRevision(Base):
         CheckConstraint("revision >= 1", name="revision"),
         CheckConstraint(_in("action", REVISION_ACTIONS), name="action"),
         CheckConstraint(_in("status", JOB_STATUSES), name="status"),
+        # Creation and edits snapshot a planned job; a terminal action snapshots its own status.
+        CheckConstraint(
+            "(action IN ('created', 'edited') AND status = 'planned') "
+            "OR (action IN ('cancelled', 'completed') AND status = action)",
+            name="action_status",
+        ),
         CheckConstraint("jsonb_typeof(snapshot) = 'object'", name="snapshot"),
         CheckConstraint("length(btrim(actor)) > 0", name="actor"),
         CheckConstraint("length(reason) <= 2000", name="reason"),
