@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Complete planned work into one confirmed operation"
 description: "Milestones 1–4: complete planned work into one confirmed operation."
-status: approved
+status: in-progress
 blocked_by: ["06", "08", "10"]
 ---
 
@@ -40,5 +40,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
+
+Claim 2026-11-07 17:15 CET: implementer `fc11-deepseek` (OpenCode Go `opencode-go/deepseek-v4.1-flash`, M1), worktree `~/dev/farmcore-worktrees/11-job-completion`, branch `feat/11-job-completion`. Coordinator and migration author: `fleet-head-opus` (M1). Reviewer: Dell Codex. Stuck deadline 2026-11-08 09:00 CET.
 
 Pending implementation.
