@@ -19,6 +19,9 @@ x-farmcore: &farmcore
   # swaps the image under another.
   image: ${FARMCORE_IMAGE:-farmcore-${COMPOSE_PROJECT_NAME}:local}
   restart: unless-stopped
+  # Unlimited unless set; `farmcore fleet apply` sets them from a declaration (docs/hosted-fleet.md).
+  mem_limit: ${FARMCORE_APP_MEMORY:-0}
+  cpus: ${FARMCORE_APP_CPUS:-0}
   depends_on: &after-migrate
     db:
       condition: service_healthy
@@ -61,6 +64,8 @@ services:
   db:
     image: ${POSTGIS_IMAGE:-postgis/postgis:17-3.5}
     restart: unless-stopped
+    mem_limit: ${FARMCORE_DATABASE_MEMORY:-0}
+    cpus: ${FARMCORE_DATABASE_CPUS:-0}
     environment:
       POSTGRES_DB: farmcore
       # The owner/migrator: this server's bootstrap superuser, owner of the database, the schema

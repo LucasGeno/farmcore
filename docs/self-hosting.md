@@ -669,6 +669,11 @@ average them per container; disk is `du -sk` of each volume and `docker image in
 30 s, and sample again. The numbers above come from Docker Desktop on Apple silicon (arm64,
 10 CPUs, 8 GiB VM, `imresamu/postgis:17-3.5`); amd64 Linux hosts are not measured yet.
 
+## Several installations
+
+An operator hosting several installations declares them in a private fleet inventory and checks it
+with `farmcore fleet plan`: see [Hosted fleet](hosted-fleet.md).
+
 ## Configuration reference
 
 Every variable is listed with its default in [.env.example](../.env.example) and

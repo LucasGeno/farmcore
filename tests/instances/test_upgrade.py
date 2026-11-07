@@ -693,6 +693,8 @@ def _image_with(base: str, tag: str, context: Path, revision: str, cmd: str | No
     (context / "zz_test_0001.py").write_text(
         REVISION.format(rev="zz_test_0001", down=HEAD, body=revision)
     )
+    # COPY keeps the mode, and the image runs as a non-root user: readable whatever the umask.
+    (context / "zz_test_0001.py").chmod(0o644)
     lines = [
         f"FROM {base}",
         "USER root",

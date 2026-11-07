@@ -98,13 +98,14 @@ class MigrationFailed(MigrateError):
 
 
 class ServerBusy(MigrateError):
-    """Another restore or migrate kept `pg_database` locked for longer than `LOCK_TIMEOUT`;
-    the transaction that waited changed nothing."""
+    """Another session (a restore or migrate) kept a server catalog, `pg_database` or the role
+    catalog `pg_authid`, locked for longer than `LOCK_TIMEOUT`; the transaction that waited
+    changed nothing."""
 
     def __init__(self) -> None:
         super().__init__(
-            "the server is busy: another restore or migrate kept its list of databases locked "
-            f"for over {LOCK_TIMEOUT}"
+            "the server is busy: another session kept a server catalog (its databases or roles) "
+            f"locked for over {LOCK_TIMEOUT}"
         )
 
 

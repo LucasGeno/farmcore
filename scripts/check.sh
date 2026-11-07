@@ -25,12 +25,21 @@ done
 # Data guard: raw datasets, spreadsheets, archives and credentials are never tracked or staged.
 # Env files: `.env`, `.env.*`, per-installation `<name>.env` and `<name>.env.*`; only `.env.example`
 # is committed.
-if leaked=$(git ls-files | grep -E '^(data|secrets|backups)/|\.(xlsx|zip|gz|dump)$|\.env(\.[^/]*)?$' \
+if leaked=$(git ls-files | grep -E '^(data|secrets|backups)/|(^|/)fleet-(inventory|state)/|\.(xlsx|zip|gz|dump)$|\.env(\.[^/]*)?$' \
   | grep -vE '(^|/)\.env\.example$'); then
   echo "data guard: these tracked/staged files must not be committed:" >&2
   echo "$leaked" >&2
   exit 1
 fi
+
+# Fleet inventories are private (docs/hosted-fleet.md). A plain search also covers a declaration
+# the strict reader refuses; the reader covers every spelling it accepts. Names only, no content.
+if leaked=$(git grep --cached -lE '^schema_version:' -- '*.yaml' '*.yml' ':(exclude)examples/fleet/*'); then
+  echo "data guard: fleet declarations must stay private:" >&2
+  echo "$leaked" >&2
+  exit 1
+fi
+uv run python -m farmcore.hosting.data_guard
 
 if ! (exec 3<>/dev/tcp/127.0.0.1/55442) 2>/dev/null; then
   echo "hint: dev PostGIS is not reachable on localhost:55442;" \
