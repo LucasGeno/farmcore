@@ -42,7 +42,7 @@ PRODUCT_TARGETS = ("downy", "powdery")
 LOG_TYPES = ("spray", "fertilise", "irrigate", "harvest", "observation")
 LOG_STATUSES = ("pending", "done")
 QUANTITY_MEASURES = ("rate", "volume", "area")
-LOG_SOURCE_TYPES = ("voice", "seed", "isoxml", "file")
+LOG_SOURCE_TYPES = ("voice", "seed", "isoxml", "file", "planning")
 ADVICE_DECISIONS = ("spray", "wait", "protected", "none")
 
 
@@ -153,6 +153,8 @@ class Log(Base):
     __table_args__ = (
         CheckConstraint(_in("type", LOG_TYPES), name="type"),
         CheckConstraint(_in("status", LOG_STATUSES), name="status"),
+        # Farm-scoped target for composite references (planning_job.operation_log_id).
+        UniqueConstraint("id", "farm_id"),
         Index("ix_log_farm_id_type_ts_start", "farm_id", "type", "ts_start"),
     )
 

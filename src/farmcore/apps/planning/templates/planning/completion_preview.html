@@ -1,0 +1,34 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, card %}
+{% block title %}Complete planned work · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Complete planned work", "Check the actual work against the saved plan before confirming. The plan revision, assessment and parameter version stay as they were; the confirmed operation is recorded once.") %}{% endcall %}
+<a href="{{ resolved_farm_url('/planning/') }}" class="inline-flex min-h-[44px] items-center underline">Back to planned jobs</a>
+
+{% call card("mt-4") %}
+<h2 class="text-lg font-semibold">What will be recorded</h2>
+<ul class="mt-3 grid gap-1 text-[15px]">
+  {% for difference in preview.differences %}<li data-difference>{{ difference }}</li>{% endfor %}
+</ul>
+
+<dl class="mt-4 grid gap-2 text-[15px] md:grid-cols-2">
+  <div><dt class="font-semibold">Saved plan</dt><dd>{{ preview.planned.scheduled_start|local }} · {{ preview.planned.duration_minutes }} min · {{ preview.planned.parcel_ids|length }} parcel(s) · {{ preview.planned.product.name if preview.planned.product else 'unknown product' }}</dd></div>
+  <div><dt class="font-semibold">Actual work</dt><dd>{{ preview.actual.start|local }} · {{ preview.actual.duration_minutes }} min · {{ preview.actual.parcel_ids|length }} parcel(s)</dd></div>
+  <div><dt class="font-semibold">Applied</dt><dd>{% for q in preview.actual.quantities %}{{ q.product }} {{ q.value }} {{ q.unit }}{{ ', ' if not loop.last }}{% endfor %}</dd></div>
+  <div><dt class="font-semibold">Assessment</dt><dd>#{{ preview.assessment.id }} · {{ preview.assessment.decision }} · parameter version {{ preview.assessment.config_version.id if preview.assessment.config_version.id else 'unversioned' }} · {{ preview.assessment.config_version.status }}</dd></div>
+  <div><dt class="font-semibold">Farmer availability on the actual day</dt><dd>{{ 'Available' if preview.availability.available else 'Marked Busy' }}</dd></div>
+</dl>
+
+<form method="post" action="{{ resolved_farm_url('/planning/jobs/' ~ completion_form.job_id ~ '/complete-form') }}" class="mt-4 grid gap-3 border-t border-line pt-3">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="expected_revision" value="{{ completion_form.expected_revision }}">
+  <input type="hidden" name="request_key" value="{{ completion_form.request_key }}">
+  <input type="hidden" name="actual_start" value="{{ completion_form.actual_start }}">
+  <input type="hidden" name="duration_minutes" value="{{ completion_form.duration_minutes }}">
+  <input type="hidden" name="notes" value="{{ completion_form.notes }}">
+  {% for parcel_id in completion_form.parcel_ids %}<input type="hidden" name="parcel_ids" value="{{ parcel_id }}">{% endfor %}
+  {% for q in completion_form.quantities %}<input type="hidden" name="product_id" value="{{ q.product_id }}"><input type="hidden" name="dose_value" value="{{ q.value }}"><input type="hidden" name="dose_unit" value="{{ q.unit }}">{% endfor %}
+  <button class="min-h-[44px] justify-self-start rounded-lg bg-brand-700 px-4 text-surface hover:bg-brand-900 focus-visible:ring-2 focus-visible:ring-brand-700" type="submit">Confirm completed work</button>
+</form>
+{% endcall %}
+{% endblock %}

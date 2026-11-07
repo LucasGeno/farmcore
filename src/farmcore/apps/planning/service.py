@@ -8,7 +8,11 @@ is read from `forecast_availability` and recorded in that snapshot; it never sil
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+import hashlib
+import json
+import secrets
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
@@ -17,7 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from farmcore.apps.advisor import service as advice_service
 from farmcore.apps.fields.seed import alias_number
 from farmcore.apps.forecast import availability
-from farmcore.apps.operations import production
+from farmcore.apps.operations import production, spray_weather
 from farmcore.apps.operations.catalogue import products_for_farm
 from farmcore.apps.planning import offers, resources
 from farmcore.apps.planning.models import (
@@ -29,12 +33,18 @@ from farmcore.apps.planning.models import (
     PlanningOperator,
 )
 from farmcore.apps.review.models import ParameterVersion
+from farmcore.core import logs
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Advice, Farm, Parcel, Product
+from farmcore.core.models.canonical import Advice, Farm, Log, LogSource, Parcel, Product
 
 SCOPE = "planning:read"
 WRITE = "planning:write"
 MAX_DURATION = 1440
+COMPLETION = "completion"
+PLANNING_SOURCE = "planning"
+RATE_UNITS = ("kg/ha", "L/ha", "l/ha", "g/ha", "ml/ha")
+MAX_QUANTITIES = 50
+MAX_NOTES = 10000
 
 
 class JobError(ValueError):
@@ -254,11 +264,22 @@ def locked(repo: ScopedRepository, job_id: int) -> PlanningJob:
         select(PlanningJob)
         .where(PlanningJob.id == job_id, PlanningJob.farm_id == repo.farm_id)
         .with_for_update()
+        .execution_options(populate_existing=True)
     )
     job = repo.execute(stmt, scope=SCOPE, resource="planning_job").scalar_one_or_none()
     if job is None:
         raise JobNotFound("Planned job not found.")
     return job
+
+
+def job(repo: ScopedRepository, job_id: int) -> PlanningJob:
+    """The job without a row lock, for a read-only preview."""
+    if not 0 < job_id < 2**63:
+        raise JobNotFound("Planned job not found.")
+    row = repo.get(PlanningJob, job_id, scope=SCOPE)
+    if row is None:
+        raise JobNotFound("Planned job not found.")
+    return row
 
 
 def edit(
@@ -620,6 +641,414 @@ def set_assignments(
     return job
 
 
+def _decimal_text(value: Decimal) -> str:
+    text = format(value, "f")
+    return text.rstrip("0").rstrip(".") if "." in text else text
+
+
+def _raw_quantities(quantities: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Validate the submitted shape and normalise doses before any database lookup."""
+    if not 1 <= len(quantities) <= MAX_QUANTITIES:
+        raise JobError("Enter at least one applied product.")
+    out: list[dict[str, object]] = []
+    for item in quantities:
+        try:
+            product_id = int(item["product_id"])  # type: ignore[arg-type]
+            value = Decimal(str(item["value"]))
+            unit = str(item["unit"])
+        except (KeyError, TypeError, ValueError, InvalidOperation):
+            raise JobError(
+                "Each applied product needs a product, a positive dose and a rate unit."
+            ) from None
+        if not 0 < product_id < 2**63:
+            raise JobError("Choose products from this farm's shortlist.")
+        if not value.is_finite() or value <= 0:
+            raise JobError("A dose must be positive.")
+        if unit not in RATE_UNITS:
+            raise JobError("Use a spray rate unit: kg/ha, L/ha, l/ha, g/ha or ml/ha.")
+        out.append({"product_id": product_id, "value": _decimal_text(value), "unit": unit})
+    if len({int(q["product_id"]) for q in out}) != len(out):
+        raise JobError("List each product once.")
+    return sorted(out, key=lambda q: (int(q["product_id"]), str(q["unit"])))
+
+
+def _fingerprint(
+    *,
+    request_key: str,
+    actual_start: datetime,
+    duration_minutes: int,
+    parcel_ids: list[int],
+    quantities: list[dict[str, object]],
+    notes: str,
+) -> str:
+    value = {
+        "request_key": request_key,
+        "actual_start": actual_start.astimezone(UTC).isoformat(),
+        "duration_minutes": int(duration_minutes),
+        "parcel_ids": sorted(set(int(parcel_id) for parcel_id in parcel_ids)),
+        "quantities": [[int(q["product_id"]), str(q["value"]), str(q["unit"])] for q in quantities],
+        "notes": notes,
+    }
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _completion_inputs(
+    repo: ScopedRepository,
+    *,
+    now: datetime,
+    actual_start: datetime,
+    duration_minutes: int,
+    parcel_ids: list[int],
+    quantities: list[dict[str, object]],
+    notes: str,
+) -> tuple[list[Parcel], list[dict[str, object]]]:
+    if actual_start.tzinfo is None:
+        raise JobError("Choose an actual start with a timezone.")
+    if not 1 <= duration_minutes <= MAX_DURATION:
+        raise JobError("Duration must be between 1 and 1440 minutes.")
+    if len(notes) > MAX_NOTES:
+        raise JobError("Notes are too long.")
+    actual_end = actual_start + timedelta(minutes=duration_minutes)
+    if actual_start > now or actual_end > now:
+        raise JobError("Actual work cannot start or end after the farm clock's now.")
+    parcels = _parcels(repo, parcel_ids)
+    doses = []
+    for quantity in _raw_quantities(quantities):
+        product = _product(repo, int(quantity["product_id"]))
+        doses.append(
+            {
+                "product_id": product.id,
+                "product": product.name,
+                "value": quantity["value"],
+                "unit": quantity["unit"],
+            }
+        )
+    return parcels, doses
+
+
+def _completion_target(job: PlanningJob, expected_revision: int) -> None:
+    if job.status == "completed":
+        raise JobConflict("This planned job is already completed.", job.revision)
+    if job.status != "planned":
+        raise JobConflict("Only planned jobs can be completed.", job.revision)
+    if expected_revision != job.revision:
+        raise JobConflict(
+            f"Revision conflict: the job is at revision {job.revision}.", job.revision
+        )
+
+
+def _clock_text(value: datetime, tz: str) -> str:
+    return value.astimezone(ZoneInfo(tz)).strftime("%d %b %H:%M")
+
+
+def _difference_lines(
+    job: PlanningJob,
+    planned_parcels: list[Parcel],
+    planned_product: Product | None,
+    actual_start: datetime,
+    duration_minutes: int,
+    parcels: list[Parcel],
+    doses: list[dict[str, object]],
+    tz: str,
+) -> list[str]:
+    lines: list[str] = []
+    if job.scheduled_start != actual_start:
+        lines.append(
+            f"Start: planned {_clock_text(job.scheduled_start, tz)}, "
+            f"actual {_clock_text(actual_start, tz)}."
+        )
+    if job.duration_minutes != duration_minutes:
+        lines.append(
+            f"Duration: planned {job.duration_minutes} min, actual {duration_minutes} min."
+        )
+    planned_ids = {parcel.id for parcel in planned_parcels}
+    actual_ids = {parcel.id for parcel in parcels}
+    added = [p.alias for p in parcels if p.id not in planned_ids]
+    removed = [p.alias for p in planned_parcels if p.id not in actual_ids]
+    if added:
+        lines.append(f"Parcels added: {', '.join(added)}.")
+    if removed:
+        lines.append(f"Parcels not treated: {', '.join(removed)}.")
+    actual_products = [str(dose["product"]) for dose in doses]
+    planned_name = planned_product.name if planned_product else None
+    if actual_products != ([planned_name] if planned_name else []):
+        lines.append(
+            f"Products: planned {planned_name or 'unknown'}, actual {', '.join(actual_products)}."
+        )
+    return lines or ["Actual work matches the saved plan."]
+
+
+def completion_preview(
+    repo: ScopedRepository,
+    job: PlanningJob,
+    *,
+    now: datetime,
+    expected_revision: int,
+    request_key: str,
+    actual_start: datetime,
+    duration_minutes: int,
+    parcel_ids: list[int],
+    quantities: list[dict[str, object]],
+    notes: str = "",
+    tz: str,
+) -> dict[str, object]:
+    """What completing this job would record, and how it differs from the saved plan. No writes."""
+    repo.check(SCOPE, "planning_job")
+    _completion_target(job, expected_revision)
+    key = _text(request_key, "Request key", maximum=128)
+    parcels, doses = _completion_inputs(
+        repo,
+        now=now,
+        actual_start=actual_start,
+        duration_minutes=duration_minutes,
+        parcel_ids=parcel_ids,
+        quantities=quantities,
+        notes=notes,
+    )
+    planned_parcels = _job_parcels(repo, job.id)
+    planned_product = repo.get(Product, job.product_id, scope="logs:read")
+    end = actual_start + timedelta(minutes=duration_minutes)
+    state = _state(repo, actual_start, tz)
+    advice_row = repo.get(Advice, job.assessment_id, scope="advice:read")
+    return {
+        "job_id": job.id,
+        "revision": job.revision,
+        "plan_revision": job.revision,
+        "request_key": key,
+        "planned": {
+            "scheduled_start": job.scheduled_start,
+            "scheduled_end": job.scheduled_start + timedelta(minutes=job.duration_minutes),
+            "duration_minutes": job.duration_minutes,
+            "parcel_ids": [parcel.id for parcel in planned_parcels],
+            "product": (
+                {"id": planned_product.id, "name": planned_product.name}
+                if planned_product
+                else None
+            ),
+        },
+        "actual": {
+            "start": actual_start,
+            "end": end,
+            "duration_minutes": duration_minutes,
+            "parcel_ids": sorted(parcel.id for parcel in parcels),
+            "quantities": doses,
+        },
+        "differences": _difference_lines(
+            job,
+            planned_parcels,
+            planned_product,
+            actual_start,
+            duration_minutes,
+            parcels,
+            doses,
+            tz,
+        ),
+        "assessment": {
+            "id": job.assessment_id,
+            "evaluated_at": advice_row.evaluated_at if advice_row else None,
+            "decision": advice_row.decision if advice_row else None,
+            "config_version": {
+                "id": job.config_version_id,
+                "status": job.config_version_status,
+                "accuracy_claim": False,
+            },
+        },
+        "availability": state,
+        "operation": {
+            "type": "spray",
+            "status": "done",
+            "ts_start": actual_start,
+            "ts_end": end,
+            "parcel_ids": sorted(parcel.id for parcel in parcels),
+            "quantities": doses,
+            "source": PLANNING_SOURCE,
+        },
+    }
+
+
+def complete(
+    repo: ScopedRepository,
+    now: datetime,
+    tz: str,
+    job_id: int,
+    *,
+    expected_revision: int,
+    request_key: str,
+    actual_start: datetime,
+    duration_minutes: int,
+    parcel_ids: list[int],
+    quantities: list[dict[str, object]],
+    notes: str = "",
+    reader=None,
+) -> tuple[PlanningJob, Log, bool]:
+    """Complete the job into one confirmed operation, or return the same operation on a retry.
+
+    The farm advisory lock serialises completions before the job row lock. A second session
+    therefore sees the first completion instead of creating a second log or stock movement.
+    """
+    repo.check(WRITE, "planning_job")
+    logs.lock_farm(repo.session, repo.farm_id)
+    job_row = locked(repo, job_id)
+    key = _text(request_key, "Request key", maximum=128)
+    raw = _raw_quantities(quantities)
+    fingerprint = _fingerprint(
+        request_key=key,
+        actual_start=actual_start,
+        duration_minutes=duration_minutes,
+        parcel_ids=parcel_ids,
+        quantities=raw,
+        notes=notes,
+    )
+    if job_row.status == "completed":
+        if job_row.operation_request_key != key:
+            raise JobConflict("This planned job is already completed.", job_row.revision)
+        stored = (job_row.props or {}).get(COMPLETION) or {}
+        if stored.get("fingerprint") != fingerprint:
+            raise JobConflict("Request key already used for another completion.", job_row.revision)
+        operation = repo.get(Log, job_row.operation_log_id, scope="logs:read")
+        if operation is None:
+            raise JobConflict("The linked operation is unavailable.", job_row.revision)
+        return job_row, operation, True
+    _completion_target(job_row, expected_revision)
+    parcels, doses = _completion_inputs(
+        repo,
+        now=now,
+        actual_start=actual_start,
+        duration_minutes=duration_minutes,
+        parcel_ids=parcel_ids,
+        quantities=quantities,
+        notes=notes,
+    )
+    end = actual_start + timedelta(minutes=duration_minutes)
+    assignments = _snapshot_assignments(_assigned_rows(repo, job_row.id))
+    external_key = f"job:{job_row.id}:{key}"
+    operation, merged = logs.record_operation(
+        repo.session,
+        farm_id=repo.farm_id,
+        type="spray",
+        parcel_ids=[parcel.id for parcel in parcels],
+        ts_start=actual_start,
+        ts_end=end,
+        quantities=[
+            logs.QuantityInput(
+                measure="rate",
+                value=Decimal(str(dose["value"])),
+                unit=str(dose["unit"]),
+                product_id=int(dose["product_id"]),
+                label=str(dose["product"]),
+            )
+            for dose in doses
+        ],
+        source=logs.SourceInput(
+            source_type=PLANNING_SOURCE,
+            external_key=external_key,
+            raw_payload={
+                "job_id": job_row.id,
+                "request_key": key,
+                "plan_revision": job_row.revision,
+                "assessment_id": job_row.assessment_id,
+                "config_version": {
+                    "id": job_row.config_version_id,
+                    "status": job_row.config_version_status,
+                },
+            },
+            confidence=None,
+            precision_rank=logs.RANK_PLANNING,
+        ),
+        actor=repo.actor,
+        occurred_at=now,
+        status="done",
+        name=job_row.name,
+        source_app="planning",
+    )
+    planning_source = next(
+        (
+            source
+            for source in operation.sources
+            if source.source_type == PLANNING_SOURCE and source.external_key == external_key
+        ),
+        None,
+    )
+    if planning_source is not None:
+        # The immutable weather receipt belongs to this completion's own source and time,
+        # before a merge could move other evidence onto the log.
+        spray_weather.capture(
+            repo,
+            [
+                spray_weather.Receipt(
+                    planning_source.id, actual_start, tuple(parcel.id for parcel in parcels)
+                )
+            ],
+            reader=reader,
+            data_now=now,
+            captured_at=datetime.now(UTC),
+        )
+    state = _state(repo, actual_start, tz)
+    completion = {
+        "request_key": key,
+        "fingerprint": fingerprint,
+        "actual_start": actual_start.isoformat(),
+        "actual_end": end.isoformat(),
+        "actual_start_local": actual_start.astimezone(ZoneInfo(tz)).strftime("%d %b %Y %H:%M"),
+        "actual_end_local": end.astimezone(ZoneInfo(tz)).strftime("%d %b %Y %H:%M"),
+        "duration_minutes": duration_minutes,
+        "parcel_ids": sorted(parcel.id for parcel in parcels),
+        "quantities": doses,
+        "notes": notes,
+        "operation_log_id": operation.id,
+        "merged": merged,
+        "availability": state,
+    }
+    job_row.status = "completed"
+    job_row.completed_by = repo.actor
+    job_row.completed_at = now
+    job_row.operation_log_id = operation.id
+    job_row.operation_request_key = key
+    job_row.revision += 1
+    job_row.updated_by = repo.actor
+    job_row.updated_at = now
+    job_row.props = {**(job_row.props or {}), COMPLETION: completion}
+    # No autoflush between these mutations and the explicit flush: a constraint failure must
+    # roll the canonical operation and the job update back together.
+    with repo.session.no_autoflush:
+        links = repo.session.scalars(
+            select(PlanningJobParcel).where(PlanningJobParcel.job_id == job_row.id)
+        ).all()
+        snapshot = {
+            **_snapshot(
+                job_row,
+                [link.parcel_id for link in links],
+                state,
+                assignments,
+            ),
+            COMPLETION: completion,
+        }
+        repo.session.add(
+            _revision(
+                job_row,
+                action="completed",
+                snapshot=snapshot,
+                actor=repo.actor,
+                reason=notes.strip()[:2000],
+                now=now,
+            )
+        )
+        # A completed job no longer reserves a machine or operator.
+        repo.session.execute(
+            delete(PlanningJobAssignment).where(PlanningJobAssignment.job_id == job_row.id)
+        )
+    try:
+        repo.session.flush()
+    except IntegrityError as exc:
+        if "ix_planning_job_farm_request_key" in str(exc.orig):
+            repo.session.rollback()
+            raise JobConflict("This completion request key is already in use.") from None
+        raise
+    return job_row, operation, False
+
+
 def _job_parcels(repo: ScopedRepository, job_id: int) -> list[Parcel]:
     links = repo.list(PlanningJobParcel, PlanningJobParcel.job_id == job_id, scope=SCOPE)
     ids = [link.parcel_id for link in links]
@@ -644,6 +1073,32 @@ def job_json(
     parcels = _job_parcels(repo, job.id)
     assigned = _assigned_rows(repo, job.id)
     assessed_at = now or job.updated_at
+    completion = (job.props or {}).get(COMPLETION)
+    if isinstance(completion, dict):
+        completion = {key: value for key, value in completion.items() if key != "fingerprint"}
+    else:
+        completion = None
+    operation = None
+    if job.operation_log_id is not None:
+        row = repo.get(Log, job.operation_log_id, scope="logs:read")
+        if row is not None:
+            source_types = sorted(
+                {
+                    source.source_type
+                    for source in repo.list(
+                        LogSource, LogSource.log_id == row.id, scope="logs:read"
+                    )
+                }
+            )
+            operation = {
+                "log_id": row.id,
+                "type": row.type,
+                "status": row.status,
+                "name": row.name,
+                "ts_start": row.ts_start,
+                "ts_end": row.ts_end,
+                "source_types": source_types,
+            }
     return {
         "id": job.id,
         "farm_id": job.farm_id,
@@ -702,6 +1157,11 @@ def job_json(
         "updated_at": job.updated_at,
         "cancelled_by": job.cancelled_by,
         "cancelled_at": job.cancelled_at,
+        "completed_by": job.completed_by,
+        "completed_at": job.completed_at,
+        "operation_log_id": job.operation_log_id,
+        "completion": completion,
+        "operation": operation,
     }
 
 
@@ -711,7 +1171,8 @@ def list_jobs(repo: ScopedRepository, now: datetime, *, tz: str) -> list[dict[st
         scope=SCOPE,
         order_by=(PlanningJob.scheduled_start, PlanningJob.id),
     )
-    jobs.sort(key=lambda job: (job.status == "cancelled", job.scheduled_start, job.id))
+    order = {"planned": 0, "completed": 1, "cancelled": 2}
+    jobs.sort(key=lambda job: (order.get(job.status, 3), job.scheduled_start, job.id))
     forecast = offers.forecast_context(repo, now, tz)
     return [job_json(repo, job, now=now, tz=tz, forecast=forecast) for job in jobs]
 
@@ -734,8 +1195,12 @@ def page_context(repo: ScopedRepository, now: datetime, tz: str) -> dict[str, ob
         if row.decision in ("spray", "wait")
         and (row.props or {}).get("assessment_status") not in ("limited", "unavailable")
     ]
+    jobs = list_jobs(repo, now, tz=tz)
+    for item in jobs:
+        if item["status"] == "planned":
+            item["completion_request_key"] = secrets.token_urlsafe(18)
     return {
-        "jobs": list_jobs(repo, now, tz=tz),
+        "jobs": jobs,
         "parcels": parcels,
         "products": _offered(repo),
         "assessments": assessments,

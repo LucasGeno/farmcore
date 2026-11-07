@@ -31,8 +31,10 @@ from farmcore.core.timeline import post_event
 # Source: the canonical data model merge rule.
 MERGE_WINDOW = timedelta(hours=12)
 MERGE_TYPES = frozenset({"spray"})
-# Precision ranks, higher wins for time and dose: machine (ISOXML) > file > voice > seed.
+# Precision ranks, higher wins for time and dose:
+# machine (ISOXML) > farmer-confirmed planned work > file > voice > seed.
 RANK_MACHINE = 30
+RANK_PLANNING = 25
 RANK_FILE = 20
 RANK_VOICE = 10
 RANK_SEED = 5

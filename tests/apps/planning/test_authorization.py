@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -132,6 +132,85 @@ def test_owner_writes_with_csrf_while_advisor_reads_only(settings, committed_ses
         assert "Spray block A" not in denied.text
 
 
+def _completion(job):
+    return {
+        "expected_revision": job["revision"],
+        "request_key": "authorization-completion-key",
+        "actual_start": (NOW - timedelta(hours=2)).isoformat(),
+        "duration_minutes": 60,
+        "parcel_ids": [p["id"] for p in job["parcels"]],
+        "quantities": [{"product_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
+        "notes": "",
+    }
+
+
+def test_only_the_owner_completes_a_planned_job(settings, committed_session_factory):
+    farm, parcel, products, advice = _planning_farm(committed_session_factory, settings)
+    app = create_app(settings, session_factory=committed_session_factory)
+    payload = job_payload([parcel], products, advice)
+    with TestClient(app, base_url="https://testserver") as owner:
+        assert _login(owner, login="owner").status_code == 303
+        created = owner.post(
+            "/planning/jobs",
+            params={"farm": farm.id},
+            json=payload,
+            headers=_headers(owner),
+        )
+        assert created.status_code == 201
+        job = created.json()
+
+    with TestClient(app, base_url="https://testserver") as expert:
+        assert _login(expert, login="expert").status_code == 303
+        assert (
+            expert.post(
+                f"/planning/jobs/{job['id']}/complete",
+                params={"farm": farm.id},
+                json=_completion(job),
+                headers=_headers(expert),
+            ).status_code
+            == 403
+        )
+
+    with TestClient(app, base_url="https://testserver") as foreign:
+        assert _login(foreign, login="foreign").status_code == 303
+        assert (
+            foreign.post(
+                f"/planning/jobs/{job['id']}/complete",
+                params={"farm": farm.id},
+                json=_completion(job),
+                headers=_headers(foreign),
+            ).status_code
+            == 403
+        )
+
+    with TestClient(app, base_url="https://testserver") as anonymous:
+        assert (
+            anonymous.post(
+                f"/planning/jobs/{job['id']}/complete",
+                params={"farm": farm.id},
+                json=_completion(job),
+                headers={"Origin": "https://testserver"},
+            ).status_code
+            == 403
+        )
+
+    with TestClient(app, base_url="https://testserver") as owner:
+        assert _login(owner, login="owner").status_code == 303
+        done = owner.post(
+            f"/planning/jobs/{job['id']}/complete",
+            params={"farm": farm.id},
+            json=_completion(job),
+            headers=_headers(owner),
+        )
+        assert done.status_code == 200, done.text
+        assert done.json()["status"] == "completed"
+
+    with TestClient(app, base_url="https://testserver") as expert:
+        assert _login(expert, login="expert").status_code == 303
+        detail = expert.get(f"/planning/jobs/{job['id']}.json", params={"farm": farm.id})
+        assert detail.status_code == 200 and detail.json()["status"] == "completed"
+
+
 def test_foreign_members_cannot_read_or_write_the_job(settings, committed_session_factory):
     farm, parcel, products, advice = _planning_farm(committed_session_factory, settings)
     app = create_app(settings, session_factory=committed_session_factory)
@@ -197,6 +276,28 @@ def test_cross_farm_assessment_and_parcel_ids_are_refused(
             f"/planning/jobs/{job_id}",
             params={"farm": other.id},
             json={"expected_revision": 1, "name": "Other farm"},
+        ).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/planning/jobs/{job_id}/complete",
+            params={"farm": other.id},
+            json={
+                "expected_revision": 1,
+                "request_key": "foreign-completion",
+                "actual_start": NOW.isoformat(),
+                "duration_minutes": 90,
+                "parcel_ids": [other_parcel.id],
+                "quantities": [
+                    {
+                        "product_id": products["copper-contact"].id,
+                        "value": "1.5",
+                        "unit": "kg/ha",
+                    }
+                ],
+                "notes": "",
+            },
         ).status_code
         == 404
     )

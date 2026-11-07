@@ -8,7 +8,14 @@ MANIFEST = Manifest(
     summary="Planned spray jobs from stored advice, with revisions and farmer availability.",
     category="Crop protection",
     depends=("fields", "operations", "advisor", "forecast"),
-    scopes=("planning:read", "planning:write", "fields:read", "logs:read", "advice:read"),
+    scopes=(
+        "planning:read",
+        "planning:write",
+        "fields:read",
+        "logs:read",
+        "logs:write",
+        "advice:read",
+    ),
     models=("farmcore.apps.planning.models",),
     routes=(
         "farmcore.apps.planning.routes:router",

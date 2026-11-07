@@ -69,6 +69,7 @@ BADGES: dict[str, tuple[str, str]] = {
     "advisor": ("🤖", "advisor"),
     "isoxml": ("🚜", "machine"),
     "file": ("📄", "file"),
+    "planning": ("🗓️", "planned work"),
 }
 KIND_LABELS: dict[str, str] = {
     "log.created": "Logged",

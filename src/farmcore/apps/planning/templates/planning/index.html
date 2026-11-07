@@ -142,6 +142,44 @@
   {% endif %}
   {% if job.notes %}<p class="mt-2 text-[15px]">{{ job.notes }}</p>{% endif %}
   <p class="mt-2 text-sm text-muted">Created by {{ job.created_by }} · {{ job.created_at|local }} · updated by {{ job.updated_by }} · {{ job.updated_at|local }}{% if job.cancelled_at %} · cancelled by {{ job.cancelled_by }} · {{ job.cancelled_at|local }}{% endif %}</p>
+  {% if job.completion %}
+  <div class="mt-3 rounded-lg border border-line bg-ground p-3" data-completion="{{ job.id }}">
+    <h4 class="font-semibold">Completed work</h4>
+    <p class="mt-1 text-[15px]">Actual: {{ job.completion.actual_start_local }}–{{ job.completion.actual_end_local }} · {{ job.completion.duration_minutes }} min{% if job.completion.notes %} · {{ job.completion.notes }}{% endif %}</p>
+    <p class="mt-1 text-[15px]">Applied: {% for q in job.completion.quantities %}{{ q.product }} {{ q.value }} {{ q.unit }}{{ ', ' if not loop.last }}{% endfor %}</p>
+    {% if job.operation %}<p class="mt-1 text-sm text-muted">Confirmed operation #{{ job.operation.log_id }} · {{ job.operation.source_types|join(', ') }}{% if job.completion.merged %} · merged into an existing record{% endif %}</p>{% endif %}
+  </div>
+  {% endif %}
+  {% if is_farm_owner and job.status == 'planned' %}
+  <details class="mt-3 border-t border-line pt-3">
+    <summary class="min-h-[44px] cursor-pointer font-semibold">Complete this planned job</summary>
+    <p class="mt-2 text-sm text-muted">Preview what actually happened and how it differs from the saved plan before anything is recorded. The confirmed operation is created once; a retry returns it instead of recording a second pass.</p>
+    <form method="post" action="{{ resolved_farm_url('/planning/jobs/' ~ job.id ~ '/complete-preview-form') }}" class="mt-3 grid gap-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="expected_revision" value="{{ job.revision }}">
+      <input type="hidden" name="request_key" value="{{ job.completion_request_key }}">
+      <label class="grid gap-2">Actual start ({{ timezone }})<input type="datetime-local" step="any" name="actual_start" required value="{{ job.scheduled_start_local }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-2">Actual duration in minutes <input type="number" name="duration_minutes" min="1" max="1440" required value="{{ job.duration_minutes }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3 tabular-nums"></label>
+      <label class="grid gap-2">Parcels actually treated
+        <select name="parcel_ids" multiple required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+          {% for p in parcels %}<option value="{{ p.id }}"{% if p.id in job.parcels|map(attribute='id')|list %} selected{% endif %}>{{ p.alias }} · {{ p.name }}</option>{% endfor %}
+        </select></label>
+      <fieldset class="grid gap-2">
+        <legend class="font-semibold">Applied products and doses</legend>
+        {% for row in range(2) %}
+        <div class="grid gap-2 sm:grid-cols-3">
+          <label class="text-sm">Product
+            <select name="product_id" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3"><option value="">No product</option>{% for p in products %}<option value="{{ p.id }}"{% if row == 0 and p.id == job.product.id %} selected{% endif %}>{{ p.name }}</option>{% endfor %}</select></label>
+          <label class="text-sm">Dose<input name="dose_value" inputmode="decimal" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3"></label>
+          <label class="text-sm">Unit<select name="dose_unit" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">{% for unit in ['kg/ha', 'L/ha', 'l/ha', 'g/ha', 'ml/ha'] %}<option>{{ unit }}</option>{% endfor %}</select></label>
+        </div>
+        {% endfor %}
+      </fieldset>
+      <label class="grid gap-2">Actual notes<textarea name="notes" maxlength="10000" rows="2" class="rounded-lg border border-line bg-surface p-3">{{ job.notes }}</textarea></label>
+      <button class="min-h-[44px] justify-self-start rounded-lg bg-brand-700 px-4 text-surface hover:bg-brand-900 focus-visible:ring-2 focus-visible:ring-brand-700">Preview completed work</button>
+    </form>
+  </details>
+  {% endif %}
   {% if is_farm_owner and job.status == 'planned' %}
   <form method="post" action="{{ resolved_farm_url('/planning/jobs/' ~ job.id ~ '/assign-form') }}" class="mt-3 grid gap-3 border-t border-line pt-3">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
