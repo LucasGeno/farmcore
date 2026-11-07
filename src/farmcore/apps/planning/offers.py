@@ -179,6 +179,9 @@ def _machine_offers(
     span: engine.Span,
     area: Decimal,
     current_id: int | None,
+    *,
+    weather: engine.State,
+    operator_state: engine.State | None,
 ) -> list[dict[str, object]]:
     offers: list[dict[str, object]] = []
     for machine in resources.machines(repo):
@@ -193,21 +196,39 @@ def _machine_offers(
         booked = any(
             booking.overlaps(span) for booking in _bookings(repo, "machine", machine.id, job.id)
         )
+        operator_known = operator_state is not None and operator_state.status != "unknown"
         if booked:
             status = "unavailable"
             reason = "This machine is already booked for an overlapping job."
         elif state.status == "busy":
             status = "unavailable"
             reason = state.reason
-        elif capacity.status == "fits" and state.status == "available":
+        elif weather.status == "closed":
+            status = "unavailable"
+            reason = weather.reason
+        elif operator_state is not None and operator_state.status == "busy":
+            status = "unavailable"
+            reason = f"Operator: {operator_state.reason}"
+        elif (
+            capacity.status == "fits"
+            and state.status == "available"
+            and weather.status == "open"
+            and operator_known
+        ):
             status = "available"
-            reason = "Configured availability and known capacity fit this job window."
+            reason = "Weather, operator, configured availability and known capacity fit."
         elif capacity.status == "unknown":
             status = "unknown"
             reason = capacity.reason
         elif state.status == "unknown":
             status = "unknown"
             reason = state.reason
+        elif weather.status == "unknown":
+            status = "unknown"
+            reason = f"Weather: {weather.reason}"
+        elif operator_state is None or operator_state.status == "unknown":
+            status = "unknown"
+            reason = "No operator is booked; operator availability is unverified."
         else:
             status = "unavailable"
             reason = capacity.reason
@@ -261,13 +282,24 @@ def _job_parcels(repo: ScopedRepository, job_id: int) -> list[Parcel]:
 
 
 def _parcel_offers(
-    repo: ScopedRepository, job: PlanningJob, now: datetime
+    repo: ScopedRepository, job: PlanningJob, now: datetime, span: engine.Span
 ) -> list[dict[str, object]]:
-    """Other parcels whose own stored assessment still says spray or wait."""
+    """Other parcels with current advice, marked eligible for this job's window or not.
+
+    Only a stored ``spray`` decision whose own dated advice window overlaps the proposed job
+    window is an eligible alternative; a ``wait`` decision or a window elsewhere is shown as
+    not eligible with its reason.
+    """
     try:
         parcels = repo.list(Parcel, scope="fields:read", order_by=Parcel.id)
         rows = repo.execute(
-            select(Advice.parcel_id, Advice.decision, Advice.props)
+            select(
+                Advice.parcel_id,
+                Advice.decision,
+                Advice.props,
+                Advice.next_window_start,
+                Advice.next_window_end,
+            )
             .where(Advice.farm_id == repo.farm_id, Advice.evaluated_at <= now)
             .ext(distinct_on(Advice.parcel_id))
             .order_by(Advice.parcel_id, Advice.evaluated_at.desc(), Advice.id.desc()),
@@ -282,29 +314,44 @@ def _parcel_offers(
         }
     except ScopeDenied:
         return []
-    latest = {parcel_id: (decision, props or {}) for parcel_id, decision, props in rows}
+    latest = {
+        parcel_id: (decision, props or {}, start, end)
+        for parcel_id, decision, props, start, end in rows
+    }
     offers: list[dict[str, object]] = []
     for parcel in parcels:
         if parcel.id in current:
             continue
-        decision, props = latest.get(parcel.id, (None, {}))
-        if decision not in ("spray", "wait") or props.get("assessment_status") in (
-            "limited",
-            "unavailable",
-        ):
+        decision, props, start, end = latest.get(parcel.id, (None, {}, None, None))
+        if decision not in ("spray", "wait"):
             continue
+        if props.get("assessment_status") in ("limited", "unavailable"):
+            status = "not_eligible"
+            reason = "Its assessment is limited or unavailable."
+        elif decision == "wait":
+            status = "not_eligible"
+            reason = "Current advice says wait for this parcel."
+        elif start is None or end is None:
+            status = "not_eligible"
+            reason = "Current advice has no dated spray window."
+        elif not (start < span.end and span.start < end):
+            status = "not_eligible"
+            reason = "Its advice window does not overlap this job's window."
+        else:
+            status = "eligible"
+            reason = "Current advice says spray and its window overlaps this job."
         offers.append(
             {
                 "id": parcel.id,
                 "alias": parcel.alias,
                 "name": parcel.name,
                 "decision": decision,
-                "reason": f"Another parcel has current advice: {decision}.",
+                "status": status,
+                "reason": reason,
             }
         )
-        if len(offers) >= 3:
-            break
-    return offers
+    offers.sort(key=lambda offer: (offer["status"] != "eligible", str(offer["alias"])))
+    return offers[:5]
 
 
 def _states(
@@ -450,8 +497,10 @@ def job_assessment(
             span,
             area,
             int(machine_row["id"]) if machine_row else None,
+            weather=result.weather,
+            operator_state=result.operator,
         ),
-        "parcels": _parcel_offers(repo, job, now),
+        "parcels": _parcel_offers(repo, job, now, span),
     }
     if result.status != "feasible":
         offers["jobs"] = _job_offers(repo, job, now, tz, forecast, span, busy_days)

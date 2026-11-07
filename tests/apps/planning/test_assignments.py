@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
@@ -397,3 +398,134 @@ def test_concurrent_assignments_to_one_machine_have_one_winner(settings, committ
     with committed_session_factory() as session:
         assert session.scalar(select(func.count()).select_from(PlanningJobAssignment)) == 1
         assert session.scalar(select(func.count()).select_from(PlanningJobRevision)) == 3
+
+
+def test_a_concurrent_booking_that_beats_the_precheck_is_a_clean_job_conflict(
+    settings, committed_session_factory
+):
+    """One session holds a new booking open while the edit's pre-check cannot see it.
+
+    The edit's flush then reaches the database exclusion constraint (23P01); the service must
+    translate that into the same 409-style conflict as the assignment endpoint, not a 500.
+    """
+    import threading
+
+    from sqlalchemy import text
+
+    from farmcore.apps.planning import service as planning_service
+    from farmcore.core.access import ScopedRepository
+
+    with committed_session_factory.begin() as session:
+        farm = Farm(name="Concurrent edit resource farm", props={"region": "FRI12"})
+        session.add(farm)
+        session.flush()
+        ensure_owner_grant(session, farm)
+        parcel = make_parcel(session, farm, 1)
+        products = ensure_products(session)
+        advice = Advice(
+            farm_id=farm.id,
+            parcel_id=parcel.id,
+            evaluated_at=NOW,
+            decision="spray",
+            reasons=[],
+            products=[],
+            props={"assessment_status": "evaluable", "config_version": {"id": None, "status": "x"}},
+        )
+        session.add(advice)
+        session.flush()
+        machine = PlanningMachine(
+            farm_id=farm.id,
+            name="Shared sprayer",
+            kind="sprayer",
+            active=True,
+            notes="",
+            created_by="owner",
+            updated_by="owner",
+        )
+        session.add(machine)
+        session.flush()
+        jobs = []
+        for offset in (2, 4):
+            job = PlanningJob(
+                farm_id=farm.id,
+                status="planned",
+                revision=1,
+                name=f"Job {offset}",
+                assessment_id=advice.id,
+                config_version_status="unversioned",
+                product_id=products["copper-contact"].id,
+                scheduled_start=NOW + timedelta(hours=offset),
+                duration_minutes=90,
+                notes="",
+                created_by="owner",
+                updated_by="owner",
+            )
+            session.add(job)
+            session.flush()
+            session.add(
+                PlanningJobAssignment(
+                    farm_id=farm.id,
+                    job_id=job.id,
+                    machine_id=machine.id,
+                    starts_at=job.scheduled_start,
+                    ends_at=job.scheduled_start + timedelta(minutes=90),
+                    created_by="owner",
+                    updated_by="owner",
+                )
+            )
+            jobs.append(job)
+        set_replay(session, NOW, settings)
+        farm_id = farm.id
+        first_id, second_id = (job.id for job in jobs)
+        machine_id = machine.id
+
+    target = NOW + timedelta(hours=8)
+    ready = threading.Event()
+
+    def hold_new_booking():
+        with committed_session_factory() as holder:
+            holder.execute(
+                text(
+                    "UPDATE planning_job_assignment SET starts_at=:start, ends_at=:end "
+                    "WHERE job_id=:job"
+                ),
+                {"start": target, "end": target + timedelta(minutes=90), "job": first_id},
+            )
+            ready.set()
+            import time
+
+            time.sleep(1.5)
+            holder.commit()
+
+    thread = threading.Thread(target=hold_new_booking)
+    thread.start()
+    assert ready.wait(5)
+
+    with committed_session_factory() as session:
+        repo = ScopedRepository(
+            session,
+            farm_id,
+            ensure_owner_grant(session, session.get(Farm, farm_id)),
+            "test",
+            "test",
+        )
+        job = planning_service.locked(repo, second_id)
+        with pytest.raises(planning_service.JobConflict) as raised:
+            planning_service.edit(
+                repo,
+                NOW,
+                "Europe/Paris",
+                job,
+                expected_revision=1,
+                changes={"scheduled_start": target},
+            )
+    thread.join(timeout=10)
+    assert "another job at the new time" in str(raised.value)
+
+    with committed_session_factory() as session:
+        assert session.get(PlanningJob, second_id).scheduled_start == NOW + timedelta(hours=4)
+        booking = session.scalar(
+            select(PlanningJobAssignment).where(PlanningJobAssignment.job_id == second_id)
+        )
+        assert booking.machine_id == machine_id
+        assert booking.starts_at == NOW + timedelta(hours=4)

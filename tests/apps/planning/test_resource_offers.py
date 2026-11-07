@@ -233,9 +233,9 @@ def test_an_infeasible_job_offers_another_parcel_with_current_advice(
     _assign(client, farm, created["id"], "machine", machine.id, 1)
 
     assessment = _detail(client, farm, created["id"])["resource_assessment"]
-    offered = {p["alias"] for p in assessment["offers"]["parcels"]}
-    assert "P2" in offered
-    assert "1" not in offered
+    by_alias = {p["alias"]: p for p in assessment["offers"]["parcels"]}
+    assert by_alias["P2"]["status"] == "eligible"
+    assert "1" not in by_alias
 
 
 def test_a_busy_farm_day_keeps_the_job_infeasible_and_offers_another_day(
@@ -268,6 +268,115 @@ def test_a_busy_farm_day_keeps_the_job_infeasible_and_offers_another_day(
     offer = assessment["offers"]["time"]
     assert offer is not None
     assert offer["start"].startswith("2024-04-10T")
+
+
+def test_wait_advice_and_a_non_overlapping_window_are_not_offered_as_eligible(
+    client, session, farm, parcels, products, advice
+):
+    from farmcore.core.models.canonical import Advice
+
+    _forecast(session, farm)
+    waiting = make_parcel(session, farm, 2)
+    elsewhere = make_parcel(session, farm, 3)
+    session.add_all(
+        [
+            Advice(
+                farm_id=farm.id,
+                parcel_id=waiting.id,
+                evaluated_at=NOW,
+                decision="wait",
+                next_window_start=NOW + timedelta(hours=2),
+                next_window_end=NOW + timedelta(hours=5),
+                reasons=[],
+                products=[],
+                props={
+                    "assessment_status": "evaluable",
+                    "config_version": {"id": None, "status": "x"},
+                },
+            ),
+            Advice(
+                farm_id=farm.id,
+                parcel_id=elsewhere.id,
+                evaluated_at=NOW,
+                decision="spray",
+                next_window_start=NOW + timedelta(hours=20),
+                next_window_end=NOW + timedelta(hours=22),
+                reasons=[],
+                products=[],
+                props={
+                    "assessment_status": "evaluable",
+                    "config_version": {"id": None, "status": "x"},
+                },
+            ),
+        ]
+    )
+    machine = _machine(session, farm, "Busy sprayer", work_rate=1.0)
+    _window(session, farm, machine=machine, start_hour=5, end_hour=9, available=False)
+    session.flush()
+    created = _created(client, farm, parcels, products, advice)
+    _assign(client, farm, created["id"], "machine", machine.id, 1)
+
+    offers = _detail(client, farm, created["id"])["resource_assessment"]["offers"]["parcels"]
+    by_alias = {offer["alias"]: offer for offer in offers}
+    assert by_alias["P2"]["status"] == "not_eligible"
+    assert "wait" in by_alias["P2"]["reason"].lower()
+    assert by_alias["P3"]["status"] == "not_eligible"
+    assert "window" in by_alias["P3"]["reason"].lower()
+
+
+def test_an_alternate_machine_also_needs_open_weather(
+    client, session, farm, parcels, products, advice
+):
+    from sqlalchemy import update
+
+    from farmcore.apps.forecast.models import ForecastValue
+
+    _forecast(session, farm)
+    # Rain from 06:00 UTC closes the 06:00-07:30 job window through the two-hour lookahead.
+    session.execute(
+        update(ForecastValue)
+        .where(
+            ForecastValue.variable == "rr1_mm",
+            ForecastValue.ts >= NOW + timedelta(hours=2),
+            ForecastValue.ts < NOW + timedelta(hours=6),
+        )
+        .values(value=10.0)
+    )
+    busy = _machine(session, farm, "Busy sprayer", work_rate=1.0)
+    spare = _machine(session, farm, "Spare sprayer", work_rate=3.0)
+    operator = _operator(session, farm)
+    _window(session, farm, machine=busy, start_hour=5, end_hour=9, available=False)
+    _window(session, farm, machine=spare, start_hour=5, end_hour=9)
+    _window(session, farm, operator=operator, start_hour=5, end_hour=9)
+    session.flush()
+    created = _created(client, farm, parcels, products, advice)
+    _assign(client, farm, created["id"], "machine", busy.id, 1)
+    _assign(client, farm, created["id"], "operator", operator.id, 2)
+
+    assessment = _detail(client, farm, created["id"])["resource_assessment"]
+    by_name = {machine["name"]: machine for machine in assessment["offers"]["machines"]}
+    assert by_name["Spare sprayer"]["status"] != "available"
+    assert "weather" in by_name["Spare sprayer"]["reason"].lower()
+
+
+def test_an_alternate_machine_also_needs_the_booked_operator(
+    client, session, farm, parcels, products, advice
+):
+    _forecast(session, farm)
+    busy = _machine(session, farm, "Busy sprayer", work_rate=1.0)
+    spare = _machine(session, farm, "Spare sprayer", work_rate=3.0)
+    operator = _operator(session, farm)
+    _window(session, farm, machine=busy, start_hour=5, end_hour=9, available=False)
+    _window(session, farm, machine=spare, start_hour=5, end_hour=9)
+    _window(session, farm, operator=operator, start_hour=5, end_hour=9, available=False)
+    created = _created(client, farm, parcels, products, advice)
+    _assign(client, farm, created["id"], "machine", busy.id, 1)
+    _assign(client, farm, created["id"], "operator", operator.id, 2)
+
+    assessment = _detail(client, farm, created["id"])["resource_assessment"]
+    by_name = {machine["name"]: machine for machine in assessment["offers"]["machines"]}
+    assert by_name["Spare sprayer"]["status"] != "available"
+    assert "operator" in by_name["Spare sprayer"]["reason"].lower()
 
 
 def test_an_infeasible_job_offers_another_planned_job_that_can_run_now(

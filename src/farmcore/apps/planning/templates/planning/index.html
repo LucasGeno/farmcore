@@ -138,7 +138,7 @@
   {% if ra.offers.time %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another eligible time:</span> {{ ra.offers.time.start|local }}–{{ ra.offers.time.end|local }} · {{ ra.offers.time.reason }}</p>{% endif %}
   {% for offer in ra.offers.jobs %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another planned job:</span> {{ offer.name }} · {{ offer.start|local }} · {{ offer.reason }}</p>{% endfor %}
   {% for offer in ra.offers.machines %}{% if offer.status == 'available' %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another configured machine:</span> {{ offer.name }} · {{ offer.reason }}</p>{% elif offer.status == 'unknown' %}<p class="mt-2 text-sm text-muted">{{ offer.name }}: {{ offer.reason }}</p>{% endif %}{% endfor %}
-  {% for offer in ra.offers.parcels %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another parcel:</span> {{ offer.alias }} {{ offer.name }} · {{ offer.reason }}</p>{% endfor %}
+  {% for offer in ra.offers.parcels %}{% if offer.status == 'eligible' %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another parcel:</span> {{ offer.alias }} {{ offer.name }} · {{ offer.reason }}</p>{% else %}<p class="mt-2 text-sm text-muted">{{ offer.alias }} {{ offer.name }}: not eligible · {{ offer.reason }}</p>{% endif %}{% endfor %}
   {% endif %}
   {% if job.notes %}<p class="mt-2 text-[15px]">{{ job.notes }}</p>{% endif %}
   <p class="mt-2 text-sm text-muted">Created by {{ job.created_by }} · {{ job.created_at|local }} · updated by {{ job.updated_by }} · {{ job.updated_at|local }}{% if job.cancelled_at %} · cancelled by {{ job.cancelled_by }} · {{ job.cancelled_at|local }}{% endif %}</p>

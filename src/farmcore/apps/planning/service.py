@@ -341,7 +341,17 @@ def edit(
             assignment.ends_at = end
             assignment.updated_by = repo.actor
             assignment.updated_at = now
-        repo.session.flush()
+        current_revision = job.revision
+        try:
+            repo.session.flush()
+        except IntegrityError as exc:
+            if "ex_planning_job_assignment" in str(exc.orig):
+                repo.session.rollback()
+                raise JobConflict(
+                    "A booked resource already has another job at the new time.",
+                    current_revision,
+                ) from None
+            raise
 
     job.revision += 1
     job.updated_by = repo.actor
