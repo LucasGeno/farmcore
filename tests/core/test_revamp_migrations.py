@@ -398,3 +398,142 @@ def test_availability_is_one_row_per_farm_day(database):
     db.execute(statement, {"farm": f})
     with pytest.raises(IntegrityError), db.begin_nested():
         db.execute(statement, {"farm": f})
+
+
+def _planning_fixture(db):
+    """Two farms; a parcel, advice and product on the first. Returns (first, second, args)."""
+    first, second = farm(db), farm(db, "B")
+    parcel = db.execute(
+        text(
+            "INSERT INTO parcel(farm_id,name,alias,area_ha,geom) VALUES (:farm,'P','p',1,"
+            "ST_Multi(ST_GeomFromText('POLYGON((0 0,0 1,1 1,0 0))',4326))) RETURNING id"
+        ),
+        {"farm": first},
+    ).scalar_one()
+    advice = db.execute(
+        text(
+            "INSERT INTO advice(farm_id,parcel_id,evaluated_at,decision) "
+            "VALUES (:farm,:parcel,now(),'spray') RETURNING id"
+        ),
+        {"farm": first, "parcel": parcel},
+    ).scalar_one()
+    product = db.execute(
+        text(
+            "INSERT INTO product(name,authorisation_no,active_substance,product_type) "
+            "VALUES ('Copper','1','copper','contact') RETURNING id"
+        )
+    ).scalar_one()
+    return first, second, {"assessment_id": advice, "product_id": product}
+
+
+def resource(db, kind, farm_id, name="R"):
+    return db.execute(
+        text(
+            f"INSERT INTO planning_{kind}(farm_id,name,created_by,updated_by) "
+            "VALUES (:farm,:name,'user:1','user:1') RETURNING id"
+        ),
+        {"farm": farm_id, "name": name},
+    ).scalar_one()
+
+
+def assign(db, farm_id, job, kind, resource_id, starts, ends):
+    return db.execute(
+        text(
+            f"INSERT INTO planning_job_assignment(farm_id,job_id,{kind}_id,starts_at,ends_at,"
+            "created_by,updated_by) VALUES (:farm,:job,:resource,CAST(:starts AS timestamptz),"
+            "CAST(:ends AS timestamptz),'user:1','user:1') RETURNING id"
+        ),
+        {"farm": farm_id, "job": job, "resource": resource_id, "starts": starts, "ends": ends},
+    ).scalar_one()
+
+
+@pytest.mark.parametrize("kind", ["machine", "operator"])
+def test_resource_bookings_are_farm_scoped_and_reject_overlap(database, kind):
+    db = database
+    first, second, args = _planning_fixture(db)
+    jobs = [planned_job(db, first, **args) for _ in range(3)]
+    mine, foreign = resource(db, kind, first), resource(db, kind, second)
+    assign(db, first, jobs[0], kind, mine, "2026-11-07 08:00Z", "2026-11-07 10:00Z")
+    # Overlap with the same resource: exclusion_violation (23P01), nothing written.
+    overlap = f"ex_planning_job_assignment_{kind}"
+    with pytest.raises(IntegrityError, match=overlap), db.begin_nested():
+        assign(db, first, jobs[1], kind, mine, "2026-11-07 09:59Z", "2026-11-07 11:00Z")
+    # Half-open: back-to-back bookings are allowed.
+    assign(db, first, jobs[1], kind, mine, "2026-11-07 10:00Z", "2026-11-07 11:00Z")
+    # Another farm's resource cannot be booked or given a window, even by guessed id.
+    with pytest.raises(IntegrityError), db.begin_nested():
+        assign(db, first, jobs[2], kind, foreign, "2026-11-08 08:00Z", "2026-11-08 09:00Z")
+    with pytest.raises(IntegrityError), db.begin_nested():
+        db.execute(
+            text(
+                f"INSERT INTO planning_resource_window(farm_id,{kind}_id,starts_at,ends_at,"
+                "available,created_by,updated_by) VALUES (:farm,:r,now(),now()+interval '1h',"
+                "true,'user:1','user:1')"
+            ),
+            {"farm": first, "r": foreign},
+        )
+    # One resource of each kind per job; exactly one resource per row; non-empty ranges.
+    other = resource(db, kind, first, "Other")
+    one_per_job = f"ix_planning_job_assignment_job_{kind}"
+    with pytest.raises(IntegrityError, match=one_per_job), db.begin_nested():
+        assign(db, first, jobs[0], kind, other, "2026-11-09 08:00Z", "2026-11-09 09:00Z")
+    with pytest.raises(IntegrityError, match="range"), db.begin_nested():
+        assign(db, first, jobs[2], kind, other, "2026-11-09 08:00Z", "2026-11-09 08:00Z")
+    with pytest.raises(IntegrityError, match="resource"), db.begin_nested():
+        db.execute(
+            text(
+                "INSERT INTO planning_job_assignment(farm_id,job_id,starts_at,ends_at,"
+                "created_by,updated_by) VALUES (:farm,:job,now(),now()+interval '1h',"
+                "'user:1','user:1')"
+            ),
+            {"farm": first, "job": jobs[2]},
+        )
+    # A booked resource cannot be deleted; deleting the job frees it.
+    with pytest.raises(IntegrityError), db.begin_nested():
+        db.execute(text(f"DELETE FROM planning_{kind} WHERE id=:id"), {"id": mine})
+    for job in jobs[:2]:
+        db.execute(text("DELETE FROM planning_job WHERE id=:id"), {"id": job})
+    assert db.execute(text("SELECT count(*) FROM planning_job_assignment")).scalar_one() == 0
+    db.execute(text(f"DELETE FROM planning_{kind} WHERE id=:id"), {"id": mine})
+
+
+def test_unknown_capacity_stays_null_and_windows_cascade_with_their_machine(database):
+    db = database
+    f = farm(db)
+    machine = resource(db, "machine", f)
+    assert db.execute(
+        text("SELECT work_rate_ha_per_hour, tank_litres FROM planning_machine WHERE id=:id"),
+        {"id": machine},
+    ).one() == (None, None)
+    with pytest.raises(IntegrityError, match="work_rate"), db.begin_nested():
+        db.execute(
+            text("UPDATE planning_machine SET work_rate_ha_per_hour=0 WHERE id=:id"),
+            {"id": machine},
+        )
+    db.execute(
+        text(
+            "INSERT INTO planning_resource_window(farm_id,machine_id,starts_at,ends_at,available,"
+            "created_by,updated_by) VALUES (:farm,:m,now(),now()+interval '1h',false,"
+            "'user:1','user:1')"
+        ),
+        {"farm": f, "m": machine},
+    )
+    db.execute(text("DELETE FROM planning_machine WHERE id=:id"), {"id": machine})
+    assert db.execute(text("SELECT count(*) FROM planning_resource_window")).scalar_one() == 0
+
+
+def test_resource_scheduling_downgrade_and_upgrade_round_trip(scratch_db_url):
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "head")
+    command.downgrade(cfg, "planning_0001")
+    engine = create_engine(scratch_db_url)
+    try:
+        with engine.connect() as db:
+            assert (
+                db.execute(text("SELECT to_regclass('planning_job_assignment')")).scalar() is None
+            )
+            assert db.execute(text("SELECT to_regclass('planning_job')")).scalar() is not None
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+    finally:
+        engine.dispose()
