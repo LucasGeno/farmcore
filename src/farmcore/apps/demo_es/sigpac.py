@@ -95,7 +95,18 @@ def _rings(shape: bytes) -> str:
     parts, points = struct.unpack_from("<ii", shape, 36)
     if parts < 0 or points < 0 or 44 + 4 * parts + 16 * points > len(shape):
         raise ValueError("Truncated polygon coordinates")
-    starts = (*struct.unpack_from(f"<{parts}i", shape, 44), points)
+    if parts == 0:
+        if points:
+            raise ValueError("Invalid polygon: points without a ring")
+        return "MULTILINESTRING EMPTY"
+    part_starts = struct.unpack_from(f"<{parts}i", shape, 44)
+    if (
+        part_starts[0] != 0
+        or any(a >= b for a, b in zip(part_starts, part_starts[1:], strict=False))
+        or part_starts[-1] >= points
+    ):
+        raise ValueError("Invalid polygon ring start indices")
+    starts = (*part_starts, points)
     coords = [struct.unpack_from("<dd", shape, 44 + 4 * parts + i * 16) for i in range(points)]
     rings = [
         "(" + ",".join(f"{x} {y}" for x, y in coords[a:b]) + ")"
