@@ -10,7 +10,10 @@ MANIFEST = Manifest(
     depends=("fields", "operations", "advisor", "forecast"),
     scopes=("planning:read", "planning:write", "fields:read", "logs:read", "advice:read"),
     models=("farmcore.apps.planning.models",),
-    routes=("farmcore.apps.planning.routes:router",),
+    routes=(
+        "farmcore.apps.planning.routes:router",
+        "farmcore.apps.planning.resource_routes:router",
+    ),
     demo_reset=("farmcore.apps.planning.demo:reset",),
     title="Planned jobs",
     nav=("Planned jobs", "/planning/"),

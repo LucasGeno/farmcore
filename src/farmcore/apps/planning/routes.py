@@ -8,6 +8,7 @@ serve the planning page and redirect with a plain error. Every write requires an
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from typing import Literal
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
@@ -79,6 +80,14 @@ class JobCancel(BaseModel):
     reason: StrictStr = Field(default="", max_length=2000)
 
 
+class AssignmentChange(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: StrictInt = Field(ge=1)
+    kind: Literal["machine", "operator"]
+    resource_id: StrictInt | None = Field(default=None, gt=0, le=2**63 - 1)
+
+
 def _now(request: Request, repo: Repo) -> datetime:
     return get_clock(repo.session, request.app.state.settings).now()
 
@@ -103,24 +112,26 @@ def _translate(exc: Exception) -> HTTPException:
         return HTTPException(404, str(exc))
     if isinstance(exc, service.JobConflict):
         return HTTPException(409, str(exc))
+    if isinstance(exc, service.ResourceConflict):
+        return HTTPException(409, str(exc))
     return HTTPException(422, str(exc))
 
 
-def _detail(repo: Repo, job_id: int, tz: str):
+def _detail(repo: Repo, job_id: int, tz: str, now: datetime):
     job = repo.get(PlanningJob, job_id, scope=service.SCOPE)
     if job is None:
         raise HTTPException(404, "Planned job not found.")
-    return service.job_json(repo, job, tz=tz)
+    return service.job_json(repo, job, now=now, tz=tz)
 
 
 @router.get("/jobs.json", dependencies=[Depends(require_farm_member)])
 def jobs_json(request: Request, repo: Repo):
-    return {"jobs": service.list_jobs(repo, tz=_tz(request))}
+    return {"jobs": service.list_jobs(repo, _now(request, repo), tz=_tz(request))}
 
 
 @router.get("/jobs/{job_id}.json", dependencies=[Depends(require_farm_member)])
 def job_detail(request: Request, repo: Repo, job_id: int):
-    return _detail(repo, job_id, _tz(request))
+    return _detail(repo, job_id, _tz(request), _now(request, repo))
 
 
 @router.post("/jobs", status_code=201, dependencies=[Depends(require_farm_owner)])
@@ -140,7 +151,7 @@ def create_job(request: Request, repo: Repo, body: JobCreate):
         )
     except (service.JobError, ValueError, TypeError) as exc:
         raise _translate(exc) from None
-    return service.job_json(repo, job, tz=_tz(request))
+    return service.job_json(repo, job, now=_now(request, repo), tz=_tz(request))
 
 
 @router.patch("/jobs/{job_id}", dependencies=[Depends(require_farm_owner)])
@@ -159,7 +170,26 @@ def edit_job(request: Request, repo: Repo, job_id: int, body: JobEdit):
         )
     except (service.JobError, service.JobNotFound, service.JobConflict) as exc:
         raise _translate(exc) from None
-    return service.job_json(repo, job, tz=_tz(request))
+    return service.job_json(repo, job, now=_now(request, repo), tz=_tz(request))
+
+
+@router.post("/jobs/{job_id}/assignments", dependencies=[Depends(require_farm_owner)])
+def assign_job_resource(request: Request, repo: Repo, job_id: int, body: AssignmentChange):
+    try:
+        job = service.locked(repo, job_id)
+        job = service.set_assignments(
+            repo,
+            _now(request, repo),
+            _tz(request),
+            job,
+            expected_revision=body.expected_revision,
+            changes={body.kind: body.resource_id},
+        )
+    except (service.JobError, service.JobNotFound, service.JobConflict) as exc:
+        raise _translate(exc) from None
+    except service.ResourceConflict as exc:
+        raise _translate(exc) from None
+    return service.job_json(repo, job, now=_now(request, repo), tz=_tz(request))
 
 
 @router.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_farm_owner)])
@@ -176,7 +206,7 @@ def cancel_job(request: Request, repo: Repo, job_id: int, body: JobCancel):
         )
     except (service.JobError, service.JobNotFound, service.JobConflict) as exc:
         raise _translate(exc) from None
-    return service.job_json(repo, job, tz=_tz(request))
+    return service.job_json(repo, job, now=_now(request, repo), tz=_tz(request))
 
 
 def _prefill(
@@ -300,6 +330,34 @@ async def edit_form(request: Request, repo: Repo, job_id: int):
         return _back(repo, str(exc))
     except (ValueError, TypeError, service.JobError) as exc:
         return _back(repo, f"Check the job details: {exc}")
+    return _back(repo)
+
+
+@router.post("/jobs/{job_id}/assign-form", dependencies=[Depends(require_farm_owner)])
+async def assign_form(request: Request, repo: Repo, job_id: int):
+    form = await request.form()
+    try:
+        expected = int(str(form.get("expected_revision", "0")))
+        changes: dict[str, int | None] = {}
+        for kind in ("machine", "operator"):
+            if f"{kind}_id" in form:
+                raw = str(form.get(f"{kind}_id") or "").strip()
+                changes[kind] = int(raw) if raw else None
+        job = service.locked(repo, job_id)
+        service.set_assignments(
+            repo,
+            _now(request, repo),
+            _tz(request),
+            job,
+            expected_revision=expected,
+            changes=changes,
+        )
+    except service.JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    except (service.JobConflict, service.ResourceConflict) as exc:
+        return _back(repo, str(exc))
+    except (ValueError, TypeError, service.JobError) as exc:
+        return _back(repo, f"Check the resource booking: {exc}")
     return _back(repo)
 
 

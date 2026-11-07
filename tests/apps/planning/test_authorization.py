@@ -255,3 +255,70 @@ def test_anonymous_demo_visitors_cannot_read_planned_jobs(settings, committed_se
             assert "Spray block A" not in response.text
             assert "Anonymous secret note" not in response.text
             assert "created_by" not in response.text
+
+
+def test_advisors_read_resources_but_cannot_configure_or_book_them(
+    settings, committed_session_factory
+):
+    from farmcore.apps.planning.models import PlanningMachine
+
+    farm, parcel, products, advice = _planning_farm(committed_session_factory, settings)
+    with committed_session_factory.begin() as session:
+        machine = PlanningMachine(
+            farm_id=farm.id,
+            name="Owner sprayer",
+            kind="sprayer",
+            active=True,
+            notes="",
+            created_by="owner",
+            updated_by="owner",
+        )
+        session.add(machine)
+        session.flush()
+        machine_id = machine.id
+    app = create_app(settings, session_factory=committed_session_factory)
+    payload = job_payload([parcel], products, advice)
+    with TestClient(app, base_url="https://testserver") as owner:
+        assert _login(owner, login="owner").status_code == 303
+        created = owner.post(
+            "/planning/jobs",
+            params={"farm": farm.id},
+            json=payload,
+            headers=_headers(owner),
+        )
+        assert created.status_code == 201
+        job_id = created.json()["id"]
+
+    with TestClient(app, base_url="https://testserver") as expert:
+        assert _login(expert, login="expert").status_code == 303
+        headers = _headers(expert)
+        page = expert.get("/planning/", params={"farm": farm.id})
+        assert page.status_code == 200
+        assert "Owner sprayer" in page.text
+        assert (
+            expert.post(
+                "/planning/resources/machines-form",
+                params={"farm": farm.id},
+                data={"name": "Advisor sprayer", "kind": "sprayer"},
+                headers=headers,
+            ).status_code
+            == 403
+        )
+        assert (
+            expert.post(
+                f"/planning/jobs/{job_id}/assignments",
+                params={"farm": farm.id},
+                json={"expected_revision": 1, "kind": "machine", "resource_id": machine_id},
+                headers=headers,
+            ).status_code
+            == 403
+        )
+        assert (
+            expert.post(
+                f"/planning/jobs/{job_id}/assign-form",
+                params={"farm": farm.id},
+                data={"expected_revision": "1", "machine_id": str(machine_id)},
+                headers=headers,
+            ).status_code
+            == 403
+        )

@@ -4,6 +4,84 @@
 {% block content %}
 {% call page_header("Planned jobs", "Intended spray work from stored advice. Planned jobs never enter the completed register or move stock.") %}{% endcall %}
 {% if error %}<p role="alert" class="mb-4 rounded-lg border border-line bg-wait-soft p-4 text-wait">{{ error }}</p>{% endif %}
+
+{% call card() %}
+<h2 class="text-lg font-semibold">Machines and operators</h2>
+<p class="mt-2 text-sm text-muted">Configured availability and known capacity are farm state. A planned job is only called feasible when the weather, the assigned machine/operator windows and the known capacity all agree; anything not configured stays “unknown”.</p>
+{% if machines or operators %}
+<div class="mt-3 grid gap-3 md:grid-cols-2">
+  <div>
+    <h3 class="font-semibold">Machines</h3>
+    {% if not machines %}<p class="mt-1 text-sm text-muted">No machine configured yet.</p>{% endif %}
+    <ul class="mt-1 grid gap-1 text-[15px]">
+      {% for m in machines %}
+      <li data-machine="{{ m.id }}"><span class="font-semibold">{{ m.name }}</span> · {{ m.kind }}{% if not m.work_rate_ha_per_hour %} · <span class="text-wait">capacity unknown</span>{% else %} · {{ m.work_rate_ha_per_hour }} ha/h{% endif %}{% if not m.active %} · inactive{% endif %}{% if m.notes %} · {{ m.notes }}{% endif %}{% if is_farm_owner %} <form method="post" action="{{ resolved_farm_url('/planning/resources/machine/' ~ m.id ~ '/active-form') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="active" value="{{ '0' if m.active else '1' }}"><button class="min-h-[44px] text-sm text-brand-700 underline">{{ 'Deactivate' if m.active else 'Reactivate' }}</button></form>{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div>
+    <h3 class="font-semibold">Operators</h3>
+    {% if not operators %}<p class="mt-1 text-sm text-muted">No operator configured yet.</p>{% endif %}
+    <ul class="mt-1 grid gap-1 text-[15px]">
+      {% for o in operators %}
+      <li data-operator="{{ o.id }}"><span class="font-semibold">{{ o.name }}</span>{% if not o.active %} · inactive{% endif %}{% if o.notes %} · {{ o.notes }}{% endif %}{% if is_farm_owner %} <form method="post" action="{{ resolved_farm_url('/planning/resources/operator/' ~ o.id ~ '/active-form') }}" class="inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="active" value="{{ '0' if o.active else '1' }}"><button class="min-h-[44px] text-sm text-brand-700 underline">{{ 'Deactivate' if o.active else 'Reactivate' }}</button></form>{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+{% endif %}
+{% if resource_windows %}
+<div class="mt-3">
+  <h3 class="font-semibold">Configured availability</h3>
+  <ul class="mt-1 grid gap-1 text-[15px]">
+    {% for w in resource_windows %}
+    <li data-window="{{ w.id }}">{{ w.label }} · {{ w.starts_at|local }}–{{ w.ends_at|local }} · {{ 'Available' if w.available else 'Busy' }}{% if w.notes %} · {{ w.notes }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% if is_farm_owner %}
+<details class="mt-4 border-t border-line pt-3">
+  <summary class="min-h-[44px] cursor-pointer font-semibold">Add a machine, operator or availability window</summary>
+  <div class="mt-3 grid gap-6 lg:grid-cols-3">
+    <form method="post" action="{{ resolved_farm_url('/planning/resources/machines-form') }}" class="grid gap-2">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h3 class="font-semibold">Machine</h3>
+      <label class="grid gap-1">Name <input name="name" required maxlength="120" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-1">Kind
+        <select name="kind" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"><option value="sprayer">Sprayer</option><option value="tractor">Tractor</option><option value="other">Other</option></select></label>
+      <label class="grid gap-1">Work rate (ha/h, optional) <input name="work_rate_ha_per_hour" inputmode="decimal" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-1">Tank (litres, optional) <input name="tank_litres" inputmode="decimal" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-1">Notes <input name="notes" maxlength="2000" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <button class="min-h-[44px] justify-self-start rounded-lg border border-line px-4 hover:bg-ground">Save machine</button>
+    </form>
+    <form method="post" action="{{ resolved_farm_url('/planning/resources/operators-form') }}" class="grid gap-2">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h3 class="font-semibold">Operator</h3>
+      <label class="grid gap-1">Name <input name="name" required maxlength="120" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-1">Notes <input name="notes" maxlength="2000" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <button class="min-h-[44px] justify-self-start rounded-lg border border-line px-4 hover:bg-ground">Save operator</button>
+    </form>
+    <form method="post" action="{{ resolved_farm_url('/planning/resources/windows-form') }}" class="grid gap-2">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <h3 class="font-semibold">Availability window</h3>
+      <label class="grid gap-1">Resource
+        <select name="resource" required class="min-h-[44px] rounded-lg border border-line bg-surface px-3">
+          {% for m in machines %}<option value="machine:{{ m.id }}">Machine · {{ m.name }}</option>{% endfor %}
+          {% for o in operators %}<option value="operator:{{ o.id }}">Operator · {{ o.name }}</option>{% endfor %}
+        </select></label>
+      <label class="grid gap-1">Starts ({{ timezone }}) <input type="datetime-local" step="any" name="starts_at" required class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-1">Ends ({{ timezone }}) <input type="datetime-local" step="any" name="ends_at" required class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-1">State
+        <select name="available" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"><option value="1">Available</option><option value="0">Busy</option></select></label>
+      <label class="grid gap-1">Notes <input name="notes" maxlength="2000" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <button class="min-h-[44px] justify-self-start rounded-lg border border-line px-4 hover:bg-ground">Save window</button>
+    </form>
+  </div>
+</details>
+{% endif %}
+{% endcall %}
+
 {% if is_farm_owner %}
 {% call card() %}
 <h2 class="text-lg font-semibold">Plan a spray</h2>
@@ -50,11 +128,38 @@
     <div><dt class="inline font-semibold">Parcels:</dt> <dd class="inline">{% for p in job.parcels %}{{ p.alias }} {{ p.name }}{{ ', ' if not loop.last }}{% endfor %}</dd></div>
     <div><dt class="inline font-semibold">Product:</dt> <dd class="inline">{{ job.product.name if job.product else 'Unknown product' }}</dd></div>
     <div><dt class="inline font-semibold">Assessment:</dt> <dd class="inline">#{{ job.assessment.id }} · {{ job.assessment.decision }} · parameter version {{ job.assessment.config_version.id if job.assessment.config_version.id else 'unversioned' }} · {{ job.assessment.config_version.status }}</dd></div>
+    <div><dt class="inline font-semibold">Resources:</dt> <dd class="inline">{% if job.assignments %}{% for a in job.assignments %}{{ a.kind|capitalize }} {{ a.name }}{% if a.kind == 'machine' and a.work_rate_ha_per_hour %}{% elif a.kind == 'machine' %} (capacity unknown){% endif %}{{ ', ' if not loop.last }}{% endfor %}{% else %}No machine or operator booked{% endif %}</dd></div>
     <div><dt class="inline font-semibold">Farmer availability:</dt> <dd class="inline">{{ 'Available' if job.availability.available else 'Marked Busy' }}{% if not job.availability.available %} · {{ pill('Unavailable day', 'warn') }}{% endif %}</dd></div>
+    {% set ra = job.resource_assessment %}
+    <div><dt class="inline font-semibold">Resource plan:</dt> <dd class="inline">{{ pill(ra.status|capitalize, 'ok' if ra.status == 'feasible' else 'bad' if ra.status == 'infeasible' else 'warn') }}{% if ra.weather %} · weather {{ ra.weather.status }}{% endif %}{% if ra.capacity %} · capacity {{ ra.capacity.status }}{% endif %}</dd></div>
   </dl>
+  {% if ra.reasons %}<ul class="mt-2 grid gap-1 text-[15px]">{% for reason in ra.reasons %}<li class="text-wait">{{ reason }}</li>{% endfor %}</ul>{% endif %}
+  {% if ra.status != 'feasible' %}
+  {% if ra.offers.time %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another eligible time:</span> {{ ra.offers.time.start|local }}–{{ ra.offers.time.end|local }} · {{ ra.offers.time.reason }}</p>{% endif %}
+  {% for offer in ra.offers.jobs %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another planned job:</span> {{ offer.name }} · {{ offer.start|local }} · {{ offer.reason }}</p>{% endfor %}
+  {% for offer in ra.offers.machines %}{% if offer.status == 'available' %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another configured machine:</span> {{ offer.name }} · {{ offer.reason }}</p>{% elif offer.status == 'unknown' %}<p class="mt-2 text-sm text-muted">{{ offer.name }}: {{ offer.reason }}</p>{% endif %}{% endfor %}
+  {% for offer in ra.offers.parcels %}{% if offer.status == 'eligible' %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another parcel:</span> {{ offer.alias }} {{ offer.name }} · {{ offer.reason }}</p>{% else %}<p class="mt-2 text-sm text-muted">{{ offer.alias }} {{ offer.name }}: not eligible · {{ offer.reason }}</p>{% endif %}{% endfor %}
+  {% endif %}
   {% if job.notes %}<p class="mt-2 text-[15px]">{{ job.notes }}</p>{% endif %}
   <p class="mt-2 text-sm text-muted">Created by {{ job.created_by }} · {{ job.created_at|local }} · updated by {{ job.updated_by }} · {{ job.updated_at|local }}{% if job.cancelled_at %} · cancelled by {{ job.cancelled_by }} · {{ job.cancelled_at|local }}{% endif %}</p>
   {% if is_farm_owner and job.status == 'planned' %}
+  <form method="post" action="{{ resolved_farm_url('/planning/jobs/' ~ job.id ~ '/assign-form') }}" class="mt-3 grid gap-3 border-t border-line pt-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="expected_revision" value="{{ job.revision }}">
+    <h4 class="font-semibold">Book machine and operator</h4>
+    <p class="text-sm text-muted">Overlapping bookings of the same machine or operator are refused. A resource with no configured availability, or a machine with no work rate, stays unknown rather than safe.</p>
+    <label class="grid gap-2">Machine
+      <select name="machine_id" class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+        <option value="">No machine</option>
+        {% for m in machines %}<option value="{{ m.id }}"{% if job.assignments|selectattr('kind', 'equalto', 'machine')|selectattr('id', 'equalto', m.id)|list %} selected{% endif %}>{{ m.name }}{% if not m.work_rate_ha_per_hour %} · capacity unknown{% endif %}</option>{% endfor %}
+      </select></label>
+    <label class="grid gap-2">Operator
+      <select name="operator_id" class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+        <option value="">No operator</option>
+        {% for o in operators %}<option value="{{ o.id }}"{% if job.assignments|selectattr('kind', 'equalto', 'operator')|selectattr('id', 'equalto', o.id)|list %} selected{% endif %}>{{ o.name }}</option>{% endfor %}
+      </select></label>
+    <button class="min-h-[44px] justify-self-start rounded-lg border border-line px-4 hover:bg-ground">Save resources</button>
+  </form>
   <details class="mt-3 border-t border-line pt-3">
     <summary class="min-h-[44px] cursor-pointer font-semibold">Edit this revision</summary>
     <form method="post" action="{{ resolved_farm_url('/planning/jobs/' ~ job.id ~ '/edit-form') }}" class="mt-3 grid gap-3">
