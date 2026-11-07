@@ -336,7 +336,7 @@ def test_a_dump_object_farmcores_schema_lacks_refuses_the_bundle(extra):
 )  # fmt: skip
 def test_backup_refuses_its_output_before_anything_runs(tmp_path, case, says):
     """No overwritten bundle, and never a pasted private key echoed into a log."""
-    secret = "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"
+    secret = "AGE-SECRET-KEY-1QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ"  # gauntlet:allow-secret
     recipients, output = (
         ["age1zvkyg2lqzraa2lnjvqej32nkuu0ues2s82hzrye869xeexvn73equnujwj"],
         (tmp_path / "a.age"),
