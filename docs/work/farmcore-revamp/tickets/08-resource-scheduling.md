@@ -54,15 +54,17 @@ Code: `planning/engine.py` (pure eligibility), `planning/resources.py` (configur
 - Review finding 1 RED: the concurrent-edit test let SQLSTATE `23P01` escape as `IntegrityError` (`test_...concurrent_booking_that_beats_the_precheck...` failed); GREEN after translating the flush failure to `JobConflict` → `1 passed`.
 - Review finding 2 RED: wait-advice and non-overlapping-window parcels were listed without eligibility (`4 failed` with the machine checks); GREEN after window/status eligibility → `70 passed` in `tests/apps/planning`.
 - Review finding 3 RED: an alternate machine was `available` with closed weather and with a busy booked operator (`4 failed`); GREEN after requiring weather + operator + capacity + windows → `70 passed`.
+- Re-review finding 1 RED: a parcel whose advice window started 30 minutes into the 90-minute job was still `eligible`; GREEN after requiring the advice window to cover the full job window → `13 passed` in `test_resource_offers.py`.
+- Re-review finding 2 RED: a spare machine was `available` on a farmer-declared Busy day; GREEN after passing the farm-day state into `_machine_offers` and excluding Busy days with an explicit reason → `13 passed`.
 
 ### Verification commands and results
 
-1. `timeout 600 uv run pytest -q tests/apps/planning tests/apps/forecast -m "not data"` → `215 passed in 47.55s`.
+1. `timeout 600 uv run pytest -q tests/apps/planning tests/apps/forecast -m "not data"` → `217 passed in 49.02s`.
 2. `uv run ruff check src tests` → `All checks passed!`; `uv run ruff format --check src tests` → `539 files already formatted`.
 3. `uv run alembic heads` → `planning_0002 (head)`.
 4. Full split, foreground, disk-guarded, instances excluded:
    `~/.local/bin/fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD -- bash -lc "timeout 900 uv run pytest -q tests/core -m 'not data and not slow' --ignore=tests/instances && timeout 1200 uv run pytest -q tests/apps -m 'not data and not slow' --ignore=tests/instances"`
-   → both commands passed; apps summary `2110 passed, 3 skipped, 262 deselected in 483.84s`. Core summary from the same tree: `752 passed, 2 deselected`.
+   → both commands passed; apps summary `2112 passed, 3 skipped, 262 deselected in 496.15s`. Core summary from the same tree: `752 passed, 2 deselected`.
 5. `git diff --check` → clean.
 
 ### Tier-3 failure model (owner writes, bookings, public contracts)
@@ -74,14 +76,14 @@ Code: `planning/engine.py` (pure eligibility), `planning/resources.py` (configur
 - **Cross-farm/unknown ids**: guessed foreign machine/operator ids are rejected by the farm-scoped composite foreign keys and service checks; inactive or missing resources return 422 and write nothing; invalid capacity/kind/times redirect with a plain error. Covered by `test_resource_forms_reject_invalid_values_and_foreign_ids`, `test_assignments_reject_foreign_unconfigured_and_inactive_resources`, and `test_owner_deactivates_a_machine_and_it_cannot_be_booked`.
 - **Scope separation**: a grant with only `fields:read` cannot read `planning_machine`; `planning:read` is required. Covered by `test_a_grant_without_planning_read_cannot_read_resources`.
 - **Demo reset ordering**: assignments and windows are deleted before jobs and resources, so demo reset clears the new farm state without foreign-key blocks. Covered by `test_demo_reset_clears_assignments_and_resources` and `test_demo_reset_clears_configured_resources`.
-- **Unknown inputs**: NULL work rate, absent availability windows and missing forecast hours stay `unknown`; a `wait` decision or a non-overlapping advice window is shown as not eligible, never as an offer. Covered by the engine/offers tests above.
+- **Unknown inputs**: NULL work rate, absent availability windows and missing forecast hours stay `unknown`; a `wait` decision, a non-overlapping advice window or one that covers only part of the job is shown as not eligible, never as an offer. A farmer-declared Busy day removes alternate machines. Covered by the engine/offers tests above.
 - **Manual mutation fallback**: changing the JSON assignment route dependency from `require_farm_owner` to `require_farm_member` made the advisor test fail (`1 failed`), restored → `1 passed`. Changing `capacity_state(None, ...)` to return `fits` made the unknown-capacity engine and offer tests fail (`2 failed`), restored → `2 passed`. The concurrent-edit test is itself a real-database mutant of the pre-check: removing the DB backstop or the translation fails it.
 
 ### Acceptance evidence
 
 - **Eligible hours combine constraints**: `test_resource_engine.py` (weather lookahead, duration, resource window coverage, capacity, product-sulphur temperature), `test_resource_offers.py::test_a_job_combines_weather_resources_and_known_capacity`, `..._busy_farm_day...`.
 - **Atomic overlap + unknown capacity**: `test_overlapping_assignments_are_rejected_and_write_nothing`, `test_concurrent_assignments_to_one_machine_have_one_winner`, the head's `tests/core/test_revamp_migrations.py` exclusion checks, and `test_unknown_capacity_is_shown_and_never_called_feasible`.
-- **Alternatives and preserved reasons**: `test_an_infeasible_job_stays_visible_with_reason_and_offers_a_time`, `...offers_another_planned_job...`, `...offers_another_parcel_with_current_advice` (eligible window only), `...busy_machine_offers_another_configured_machine...` (weather/operator/known capacity required), plus the page rendering the status and reasons.
+- **Alternatives and preserved reasons**: `test_an_infeasible_job_stays_visible_with_reason_and_offers_a_time`, `...offers_another_planned_job...`, `...offers_another_parcel_with_current_advice` and `...advice_window_must_cover_the_full_job_duration` (full-window eligibility only), `...busy_machine_offers_another_configured_machine...` and `...alternate_machine_also_needs_open_weather` / `...needs_the_booked_operator` / `...not_offered_on_a_busy_farm_day` (weather, operator, capacity and farm-day constraints), plus the page rendering the status and reasons.
 - **No unsupported claims / side-effect-free**: `test_reading_offers_writes_nothing_and_makes_no_unsupported_claims` asserts unchanged job/assignment/revision counts across repeated reads and no probability, soil, dose, cost, price, saving or currency text in the JSON.
 
 Independent reviewer: pending (Dell Codex). No merge or deploy performed by this stream.

@@ -182,6 +182,7 @@ def _machine_offers(
     *,
     weather: engine.State,
     operator_state: engine.State | None,
+    busy_day: bool,
 ) -> list[dict[str, object]]:
     offers: list[dict[str, object]] = []
     for machine in resources.machines(repo):
@@ -197,7 +198,10 @@ def _machine_offers(
             booking.overlaps(span) for booking in _bookings(repo, "machine", machine.id, job.id)
         )
         operator_known = operator_state is not None and operator_state.status != "unknown"
-        if booked:
+        if busy_day:
+            status = "unavailable"
+            reason = "Farmer marked this day Busy; no machine is offered for this day."
+        elif booked:
             status = "unavailable"
             reason = "This machine is already booked for an overlapping job."
         elif state.status == "busy":
@@ -334,9 +338,9 @@ def _parcel_offers(
         elif start is None or end is None:
             status = "not_eligible"
             reason = "Current advice has no dated spray window."
-        elif not (start < span.end and span.start < end):
+        elif not (start <= span.start and span.end <= end):
             status = "not_eligible"
-            reason = "Its advice window does not overlap this job's window."
+            reason = "Its advice window does not cover the full job duration."
         else:
             status = "eligible"
             reason = "Current advice says spray and its window overlaps this job."
@@ -499,6 +503,7 @@ def job_assessment(
             int(machine_row["id"]) if machine_row else None,
             weather=result.weather,
             operator_state=result.operator,
+            busy_day=job.scheduled_start.astimezone(ZoneInfo(tz)).date() in busy_days,
         ),
         "parcels": _parcel_offers(repo, job, now, span),
     }
