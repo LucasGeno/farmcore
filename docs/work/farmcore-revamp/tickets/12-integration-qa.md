@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Independent QA verifies milestones 1–4"
 description: "Milestones 1–4: independent qa verifies milestones 1–4."
-status: approved
+status: in-progress
 blocked_by: ["03", "06", "11"]
 ---
 
@@ -40,6 +40,8 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
+
+Claim 2026-11-07 21:25 CET: fresh QA agent `fc12-qa` (OpenCode Go `opencode-go/deepseek-v4.1-flash`, M1; wrote none of tickets 01-11), worktree `~/dev/farmcore-worktrees/12-integration-qa`, branch `qa/12-integration-qa`. Fixes for blocking findings go to a separate writer; reviewer Dell Codex. Coordinator and migration author: `fleet-head-opus`. Stuck deadline 2026-11-08 13:00 CET.
 
 Pending implementation. No acceptance criteria verified yet.
 
