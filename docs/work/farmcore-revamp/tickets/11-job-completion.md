@@ -94,12 +94,12 @@ implementation follows the coordinator's `planning_0003` (`1911a99`, head `plann
 
 ```sh
 timeout 600 uv run pytest -q tests/apps/planning tests/apps/operations tests/apps/inventory tests/apps/advisor -m "not data"
-# 906 passed, 132 deselected in 114.21s (0:01:54)
+# 908 passed, 132 deselected in 107.72s (0:01:47)
 
 ~/.local/bin/fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD -- \
   bash -lc "timeout 900 uv run pytest -q tests/core -m 'not data and not slow' --ignore=tests/instances && timeout 1200 uv run pytest -q tests/apps -m 'not data and not slow'"
-# tests/core: 760 passed, 2 deselected in 246.10s (0:04:06)
-# tests/apps: 2121 passed, 3 skipped, 262 deselected in 491.89s (0:08:11)
+# tests/core: 760 passed, 2 deselected in 242.04s (0:04:02)
+# tests/apps: 2123 passed, 3 skipped, 262 deselected in 486.90s (0:08:06)
 
 node --test tests/core/*.mjs tests/apps/fields/*.mjs
 # tests 32, pass 32, fail 0
@@ -155,9 +155,26 @@ timeout 600 uv run pytest -q tests/apps/planning/test_completion_concurrency.py 
    parcel ids; recommendation review rows are untouched.
 4. *Re-evaluate only after commit*: the service never runs a job; routes add `advisor.evaluate`
    only after `service.complete` returns, through background tasks after the function-scoped
-   repository commits (the same seam as confirmed corrections). A failed completion raises before
-   that point and leaves plan, log set and stock unchanged. The fixture farm has no weather
-   station, so the advisor run itself writes no advice row to assert; this limitation is explicit.
+   repository commits (the same seam as confirmed corrections).
+   `test_advisor_re_evaluation_runs_only_after_a_committed_completion` attaches a synthetic
+   station and observes the public seam: a successful completion adds one `advice` row per parcel
+   at the farm clock's now, while a completion that fails on the per-farm request key adds none
+   and leaves the second plan untouched. A failed completion therefore leaves plan, log set and
+   stock unchanged and queues no evaluation.
+
+### Review round 1 (independent review of `8d1194b`, fixed 2026-11-07)
+
+- **MED — future work could be confirmed as done.** `service._completion_inputs` now rejects an
+  actual start, or an actual end derived from start + duration, later than the farm clock's
+  `now`, for both preview and completion; the form answers a 303 redirect with a clean
+  `error=` message and writes nothing. Existing tests were moved to valid past actuals.
+  RED: `timeout 600 uv run pytest -q tests/apps/planning/test_completion.py -m "not data"`
+  → `1 failed, 6 passed` (`test_a_future_completion_is_refused_with_a_clean_form_error` saw
+  preview `200 != 422`). GREEN after the check → `8 passed`.
+- **MED — re-evaluation proof gap.** Added the station-backed test described in acceptance point
+  4. It passed against the existing `BackgroundTasks` seam (no code fix was needed) and covers
+  both a committed completion and a failed one. The earlier Evidence caveat about the fixture
+  farm having no station is removed.
 
 Not claimed: independent reviewer sign-off (Dell Codex) — the last Verification box stays
 unticked. No merge, deploy, force-push or Alembic revision was performed.

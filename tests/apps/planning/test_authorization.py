@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -136,8 +136,8 @@ def _completion(job):
     return {
         "expected_revision": job["revision"],
         "request_key": "authorization-completion-key",
-        "actual_start": job["scheduled_start"],
-        "duration_minutes": job["duration_minutes"],
+        "actual_start": (NOW - timedelta(hours=2)).isoformat(),
+        "duration_minutes": 60,
         "parcel_ids": [p["id"] for p in job["parcels"]],
         "quantities": [{"product_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
         "notes": "",

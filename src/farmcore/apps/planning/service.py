@@ -697,6 +697,7 @@ def _fingerprint(
 def _completion_inputs(
     repo: ScopedRepository,
     *,
+    now: datetime,
     actual_start: datetime,
     duration_minutes: int,
     parcel_ids: list[int],
@@ -709,6 +710,9 @@ def _completion_inputs(
         raise JobError("Duration must be between 1 and 1440 minutes.")
     if len(notes) > MAX_NOTES:
         raise JobError("Notes are too long.")
+    actual_end = actual_start + timedelta(minutes=duration_minutes)
+    if actual_start > now or actual_end > now:
+        raise JobError("Actual work cannot start or end after the farm clock's now.")
     parcels = _parcels(repo, parcel_ids)
     doses = []
     for quantity in _raw_quantities(quantities):
@@ -780,6 +784,7 @@ def completion_preview(
     repo: ScopedRepository,
     job: PlanningJob,
     *,
+    now: datetime,
     expected_revision: int,
     request_key: str,
     actual_start: datetime,
@@ -795,6 +800,7 @@ def completion_preview(
     key = _text(request_key, "Request key", maximum=128)
     parcels, doses = _completion_inputs(
         repo,
+        now=now,
         actual_start=actual_start,
         duration_minutes=duration_minutes,
         parcel_ids=parcel_ids,
@@ -908,6 +914,7 @@ def complete(
     _completion_target(job_row, expected_revision)
     parcels, doses = _completion_inputs(
         repo,
+        now=now,
         actual_start=actual_start,
         duration_minutes=duration_minutes,
         parcel_ids=parcel_ids,

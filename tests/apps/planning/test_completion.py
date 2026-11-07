@@ -12,7 +12,7 @@ from farmcore.apps.inventory.service import stock_rows
 from farmcore.apps.planning.models import PlanningJob, PlanningJobRevision
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Log, LogSource, Quantity
+from farmcore.core.models.canonical import Advice, Asset, Log, LogSource, Quantity
 from tests.apps.planning.conftest import NOW, job_payload
 
 
@@ -30,7 +30,7 @@ def completion_body(job, *, parcel_ids=None, quantities=None, **overrides):
     body = {
         "expected_revision": job["revision"],
         "request_key": "completion-key-1",
-        "actual_start": job["scheduled_start"],
+        "actual_start": (NOW - timedelta(hours=2)).isoformat(),
         "duration_minutes": job["duration_minutes"],
         "parcel_ids": parcel_ids or [p["id"] for p in job["parcels"]],
         "quantities": quantities
@@ -71,7 +71,7 @@ def test_completion_preview_shows_actual_differences_and_writes_nothing(
         params={"farm": farm.id},
         json=completion_body(
             created,
-            actual_start=(NOW + timedelta(hours=1)).isoformat(),
+            actual_start=(NOW - timedelta(hours=2)).isoformat(),
             duration_minutes=60,
             parcel_ids=[p.id for p in parcels],
             quantities=[
@@ -117,7 +117,7 @@ def test_completion_creates_one_confirmed_operation_and_retries_are_idempotent(
     created = _created(client, farm, parcels, products, advice)
     body = completion_body(
         created,
-        actual_start=NOW.isoformat(),
+        actual_start=(NOW - timedelta(hours=1)).isoformat(),
         duration_minutes=60,
         parcel_ids=[p.id for p in parcels],
         quantities=[{"product_id": products["copper-contact"].id, "value": "1.5", "unit": "kg/ha"}],
@@ -148,8 +148,8 @@ def test_completion_creates_one_confirmed_operation_and_retries_are_idempotent(
     )
     assert operation.status == "done"
     assert operation.type == "spray"
-    assert operation.ts_start == NOW
-    assert operation.ts_end == NOW + timedelta(hours=1)
+    assert operation.ts_start == NOW - timedelta(hours=1)
+    assert operation.ts_end == NOW
     assert {p.id for p in operation.parcels} == {p.id for p in parcels}
     assert [(p.product_id, str(p.value), p.unit) for p in operation.quantities] == [
         (products["copper-contact"].id, "1.5", "kg/ha")
@@ -163,7 +163,7 @@ def test_completion_creates_one_confirmed_operation_and_retries_are_idempotent(
 
     receipt = source.raw_payload[NAMESPACE]
     assert receipt["parcel_ids"] == sorted(p.id for p in parcels)
-    assert receipt["source_time"].startswith("2024-04-09T04:00")
+    assert receipt["source_time"].startswith("2024-04-09T03:00")
     assert receipt["policy"] == "exact_previous_hour_slot_v1"
 
     revisions = session.scalars(
@@ -244,7 +244,7 @@ def test_completion_merges_into_a_matching_confirmed_spray_once(
         farm_id=farm.id,
         type="spray",
         parcel_ids=[parcels[0].id],
-        ts_start=NOW + timedelta(hours=1),
+        ts_start=NOW - timedelta(hours=2),
         ts_end=None,
         quantities=[
             logs.QuantityInput(
@@ -267,7 +267,8 @@ def test_completion_merges_into_a_matching_confirmed_spray_once(
         params={"farm": farm.id},
         json=completion_body(
             created,
-            actual_start=(NOW + timedelta(hours=1)).isoformat(),
+            actual_start=(NOW - timedelta(hours=2)).isoformat(),
+            duration_minutes=60,
             quantities=[
                 {"product_id": products["copper-contact"].id, "value": "1.5", "unit": "kg/ha"}
             ],
@@ -356,7 +357,7 @@ def test_the_completion_form_previews_differences_then_confirms(
     form = {
         "expected_revision": str(created["revision"]),
         "request_key": "form-key-1",
-        "actual_start": "2024-04-09T07:30",
+        "actual_start": "2024-04-09T04:30",
         "duration_minutes": "60",
         "parcel_ids": [str(p.id) for p in parcels],
         "product_id": [str(products["copper-contact"].id)],
@@ -388,11 +389,127 @@ def test_the_completion_form_previews_differences_then_confirms(
     saved = session.get(PlanningJob, created["id"])
     assert (saved.status, saved.revision) == ("completed", 2)
     operation = session.get(Log, saved.operation_log_id)
-    assert operation.ts_start == NOW + timedelta(hours=1, minutes=30)
+    assert operation.ts_start == NOW - timedelta(hours=1, minutes=30)
     assert [(q.product_id, str(q.value), q.unit) for q in operation.quantities] == [
         (products["copper-contact"].id, "1.5", "kg/ha")
     ]
     assert session.scalar(select(func.count()).select_from(Quantity)) == 1
+
+
+def test_a_future_completion_is_refused_with_a_clean_form_error(
+    client, session, farm, parcels, products, advice
+):
+    created = _created(client, farm, parcels, products, advice)
+    future_start = (NOW + timedelta(hours=1)).isoformat()
+    preview = client.post(
+        f"/planning/jobs/{created['id']}/completion/preview",
+        params={"farm": farm.id},
+        json=completion_body(created, actual_start=future_start, duration_minutes=30),
+    )
+    assert preview.status_code == 422
+    assert "future" in preview.text.lower() or "clock" in preview.text.lower()
+
+    # A past start whose actual end is still in the future is work that has not happened.
+    running = client.post(
+        f"/planning/jobs/{created['id']}/complete",
+        params={"farm": farm.id},
+        json=completion_body(
+            created,
+            actual_start=(NOW - timedelta(minutes=30)).isoformat(),
+            duration_minutes=60,
+        ),
+    )
+    assert running.status_code == 422
+    assert (
+        client.post(
+            f"/planning/jobs/{created['id']}/complete",
+            params={"farm": farm.id},
+            json=completion_body(created, actual_start=future_start, duration_minutes=30),
+        ).status_code
+        == 422
+    )
+    session.expire_all()
+    job = session.get(PlanningJob, created["id"])
+    assert (job.status, job.revision) == ("planned", 1)
+    assert session.scalar(select(func.count()).select_from(Log)) == 0
+
+    form = {
+        "expected_revision": str(created["revision"]),
+        "request_key": "future-form-key",
+        "actual_start": "2024-04-09T08:00",
+        "duration_minutes": "30",
+        "parcel_ids": [str(parcels[0].id)],
+        "product_id": [str(products["copper-contact"].id)],
+        "dose_value": ["1.5"],
+        "dose_unit": ["kg/ha"],
+        "notes": "",
+    }
+    preview_form = client.post(
+        f"/planning/jobs/{created['id']}/complete-preview-form",
+        params={"farm": farm.id},
+        data=form,
+        follow_redirects=False,
+    )
+    assert preview_form.status_code == 303
+    assert "error=" in preview_form.headers["location"]
+    assert "farm+clock" in preview_form.headers["location"]
+    confirm_form = client.post(
+        f"/planning/jobs/{created['id']}/complete-form",
+        params={"farm": farm.id},
+        data=form,
+        follow_redirects=False,
+    )
+    assert confirm_form.status_code == 303
+    assert "error=" in confirm_form.headers["location"]
+    session.expire_all()
+    assert session.get(PlanningJob, created["id"]).status == "planned"
+    assert session.scalar(select(func.count()).select_from(Log)) == 0
+
+
+def test_advisor_re_evaluation_runs_only_after_a_committed_completion(
+    client, session, farm, parcels, products, advice
+):
+    session.add(Asset(farm_id=farm.id, kind="station", name="Synthetic station", props={}))
+    session.flush()
+    first = _created(client, farm, parcels, products, advice)
+
+    def evaluated_at_now() -> int:
+        return session.scalar(
+            select(func.count())
+            .select_from(Advice)
+            .where(Advice.farm_id == farm.id, Advice.evaluated_at == NOW)
+        )
+
+    before = evaluated_at_now()
+    completed = client.post(
+        f"/planning/jobs/{first['id']}/complete",
+        params={"farm": farm.id},
+        json=completion_body(first),
+    )
+    assert completed.status_code == 200, completed.text
+    session.expire_all()
+    after = evaluated_at_now()
+    assert after == before + len(parcels)
+    assert (
+        session.scalar(
+            select(func.count())
+            .select_from(Advice)
+            .where(Advice.parcel_id == parcels[1].id, Advice.evaluated_at == NOW)
+        )
+        == 1
+    )
+
+    # A completion that fails leaves no committed work, so no new evaluation is queued.
+    second = _created(client, farm, parcels, products, advice, name="Second block")
+    failed = client.post(
+        f"/planning/jobs/{second['id']}/complete",
+        params={"farm": farm.id},
+        json=completion_body(second, request_key="completion-key-1"),
+    )
+    assert failed.status_code == 409
+    session.expire_all()
+    assert evaluated_at_now() == after
+    assert session.get(PlanningJob, second["id"]).status == "planned"
 
 
 def test_demo_reset_removes_a_completed_job_and_its_operation(

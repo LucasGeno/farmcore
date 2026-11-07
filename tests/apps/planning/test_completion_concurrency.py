@@ -66,7 +66,7 @@ def _body(job, key):
     return {
         "expected_revision": job["revision"],
         "request_key": key,
-        "actual_start": (NOW + timedelta(minutes=15)).isoformat(),
+        "actual_start": (NOW - timedelta(minutes=75)).isoformat(),
         "duration_minutes": 60,
         "parcel_ids": [p["id"] for p in job["parcels"]],
         "quantities": [{"product_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],

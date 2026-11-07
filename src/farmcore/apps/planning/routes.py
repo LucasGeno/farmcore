@@ -299,7 +299,13 @@ def _schedule_advice(request: Request, repo: Repo, tasks: BackgroundTasks) -> No
 def completion_preview(request: Request, repo: Repo, job_id: int, body: JobCompletion):
     try:
         row = service.job(repo, job_id)
-        return service.completion_preview(repo, row, tz=_tz(request), **_completion_kwargs(body))
+        return service.completion_preview(
+            repo,
+            row,
+            now=_now(request, repo),
+            tz=_tz(request),
+            **_completion_kwargs(body),
+        )
     except (service.JobError, service.JobNotFound, service.JobConflict) as exc:
         raise _translate(exc) from None
 
@@ -330,7 +336,13 @@ async def completion_preview_form(request: Request, repo: Repo, job_id: int):
     try:
         body = _completion_body(form, _tz(request))
         row = service.job(repo, job_id)
-        preview = service.completion_preview(repo, row, tz=_tz(request), **_completion_kwargs(body))
+        preview = service.completion_preview(
+            repo,
+            row,
+            now=_now(request, repo),
+            tz=_tz(request),
+            **_completion_kwargs(body),
+        )
     except service.JobNotFound as exc:
         raise HTTPException(404, str(exc)) from None
     except service.JobConflict as exc:
