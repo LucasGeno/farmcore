@@ -47,7 +47,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from farmcore.apps.operations import bbch, checks, corrections, isoxml, register
+from farmcore.apps.operations import bbch, checks, corrections, facts, isoxml, register
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel, Product
@@ -135,6 +135,7 @@ def _record_summaries(repo: Repo, events: list[Event]) -> dict[int, dict[str, An
         r.id: {
             "products": products_of[r.id],
             "parcels": [p.alias for p in sorted(parcels_of[r.id], key=register.parcel_key)],
+            "facts": facts.summary(r),
         }
         for r in records
     }
@@ -178,6 +179,8 @@ def _index_context(request: Request, repo: Repo) -> dict[str, Any]:
             ],
             "badges": _badges(sources_of[log.id]),
             "products": products_of[log.id],
+            "label": facts.label(log),
+            "facts": facts.summary(log),
         }
         for log in recent
     ]

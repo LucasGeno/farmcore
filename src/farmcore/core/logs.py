@@ -324,6 +324,42 @@ def record_operation(
     return target, True
 
 
+def create_pending_once(
+    session: Session,
+    *,
+    farm_id: int,
+    type: str,
+    parcel_ids: Sequence[int],
+    ts_start: datetime,
+    ts_end: datetime | None,
+    quantities: Sequence[QuantityLike],
+    source: SourceInput,
+    actor: str,
+    occurred_at: datetime,
+    name: str | None = None,
+    source_app: str = DEFAULT_SOURCE_APP,
+) -> tuple[Log, bool]:
+    """A pending log awaiting confirmation, and whether this call created it.
+
+    `True` means the source was already held (a replay or a concurrent duplicate): the existing
+    draft is returned unchanged, and the caller must not write to it."""
+    return record_operation(
+        session,
+        farm_id=farm_id,
+        type=type,
+        parcel_ids=parcel_ids,
+        ts_start=ts_start,
+        ts_end=ts_end,
+        quantities=quantities,
+        source=source,
+        actor=actor,
+        occurred_at=occurred_at,
+        status="pending",
+        name=name,
+        source_app=source_app,
+    )
+
+
 def create_pending(
     session: Session,
     *,
@@ -340,7 +376,7 @@ def create_pending(
     source_app: str = DEFAULT_SOURCE_APP,
 ) -> Log:
     """A pending log awaiting confirmation (no merge check until `confirm`)."""
-    log, _ = record_operation(
+    log, _held = create_pending_once(
         session,
         farm_id=farm_id,
         type=type,
@@ -351,7 +387,6 @@ def create_pending(
         source=source,
         actor=actor,
         occurred_at=occurred_at,
-        status="pending",
         name=name,
         source_app=source_app,
     )

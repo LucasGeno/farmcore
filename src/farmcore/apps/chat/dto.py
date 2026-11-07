@@ -26,8 +26,10 @@ class Callback:
 @dataclass(frozen=True)
 class Outgoing:
     """A reply; `buttons` are inline `(label, callback data)` pairs and `url_buttons` inline
-    `(label, url)` pairs, each in order (callback buttons first)."""
+    `(label, url)` pairs, each in order (callback buttons first). `status` is the HTTP status a
+    web route should answer with; transports that have none ignore it."""
 
     text: str
     buttons: list[tuple[str, str]] = field(default_factory=list)
     url_buttons: list[tuple[str, str]] = field(default_factory=list)
+    status: int = 200
