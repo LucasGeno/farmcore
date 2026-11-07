@@ -37,6 +37,9 @@
     {%- if item.products %}
     <p data-products class="mt-0.5 min-w-0 break-words text-sm text-stone-700">{% for p in item.products %}<span class="block">{{ product_line(p) }}</span>{% endfor %}</p>
     {%- endif %}
+    {%- if item.facts %}
+    <p data-facts class="mt-0.5 min-w-0 break-words text-sm text-stone-700">{{ item.facts }}</p>
+    {%- endif %}
     {%- if item.parcels %}
     <p data-parcels class="mt-0.5 min-w-0 break-words text-sm text-stone-500">Parcels: {{ item.parcels|join(", ") }}</p>
     {%- endif %}

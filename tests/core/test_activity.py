@@ -289,3 +289,53 @@ def test_doses_keep_their_decimals() -> None:
 
     values = [Decimal("2.0"), Decimal("1.05"), Decimal("0.050"), Decimal("12")]
     assert [_dose(v) for v in values] == ["2", "1.05", "0.05", "12"]
+
+
+def test_activity_does_not_expose_private_advisor_check_notes(farm, session, client):
+    """A review is owner/advisor material: generic activity (logs:read) never lists it."""
+    from farmcore.core.models.canonical import Advice
+
+    parcel = session.query(Parcel).filter_by(farm_id=farm.id, alias="P1").one()
+    row = Advice(
+        farm_id=farm.id,
+        parcel_id=parcel.id,
+        evaluated_at=NOW,
+        decision="wait",
+        reasons=[],
+        products=[],
+        props={"headline": "Stored wait"},
+    )
+    session.add(row)
+    session.flush()
+    for kind, body, payload in (
+        (
+            "advice.review_requested",
+            "Advisor check requested for P1",
+            {"advice_id": row.id, "parcel_id": parcel.id, "note": "Private request"},
+        ),
+        (
+            "advice.reviewed",
+            "Advisor check answered for P1",
+            {"advice_id": row.id, "parcel_id": parcel.id, "note": "Private answer"},
+        ),
+    ):
+        post_event(
+            session,
+            farm_id=farm.id,
+            res_model="advice",
+            res_id=row.id,
+            kind=kind,
+            body=body,
+            payload=payload,
+            actor="user:1",
+            source_app="review",
+            occurred_at=NOW,
+        )
+    session.commit()
+    today = client.get("/activity/today", params={"farm": farm.id})
+    assert today.status_code == 200
+    assert "Advisor check" not in today.text
+    page = client.get("/activity/", params={"farm": farm.id})
+    assert page.status_code == 200
+    assert "Private answer" not in page.text
+    assert "Advisor check" not in page.text

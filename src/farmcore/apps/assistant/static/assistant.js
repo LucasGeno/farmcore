@@ -18,6 +18,10 @@
   let recording = null;
   let mic = null;
   let busy = false;
+  // One idempotency key per submission: kept while a POST may have failed, so retrying the same
+  // text reuses it (one draft), and replaced after a successful save (a new note is a new draft).
+  let pendingKey = null;
+  let pendingText = '';
   const TTL = 30 * 60 * 1000;
   const MAX_TURNS = 6;
   const say = text => { status.textContent = text; };
@@ -27,6 +31,14 @@
     input.disabled = value;
     if (mic) mic.disabled = value;
     form.setAttribute('aria-busy', String(value));
+  }
+  function requestKey(question) {
+    if (pendingText !== question || !pendingKey) {
+      pendingText = question;
+      pendingKey = crypto.randomUUID ? crypto.randomUUID()
+        : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    }
+    return pendingKey;
   }
   function fresh(text) {
     generation++;
@@ -144,6 +156,7 @@
         const body = new FormData();
         body.append('q', question);
         body.append('conversation', conversation);
+        body.append('request_key', requestKey(question));
         response = await mutate(messageUrl, body);
       } else {
         const url = new URL(dialog.dataset.askUrl, location.origin);
@@ -154,6 +167,7 @@
       const answer = await response.json();
       if (current !== generation) return;
       if (!response.ok) { say(answer.text || answer.detail || 'Could not read the records. Please try again.'); return; }
+      if (messageUrl) { pendingKey = null; pendingText = ''; }
       if (answer.fresh_conversation) { output.replaceChildren(user); }
       const block = entry('Farm assistant', answer.text, 'assistant');
       addLinks(block, answer.links);

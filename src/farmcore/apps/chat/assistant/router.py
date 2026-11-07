@@ -48,6 +48,19 @@ QUESTION_PREFIXES = ("est-ce", "est ce", "faut-il", "faut il")
 SPRAY_VERBS = frozenset(
     {"sprayed", "treated", "applied", "traite", "traites", "traitee", "traitees", "passe"}
 )
+IRRIGATION_VERBS = frozenset(
+    {
+        *("irrigated", "irrigate", "irrigue", "irrigues", "irriguee", "irriguees"),
+        *("watered", "watering", "arrose", "arrosee", "arroses", "arrosees", "arrosage"),
+    }
+)
+OBSERVATION_VERBS = frozenset(
+    {
+        *("observed", "observe", "observee", "observes", "saw", "seen", "notice", "noticed"),
+        *("spotted", "vu", "vue", "vus", "signale", "signalee", "repere", "reperee"),
+    }
+)
+CAPTURE_VERBS = SPRAY_VERBS | IRRIGATION_VERBS | OBSERVATION_VERBS
 # A completed spray reported in the first person: subject, optional auxiliary or adverb, verb.
 SUBJECTS = frozenset({"i", "we", "j", "je", "nous", "on"})
 REPORT_FILLERS = frozenset({"have", "ve", "had", "ai", "avons", "a", "just", "already", "bien"})
@@ -90,7 +103,7 @@ def intent(text: str) -> str:
     dose = _DOSE.search(folded) is not None
     if asks and not (dose and _reports(words)):
         return QUESTION
-    if dose or SPRAY_VERBS & set(words):
+    if dose or CAPTURE_VERBS & set(words):
         return LOG
     if asks or stripped.endswith("?"):
         return QUESTION
