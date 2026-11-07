@@ -106,6 +106,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "planning_job_parcel": frozenset({"planning:read", "planning:write"}),
     "planning_job_revision": frozenset({"planning:read", "planning:write"}),
     "forecast_availability": frozenset({"fields:read", "planning:read", "planning:write"}),
+    # Recommendation-review events are advice material; a logs-only consent cannot read the
+    # farmer's or advisor's note by naming the generic `event` table.
+    "recommendation_review": frozenset({"advice:read"}),
     "llm_audit": frozenset({"audit:read"}),
     "access_log": frozenset({"audit:read"}),
     "data_grant": frozenset({"audit:read"}),

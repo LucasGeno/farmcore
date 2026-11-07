@@ -16,13 +16,13 @@ capped by Content-Length and while streaming, before any parsing; the clip by si
 An unreadable clip is a 422; no speech model on the host → 503 "Voice needs the speech service."
 """
 
+import hashlib
 import json
 import logging
 import os
 import re
 import shutil
 import tempfile
-import time
 from contextlib import suppress
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -37,6 +37,7 @@ from farmcore.apps.assistant import conversations, limits, llm
 from farmcore.apps.assistant.tools import PLAN
 from farmcore.apps.chat import conversation as clarification
 from farmcore.apps.chat import handlers as chat
+from farmcore.apps.chat import service as chat_service
 from farmcore.apps.chat.assistant import router as intent
 from farmcore.apps.chat.assistant.fallback import choose
 from farmcore.apps.chat.audit import DbAuditSink, audit_ref
@@ -52,6 +53,7 @@ from farmcore.core.models.canonical import Farm
 from farmcore.core.registry import visible_manifests
 from farmcore.core.routes_clock import require_admin
 from farmcore.core.tools import ToolContext, ToolResult, call_tool, collect_tools
+from farmcore.core.tour import is_tour
 from farmcore.core.urls import with_farm
 from farmcore.web import is_admin, templates
 
@@ -66,16 +68,23 @@ ALLOWED = {
     "operations_last_spray",
     "advisor_today",
     "advisor_parcel_status",
+    "review_assessment_status",
     "fields_list_parcels",
     "operations_recent_sprays",
 }
 # Anonymous visitors and tour visitors never write: a spray report gets this instead of a guess.
 LOG_ELSEWHERE = (
-    "Logging a spray is for the signed-in farmer, or send it to the farm's Telegram bot. "
-    "Here you can ask about your records."
+    "Logging a spray, an irrigation or an observation is for the signed-in farmer, "
+    "or send it to the farm's Telegram bot. Here you can ask about your records."
 )
 LOG_OTHER_FARM = "Spray logging here is set up for the main demo farm only."
 CANCEL_WORDS = {"/cancel", "cancel", "start over"}
+# An irrigation amount without a verb ("P5 20 mm") is still a capture; a bare "P1" is not.
+IRRIGATION_NOTE = re.compile(
+    r"\b\d+(?:[.,]\d+)?\s*"
+    r"(?:mm|millimetres?|millimeters?|m3|cubic\s+met(?:re|er)s?|met(?:re|er)s?\s+cubed?)\b",
+    re.I,
+)
 SPRAY_TURN = "spray_log"  # routing metadata only: a follow-up never re-runs a write
 
 
@@ -105,13 +114,30 @@ def ask(
         private_member=repo.private_member,
     )
     settings = request.app.state.settings
+    from farmcore.core.identity import principal_for
+
+    principal = principal_for(request)
+    member_role = (
+        principal.memberships.get(repo.farm_id) if principal and not is_tour(request) else None
+    )
     ctx = ToolContext(
-        scoped, get_clock(repo.session, settings).now(), ZoneInfo(settings.display_tz)
+        scoped,
+        get_clock(repo.session, settings).now(),
+        ZoneInfo(settings.display_tz),
+        member_role=member_role,
+        is_admin=is_admin(request),
     )
     generation = epoch(repo.session)
     key = _conversation_key(request, repo, token, conversation)
     history = conversations.load(request.app, key, generation)
-    tools = [t for t in collect_tools(manifests) if t.name in ALLOWED and t.scope.endswith(":read")]
+    review_reader = is_admin(request) or member_role in ("owner", "advisor")
+    tools = [
+        t
+        for t in collect_tools(manifests)
+        if t.name in ALLOWED
+        and t.scope.endswith(":read")
+        and (t.name != "review_assessment_status" or review_reader)
+    ]
     if any(m.name == "forecast" for m in manifests):
         tools.append(PLAN)
     has_fields = any(m.name == "fields" for m in manifests)
@@ -242,9 +268,16 @@ def message(
     repo: Repo,
     q: str = Form(min_length=1, max_length=500),
     conversation: str | None = Form(default=None, min_length=1, max_length=64),
+    request_key: str = Form(min_length=1, max_length=128),
 ):
-    """The signed-in farmer's panel: a spray report (or the reply to its clarifying question)
-    takes the chat app's draft → ✅ path; anything else is answered exactly like `GET /ask`."""
+    """The signed-in farmer's panel: a spray/irrigation/observation report (or the reply to its
+    clarifying question) takes the chat app's draft → ✅ path; anything else is answered exactly
+    like `GET /ask`.
+
+    `request_key` is required: it is the client's idempotency key for one submission. It is
+    hashed into the draft's message id, and the chat key already carries the farm and member, so
+    a retried POST returns the same draft instead of writing a second one, and a different
+    message under the same key is refused."""
     names = {m.name for m in visible_manifests(request)}
     if "assistant" not in names:
         raise HTTPException(404)
@@ -254,7 +287,7 @@ def message(
     token, allowed = _take_quota(request)
     if not allowed:
         return response(request, token, {"text": "Too many messages. Try again in a minute."}, 429)
-    message_id = time.time_ns() // 1000  # unique per message: the draft's idempotency key
+    message_id = _submission_id(request_key)
     deps = bound_chat_deps(request, repo)
     _end_request_transaction(repo)
     out = chat.on_message(deps, Incoming(chat.WEB_CHAT_ID, text, None, message_id))
@@ -265,7 +298,17 @@ def message(
     conversations.save(
         request.app, key, generation, [*history, conversations.Turn(text, SPRAY_TURN, None)]
     )
-    return response(request, token, _web_reply(request, repo, out))
+    return response(request, token, _web_reply(request, repo, out), out.status)
+
+
+def _submission_id(request_key: str) -> int:
+    """The draft's idempotency id: the client key hashed to a positive bigint.
+
+    The chat's external key binds this id to the farm and member (`CaptureBinding.prefix`), so
+    the same key from another farm or member is another draft.
+    """
+    digest = hashlib.blake2b(request_key.encode(), digest_size=8).digest()
+    return max(1, int.from_bytes(digest, "big") >> 1)
 
 
 def _conversation_key(request: Request, repo: Repo, token: str, conversation: str | None):
@@ -308,11 +351,13 @@ def confirm(
     _end_request_transaction(repo)
     out = chat.on_callback(deps, Callback(chat.WEB_CHAT_ID, action))
     token = request.cookies.get(limits.COOKIE) or ""
-    return response(request, token, _web_reply(request, repo, out))
+    return response(request, token, _web_reply(request, repo, out), out.status)
 
 
 def _spray_turn(request: Request, repo: Repo, text: str) -> bool:
-    """A spray report, a cancel, or any non-question while a web clarification is open."""
+    """A capture turn: a spray/irrigation/observation report, a cancel, any non-question while a
+    web clarification is open, or a fresh irrigation amount naming one of the farm's parcels
+    ("P5 20 mm": the bot's own reading, without turning a bare "P1" into a draft)."""
     said = intent.intent(text)
     if said == intent.LOG or text.casefold() == "/confirm":
         return True
@@ -322,9 +367,12 @@ def _spray_turn(request: Request, repo: Repo, text: str) -> bool:
     open_draft = clarification.load(
         repo.session, repo.farm_id, _capture_binding(request, repo).state_key, now
     )
-    return open_draft is not None or (
-        text.casefold() in CANCEL_WORDS and _has_pending(repo, request)
-    )
+    if open_draft is not None or (text.casefold() in CANCEL_WORDS and _has_pending(repo, request)):
+        return True
+    if said != intent.OTHER or not IRRIGATION_NOTE.search(text):
+        return False
+    settings = request.app.state.settings
+    return chat.names_a_parcel(text, chat_service.load_context(repo, now, settings.display_tz))
 
 
 def _has_pending(repo, request) -> bool:

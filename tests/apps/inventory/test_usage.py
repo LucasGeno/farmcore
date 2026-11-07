@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
+
 from farmcore.apps.inventory import service
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
@@ -188,3 +190,26 @@ def test_a_log_with_only_a_total_of_the_product_is_not_computable(session, inv):
 
     assert row.used is None
     assert row.not_computable == 1
+
+
+@pytest.mark.parametrize("kind", ["irrigate", "observation"])
+def test_a_confirmed_fact_never_consumes_spray_stock(session, inv, kind):
+    """Only spray rates count: an irrigation or observation is a record, not a product use."""
+    copper = inv.products["copper-contact"]
+    stock(session, inv.farm, copper, purchased="20")
+    logs.record_operation(
+        session,
+        farm_id=inv.farm.id,
+        type=kind,
+        parcel_ids=[p.id for p in inv.parcels],
+        ts_start=T_APR,
+        ts_end=None,
+        quantities=[],
+        source=logs.SourceInput("voice", f"{kind}-1", {}, 0.9, logs.RANK_VOICE),
+        actor="owner",
+        occurred_at=T_APR,
+    )
+
+    row = _row(session, inv.farm, T_APR + timedelta(hours=1))
+
+    assert (row.used, row.sprays, row.on_hand) == (Decimal("0"), 0, Decimal("20"))

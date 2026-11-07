@@ -373,3 +373,179 @@ def test_new_issue_of_unchanged_forecast_does_not_resurrect_read_items(client, s
     second = client.get("/notifications").text
     assert re.findall(r'data-notification-key="([0-9a-f]+)"', second) == keys
     assert 'data-unread-count="0"' in second
+
+
+def test_bell_reports_an_open_check_and_the_advisor_answer(committed_session_factory, settings):
+    from datetime import UTC, datetime
+
+    from fastapi.testclient import TestClient
+
+    from farmcore.apps.review import recommendations
+    from farmcore.core.access import ScopedRepository, ensure_owner_grant
+    from farmcore.core.clock import set_replay
+    from farmcore.core.models.canonical import Farm
+    from farmcore.main import create_app
+    from tests.apps.share.conftest import make_parcel
+    from tests.core.test_member_sessions import _account, _login
+
+    now = datetime(2024, 4, 10, 4, tzinfo=UTC)
+    _, farm_id = _account(committed_session_factory, login="owner")
+    _account(committed_session_factory, login="expert", role="advisor", farm_id=farm_id)
+    with committed_session_factory.begin() as session:
+        farm = session.get(Farm, farm_id)
+        parcel = make_parcel(session, farm, 1)
+        row = Advice(
+            farm_id=farm_id,
+            parcel_id=parcel.id,
+            evaluated_at=now,
+            decision="wait",
+            reasons=[],
+            products=[],
+            props={"headline": "Stored wait", "assessment_status": "evaluable"},
+        )
+        session.add(row)
+        session.flush()
+        set_replay(session, now)
+        repo = ScopedRepository(
+            session, farm_id, ensure_owner_grant(session, farm), "owner", "test"
+        )
+        asked = recommendations.request_check(
+            repo, now, row, parcel, note="Please check", requested_by="owner"
+        )
+        request_id = asked.request.id
+        advice_id = row.id
+    app = create_app(settings, session_factory=committed_session_factory)
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        bell = owner.get("/notifications", params={"farm": farm_id})
+        assert bell.status_code == 200
+        assert "Advisor check requested" in bell.text
+        assert "P1" in bell.text
+        assert "No answer yet" in bell.text
+
+        answered = advisor.post(
+            f"/review/requests/{request_id}/response",
+            params={"farm": farm_id},
+            json={"opinion": "agree", "note": "Looks right"},
+            headers={
+                "Origin": "https://testserver",
+                "X-CSRF-Token": advisor.cookies.get("farmcore_csrf"),
+            },
+        )
+        assert answered.status_code == 201
+        bell = owner.get("/notifications", params={"farm": farm_id})
+        assert "Advisor check answered" in bell.text
+        assert "expert" in bell.text
+        assert "Agrees with this saved check" in bell.text
+        assert "Please check" not in bell.text  # the note stays on the review page/card
+    assert advice_id
+
+
+def _review_farm(factory):
+    from datetime import UTC, datetime
+
+    from farmcore.apps.review import recommendations
+    from farmcore.core.access import ScopedRepository, ensure_owner_grant
+    from farmcore.core.clock import set_replay
+    from farmcore.core.models.canonical import Farm
+    from tests.apps.share.conftest import make_parcel
+    from tests.core.test_member_sessions import _account
+
+    now = datetime(2024, 4, 10, 4, tzinfo=UTC)
+    _, farm_id = _account(factory, login="owner")
+    _account(factory, login="expert", role="advisor", farm_id=farm_id)
+    with factory.begin() as session:
+        farm = session.get(Farm, farm_id)
+        parcel = make_parcel(session, farm, 1)
+        row = Advice(
+            farm_id=farm_id,
+            parcel_id=parcel.id,
+            evaluated_at=now,
+            decision="none",
+            reasons=[],
+            products=[],
+            props={"headline": "Stored check", "assessment_status": "evaluable"},
+        )
+        session.add(row)
+        session.flush()
+        set_replay(session, now)
+        repo = ScopedRepository(
+            session, farm_id, ensure_owner_grant(session, farm), "owner", "test"
+        )
+        asked = recommendations.request_check(
+            repo, now, row, parcel, note="Please check", requested_by="owner"
+        )
+        recommendations.respond(
+            repo,
+            now,
+            row,
+            parcel,
+            asked.request.id,
+            opinion="agree",
+            note="Private advisor note",
+            reviewer="expert",
+        )
+    return farm_id, now
+
+
+def test_the_bell_hides_review_metadata_from_an_anonymous_demo_visitor(
+    committed_session_factory, settings
+):
+    from fastapi.testclient import TestClient
+
+    from farmcore.main import create_app
+
+    farm_id, _ = _review_farm(committed_session_factory)
+    demo = settings.model_copy(update={"demo_mode": True, "demo_farm_ids": [farm_id]})
+    with TestClient(
+        create_app(demo, session_factory=committed_session_factory), base_url="https://testserver"
+    ) as visitor:
+        bell = visitor.get("/notifications", params={"farm": farm_id})
+        assert bell.status_code == 200  # an enabled demo farm is readable anonymously
+        assert "Advisor check" not in bell.text
+        assert "expert" not in bell.text
+        assert "Agrees with this saved check" not in bell.text
+        assert "Private advisor note" not in bell.text
+
+
+def test_the_bell_hides_review_metadata_from_a_member_of_another_farm(
+    committed_session_factory, settings
+):
+    from fastapi.testclient import TestClient
+
+    from farmcore.main import create_app
+    from tests.core.test_member_sessions import _account, _login
+
+    farm_id, _ = _review_farm(committed_session_factory)
+    _account(committed_session_factory, login="other-owner")
+    demo = settings.model_copy(update={"demo_mode": True, "demo_farm_ids": [farm_id]})
+    with TestClient(
+        create_app(demo, session_factory=committed_session_factory), base_url="https://testserver"
+    ) as other:
+        assert _login(other, login="other-owner").status_code == 303
+        bell = other.get("/notifications", params={"farm": farm_id})
+        assert bell.status_code == 403
+        assert "Private advisor note" not in bell.text
+        assert "Agrees with this saved check" not in bell.text
+
+
+def test_review_items_need_an_explicit_member_capability(committed_session_factory, settings):
+    from farmcore.apps.notifications.service import items
+    from farmcore.core.access import ScopedRepository, ensure_owner_grant
+    from farmcore.core.models.canonical import Farm
+
+    farm_id, now = _review_farm(committed_session_factory)
+    with committed_session_factory() as session:
+        farm = session.get(Farm, farm_id)
+        repo = ScopedRepository(
+            session, farm_id, ensure_owner_grant(session, farm), "owner", "test"
+        )
+        tz = settings.display_tz
+        without = items(repo, now, tz, ["review"])
+        with_capability = items(repo, now, tz, ["review"], review_reader=True)
+    assert not any("Advisor check" in i.title for i in without)
+    assert any("Advisor check answered" in i.title for i in with_capability)
