@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Advice becomes a persistent planned spray job"
 description: "Milestones 1–4: advice becomes a persistent planned spray job."
-status: in-progress
+status: done
 blocked_by: ["04", "05"]
 ---
 
@@ -36,7 +36,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -94,5 +94,6 @@ Focused regression: `timeout 600 uv run pytest tests/apps/planning tests/apps/fo
 
 Full split regression (exact coordinator command, foreground): `~/.local/bin/fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD -- bash -lc "timeout 900 uv run pytest -q tests/core -m 'not data and not slow' && timeout 1200 uv run pytest -q tests/apps -m 'not data and not slow'"` → `tests/core`: `747 passed, 2 deselected in 225.65s`; `tests/apps`: `2004 passed, 3 skipped, 262 deselected in 390.07s`. Node: `node --test tests/core/*.mjs tests/apps/fields/*.mjs` → `# tests 32`, `# pass 32`, `# fail 0`. Ruff: `uv run ruff check src tests` → `All checks passed!`; `uv run ruff format --check src tests` → `521 files already formatted`; `uv run alembic heads` → `planning_0001 (head)`.
 
-Fresh reviewer (Dell Codex) has not yet signed off; the final verification checkbox remains open.
+Fresh reviewer (Dell Codex) signed off after three review rounds; see Closeout below.
 
+Closeout 2026-11-07 (fleet-head-opus): independent adversarial review by Dell Codex passed at frozen SHA `5615597 (merge resolution c7e1afb reviewed separately)` after fix rounds recorded above; CI green; merged as PR #53 (`682ac2c7`) on Lucas's 2026-11-07 ruling. One Alembic head on main.

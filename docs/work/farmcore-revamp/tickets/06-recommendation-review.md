@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Farmer requests and receives an advisor check"
 description: "Milestones 1–4: farmer requests and receives an advisor check."
-status: in-progress
+status: done
 blocked_by: ["05"]
 ---
 
@@ -35,7 +35,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -228,3 +228,5 @@ Focused checks after this fix:
 No full split re-run: this round changes only app-owned notifications code/tests, not shared
 `src/farmcore/core`; the last full split at this branch ran the shared code green
 (`746` core + `1990` apps).
+
+Closeout 2026-11-07 (fleet-head-opus): independent adversarial review by Dell Codex passed at frozen SHA `2e7adf5` after fix rounds recorded above; CI green; merged as PR #52 (`9246e522`) on Lucas's 2026-11-07 ruling. One Alembic head on main.
