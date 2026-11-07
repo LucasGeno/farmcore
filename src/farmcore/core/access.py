@@ -100,6 +100,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "parameter_version": frozenset({"parameters:read"}),
     "parameter_review": frozenset({"parameters:read"}),
     "parameter_activation": frozenset({"parameters:read"}),
+    # Recommendation-review events are advice material; a logs-only consent cannot read the
+    # farmer's or advisor's note by naming the generic `event` table.
+    "recommendation_review": frozenset({"advice:read"}),
     "llm_audit": frozenset({"audit:read"}),
     "access_log": frozenset({"audit:read"}),
     "data_grant": frozenset({"audit:read"}),

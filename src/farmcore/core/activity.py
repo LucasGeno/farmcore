@@ -42,7 +42,7 @@ LIMIT = 5
 PAGE = 50  # rows per Activity page
 FETCH = 200  # events read to fill LIMIT rows after grouping (advice.evaluated is skipped in SQL)
 NAMED_PARCELS = 3  # more than this: "on 10 parcels"
-HIDDEN_KINDS = ("advice.evaluated",)
+HIDDEN_KINDS = ("advice.evaluated", "advice.review_requested", "advice.reviewed")
 SOURCES = {
     "voice": ("mic", "Voice note", "a voice note"),
     "isoxml": ("tractor", "Machine file", "the machine file"),

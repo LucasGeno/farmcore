@@ -630,3 +630,54 @@ def test_confirm_merged_spray_uses_canonical_checks_and_excludes_future_history(
     assert "Checks: OK: 1 of 1 sulphur applications this season" in out.text
     assert "2 sulphur applications" not in out.text
     assert "Checks unavailable" not in out.text
+
+
+@pytest.mark.parametrize(
+    ("message_id", "transcript"),
+    [(101, "first note on the merged spray"), (102, "second note on the merged spray")],
+)
+def test_replaying_either_source_of_a_merged_spray_returns_the_record(
+    session_factory, session, settings, message_id, transcript
+):
+    """A merged spray holds two same-chat sources. A replay compares the source with the exact
+    external key, never with the other source's transcript."""
+    from farmcore.core import logs
+    from farmcore.core.logs import QuantityInput, SourceInput
+
+    ids = seed_farm(session, settings)
+    farm_id = session.get(Parcel, ids["P1"]).farm_id
+    for mid, text, when in (
+        (101, "first note on the merged spray", NOW_LOCAL.replace(hour=4)),
+        (102, "second note on the merged spray", NOW_LOCAL.replace(hour=5)),
+    ):
+        pending = logs.create_pending(
+            session,
+            farm_id=farm_id,
+            type="spray",
+            parcel_ids=[ids["P1"]],
+            ts_start=when,
+            ts_end=None,
+            quantities=[QuantityInput("rate", Decimal("2"), "kg/ha", ids[COPPER])],
+            source=SourceInput(
+                "voice",
+                f"tg:{CHAT}:{mid}",
+                {"transcript": text, "input": "voice", "notes": []},
+                0.9,
+                logs.RANK_VOICE,
+            ),
+            actor=f"chat:{CHAT}",
+            occurred_at=when,
+            source_app="chat",
+        )
+        logs.confirm(session, pending.id, f"chat:{CHAT}", when, source_app="chat")
+    session.commit()
+    [merged] = logs_of(session)
+    assert sorted(s.external_key for s in merged.sources) == [f"tg:{CHAT}:101", f"tg:{CHAT}:102"]
+    d = deps(session_factory, settings, RegexExtractor())
+
+    out = on_message(d, voice(transcript, message_id))
+
+    assert out.text == "This spray is already logged."
+    assert out.buttons == []
+    assert count(session, Log) == 1
+    assert count(session, LogSource) == 2

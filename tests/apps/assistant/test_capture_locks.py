@@ -34,7 +34,11 @@ def test_signed_in_spray_message_and_confirm_answer_instead_of_hanging(
     token = settings.admin_token.get_secret_value()
     with TestClient(app, headers={"X-Admin-Token": token}) as client:
         draft = client.post(
-            "/assistant/message", data={"q": f"sprayed P1 with {COPPER} 2 kg/ha this morning"}
+            "/assistant/message",
+            data={
+                "q": f"sprayed P1 with {COPPER} 2 kg/ha this morning",
+                "request_key": "lock-test-draft",
+            },
         ).json()
         assert draft["kind"] == "draft", draft
         done = client.post("/assistant/confirm", data={"action": draft["actions"][0]["action"]})
@@ -65,7 +69,8 @@ SLOW_CALLS = {
         "/assistant/transcribe", files={"audio": ("q.webm", b"OggS" + b"\0" * 200, "audio/webm")}
     ),
     "model tool choice": lambda c: c.post(
-        "/assistant/message", data={"q": "When was P1 last sprayed?"}
+        "/assistant/message",
+        data={"q": "When was P1 last sprayed?", "request_key": "lock-test-slow"},
     ),
 }
 
