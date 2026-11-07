@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Complete planned work into one confirmed operation"
 description: "Milestones 1–4: complete planned work into one confirmed operation."
-status: in-progress
+status: done
 blocked_by: ["06", "08", "10"]
 ---
 
@@ -37,7 +37,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -178,3 +178,5 @@ timeout 600 uv run pytest -q tests/apps/planning/test_completion_concurrency.py 
 
 Not claimed: independent reviewer sign-off (Dell Codex) — the last Verification box stays
 unticked. No merge, deploy, force-push or Alembic revision was performed.
+
+Closeout 2026-11-07 (fleet-head-opus): independent adversarial review by Dell Codex passed at frozen SHA `e62c83f` after one fix round recorded above; CI green; merged as PR #58 (`d42d7db6`). Schema `planning_0003` authored by the coordinator. One Alembic head on main.
