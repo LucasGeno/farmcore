@@ -89,6 +89,35 @@ def continue_draft(current: DraftOperation, state):
     for key in ("parcels", "products", "dose_value", "dose_unit"):
         value = getattr(current, key)
         values[key] = value if value is not None and value != [] else getattr(previous, key)
+    # A short reply ("P5", "gross") carries no type: keep the unfinished operation's, unless it
+    # plainly reports a spray (a product or a dose). An explicit irrigation/observation wins.
+    stated_spray = bool(current.products or current.product_doses or current.dose_value is not None)
+    if current.type != "spray" or previous.type == "spray" or stated_spray:
+        values["type"] = current.type
+    else:
+        values["type"] = previous.type
+    for key in ("amount_value", "amount_unit", "basis", "observation"):
+        value = getattr(current, key)
+        values[key] = value if value not in (None, "") else getattr(previous, key)
+    # A short reply does not restate the date: keep the unfinished operation's own start time.
+    if current.ts_start is None and previous.ts_start is not None:
+        values["ts_start"] = previous.ts_start
+    if values["type"] == "irrigate":
+        values.update(
+            products=[], product_doses=[], dose_value=None, dose_unit=None, observation=None
+        )
+    elif values["type"] == "observation":
+        values.update(
+            products=[],
+            product_doses=[],
+            dose_value=None,
+            dose_unit=None,
+            amount_value=None,
+            amount_unit=None,
+            basis=None,
+        )
+    elif values["type"] == "spray":
+        values.update(amount_value=None, amount_unit=None, basis=None, observation=None)
     if not current.product_doses and values["products"] == previous.products:
         values["product_doses"] = previous.product_doses
     question = state["history"][-1]["content"] if state["history"] else ""

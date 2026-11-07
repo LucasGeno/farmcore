@@ -527,3 +527,61 @@ def test_explicit_vertex_auth_wins_over_the_credentials_file(monkeypatch):
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/run/secrets/vertex_credentials")
     monkeypatch.setenv("VERTEX_AUTH", "gcloud")
     assert Settings(_env_file=None).vertex_auth == "gcloud"
+
+
+def test_the_model_schema_and_parse_cover_irrigation_and_observation_facts():
+    """The model boundary offers, and accepts, the same fact fields the handlers store."""
+    recorder = Recorder(
+        httpx.Response(
+            200,
+            json=gemini_response(
+                {
+                    "type": "irrigate",
+                    "parcels": ["P5"],
+                    "products": [],
+                    "amount_value": 20,
+                    "amount_unit": "mm",
+                    "basis": "gross",
+                    "ts_start": "2024-04-10T06:00",
+                    "confidence": 0.8,
+                    "notes": [],
+                }
+            ),
+        )
+    )
+    req = make_request("Irrigated P5 20 mm gross at 6")
+
+    draft = vertex(recorder, []).extract(req)
+
+    assert draft.type == "irrigate"
+    assert (draft.amount_value, draft.amount_unit, draft.basis) == (20.0, "mm", "gross")
+    assert draft.ts_start == datetime(2024, 4, 10, 6, 0, tzinfo=PARIS)
+    (sent,) = recorder.requests
+    schema = json.loads(sent.content)["generationConfig"]["responseSchema"]
+    assert schema["properties"]["type"]["enum"] == ["spray", "irrigate", "observation"]
+    assert schema["properties"]["amount_unit"]["enum"] == ["mm", "m3", "L"]
+    assert schema["properties"]["basis"]["enum"] == ["gross", "net"]
+    assert {"amount_value", "amount_unit", "basis", "observation"} <= set(schema["properties"])
+
+    recorder = Recorder(
+        httpx.Response(
+            200,
+            json=gemini_response(
+                {
+                    "type": "observation",
+                    "parcels": ["P6"],
+                    "products": [],
+                    "observation": "Powdery mildew on leaves",
+                    "ts_start": None,
+                    "confidence": 0.7,
+                    "notes": [],
+                }
+            ),
+        )
+    )
+
+    draft = vertex(recorder, []).extract(make_request("Observed powdery mildew on Peyrot"))
+
+    assert draft.type == "observation"
+    assert draft.observation == "Powdery mildew on leaves"
+    assert draft.amount_value is None

@@ -1,5 +1,7 @@
 """Demo questions and the web spray log, through the assistant's HTTP boundary."""
 
+import uuid
+
 import pytest
 from sqlalchemy import select
 
@@ -30,7 +32,14 @@ def _ask(client, q, conversation="one"):
 
 
 def _say(client, q, conversation="one"):
-    return client.post("/assistant/message", data={"q": q, "conversation": conversation})
+    return client.post(
+        "/assistant/message",
+        data={
+            "q": q,
+            "conversation": conversation,
+            "request_key": f"test-{uuid.uuid4().hex}",
+        },
+    )
 
 
 def test_which_parcels_did_i_spray_names_only_the_sprayed_parcels(client, session, seeded, step):

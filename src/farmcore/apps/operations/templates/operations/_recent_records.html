@@ -11,7 +11,7 @@
     {%- set rest = log.name[prefix|length:] if log.name.startswith(prefix) else "" %}
     {%- set default_name = rest|length == 10 and rest[4] == "-" and rest[7] == "-"
                            and rest.replace("-", "").isdigit() %}
-    {%- set title = log.type if default_name else log.name %}
+    {%- set title = (log.label or log.type) if default_name else log.name %}
     <li class="rounded-xl border border-line bg-surface p-3" data-record="{{ log.id }}">
       <div class="flex flex-wrap items-center gap-2">
         <time class="text-sm tabular-nums text-muted">{{ log.ts_start|local }}</time>
@@ -20,6 +20,9 @@
       </div>
       {%- if log.products %}
       <p data-products class="mt-1 min-w-0 break-words text-sm font-semibold">{% for p in log.products %}<span class="block">{{ product_line(p) }}</span>{% endfor %}</p>
+      {%- endif %}
+      {%- if log.facts %}
+      <p data-facts class="mt-1 min-w-0 break-words text-sm font-semibold">{{ log.facts }}</p>
       {%- endif %}
       <p class="mt-1 min-w-0 break-words text-sm">
         {% for p in log.parcels %}<a href="{{ farm_url('/operations/parcels/' ~ p.id) }}" class="mr-2 inline-flex min-h-[44px] max-w-full items-center gap-1 py-1 underline decoration-line hover:decoration-ink">{{ parcel_shape(p.id) }}<span class="min-w-0 break-words">{{ p.alias }} {{ p.name }}</span></a>{% endfor %}
