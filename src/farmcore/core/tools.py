@@ -43,6 +43,10 @@ class ToolContext:
     now: datetime  # shared clock, replay-aware
     tz: ZoneInfo
     lang: str = "en"  # language of ToolResult.text ("en" or "fr")
+    # The viewer's active role on this farm; None for anonymous, grant-only and bot contexts.
+    # A tool that reads member-only material must check it, never assume the repo's actor.
+    member_role: str | None = None
+    is_admin: bool = False
 
 
 @dataclass(frozen=True)
