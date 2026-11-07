@@ -54,11 +54,25 @@ FarmCore began at the EU Agri-Hackathon 2026.
   fallback.
 - **Records.** The Regulation (EU) 2023/564 plant-protection register with record checks
   (label limits, copper per season), CSV / JSON export and ISOXML TaskData import that merges
-  machine files with voice logs.
-- **Weather and forecast.** Météo-France station ingest, spray conditions per hour, a five-day
-  spray plan from archived forecast runs.
-- **Consent-based sharing.** Read-only, revocable grants by scope, an access log of every read,
-  and a FIWARE NGSI-LD export.
+  machine files with voice logs. Confirmed records are corrected through an audited revision
+  that keeps the original evidence.
+- **Field observations and irrigation.** Confirmed observations and irrigation facts keep the
+  entered amount, unit and gross/net basis when stated; they never consume spray stock.
+- **Live weather and forecast.** Live Météo-France station ingest, spray conditions per hour,
+  a five-day spray plan from archived forecast runs.
+- **Private member accounts.** Local accounts with scrypt password hashes, opaque server-side
+  sessions, owner/advisor memberships, next-request revocation and CSRF protection; the
+  installation operator remains a separate break-glass identity.
+- **Authenticated sharing.** Owners create scoped, time-limited grants bound to an existing
+  recipient login; recipients read only their active grants and an access log records every
+  read. Numeric or legacy name-based grant URLs confer no authority. A FIWARE NGSI-LD export is
+  included.
+- **Reviewed advice.** A versioned, sourced parameter catalog with approval and scoped
+  activation history; owners request a recommendation review on a stored assessment and
+  assigned advisors answer with an opinion and note, kept separate from the model output.
+- **Persistent planned jobs.** Plan spray work from stored advice with revisions,
+  machine/operator availability and feasible alternatives. A completion preview compares actual
+  work with the plan and records one confirmed operation atomically.
 - **Season & impact.** Replays a season against a calendar spray programme and the Agreste
   regional reference: treatments, copper, diesel and CO₂ avoided, with every assumption shown.
 - **Modular.** Apps declare routes, jobs, scopes, map layers and Today widgets in a manifest;
