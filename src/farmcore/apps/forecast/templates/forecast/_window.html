@@ -6,7 +6,7 @@
   <h2 id="{{ window_id }}-title" class="text-[13px] font-semibold uppercase tracking-wider text-muted">Spray window · {% if top %}best 3 days{% else %}next 5 days{% endif %}</h2>
   {% if planned_treatment %}
   <aside class="mt-3 rounded-lg border border-line bg-ground p-3" aria-live="polite">
-    {% if planned_treatment.to_day %}<p data-planned-treatment="{{ planned_treatment.to_day }}" class="text-sm font-semibold">Planned treatment: {{ planned_treatment.to_label }} · {{ planned_treatment.window }}</p><p class="mt-1 text-[13px] text-muted">Rescheduled from {{ planned_treatment.from_label }} because of Busy. This calendar window replaces the original window above for your availability in this browser.</p>
+    {% if planned_treatment.to_day %}<p data-planned-treatment="{{ planned_treatment.to_day }}" class="text-sm font-semibold">Planned treatment: {{ planned_treatment.to_label }} · {{ planned_treatment.window }}</p><p class="mt-1 text-[13px] text-muted">Rescheduled from {{ planned_treatment.from_label }} because of Busy. This calendar window replaces the original window above for this farm's shared availability.</p>
     {% else %}<p class="text-sm font-semibold text-spray">{{ planned_treatment.schedule_reason }}</p><p class="mt-1 text-[13px] text-muted">The original window above is unavailable because of Busy. Update availability or review the parcel advice.</p>{% endif %}
   </aside>
   {% endif %}
@@ -24,16 +24,18 @@
     Days ranked by the spray-window rules: rain, wind{% if sulphur %}, heat for sulphur{% endif %}, {{ band }}.
   </p>
   </details>
-  <p class="mt-2 text-[13px] text-muted">Can't spray that day? Mark it Busy. Saved for this farm in this browser only; busy days are excluded from weather ranking.</p>
+  <p class="mt-2 text-[13px] text-muted">Can't spray that day? Mark it Busy. Saved for this farm and shared with every signed-in device; busy days are excluded from weather ranking.{% if not is_farm_owner %} Only the farm owner can change availability.{% endif %}</p>
   {% if top and not days %}<p class="mt-3 text-[14px]" data-no-suitable-day>No day in the forecast grades Best, Good or Possible; see the Plan.</p>{% endif %}
   <ol class="mt-3 space-y-2">
     {% for d in days %}
     <li class="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-lg border border-line p-3" data-day="{{ d.day }}" data-grade="{{ d.grade }}">
       <span class="font-semibold sm:w-48 sm:shrink-0">{{ d.label }}</span>
       {{ pill(d.word, d.tone) }}
-      <form method="get" action="{{ farm_url('/forecast/busy') }}"
-            hx-get="{{ farm_url('/forecast/busy') }}" hx-target="closest [data-spray-window]" hx-swap="outerHTML"
+      {% if is_farm_owner %}
+      <form method="post" action="{{ farm_url('/forecast/busy') }}"
+            hx-post="{{ farm_url('/forecast/busy') }}" hx-target="closest [data-spray-window]" hx-swap="outerHTML"
             hx-sync="closest [data-spray-window]:drop" class="ml-auto">
+        {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
         <input type="hidden" name="day" value="{{ d.day }}">
         <input type="hidden" name="busy" value="{{ '0' if d.busy else '1' }}">
         <input type="hidden" name="next" value="{{ farm_url(request.url.path) }}">
@@ -42,6 +44,7 @@
                 aria-label="Busy on {{ d.label }}"
                 class="min-h-[44px] min-w-[44px] rounded-lg border border-line px-3 text-[14px] font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2">{{ 'Free' if d.busy else 'Busy' }}</button>
       </form>
+      {% endif %}
       <span class="min-w-0 basis-full break-words text-[14px] sm:basis-auto">{{ d.reason }}</span>
       {% if d.gusts is not none %}<span class="min-w-0 basis-full break-words text-[13px] text-muted">Gusts up to {{ "%.0f"|format(d.gusts) }} km/h (information only).</span>{% endif %}
       {% if d.protected %}<span class="min-w-0 basis-full break-words text-[13px] text-muted">Still protected until {{ d.protected }}.</span>{% endif %}

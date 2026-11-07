@@ -1,7 +1,8 @@
 """Plan and Home share one replay-aware forecast/availability view."""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
+from farmcore.apps.forecast.models import ForecastAvailability
 from farmcore.core import clock
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.forecast.test_plan_calendar import top3
@@ -38,13 +39,14 @@ def test_busy_toggles_keep_unknown_weather_honest_and_rerank_home_identically(
     clock.set_replay(session, datetime(2024, 4, 9, 4, tzinfo=UTC), settings)
     session.commit()
     for day in ("2024-04-09", "2024-04-22"):
-        response = client.get(
+        response = client.post(
             "/forecast/busy",
-            params={
+            params={"farm": farm.id},
+            data={
                 "day": day,
                 "busy": "1",
-                "farm": farm.id,
                 "next": f"/forecast/plan?farm={farm.id}&day={day}",
+                "farm": str(farm.id),
             },
         )
         assert response.status_code == 200
@@ -98,8 +100,16 @@ def test_plan_replans_busy_advice_and_keeps_other_current_windows(
         ]
     )
     clock.set_replay(session, now, settings)
+    session.add(
+        ForecastAvailability(
+            farm_id=farm.id,
+            day=date(2024, 4, 9),
+            available=False,
+            created_by="test",
+            updated_by="test",
+        )
+    )
     session.commit()
-    client.cookies.set(f"farmcore_forecast_busy_{farm.id}", "2024-04-09")
     html = client.get("/forecast/plan", params={"farm": farm.id}).text
     today = client.get("/forecast/plan", params={"farm": farm.id, "day": "2024-04-09"}).text
     tomorrow = client.get("/forecast/plan", params={"farm": farm.id, "day": "2024-04-10"}).text
@@ -174,11 +184,9 @@ def test_plan_dst_dates_and_weather_completeness_count_the_actual_local_hours(
 
 
 def test_plan_tour_reads_and_busy_remain_farm_local_and_app_off_hides_the_page(
-    client, session, settings, farm, imported, connection
+    client, session, settings, farm, imported
 ):
-    import re
-
-    from sqlalchemy import event
+    from sqlalchemy import select
 
     from farmcore.core.access import ensure_owner_grant
     from farmcore.core.models.canonical import Farm
@@ -199,28 +207,23 @@ def test_plan_tour_reads_and_busy_remain_farm_local_and_app_off_hides_the_page(
     assert "Advisor withheld" in response.text and "Synthetic test forecast" not in response.text
     assert len(_days(response.text)) == 14
     assert all(grade == "no_forecast" for _, grade in _days(response.text))
-    statements = []
-
-    def record(conn, cursor, statement, parameters, context, executemany):
-        statements.append(statement)
-
-    event.listen(connection, "before_cursor_execute", record)
-    try:
-        response = client.get(
-            "/forecast/busy",
-            follow_redirects=False,
-            params={
-                "farm": es.id,
-                "day": "2024-04-09",
-                "busy": "1",
-                "next": f"/forecast/plan?farm={es.id}",
-            },
-        )
-    finally:
-        event.remove(connection, "before_cursor_execute", record)
-    assert not any(re.match(r"\s*(INSERT|UPDATE|DELETE)\b", s, re.I) for s in statements)
-    assert f"farmcore_forecast_busy_{es.id}" in client.cookies
-    assert f"farmcore_forecast_busy_{farm.id}" not in client.cookies
+    denied = client.post(
+        "/forecast/busy",
+        follow_redirects=False,
+        params={"farm": es.id},
+        data={
+            "day": "2024-04-09",
+            "busy": "1",
+            "next": f"/forecast/plan?farm={es.id}",
+            "farm": str(es.id),
+        },
+    )
+    assert denied.status_code == 403
+    session.expire_all()
+    assert (
+        session.scalar(select(ForecastAvailability).where(ForecastAvailability.farm_id == es.id))
+        is None
+    )
     assert (
         dict(_days(client.get("/forecast/today", params={"farm": farm.id}).text))["2024-04-09"]
         == "best"
@@ -259,5 +262,5 @@ def test_plan_intro_is_one_line_with_details_disclosure(client, session, setting
     page = client.get("/forecast/plan", params={"farm": farm.id}).text
     main = page.split('<main id="main"', 1)[1].split("</main>", 1)[0]
     assert main.count("<details") == 1
-    assert "this browser" in main.split("<details", 1)[1]
-    assert "this browser" not in main.split("<details", 1)[0]
+    assert "signed-in device" in main.split("<details", 1)[1]
+    assert "signed-in device" not in main.split("<details", 1)[0]

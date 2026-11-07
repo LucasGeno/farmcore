@@ -47,7 +47,7 @@ from farmcore.apps.chat.transcribe import WhisperTranscriber
 from farmcore.apps.fields.tools import mentioned_parcel, parcels
 from farmcore.apps.forecast import availability
 from farmcore.apps.operations.catalogue import products_for_farm
-from farmcore.core.access import Repo, ScopedRepository, require_farm_owner
+from farmcore.core.access import Repo, ScopedRepository, has_farm_membership, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.models.canonical import Farm
 from farmcore.core.registry import visible_manifests
@@ -223,9 +223,10 @@ def ask(
         if tool.name == "assistant_plan":
             args["busy_days"] = tuple(
                 d.isoformat()
-                for d in availability.parse(
-                    request.cookies.get(availability.COOKIE.format(farm_id=repo.farm_id)),
+                for d in availability.busy_days(
+                    repo,
                     ctx.now.astimezone(ctx.tz).date(),
+                    member=has_farm_membership(request, repo),
                 )
             )
         with repo.session.begin_nested():

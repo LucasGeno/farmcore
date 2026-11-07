@@ -83,6 +83,8 @@ class Parcel(Base):
     __tablename__ = "parcel"
     __table_args__ = (
         UniqueConstraint("farm_id", "alias"),
+        # Target of farm-scoped composite foreign keys (planning_0001).
+        UniqueConstraint("id", "farm_id"),
         Index("ix_parcel_geom", "geom", postgresql_using="gist"),
     )
 
@@ -282,7 +284,11 @@ class AccessLog(Base):
 
 class Advice(Base):
     __tablename__ = "advice"
-    __table_args__ = (CheckConstraint(_in("decision", ADVICE_DECISIONS), name="decision"),)
+    __table_args__ = (
+        CheckConstraint(_in("decision", ADVICE_DECISIONS), name="decision"),
+        # Target of farm-scoped composite foreign keys (planning_0001).
+        UniqueConstraint("id", "farm_id"),
+    )
 
     id: Mapped[int] = _pk()
     farm_id: Mapped[int] = _fk("farm.id")

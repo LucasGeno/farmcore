@@ -1,0 +1,89 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, card, pill, empty_state, button %}
+{% block title %}Planned jobs · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Planned jobs", "Intended spray work from stored advice. Planned jobs never enter the completed register or move stock.") %}{% endcall %}
+{% if error %}<p role="alert" class="mb-4 rounded-lg border border-line bg-wait-soft p-4 text-wait">{{ error }}</p>{% endif %}
+{% if is_farm_owner %}
+{% call card() %}
+<h2 class="text-lg font-semibold">Plan a spray</h2>
+<p class="mt-2 text-sm text-muted">Choose the stored assessment, product, parcels, start and duration. The assessment and parameter version are frozen on the job; edits create a new revision.</p>
+{% if not assessments %}<p class="mt-3 text-wait">No current assessment is available. Open Crop protection and evaluate the farm first.</p>{% endif %}
+<form method="post" action="{{ resolved_farm_url('/planning/jobs-form') }}" class="mt-4 grid gap-4">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<label class="grid gap-2">Job name <input name="name" required maxlength="200" value="{{ form.get('name', 'Planned spray') }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+<label class="grid gap-2">Assessment
+<select name="assessment_id" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+{% for a in assessments %}<option value="{{ a.id }}"{% if form.get('assessment_id') == a.id %} selected{% endif %}>Parcel {{ a.parcel_id }} · {{ a.decision }} · {{ a.assessment_status or 'legacy-unknown' }} · assessed {{ a.evaluated_at }}</option>{% endfor %}
+</select></label>
+<label class="grid gap-2">Parcels (choose every parcel in the pass)
+<select name="parcel_ids" multiple required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+{% for p in parcels %}<option value="{{ p.id }}"{% if p.id in form.get('parcel_ids', []) %} selected{% endif %}>{{ p.alias }} · {{ p.name }} · {{ '%.2f'|format(p.area_ha) }} ha</option>{% endfor %}
+</select></label>
+<label class="grid gap-2">Product
+<select name="product_id" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+{% for p in products %}<option value="{{ p.id }}">{{ p.name }} · {{ p.active_substance }}</option>{% endfor %}
+</select></label>
+<label class="grid gap-2">Start ({{ timezone }})<input type="datetime-local" step="any" name="scheduled_start" required value="{{ form.get('scheduled_start', '') }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+<label class="grid gap-2">Duration in minutes <input type="number" name="duration_minutes" min="1" max="1440" required value="{{ form.get('duration_minutes', 90) }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3 tabular-nums"></label>
+<label class="grid gap-2">Notes <textarea name="notes" maxlength="10000" rows="2" class="rounded-lg border border-line bg-surface p-3">{{ form.get('notes', '') }}</textarea></label>
+<button class="min-h-[44px] justify-self-start rounded-lg bg-brand-700 px-4 text-surface hover:bg-brand-900 focus-visible:ring-2 focus-visible:ring-brand-700">Save planned job</button>
+</form>
+{% endcall %}
+{% endif %}
+
+{% call card("mt-4") %}
+<div class="flex flex-wrap items-baseline justify-between gap-2">
+<h2 class="text-lg font-semibold">Planned work</h2>
+<a class="inline-flex min-h-[44px] items-center text-sm text-brand-700 underline" href="{{ resolved_farm_url('/forecast/plan') }}">Change farmer availability in Plan</a>
+</div>
+{% if not jobs %}{{ empty_state("No planned jobs yet. Plan one from stored advice, the forecast Plan or a parcel's advice card.") }}{% endif %}
+<div class="mt-3 grid gap-4">
+{% for job in jobs %}
+<section data-planning-job="{{ job.id }}" data-status="{{ job.status }}" class="rounded-xl border border-line bg-surface p-4">
+  <div class="flex flex-wrap items-baseline justify-between gap-2">
+    <h3 class="text-[17px] font-semibold">{{ job.name }}</h3>
+    <span class="flex flex-wrap items-center gap-2">{{ pill(job.status|capitalize, 'ok' if job.status == 'planned' else 'neutral') }}<span class="text-sm text-muted">Revision {{ job.revision }}</span></span>
+  </div>
+  <dl class="mt-3 grid gap-2 text-[15px]">
+    <div><dt class="inline font-semibold">When:</dt> <dd class="inline tabular-nums">{{ job.scheduled_start|local }} · {{ job.duration_minutes }} min</dd></div>
+    <div><dt class="inline font-semibold">Parcels:</dt> <dd class="inline">{% for p in job.parcels %}{{ p.alias }} {{ p.name }}{{ ', ' if not loop.last }}{% endfor %}</dd></div>
+    <div><dt class="inline font-semibold">Product:</dt> <dd class="inline">{{ job.product.name if job.product else 'Unknown product' }}</dd></div>
+    <div><dt class="inline font-semibold">Assessment:</dt> <dd class="inline">#{{ job.assessment.id }} · {{ job.assessment.decision }} · parameter version {{ job.assessment.config_version.id if job.assessment.config_version.id else 'unversioned' }} · {{ job.assessment.config_version.status }}</dd></div>
+    <div><dt class="inline font-semibold">Farmer availability:</dt> <dd class="inline">{{ 'Available' if job.availability.available else 'Marked Busy' }}{% if not job.availability.available %} · {{ pill('Unavailable day', 'warn') }}{% endif %}</dd></div>
+  </dl>
+  {% if job.notes %}<p class="mt-2 text-[15px]">{{ job.notes }}</p>{% endif %}
+  <p class="mt-2 text-sm text-muted">Created by {{ job.created_by }} · {{ job.created_at|local }} · updated by {{ job.updated_by }} · {{ job.updated_at|local }}{% if job.cancelled_at %} · cancelled by {{ job.cancelled_by }} · {{ job.cancelled_at|local }}{% endif %}</p>
+  {% if is_farm_owner and job.status == 'planned' %}
+  <details class="mt-3 border-t border-line pt-3">
+    <summary class="min-h-[44px] cursor-pointer font-semibold">Edit this revision</summary>
+    <form method="post" action="{{ resolved_farm_url('/planning/jobs/' ~ job.id ~ '/edit-form') }}" class="mt-3 grid gap-3">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="expected_revision" value="{{ job.revision }}">
+      <label class="grid gap-2">Job name <input name="name" required maxlength="200" value="{{ job.name }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-2">Parcels
+        <select name="parcel_ids" multiple required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+          {% for p in parcels %}<option value="{{ p.id }}"{% if p.id in job.parcels|map(attribute='id')|list %} selected{% endif %}>{{ p.alias }} · {{ p.name }}</option>{% endfor %}
+        </select></label>
+      <label class="grid gap-2">Product
+        <select name="product_id" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+          {% for p in products %}<option value="{{ p.id }}"{% if p.id == job.product.id %} selected{% endif %}>{{ p.name }}</option>{% endfor %}
+        </select></label>
+      <label class="grid gap-2">Start ({{ timezone }})<input type="datetime-local" step="any" name="scheduled_start" required value="{{ job.scheduled_start_local }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+      <label class="grid gap-2">Duration in minutes <input type="number" name="duration_minutes" min="1" max="1440" required value="{{ job.duration_minutes }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3 tabular-nums"></label>
+      <label class="grid gap-2">Notes <textarea name="notes" maxlength="10000" rows="2" class="rounded-lg border border-line bg-surface p-3">{{ job.notes }}</textarea></label>
+      <button class="min-h-[44px] justify-self-start rounded-lg border border-line px-4 hover:bg-ground">Save revision</button>
+    </form>
+  </details>
+  <form method="post" action="{{ resolved_farm_url('/planning/jobs/' ~ job.id ~ '/cancel-form') }}" class="mt-3 grid gap-3 border-t border-line pt-3">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="expected_revision" value="{{ job.revision }}">
+    <label class="grid gap-2">Reason for cancelling <input name="reason" maxlength="2000" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
+    <button class="min-h-[44px] justify-self-start rounded-lg border border-line px-4 text-spray hover:bg-ground">Cancel planned job</button>
+  </form>
+  {% endif %}
+</section>
+{% endfor %}
+</div>
+{% endcall %}
+{% endblock %}

@@ -51,6 +51,8 @@ class ParameterVersion(ScopedEvent, Base):
     __table_args__ = (
         *scope_checks(),
         UniqueConstraint("id", *SCOPE),
+        # Target of farm-scoped composite foreign keys (planning_0001).
+        UniqueConstraint("id", "farm_id"),
         ForeignKeyConstraint(
             ("parent_version_id", *SCOPE), tuple(f"parameter_version.{c}" for c in ("id", *SCOPE))
         ),

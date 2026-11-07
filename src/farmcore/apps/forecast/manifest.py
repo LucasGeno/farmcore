@@ -10,7 +10,7 @@ MANIFEST = Manifest(
     version="0.1.0",
     summary="The next five days ranked for spraying, from an imported forecast.",
     depends=("stations", "advisor"),
-    scopes=("stations:read", "advice:read", "fields:read"),
+    scopes=("stations:read", "advice:read", "fields:read", "planning:write"),
     models=("farmcore.apps.forecast.models",),
     routes=("farmcore.apps.forecast.routes:router",),
     jobs=(
@@ -19,6 +19,7 @@ MANIFEST = Manifest(
         ),
     ),
     seed="farmcore.apps.forecast.seed:seed",
+    demo_reset=("farmcore.apps.forecast.availability:reset",),
     widgets=(
         Widget("/forecast/home-weather", 21, label="Forecast weather"),
         Widget("/forecast/today", 50, label="Spray window"),

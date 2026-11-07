@@ -5,7 +5,7 @@ from fastapi.responses import HTMLResponse
 
 from farmcore.apps.forecast import availability
 from farmcore.apps.notifications import preferences, service
-from farmcore.core.access import Repo
+from farmcore.core.access import Repo, has_farm_membership
 from farmcore.core.clock import get_clock
 from farmcore.core.identity import principal_for
 from farmcore.core.registry import visible_manifests
@@ -34,9 +34,10 @@ def notifications(request: Request, repo: Repo):
         settings.display_tz,
         visible,
         review_reader=is_admin(request) or member_role in ("owner", "advisor"),
-        busy_days=availability.parse(
-            request.cookies.get(availability.COOKIE.format(farm_id=repo.farm_id)),
+        busy_days=availability.busy_days(
+            repo,
             now.astimezone(ZoneInfo(settings.display_tz)).date(),
+            member=has_farm_membership(request, repo),
         ),
     )
     cookie_name = preferences.COOKIE.format(farm_id=repo.farm_id)

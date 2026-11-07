@@ -59,12 +59,14 @@ SCOPES = frozenset(
         "corrections:read",
         "advice:read",
         "parameters:read",
+        "planning:read",
+        "planning:write",
         "register:read",
         "audit:read",
     }
 )
 GRANT_READ_SCOPES = frozenset(
-    {"fields:read", "stations:read", "logs:read", "register:read", "advice:read"}
+    {"fields:read", "stations:read", "logs:read", "register:read", "advice:read", "planning:read"}
 )
 ALL_SCOPES = "*"
 OWNER = "owner"
@@ -100,6 +102,10 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "parameter_version": frozenset({"parameters:read"}),
     "parameter_review": frozenset({"parameters:read"}),
     "parameter_activation": frozenset({"parameters:read"}),
+    "planning_job": frozenset({"planning:read", "planning:write"}),
+    "planning_job_parcel": frozenset({"planning:read", "planning:write"}),
+    "planning_job_revision": frozenset({"planning:read", "planning:write"}),
+    "forecast_availability": frozenset({"fields:read", "planning:read", "planning:write"}),
     # Recommendation-review events are advice material; a logs-only consent cannot read the
     # farmer's or advisor's note by naming the generic `event` table.
     "recommendation_review": frozenset({"advice:read"}),
@@ -449,6 +455,45 @@ def repo_for_job(session: Session, farm_id: int, job_name: str) -> ScopedReposit
 
 
 Repo = Annotated[ScopedRepository, Depends(get_repo, scope="function")]
+
+
+def has_farm_membership(request: Request, repo: Repo) -> bool:
+    """True for an active member (or installation operator); false for demo, tour, anonymous."""
+    from farmcore.core.identity import principal_for
+    from farmcore.core.models.identity import FarmMembership, LocalIdentity
+    from farmcore.core.tour import is_tour
+    from farmcore.web import is_admin
+
+    if is_admin(request):
+        return True
+    if is_tour(request):
+        return False
+    principal = principal_for(request)
+    if principal is None:
+        return False
+    return (
+        repo.session.scalar(
+            select(FarmMembership.id)
+            .join(LocalIdentity)
+            .where(
+                FarmMembership.farm_id == repo.farm_id,
+                FarmMembership.identity_id == principal.identity_id,
+                FarmMembership.revoked_at.is_(None),
+                LocalIdentity.disabled_at.is_(None),
+            )
+        )
+        is not None
+    )
+
+
+def require_farm_member(request: Request, repo: Repo) -> None:
+    """Private planning reads need a current farm membership, not demo/tour access.
+
+    The installation operator keeps break-glass authority; an anonymous demo visitor never
+    becomes a member and a tour never authorizes private data.
+    """
+    if not has_farm_membership(request, repo):
+        raise HTTPException(403, "Farm member required.")
 
 
 def require_farm_owner(request: Request, repo: Repo) -> None:

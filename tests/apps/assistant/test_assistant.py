@@ -44,11 +44,10 @@ def test_last_spray_question_uses_audited_read_only_tools(client, session, seede
     assert reads and all(r.purpose == "assistant" for r in reads)
 
 
-def test_plan_answer_uses_same_ranking_and_validated_farm_busy_cookie(
-    client, session, seeded, step
-):
+def test_plan_answer_uses_same_ranking_and_validated_farm_busy_state(client, session, seeded, step):
     from datetime import date
 
+    from farmcore.apps.forecast.models import ForecastAvailability
     from farmcore.apps.forecast.planning import plan_days
     from farmcore.core.access import ScopedRepository, ensure_owner_grant
     from farmcore.core.clock import get_clock
@@ -62,7 +61,16 @@ def test_plan_answer_uses_same_ranking_and_validated_farm_busy_cookie(
     )
     expected = plan_days(repo, get_clock(session, client.app.state.settings).now(), "Europe/Paris")
     good = next(d for d in expected["days"][:7] if d["grade"] in {"best", "good"})
-    client.cookies.set(f"farmcore_forecast_busy_{farm.id}", good["day"] + ",garbage")
+    session.add(
+        ForecastAvailability(
+            farm_id=farm.id,
+            day=date.fromisoformat(good["day"]),
+            available=False,
+            created_by="test",
+            updated_by="test",
+        )
+    )
+    session.commit()
     response = client.get(
         "/assistant/ask", params={"q": "Which days this week are good?", "farm": farm.id}
     )

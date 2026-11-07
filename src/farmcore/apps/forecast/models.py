@@ -10,10 +10,22 @@ so the scoped repository filters them like any farm table.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Double, ForeignKey, Text, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
+    DateTime,
+    Double,
+    ForeignKey,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -48,3 +60,29 @@ class ForecastValue(Base):
     ts: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     variable: Mapped[str] = mapped_column(Text)
     value: Mapped[float] = mapped_column(Double)
+
+
+class ForecastAvailability(Base):
+    """Farmer availability per local day (migration `forecast_0002`). No row means available;
+    `available=false` marks the day Busy, `available=true` records an explicit Free choice."""
+
+    __tablename__ = "forecast_availability"
+    __table_args__ = (
+        UniqueConstraint("farm_id", "day"),
+        CheckConstraint("day BETWEEN DATE '2000-01-01' AND DATE '2200-12-31'", name="day"),
+        CheckConstraint("length(notes) <= 1000", name="notes"),
+        CheckConstraint("length(btrim(created_by)) > 0", name="created_by"),
+        CheckConstraint("length(btrim(updated_by)) > 0", name="updated_by"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    farm_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("farm.id"))
+    day: Mapped[date] = mapped_column(Date)
+    available: Mapped[bool] = mapped_column(Boolean)
+    notes: Mapped[str] = mapped_column(Text, server_default="", default="")
+    created_by: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_by: Mapped[str] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

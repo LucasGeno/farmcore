@@ -43,16 +43,19 @@
             {% for decision in d.parcels|groupby('decision') %}
               {% for window in decision.list|groupby('window') %}
                 <h4 class="fc-plan-treatment-window">{{ decision.grouper|capitalize }} · {{ window.grouper }}</h4>
-                <ul class="fc-plan-parcel-list">{% for p in window.list %}<li data-advice-parcel="{{ p.id }}"><a href="{{ workspace_links[p.id] }}" aria-label="{{ p.label }} · {{ p.decision }} · {{ p.window }}">{{ p.label }}</a></li>{% endfor %}</ul>
+                <ul class="fc-plan-parcel-list">{% for p in window.list %}<li data-advice-parcel="{{ p.id }}"><a href="{{ workspace_links[p.id] }}" aria-label="{{ p.label }} · {{ p.decision }} · {{ p.window }}">{{ p.label }}</a>{% if is_farm_owner %} <a class="ml-2 inline-flex min-h-[44px] items-center text-[13px] text-brand-700 underline" href="{{ resolved_farm_url('/planning/new?parcel=' ~ p.id ~ '&assessment=' ~ p.assessment ~ '&day=' ~ d.day) }}">Plan job</a>{% endif %}</li>{% endfor %}</ul>
                 {% for moved in window.list|selectattr('rescheduled_from', 'defined')|groupby('from_label') %}<p class="fc-plan-caption">Rescheduled from {{ moved.grouper }} · {{ moved.list|length }} {{ 'parcel' if moved.list|length == 1 else 'parcels' }}.</p>{% endfor %}
               {% endfor %}
             {% endfor %}
           {% else %}<p class="fc-plan-caption">No current treatment window on this date.</p>{% endif %}
         {% endif %}
-        <form method="get" action="{{ resolved_farm_url('/forecast/busy') }}" hx-get="{{ resolved_farm_url('/forecast/busy') }}" hx-target="#plan-days" hx-select="#plan-days" hx-swap="outerHTML" hx-sync="#plan-days:replace" hx-disabled-elt="find button" data-plan-availability>
+        {% if is_farm_owner %}
+        <form method="post" action="{{ resolved_farm_url('/forecast/busy') }}" hx-post="{{ resolved_farm_url('/forecast/busy') }}" hx-target="#plan-days" hx-select="#plan-days" hx-swap="outerHTML" hx-sync="#plan-days:replace" hx-disabled-elt="find button" data-plan-availability>
+          {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
           <input type="hidden" name="day" value="{{ d.day }}"><input type="hidden" name="busy" value="{{ '0' if d.busy else '1' }}"><input type="hidden" name="next" value="{{ plan_next }}"><input type="hidden" name="farm" value="{{ request.state.selected_farm_id }}">
           <button id="plan-busy-{{ d.day }}" type="submit" aria-pressed="{{ 'true' if d.busy else 'false' }}" aria-label="Busy on {{ d.label.split(' · ')[-1] }}" title="{{ 'Unavailable for spraying. Tap to make available.' if d.busy else 'Mark unavailable for spraying.' }}" class="fc-plan-busy text-spray{% if d.busy %} bg-spray-soft{% endif %}"><span>Busy</span>{% if d.busy %} · make available{% endif %}</button>
         </form>
+        {% endif %}
         <p class="fc-plan-caption" data-plan-legend>Can’t spray that day? Tap Busy. Tap again to make available. No forecast yet means no weather recommendation.</p>
       </div>
     </section>
@@ -62,7 +65,7 @@
   <details data-plan-sources class="fc-plan-sources"><summary>Forecast & planning rules <span>· {{ display_tz }}</span></summary>
     {% if run %}<p>{{ run.label }} · {% if run.receipt %}Fetched {{ run.available }} · provider issue time unknown{% else %}Forecast run {{ run.issued }}{% endif %} · available {{ run.available }} · {% if run.as_issued %}forecast as issued{% else %}not the forecast as it was issued{% endif %}. Stored coverage ends {{ run.end }}. Spray hours {{ band }}.</p>{% else %}<p>No forecast yet at this clock. Station observations and archives are separate.</p>{% endif %}
     <p>Current crop protection advice determines which parcels need treatment. Busy replans their windows within the advisor’s search horizon, using the forecast and product rules. If no suitable option remains, the parcel needs a window.</p>
-    <p>Planned windows do not change completed treatments or the original engine evaluation. Availability is saved for this farm in this browser only. Demo reset keeps it; other devices and the bot do not share it.</p>
+    <p>Planned windows do not change completed treatments or the original engine evaluation. Availability is farm state: it is saved for this farm and shared by every signed-in device. Planned jobs are separate intended work and never enter the completed register.</p>
     <p>Partial weather values have missing hours; missing rain is not zero. Gusts are information only.{% if selected.gust.value is not none %} Selected-day peak gust: {{ '%.0f'|format(selected.gust.value) }} km/h.{% endif %}</p>
     {% if run and run.attribution %}<p>{{ run.attribution }} · <a href="https://open-meteo.com/">Weather data by Open-Meteo.com</a> · <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a></p>{% endif %}
   </details>

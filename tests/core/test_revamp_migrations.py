@@ -323,3 +323,78 @@ def test_generated_retry_keys_keep_principal_scope_and_reject_invalid_values(dat
             ).scalar_one()
             == 2
         )
+
+
+def planned_job(db, farm_id, assessment_id, product_id, *, version_id=None):
+    return db.execute(
+        text(
+            "INSERT INTO planning_job (farm_id,name,assessment_id,config_version_id,"
+            "config_version_status,product_id,scheduled_start,duration_minutes,created_by,"
+            "updated_by) VALUES (:farm,'Spray block A',:advice,:version,'approved',:product,"
+            "now(),90,'user:1','user:1') RETURNING id"
+        ),
+        {"farm": farm_id, "advice": assessment_id, "version": version_id, "product": product_id},
+    ).scalar_one()
+
+
+def test_planned_jobs_are_farm_scoped_with_append_only_revisions(database):
+    db = database
+    first, second = farm(db), farm(db, "B")
+    parcel = db.execute(
+        text(
+            "INSERT INTO parcel(farm_id,name,alias,area_ha,geom) VALUES (:farm,'P','p',1,"
+            "ST_Multi(ST_GeomFromText('POLYGON((0 0,0 1,1 1,0 0))',4326))) RETURNING id"
+        ),
+        {"farm": first},
+    ).scalar_one()
+    advice = db.execute(
+        text(
+            "INSERT INTO advice(farm_id,parcel_id,evaluated_at,decision) "
+            "VALUES (:farm,:parcel,now(),'spray') RETURNING id"
+        ),
+        {"farm": first, "parcel": parcel},
+    ).scalar_one()
+    product = db.execute(
+        text(
+            "INSERT INTO product(name,authorisation_no,active_substance,product_type) "
+            "VALUES ('Copper','1','copper','contact') RETURNING id"
+        )
+    ).scalar_one()
+    foreign_version = version(db, second)
+    for kwargs in ({"farm_id": second}, {"version_id": foreign_version}):
+        args = {"farm_id": first, "assessment_id": advice, "product_id": product} | kwargs
+        with pytest.raises(IntegrityError), db.begin_nested():
+            planned_job(db, args.pop("farm_id"), **args)
+    job = planned_job(db, first, advice, product, version_id=version(db, first))
+    with pytest.raises(IntegrityError), db.begin_nested():
+        db.execute(
+            text("INSERT INTO planning_job_parcel VALUES (:farm,:job,:parcel)"),
+            {"farm": second, "job": job, "parcel": parcel},
+        )
+    with pytest.raises(IntegrityError, match="cancel_metadata"), db.begin_nested():
+        db.execute(text("UPDATE planning_job SET status='cancelled' WHERE id=:id"), {"id": job})
+    revision = db.execute(
+        text(
+            "INSERT INTO planning_job_revision(farm_id,job_id,revision,action,status,snapshot,"
+            "actor) VALUES (:farm,:job,1,'created','planned','{}'::jsonb,'user:1') RETURNING id"
+        ),
+        {"farm": first, "job": job},
+    ).scalar_one()
+    with pytest.raises(IntegrityError, match="append-only"), db.begin_nested():
+        db.execute(
+            text("UPDATE planning_job_revision SET reason='x' WHERE id=:id"), {"id": revision}
+        )
+    db.execute(text("DELETE FROM planning_job_revision WHERE id=:id"), {"id": revision})
+    db.execute(text("DELETE FROM planning_job WHERE id=:id"), {"id": job})
+
+
+def test_availability_is_one_row_per_farm_day(database):
+    db = database
+    f = farm(database)
+    statement = text(
+        "INSERT INTO forecast_availability(farm_id,day,available,created_by,updated_by) "
+        "VALUES (:farm,'2026-11-07',false,'user:1','user:1')"
+    )
+    db.execute(statement, {"farm": f})
+    with pytest.raises(IntegrityError), db.begin_nested():
+        db.execute(statement, {"farm": f})
