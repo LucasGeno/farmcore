@@ -481,7 +481,7 @@ def test_migrate_refuses_a_server_or_role_it_cannot_make_safe_and_says_why(
         then()
 
 
-HOSTILE_PASSWORD = "p'\"%s%%{}$$\\;--\n" + secrets.token_hex(8)  # gauntlet:allow-secret
+HOSTILE_PASSWORD = "p'\"%s%%{}$$\\;--\n" + secrets.token_hex(8)
 
 
 def test_a_runtime_password_with_sql_and_format_characters_works_and_is_never_echoed(
@@ -489,7 +489,7 @@ def test_a_runtime_password_with_sql_and_format_characters_works_and_is_never_ec
 ) -> None:
     """The password must never reach the terminal or the server log, and must survive quoting,
     even when a role statement fails."""
-    inst = install(password=HOSTILE_PASSWORD, migrate=False)
+    inst = install(password=HOSTILE_PASSWORD, migrate=False)  # gauntlet:allow-secret
 
     result = run_cli("migrate", env=inst.env)
     failed = run_cli("migrate", env={**inst.env, "RUNTIME_DATABASE_ROLE": "pg_monitor"})
