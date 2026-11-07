@@ -116,3 +116,125 @@ Four plausible faults planted one at a time were all killed: removed retry uniqu
 Fresh independent review separates Spec/Standards and found no blocking issue in this bounded foundation. Seven real execution groups passed: public Alembic upgrade/metadata, cross-farm/region/year ancestry, review/activation linkage, append-only UPDATE/DELETE, actual scoped repository denial/farm filtering, downgrade function cleanup/legacy-farm retention, and re-upgrade/metadata. Disposable database dropped. Root round-trip tests also preserve canonical rows and NULL legacy recipient bindings and retain correction snapshots/retry identity after log/creator deletion. Parameter history guards protect against application UPDATE/DELETE; unrestricted database owners can disable triggers. Correction immutability/atomic stock effects remain application-service acceptance, not a schema-only claim.
 
 Reports: `/tmp/farmcore-foundation-gate-final.json`, `/tmp/farmcore-foundation-gate-junit.xml`, `/tmp/farmcore-foundation-mutants.json`, `/tmp/farmcore-schema-foundation-integration-qa.md`, `/tmp/farmcore-schema-qa-probe.py`, `/tmp/farmcore-foundation-{ordered.log,node.log,heads.log,format.log}`. This ticket remains incomplete; no final milestone acceptance follows from foundation verification.
+
+### Independent QA report — 2026-11-07 (`fc12-qa`)
+
+Fresh independent QA. This agent wrote none of tickets 01–11 and changed no `src/` or `tests/`
+file: every probe and walkthrough below lives in the worktree-local, git-excluded
+`.qa-scratch/` directory. Worktree `~/dev/farmcore-worktrees/12-integration-qa`, branch
+`qa/12-integration-qa` (claim `377192f`), HEAD at review `377192f` on main `d42d7db` (milestones
+1–4 merged). Reviewed diff base: `bf3ae8475470dcb531ec0bb100a1adf8f251a28f`, the first parent of
+the revamp merge `f1a8255`, whose schema head is `inventory_0001` (the two pre-revamp revision
+files are byte-identical at base and HEAD). Environment: M1, Python 3.12.13, PostgreSQL 17.11 +
+PostGIS on `localhost:55442`; no Playwright. Disk guard checked before every heavy run
+(`df -k /System/Volumes/Data` ≥ 225,000,000 KiB available against the 31,614,567 KiB floor).
+`tests/instances` was never run locally.
+
+#### Verification results
+
+| Check | Command / method | Fresh result |
+|---|---|---|
+| One head, linear chain | `uv run alembic heads`; `uv run alembic history`; Alembic `ScriptDirectory` assertions | `planning_0003 (head)`; one linear 12-revision chain `core_0001 → core_0002 → forecast_0001 → inventory_0001 → core_0003 → core_0004_grant_recipients → operations_0002 → review_0001 → forecast_0002 → planning_0001 → planning_0002 → planning_0003`; no branch labels or dependencies |
+| Fresh-install upgrade | Disposable `farmcore_qa12_fresh_*` database: `alembic upgrade head` | PASS; `planning_0003`, 1 alembic row, 39 tables including every milestone table; `uv run alembic -x url=… check` rc 0 (no ORM/revision drift) |
+| Existing-database upgrade | Disposable `farmcore_qa12_upgrade_*`: `alembic upgrade inventory_0001`, insert legacy farm/parcel/product/advice/two named grants, then `alembic upgrade head` | PASS; legacy rows preserved, both grants keep `recipient_identity_id = NULL` (no name backfill), zero identities/memberships inferred, advice props byte-equal; downgrade to `inventory_0001` and re-upgrade preserve the same rows. Both scratch databases dropped |
+| Focused regression | `timeout 600 uv run pytest -q tests/core -m 'not data and not slow' --randomly-seed=12012026` then the same for `tests/apps`, through `fleet-build` | core **760 passed, 2 deselected in 245.26s**; apps **2123 passed, 3 skipped, 262 deselected in 505.18s**; both exit 0 |
+| Gauntlet tier 3 | `PYTEST_ADDOPTS="tests/core tests/apps -m 'not data and not slow' --randomly-seed=12012026 …"` + `fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 -- bash ~/.claude/scripts/gauntlet.sh --tier=3 --base=bf3ae84 --suite-timeout=1800` | verdict **fail**: tests **2883 passed, 3 skipped, 264 deselected in 1391.30s**; suite_health, lint_python, lint_shell pass; `coverage_changed` **80% (5869 changed lines, 1126 missing)**; `secrets` **fail**; types/deps/execution/mutation skipped honestly (details below) |
+| JavaScript contracts | `node --test tests/core/*.mjs tests/apps/fields/*.mjs` | **32 passed, 0 failed/skipped** |
+| Lint/format | `uv run ruff check src tests`; `uv run ruff format --check src tests` | clean; **542 files already formatted** |
+| Container/Compose layer | Not run locally (starts and removes Docker containers). Cited hosted CI on reviewed main `d42d7db`: [run 42410650123](https://github.com/LucasGeno/farmcore/actions/runs/42410650123) — **python**, **node**, **docker** and **slow** jobs all `success`; the python job ran `scripts/check.sh`, the slow job ran `pytest -q -m slow` (the `tests/instances` journeys) |
+| Independent PostGIS probes | `timeout 600 uv run pytest .qa-scratch/qa12_probe -q -p no:randomly` against the real app and a throwaway migrated PostGIS database | **7 passed** — real role matrix, CSRF origin+nonce, wall-clock session expiry, membership revocation, bound-grant expiry/revocation/wrong-identity, forged session and foreign selectors, completion retry, failed-transaction rollback, two-session concurrent completion, rejected completion intent |
+| Browser-journey manual fallback | `timeout 600 uv run python .qa-scratch/qa12_walkthrough.py` — real HTTPS uvicorn on a free port, disposable migrated PostGIS database, seeded scene B, CLI accounts, then HTTP/HTML forms | **13/13 steps passed**; uvicorn stopped (SIGTERM), database dropped |
+
+The three skips are the optional SIGPAC/InfoRiego fixtures, not passes. `pytest-cov`,
+`pytest-randomly` and `diff-cover` were installed only in this worktree's `.venv`; they are not
+repository dependencies.
+
+#### Tier-3 failure model exercised here
+
+| Failure mode | Independent evidence |
+|---|---|
+| Anonymous/foreign/forged identity reads private data or metadata | Anonymous `/today/` 403 without farm text; owner of farm A gets 403 + no metadata for farm B selectors and `/operations/register.json`; forged opaque session cookie 403; zero-membership recipient gets 404 for a foreign grant, 403 for expired/revoked grants, and never sees the grantee label |
+| Cookie mutation bypasses CSRF or role checks | Advisor `POST /planning/jobs` 403 with no row; owner same-origin POST without the server nonce 403 and with a forged nonce 403, no row; valid nonce 201; correction cancel without the nonce 403; browser walkthrough uses the same HTML forms |
+| Expiry/revocation take effect on the next request | Session `expires_at` moved into the past → next `/planning/jobs.json` 403 with no job name; membership `revoked_at` → next read 403; binding grant `valid_to`/`revoked_at` edited → next advice export 403 |
+| Retry/double tap/concurrent completion duplicates work or stock | Same request key returns the same operation id; two pooled-session TestClients complete one job concurrently → both 200, one `Log`, one `Quantity`, one completion revision, one stock movement (`10 − 1.5 × 2 ha = 7 kg`) |
+| Failed transaction leaves plan/log/stock unchanged | Farm-scoped idempotency-key collision → 409 with the second job still `planned`/revision 1/no operation, log count unchanged, stock unchanged; invalid dose units (`cups`, `kg`) → 422/400 with no canonical row, no revision, no stock movement |
+| Re-evaluation only after commit | Covered by the repository suite (`test_advisor_re_evaluation_runs_only_after_a_committed_completion`) and the commit-before-background-task seam; not re-run as a separate probe |
+| Schema upgrade or intermediate integration leaves parallel heads/data loss | Fresh install, pre-revamp existing upgrade, downgrade/re-upgrade and metadata check above; one head |
+
+#### Browser-journey manual fallback (no Playwright)
+
+Exact HTTP/HTML-level walkthrough executed against a real uvicorn (`uvicorn
+farmcore.main:create_app --factory`, high port, self-signed TLS) with a disposable database
+created, migrated, seeded (`farmcore seed --scene B`, `farmcore replay --to "2024-04-10 06:00"`)
+and dropped by the script; the server is stopped before the script exits. Steps, all through
+the same forms a browser submits (`Origin` + `farmcore_csrf` / hidden `csrf_token`):
+
+1. `GET /health` → 200 `{"db":"ok","alembic_heads":["planning_0003"],"state":"ok"}`.
+2. Anonymous `GET /today/` → 403 and no farm text.
+3. `GET /login` → 200; `POST /login` (`login`, `password`, `csrf_token`) → 303 with
+   `farmcore_session`/`farmcore_csrf` set `HttpOnly; Secure; SameSite=strict`.
+4. Owner `GET /today/` → 200; `GET /operations/register` → 200.
+5. `GET /farms/members` → 200; `POST /farms/members` (`login=qa-advisor`, `role=advisor`) → 303;
+   the advisor appears on the page.
+6. `GET /review/assessments/1/card` → 200; `POST /review/assessments/1/request-form`
+   (`note`) → 303 with `requested=1`.
+7. `POST /logout` → 303; next `GET /today/` → 403.
+8. Advisor `POST /login` → 303; `GET /review/recommendations/` → 200 and the
+   `action="/review/requests/<id>/response-form"` form; `POST` it (`opinion=agree`, `note`) → 303.
+9. Owner `GET /planning/new?parcel=1&assessment=1` → 200; `POST /planning/jobs-form`
+   (`name`, `parcel_ids`, `assessment_id`, `product_id`, `scheduled_start`, `duration_minutes`)
+   → 303; `/planning/` renders the completion form for the new job.
+10. `POST /planning/jobs/<id>/complete-preview-form` (actual start/duration/parcel/dose) → 200
+    preview; `POST /planning/jobs/<id>/complete-form` → 303; `/operations/register` shows the
+    confirmed spray.
+11. `GET /operations/logs/<id>/corrections` → 200; `POST
+    /operations/logs/<id>/corrections/preview` (`reason`, one corrected dose, parcels, time,
+    request key) → 303 to the receipt; `POST /operations/corrections/<id>/confirm`
+    (`confirm=yes`) → 303; the receipt and the `quantity` row show the corrected `0.4 kg/ha`
+    (was `0.5`).
+12. `POST /operations/corrections/<id>/cancel` without the CSRF nonce → 403.
+
+Residual limits of this fallback: it is HTTP/HTML, not a rendering engine, so it proves form
+wiring, CSRF, redirects, status codes and persisted state, not layout, focus or motion. The
+instructed `tests/instances` Compose journeys are covered by the green hosted CI above.
+
+#### SPEC GAPS (spec/acceptance criteria not met)
+
+| ID | Ticket | Criterion and location | Evidence / repro | Severity | Status |
+|---|---|---|---|---|---|
+| SG-1 | 11 — job completion | "Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence" is unticked and the ticket remains `in-progress` with no closeout: `docs/work/farmcore-revamp/tickets/11-job-completion.md:5`, `:40`, `:179-180`. The feature is merged (`d42d7db`) and behaviour passes this QA. | `sed -n '5p;40p;179,180p' docs/work/farmcore-revamp/tickets/11-job-completion.md`; completion behaviour repro is the 7 independent probes above plus `test_completion.py`/`test_completion_concurrency.py`. | Medium | NON-BLOCKING (record a reviewer closeout like tickets 06/07/10) |
+
+No product-level spec gap was found for milestones 1–4: every acceptance criterion in tickets
+01–10 is exercised by the selected suite (2883 passed) and independently by the probes and
+walkthrough above. The remaining spec/acceptance risk is evidence recording, not behaviour.
+
+#### STANDARDS FINDINGS (code quality, security, docs drift)
+
+| ID | Area | Finding and location | Evidence / repro | Severity | Status |
+|---|---|---|---|---|---|
+| ST-1 | Docs drift — security/setup | The setup guide still tells operators that Sharing and recipient grants are operator-only and that ordinary members get only a read-only assistant: `docs/self-hosting.md:181-185`. This contradicts the shipped owner browser grant management and recipient-bound sharing described at `README.md:125-130` and in `SECURITY.md:12-30`. `SECURITY.md:183` separately says advisor recommendation-review writes "arrive with the review feature; advisors currently read", although advisors now answer requests (`review/routes.py:523`, `review/recommendations.py:173`). | Owner creates/revokes a bound grant in the browser (`tests/apps/share/test_recipient_identity.py::test_owner_browser_binds_existing_login_and_revokes_next_recipient_read`, `::test_owner_shell_exposes_sharing_navigation`); advisor response returns 201/303 (`tests/apps/review/test_recommendation_review.py:94-106`). My walkthrough steps 5–8 are the same authority path. | Low | **BLOCKING** (docs-only fix; update `docs/self-hosting.md:181-185` and `SECURITY.md:183`, and add recommendation-review response to the advisor row at `SECURITY.md:24`) |
+| ST-2 | Security gate | The tier-3 secrets layer fails on two credential-shaped strings added by the operator backup/restore work (outside milestones 1–4): `tests/instances/test_bundle_checks.py:339` (`secret = "AGE-SECRET-KEY-1QQQQ…"`, a synthetic placeholder used to prove a pasted private key is refused) and `tests/instances/test_isolation.py:484` (`install(password=HOSTILE_PASSWORD, …)`, a constant name). Neither is a usable credential, but the gate is red, so the security layer cannot be reported green. | Reproduced with the same matcher: `git diff -U0 bf3ae84...HEAD \| grep '^+' \| grep -v '^+++' \| grep -Ei 'secret…' \| grep -v gauntlet:allow-secret` → the two lines above. The repository already uses `# gauntlet:allow-secret` on six synthetic lines. | Low | **BLOCKING** (one-line marker on each synthetic line; no production change) |
+| ST-3 | Verification scope | `coverage_changed` reports 80% (5869 changed lines, 1126 missing) against the instructed whole-base diff. The diff spans post-revamp main work whose tests live in `tests/instances` (Compose/backup/restore/upgrade): `src/farmcore/core/commands` plus `apps/fields/commands.py` alone add **2,410** source lines, and this QA is forbidden to run that suite locally. With only the milestone test directories, the milestone source itself measures **93%** (3334 statements, 231 missing); each feature ticket also records 100% changed-line coverage on its own diff. | `git diff --numstat bf3ae84 HEAD -- src/farmcore/core/commands src/farmcore/apps/fields/commands.py` → 2410 added lines; focused report `.qa-scratch/qa12-milestone-coverage.txt`; hosted CI slow job green on `d42d7db`. Recommendation: run tier 3 in CI (or accept a milestone-scoped base) rather than locally. | Medium | NON-BLOCKING |
+| ST-4 | Ticket artifact drift | Ticket 03's four Verification boxes remain unticked although the ticket is `done` and its closeout says the final gate passed: `docs/work/farmcore-revamp/tickets/03-authenticated-sharing.md:34-37`. | `sed -n '34,37p' docs/work/farmcore-revamp/tickets/03-authenticated-sharing.md`; the closeout at `:311-321` records the passing gate. | Low | NON-BLOCKING |
+| ST-5 | Docs drift — README | The user-facing feature list still describes only the pre-revamp apps; planned jobs, recommendation/parameter review, member accounts and record corrections are absent from `README.md:44-66` even though they are first-class pages. | `sed -n '44,66p' README.md`; compare the manifests and routes under `src/farmcore/apps/{planning,review,share}` and `/operations` corrections. | Low | NON-BLOCKING |
+
+#### Disposition
+
+Counts: **0 blocking spec gaps** and **2 blocking standards findings** (ST-1, ST-2; both Low
+severity, both docs/comment-only fixes), plus 1 non-blocking spec gap and 3 non-blocking
+standards findings. The instructed tier-3 gauntlet verdict is **fail** for the two reasons in
+ST-2 and ST-3; its test, randomized-order, Python-lint and shell-lint layers pass, and the
+missing frontend/build/security/execution evidence has the documented fallbacks above. No
+`src/` or `tests/` file was changed by this QA; the working tree is clean apart from this
+report, and every scratch database and uvicorn process created for it was removed.
+
+This ticket stays `in-progress`: a separate writer should fix ST-1 and ST-2 (documentation and
+test-comment only), record the ticket 11 closeout (SG-1), and the maintainer should decide ST-3
+(milestone-scoped base or CI tier 3). A short recheck then re-runs the secrets layer, the docs
+diff and `alembic heads`; no product behaviour should change.
+
+Evidence files (worktree-local, git-excluded): `.qa-scratch/qa12-migrations.log`,
+`qa12-focused-shards.log`, `qa12-gauntlet.log`, `qa12-gauntlet-junit.xml`,
+`qa12-independent-probe.log`, `qa12-browser-fallback.{log,json}`, `qa12-walk-pages/`,
+`qa12-milestone-coverage.{txt,xml}`, `qa12-uvicorn.log`; scripts `qa12_migrations.py`,
+`qa12_probe/`, `qa12_walkthrough.py`.
