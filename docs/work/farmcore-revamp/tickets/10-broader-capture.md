@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Confirm field observations and irrigation facts"
 description: "Milestones 1–4: confirm field observations and irrigation facts."
-status: in-progress
+status: done
 blocked_by: ["09"]
 ---
 
@@ -35,7 +35,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -111,3 +111,5 @@ Mutant runs (actually applied to the working copy, each restored from a `/tmp` b
    `uv run pytest tests/apps/chat/test_broader_capture.py::test_confirmed_irrigation_runs_no_advisor_job_and_uses_no_spray_stock -m "not data" -q` → **1 failed in 1.43s**, `assert [[]] == []`.
 
 Not claimed: independent reviewer sign-off (Dell Codex) — the last Verification box stays unticked. No merge, deploy or force-push was performed.
+
+Closeout 2026-11-07 (fleet-head-opus): independent adversarial review by Dell Codex passed at frozen SHA `f4fd8e1` after fix rounds recorded above; CI green; merged as PR #51 (`b42610a8`) on Lucas's 2026-11-07 ruling. One Alembic head on main.
