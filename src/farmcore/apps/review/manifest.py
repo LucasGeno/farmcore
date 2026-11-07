@@ -1,6 +1,7 @@
 """Reviewed agronomic parameter versions; opinions never imply field accuracy."""
 
-from farmcore.core.manifest import Manifest
+from farmcore.apps.review.tools import TOOLS
+from farmcore.core.manifest import Manifest, NavItem
 
 MANIFEST = Manifest(
     name="review",
@@ -13,6 +14,10 @@ MANIFEST = Manifest(
     routes=("farmcore.apps.review.routes:router",),
     title="Parameter review",
     nav=("Parameter review", "/review/"),
+    extra_nav=(
+        NavItem("Recommendation review", "/review/recommendations/", "more", 36, "advisor"),
+    ),
     nav_group="more",
     nav_order=35,
+    tools=TOOLS,
 )

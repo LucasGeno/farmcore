@@ -1,0 +1,6 @@
+{% extends "core/base.html" %}
+{% block title %}Advisor check · {{ review.parcel.alias }} · farmcore{% endblock %}
+{% block content %}
+<p class="-mt-2 mb-2 text-[14px]"><a href="{{ farm_url('/advisor/parcels/' ~ review.parcel.id) }}" class="inline-flex min-h-[44px] items-center gap-1 text-muted hover:text-ink">← Back to the advice card</a></p>
+{% include "review/_check.html" %}
+{% endblock %}
