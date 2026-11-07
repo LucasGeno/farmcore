@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Resource-aware scheduling offers feasible alternatives"
 description: "Milestones 1–4: resource-aware scheduling offers feasible alternatives."
-status: approved
+status: in-progress
 blocked_by: ["07"]
 ---
 
@@ -38,5 +38,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
+
+Claim 2026-11-07 12:35 CET: implementer `fc08-deepseek` (OpenCode Go `opencode-go/deepseek-v4.1-flash`, M1), worktree `~/dev/farmcore-worktrees/08-resource-scheduling`, branch `feat/08-resource-scheduling`. Coordinator and migration author: `fleet-head-opus` (M1). Reviewer: Dell Codex. Stuck deadline 2026-11-08 06:00 CET.
 
 Pending implementation.
