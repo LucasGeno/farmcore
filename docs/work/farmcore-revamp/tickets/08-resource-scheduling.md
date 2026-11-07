@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Resource-aware scheduling offers feasible alternatives"
 description: "Milestones 1–4: resource-aware scheduling offers feasible alternatives."
-status: in-progress
+status: done
 blocked_by: ["07"]
 ---
 
@@ -35,7 +35,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -87,3 +87,5 @@ Code: `planning/engine.py` (pure eligibility), `planning/resources.py` (configur
 - **No unsupported claims / side-effect-free**: `test_reading_offers_writes_nothing_and_makes_no_unsupported_claims` asserts unchanged job/assignment/revision counts across repeated reads and no probability, soil, dose, cost, price, saving or currency text in the JSON.
 
 Independent reviewer: pending (Dell Codex). No merge or deploy performed by this stream.
+
+Closeout 2026-11-07 (fleet-head-opus): independent adversarial review by Dell Codex passed at frozen SHA `b568996` after two fix rounds recorded above; CI green; merged as PR #56 (`1c1d70c4`). Schema `planning_0002` authored by the coordinator. One Alembic head on main.
