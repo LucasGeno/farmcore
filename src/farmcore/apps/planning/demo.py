@@ -8,10 +8,22 @@ from __future__ import annotations
 
 from sqlalchemy import delete
 
-from farmcore.apps.planning.models import PlanningJob, PlanningJobParcel, PlanningJobRevision
+from farmcore.apps.planning.models import (
+    PlanningJob,
+    PlanningJobAssignment,
+    PlanningJobParcel,
+    PlanningJobRevision,
+    PlanningMachine,
+    PlanningOperator,
+    PlanningResourceWindow,
+)
 
 
 def reset(session, farm) -> None:
+    session.execute(delete(PlanningJobAssignment).where(PlanningJobAssignment.farm_id == farm.id))
+    session.execute(delete(PlanningResourceWindow).where(PlanningResourceWindow.farm_id == farm.id))
     session.execute(delete(PlanningJobRevision).where(PlanningJobRevision.farm_id == farm.id))
     session.execute(delete(PlanningJobParcel).where(PlanningJobParcel.farm_id == farm.id))
     session.execute(delete(PlanningJob).where(PlanningJob.farm_id == farm.id))
+    session.execute(delete(PlanningOperator).where(PlanningOperator.farm_id == farm.id))
+    session.execute(delete(PlanningMachine).where(PlanningMachine.farm_id == farm.id))

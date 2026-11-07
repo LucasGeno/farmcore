@@ -105,6 +105,10 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "planning_job": frozenset({"planning:read", "planning:write"}),
     "planning_job_parcel": frozenset({"planning:read", "planning:write"}),
     "planning_job_revision": frozenset({"planning:read", "planning:write"}),
+    "planning_machine": frozenset({"planning:read", "planning:write"}),
+    "planning_operator": frozenset({"planning:read", "planning:write"}),
+    "planning_resource_window": frozenset({"planning:read", "planning:write"}),
+    "planning_job_assignment": frozenset({"planning:read", "planning:write"}),
     "forecast_availability": frozenset({"fields:read", "planning:read", "planning:write"}),
     # Recommendation-review events are advice material; a logs-only consent cannot read the
     # farmer's or advisor's note by naming the generic `event` table.

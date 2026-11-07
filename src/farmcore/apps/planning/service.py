@@ -12,13 +12,22 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, select
+from sqlalchemy.exc import IntegrityError
 
 from farmcore.apps.advisor import service as advice_service
 from farmcore.apps.fields.seed import alias_number
 from farmcore.apps.forecast import availability
 from farmcore.apps.operations import production
 from farmcore.apps.operations.catalogue import products_for_farm
-from farmcore.apps.planning.models import PlanningJob, PlanningJobParcel, PlanningJobRevision
+from farmcore.apps.planning import offers, resources
+from farmcore.apps.planning.models import (
+    PlanningJob,
+    PlanningJobAssignment,
+    PlanningJobParcel,
+    PlanningJobRevision,
+    PlanningMachine,
+    PlanningOperator,
+)
 from farmcore.apps.review.models import ParameterVersion
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.canonical import Advice, Farm, Parcel, Product
@@ -42,6 +51,10 @@ class JobConflict(RuntimeError):
     def __init__(self, message: str, current_revision: int | None = None) -> None:
         super().__init__(message)
         self.current_revision = current_revision
+
+
+class ResourceConflict(RuntimeError):
+    """A machine or operator is already booked for an overlapping window; the route answers 409."""
 
 
 def _day(start: datetime, tz: str) -> date:
@@ -127,6 +140,7 @@ def _snapshot(
     job: PlanningJob,
     parcel_ids: list[int],
     state: dict[str, object],
+    assignments: list[dict[str, object]],
 ) -> dict[str, object]:
     return {
         "name": job.name,
@@ -139,6 +153,7 @@ def _snapshot(
         "duration_minutes": job.duration_minutes,
         "parcels": parcel_ids,
         "availability": state,
+        "assignments": assignments,
         "notes": job.notes,
     }
 
@@ -216,12 +231,13 @@ def create(
     repo.session.flush()
     state = _state(repo, job.scheduled_start, tz)
     job.props = {"availability": state}
+    job.updated_at = now
     parcel_ids_now = [parcel.id for parcel in parcels]
     repo.session.add(
         _revision(
             job,
             action="created",
-            snapshot=_snapshot(job, parcel_ids_now, state),
+            snapshot=_snapshot(job, parcel_ids_now, state, []),
             actor=repo.actor,
             reason="",
             now=now,
@@ -264,6 +280,28 @@ def edit(
     changes = {key: value for key, value in changes.items() if value is not None}
     if not changes:
         raise JobError("No changes were provided.")
+    old_start, old_duration = job.scheduled_start, job.duration_minutes
+    new_start = changes.get("scheduled_start", job.scheduled_start)
+    new_duration = changes.get("duration_minutes", job.duration_minutes)
+    if not isinstance(new_start, datetime):
+        new_start = job.scheduled_start
+    new_end = new_start + timedelta(minutes=int(new_duration))  # type: ignore[arg-type]
+    if (old_start, old_duration) != (new_start, new_duration):
+        for assignment in repo.list(
+            PlanningJobAssignment, PlanningJobAssignment.job_id == job.id, scope=SCOPE
+        ):
+            kind, resource_id = _resource_label(assignment)
+            message = _booking_conflict(
+                repo,
+                kind=kind,
+                resource_id=resource_id,
+                start=new_start,
+                end=new_end,
+                job_id=job.id,
+                tz=tz,
+            )
+            if message:
+                raise JobConflict(message, job.revision)
 
     advice_row = _assessment(repo, job.assessment_id, now)
     if "parcel_ids" in changes:
@@ -294,11 +332,22 @@ def edit(
     if "notes" in changes:
         job.notes = str(changes["notes"])
 
+    if (old_start, old_duration) != (job.scheduled_start, job.duration_minutes):
+        end = job.scheduled_start + timedelta(minutes=job.duration_minutes)
+        for assignment in repo.list(
+            PlanningJobAssignment, PlanningJobAssignment.job_id == job.id, scope=SCOPE
+        ):
+            assignment.starts_at = job.scheduled_start
+            assignment.ends_at = end
+            assignment.updated_by = repo.actor
+            assignment.updated_at = now
+        repo.session.flush()
+
     job.revision += 1
     job.updated_by = repo.actor
-    job.updated_at = now
     state = _state(repo, job.scheduled_start, tz)
     job.props = {**(job.props or {}), "availability": state}
+    job.updated_at = now
     links = repo.session.scalars(
         select(PlanningJobParcel)
         .where(PlanningJobParcel.job_id == job.id)
@@ -308,7 +357,12 @@ def edit(
         _revision(
             job,
             action="edited",
-            snapshot=_snapshot(job, [link.parcel_id for link in links], state),
+            snapshot=_snapshot(
+                job,
+                [link.parcel_id for link in links],
+                state,
+                _snapshot_assignments(_assigned_rows(repo, job.id)),
+            ),
             actor=repo.actor,
             reason="",
             now=now,
@@ -339,19 +393,216 @@ def cancel(
     job.cancelled_at = now
     job.revision += 1
     job.updated_by = repo.actor
-    job.updated_at = now
     state = _state(repo, job.scheduled_start, tz)
     job.props = {**(job.props or {}), "availability": state}
+    job.updated_at = now
+    links = repo.session.scalars(
+        select(PlanningJobParcel).where(PlanningJobParcel.job_id == job.id)
+    ).all()
+    assignments = _snapshot_assignments(_assigned_rows(repo, job.id))
+    repo.session.add(
+        _revision(
+            job,
+            action="cancelled",
+            snapshot=_snapshot(job, [link.parcel_id for link in links], state, assignments),
+            actor=repo.actor,
+            reason=reason.strip(),
+            now=now,
+        )
+    )
+    repo.session.execute(
+        delete(PlanningJobAssignment).where(PlanningJobAssignment.job_id == job.id)
+    )
+    repo.session.flush()
+    return job
+
+
+def _resource_label(assignment: PlanningJobAssignment) -> tuple[str, int]:
+    if assignment.machine_id is not None:
+        return "machine", assignment.machine_id
+    return "operator", int(assignment.operator_id or 0)
+
+
+def _assigned_rows(repo: ScopedRepository, job_id: int) -> list[dict[str, object]]:
+    """Live assignments for one job, with the configured resource's display fields."""
+    rows: list[dict[str, object]] = []
+    for assignment in repo.list(
+        PlanningJobAssignment, PlanningJobAssignment.job_id == job_id, scope=SCOPE
+    ):
+        kind, resource_id = _resource_label(assignment)
+        model = PlanningMachine if kind == "machine" else PlanningOperator
+        resource = repo.get(model, resource_id, scope=SCOPE)
+        rows.append(
+            {
+                "kind": kind,
+                "id": resource_id,
+                "name": resource.name if resource else "Removed resource",
+                "active": bool(resource.active) if resource else False,
+                "work_rate_ha_per_hour": (
+                    float(resource.work_rate_ha_per_hour)
+                    if kind == "machine" and resource and resource.work_rate_ha_per_hour
+                    else None
+                ),
+                "tank_litres": (
+                    float(resource.tank_litres)
+                    if kind == "machine" and resource and resource.tank_litres
+                    else None
+                ),
+                "starts_at": assignment.starts_at,
+                "ends_at": assignment.ends_at,
+            }
+        )
+    return sorted(rows, key=lambda row: (str(row["kind"]), int(row["id"])))
+
+
+def _snapshot_assignments(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    return [
+        {
+            "kind": row["kind"],
+            "id": row["id"],
+            "name": row["name"],
+            "starts_at": row["starts_at"].isoformat(),  # type: ignore[union-attr]
+            "ends_at": row["ends_at"].isoformat(),  # type: ignore[union-attr]
+        }
+        for row in rows
+    ]
+
+
+def _booking_conflict(
+    repo: ScopedRepository,
+    *,
+    kind: str,
+    resource_id: int,
+    start: datetime,
+    end: datetime,
+    job_id: int,
+    tz: str,
+) -> str | None:
+    """Another job already booking this resource over the half-open window, if any."""
+    column = (
+        PlanningJobAssignment.machine_id if kind == "machine" else PlanningJobAssignment.operator_id
+    )
+    for other in repo.list(PlanningJobAssignment, column == resource_id, scope=SCOPE):
+        if other.job_id == job_id:
+            continue
+        if other.starts_at < end and start < other.ends_at:
+            model = PlanningMachine if kind == "machine" else PlanningOperator
+            resource = repo.get(model, resource_id, scope=SCOPE)
+            name = resource.name if resource else "That resource"
+            return (
+                f"{name} is already booked "
+                f"{other.starts_at.astimezone(ZoneInfo(tz)):%d %b %H:%M}–"
+                f"{other.ends_at.astimezone(ZoneInfo(tz)):%d %b %H:%M}."
+            )
+    return None
+
+
+def set_assignments(
+    repo: ScopedRepository,
+    now: datetime,
+    tz: str,
+    job: PlanningJob,
+    *,
+    expected_revision: int,
+    changes: dict[str, int | None],
+) -> PlanningJob:
+    """Book (or clear) one machine and/or operator on the job's current window.
+
+    A new revision records the booking. The database exclusion constraint is the final
+    authority; the pre-check gives the farmer a clear conflict message without relying on it.
+    """
+    repo.check(WRITE, "planning_job")
+    if job.status != "planned":
+        raise JobConflict("Cancelled jobs cannot be rebooked.", job.revision)
+    if expected_revision != job.revision:
+        raise JobConflict(
+            f"Revision conflict: the job is at revision {job.revision}.", job.revision
+        )
+    changes = {kind: value for kind, value in changes.items() if kind in ("machine", "operator")}
+    if not changes:
+        raise JobError("No resource changes were provided.")
+    start = job.scheduled_start
+    end = start + timedelta(minutes=job.duration_minutes)
+    current = {
+        _resource_label(row)[0]: row
+        for row in repo.list(
+            PlanningJobAssignment, PlanningJobAssignment.job_id == job.id, scope=SCOPE
+        )
+    }
+    try:
+        with repo.session.begin_nested():
+            for kind, resource_id in changes.items():
+                existing = current.get(kind)
+                if resource_id is None:
+                    if existing is not None:
+                        repo.session.delete(existing)
+                    continue
+                model = PlanningMachine if kind == "machine" else PlanningOperator
+                resource = repo.get(model, resource_id, scope=SCOPE)
+                if resource is None:
+                    raise JobError("That machine or operator is not configured on this farm.")
+                if not resource.active:
+                    raise JobError("That machine or operator is inactive.")
+                message = _booking_conflict(
+                    repo,
+                    kind=kind,
+                    resource_id=resource_id,
+                    start=start,
+                    end=end,
+                    job_id=job.id,
+                    tz=tz,
+                )
+                if message:
+                    raise ResourceConflict(message)
+                if existing is None:
+                    repo.session.add(
+                        PlanningJobAssignment(
+                            farm_id=repo.farm_id,
+                            job_id=job.id,
+                            machine_id=resource_id if kind == "machine" else None,
+                            operator_id=resource_id if kind == "operator" else None,
+                            starts_at=start,
+                            ends_at=end,
+                            created_by=repo.actor,
+                            created_at=now,
+                            updated_by=repo.actor,
+                            updated_at=now,
+                        )
+                    )
+                else:
+                    existing.starts_at = start
+                    existing.ends_at = end
+                    existing.updated_by = repo.actor
+                    existing.updated_at = now
+            repo.session.flush()
+    except IntegrityError as exc:
+        if "ex_planning_job_assignment" in str(exc.orig):
+            repo.session.rollback()
+            raise ResourceConflict(
+                "That machine or operator is already booked for an overlapping time."
+            ) from None
+        raise
+
+    job.revision += 1
+    job.updated_by = repo.actor
+    state = _state(repo, job.scheduled_start, tz)
+    job.props = {**(job.props or {}), "availability": state}
+    job.updated_at = now
     links = repo.session.scalars(
         select(PlanningJobParcel).where(PlanningJobParcel.job_id == job.id)
     ).all()
     repo.session.add(
         _revision(
             job,
-            action="cancelled",
-            snapshot=_snapshot(job, [link.parcel_id for link in links], state),
+            action="edited",
+            snapshot=_snapshot(
+                job,
+                [link.parcel_id for link in links],
+                state,
+                _snapshot_assignments(_assigned_rows(repo, job.id)),
+            ),
             actor=repo.actor,
-            reason=reason.strip(),
+            reason="",
             now=now,
         )
     )
@@ -370,10 +621,19 @@ def _job_parcels(repo: ScopedRepository, job_id: int) -> list[Parcel]:
     )
 
 
-def job_json(repo: ScopedRepository, job: PlanningJob, *, tz: str) -> dict[str, object]:
+def job_json(
+    repo: ScopedRepository,
+    job: PlanningJob,
+    *,
+    tz: str,
+    now: datetime | None = None,
+    forecast: offers.Forecast | None = None,
+) -> dict[str, object]:
     advice_row = repo.get(Advice, job.assessment_id, scope="advice:read")
     product = repo.get(Product, job.product_id, scope="logs:read")
     parcels = _job_parcels(repo, job.id)
+    assigned = _assigned_rows(repo, job.id)
+    assessed_at = now or job.updated_at
     return {
         "id": job.id,
         "farm_id": job.farm_id,
@@ -415,6 +675,17 @@ def job_json(repo: ScopedRepository, job: PlanningJob, *, tz: str) -> dict[str, 
         "duration_minutes": job.duration_minutes,
         "notes": job.notes,
         "availability": _state(repo, job.scheduled_start, tz),
+        "assignments": assigned,
+        "resource_assessment": offers.job_assessment(
+            repo,
+            job,
+            now=assessed_at,
+            tz=tz,
+            assigned=assigned,
+            parcels=parcels,
+            product=product,
+            forecast=forecast,
+        ),
         "created_by": job.created_by,
         "created_at": job.created_at,
         "updated_by": job.updated_by,
@@ -424,14 +695,15 @@ def job_json(repo: ScopedRepository, job: PlanningJob, *, tz: str) -> dict[str, 
     }
 
 
-def list_jobs(repo: ScopedRepository, *, tz: str) -> list[dict[str, object]]:
+def list_jobs(repo: ScopedRepository, now: datetime, *, tz: str) -> list[dict[str, object]]:
     jobs = repo.list(
         PlanningJob,
         scope=SCOPE,
         order_by=(PlanningJob.scheduled_start, PlanningJob.id),
     )
     jobs.sort(key=lambda job: (job.status == "cancelled", job.scheduled_start, job.id))
-    return [job_json(repo, job, tz=tz) for job in jobs]
+    forecast = offers.forecast_context(repo, now, tz)
+    return [job_json(repo, job, now=now, tz=tz, forecast=forecast) for job in jobs]
 
 
 def page_context(repo: ScopedRepository, now: datetime, tz: str) -> dict[str, object]:
@@ -453,8 +725,9 @@ def page_context(repo: ScopedRepository, now: datetime, tz: str) -> dict[str, ob
         and (row.props or {}).get("assessment_status") not in ("limited", "unavailable")
     ]
     return {
-        "jobs": list_jobs(repo, tz=tz),
+        "jobs": list_jobs(repo, now, tz=tz),
         "parcels": parcels,
         "products": _offered(repo),
         "assessments": assessments,
+        **resources.context(repo),
     }
