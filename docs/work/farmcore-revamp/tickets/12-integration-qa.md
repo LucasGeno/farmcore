@@ -2,7 +2,7 @@
 type: Work Ticket
 title: "Independent QA verifies milestones 1–4"
 description: "Milestones 1–4: independent qa verifies milestones 1–4."
-status: in-progress
+status: done
 blocked_by: ["03", "06", "11"]
 ---
 
@@ -22,10 +22,10 @@ Independent QA verifies milestones 1–4. Touchpoints: whole branch review; migr
 
 ## Acceptance criteria
 
-- [ ] Fresh QA agent reports spec gaps separately from standards findings; all blocking findings fixed.
-- [ ] Real PostGIS role/expiry/revoke/CSRF/retry/concurrency/rollback regressions and browser journeys pass.
-- [ ] One Alembic head, fresh-install upgrade and relevant existing-database upgrade pass.
-- [ ] verify tier3 evidence includes failure model, test/lint/frontend/build/security results and manual fallbacks for missing tooling; PRs integrated only after QA.
+- [x] Fresh QA agent reports spec gaps separately from standards findings; all blocking findings fixed.
+- [x] Real PostGIS role/expiry/revoke/CSRF/retry/concurrency/rollback regressions and browser journeys pass.
+- [x] One Alembic head, fresh-install upgrade and relevant existing-database upgrade pass.
+- [x] verify tier3 evidence includes failure model, test/lint/frontend/build/security results and manual fallbacks for missing tooling; PRs integrated only after QA.
 
 ## Execution discipline
 
@@ -33,11 +33,11 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 
 ## Verification
 
-- [ ] `bash ~/.claude/scripts/gauntlet.sh --tier=3 --base=origin/main; node --test tests/core/*.mjs tests/apps/fields/*.mjs` — focused relevant regression passes. Adapt test directories only when real repo names differ; record exact commands.
-- [ ] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
-- [ ] `uv run alembic heads` — one head after integration.
-- [ ] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
-- [ ] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
+- [x] `bash ~/.claude/scripts/gauntlet.sh --tier=3 --base=origin/main; node --test tests/core/*.mjs tests/apps/fields/*.mjs` — focused relevant regression passes. Adapt test directories only when real repo names differ; record exact commands.
+- [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
+- [x] `uv run alembic heads` — one head after integration.
+- [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
+- [x] Fresh reviewer checks every acceptance criterion; no done claim on missing/skipped evidence.
 
 ## Evidence
 
@@ -228,13 +228,79 @@ missing frontend/build/security/execution evidence has the documented fallbacks 
 `src/` or `tests/` file was changed by this QA; the working tree is clean apart from this
 report, and every scratch database and uvicorn process created for it was removed.
 
-This ticket stays `in-progress`: a separate writer should fix ST-1 and ST-2 (documentation and
-test-comment only), record the ticket 11 closeout (SG-1), and the maintainer should decide ST-3
-(milestone-scoped base or CI tier 3). A short recheck then re-runs the secrets layer, the docs
-diff and `alembic heads`; no product behaviour should change.
+This ticket stayed `in-progress` at first review: a separate writer was to fix ST-1 and ST-2
+(documentation and test-comment only), record the ticket 11 closeout (SG-1), and the maintainer
+was to decide ST-3 (milestone-scoped base or CI tier 3). **Superseded by the re-verification
+below**, where the fixes are merged and checked.
 
 Evidence files (worktree-local, git-excluded): `.qa-scratch/qa12-migrations.log`,
 `qa12-focused-shards.log`, `qa12-gauntlet.log`, `qa12-gauntlet-junit.xml`,
 `qa12-independent-probe.log`, `qa12-browser-fallback.{log,json}`, `qa12-walk-pages/`,
 `qa12-milestone-coverage.{txt,xml}`, `qa12-uvicorn.log`; scripts `qa12_migrations.py`,
 `qa12_probe/`, `qa12_walkthrough.py`.
+
+### Re-verification after fixes — 2026-11-08 (`fc12-qa`)
+
+Fetched `main` from `https://github.com/LucasGeno/farmcore.git` and merged normally (no rebase):
+merge commit `bfbc30c`, parents `54c273e` (this report) and `a56be65` (#60), which also contains
+#59 `40f8329`. The merged tree changes only docs, ticket sources and two test comments; no
+product source changed. CI on the fix head `a56be65` is green:
+[run 42422127386](https://github.com/LucasGeno/farmcore/actions/runs/42422127386) (python, node,
+docker, slow all successful).
+
+| Finding | Status | Re-verification evidence |
+|---|---|---|
+| SG-1 — ticket 11 not closed | **RESOLVED** | `11-job-completion.md:5` is `status: done`, all five Verification boxes are `[x]`, and `:182` records the Dell Codex review, green CI and PR #58 merge. |
+| ST-1 — stale sharing/advisor docs | **RESOLVED** | `docs/self-hosting.md:181-188` now states that owners capture/confirm sprays, advisors answer recommendation-review requests, owners manage Sharing grants in the browser, and only active bound grants reach a recipient. `SECURITY.md:24` grants advisors "answer recommendation-review requests … with an opinion and note" and `SECURITY.md:183-184` replaces the stale "writes arrive with the review feature" sentence. Read against `share/routes.py`/`review/routes.py` and the passing share/review suites (`test_owner_browser_binds_existing_login_and_revokes_next_recipient_read`, `test_recommendation_review.py:94-106`). |
+| ST-2 — secrets layer false positives | **RESOLVED** | `tests/instances/test_bundle_checks.py:339` and `tests/instances/test_isolation.py:492` now carry `# gauntlet:allow-secret`. Exact `SECRET_RE` replay over `git diff -U0 bf3ae84...HEAD` with the allowlist removed: **0 unmarked hits, 9 allowlisted lines**. Fresh gauntlet on the merged tree (tier 1, `--base=bf3ae84`): **verdict pass**, `secrets: ok — no secret patterns in the diff (9 line(s) allowlisted)`, lint and tests pass. |
+| ST-3 — coverage scope | **SCOPE RESOLVED; residual NON-BLOCKING** | Head ruling applied: the gate is scoped to milestones 1–4; operator installation/backup/restore/upgrade work is out of scope. Scoping and figure below. |
+| ST-4 — ticket 03 verification boxes | **OPEN (recorded NON-BLOCKING)** | Left exactly as recorded; not part of this re-verification. |
+| ST-5 — README feature list | **RESOLVED** | `README.md:57-75` now lists audited record corrections, field observations/irrigation, private member accounts, authenticated sharing, reviewed advice and persistent planned jobs. |
+
+Coverage re-measurement, stated exactly:
+
+- Scope: `git diff bf3ae84...HEAD` restricted to milestone 1–4 product paths — every changed file
+  under `src/farmcore/apps/{activity,advisor,assistant,chat,forecast,inventory,kpi,notifications,planning,review,share,stations,today}`,
+  `apps/fields/{service.py,static,templates}`, and
+  `apps/operations/{corrections.py,facts.py,manifest.py,routes.py,templates}`; `core/**` except
+  the operator installation/backup/restore/upgrade commands; plus `core/commands/users.py`,
+  `main.py`, `settings.py`, `web.py`, and `migrations/versions/**`. Explicitly excluded under the
+  head ruling: `core/commands/{apps,backup,effects,farms,migrate,restore,upgrade}.py`,
+  `core/startup.py`, `db.py`, `apps/demo_es/**`, `apps/fields/commands.py` and
+  `apps/operations/isoxml.py`.
+- Suite: the gate's own selection, `tests/core tests/apps -m 'not data and not slow'`, run in six
+  shards with `--cov-append` (each under 600 s): 760 + 794 + 706 + 149 + 178 + 296 = **2883
+  passed, 3 skipped**. Coverage XML from the merged HEAD `bfbc30c`.
+  `diff-cover … --diff-file=<scoped diff> --fail-under=100` reports **94.2%: 4342 changed lines,
+  250 missing** (4092 covered).
+- Residual: the strict 100% layer is **not green**. The 250 lines are concentrated in untested
+  browser form/error branches — `planning/routes.py` 81.2% (new/edit/assign/cancel form paths),
+  `planning/resources.py` 86.4%, `planning/service.py` 88.6%, `planning/offers.py` 88.8%,
+  `planning/engine.py` 92.6%, `advisor/routes.py` 89.7%, `advisor/tools.py` 90.0%,
+  `notifications/service.py` 91.5% — and in data/instance-only paths such as `chat/push.py` 60%,
+  `chat/commands.py` 71.4%, `advisor/debug.py` 0% (one line) and `core/cookie_scope.py` 73.5%
+  (request-cookie filtering only activates after `farmcore migrate`; exercised by the green
+  `tests/instances` CI job). The previously untested browser new/edit paths were independently
+  exercised below.
+
+Other re-verification results on the merged tree:
+
+- `uv run alembic heads` → `planning_0003 (head)`; `history` still one linear chain.
+- `node --test tests/core/*.mjs tests/apps/fields/*.mjs` → **32 passed, 0 failed/skipped**.
+- `uv run ruff check src tests` → clean; `uv run ruff format --check src tests` → **542 files
+  already formatted**.
+- Independent PostGIS probes re-run on the merged tree → **7 passed**.
+- Browser fallback re-run with a replan step added → **14/14 passed**: anonymous denial, owner
+  login cookies, advisor assignment, owner request, advisor answer, job create, **job replan via
+  `/planning/jobs/<id>/edit-form`**, preview/complete, correction to `0.4 kg/ha`, CSRF refusal;
+  uvicorn stopped and the scratch database dropped.
+- No blocking finding remains. The residual coverage figure is reported above and is not treated
+  as blocking under the head's scope ruling; if a green 100% coverage layer is required later,
+  the cheapest additions are browser-form tests for the planning edit/assign/cancel routes and
+  running the dataset-marked path under coverage.
+
+Acceptance criteria and Verification boxes above are ticked on this evidence; ticket status is
+`done`. The two non-blocking residuals (ST-3 figure, ST-4 ticket-03 boxes) are recorded, not
+silently waived. New evidence: `.qa-scratch/qa12-reverify-secrets-gate.log`,
+`qa12-reverify-coverage-shards{,-d}.log`, `qa12-reverify-coverage-scoped.log`,
+`qa12-milestone-scope.diff`, `qa12-merged-coverage.xml`.
