@@ -537,3 +537,132 @@ def test_resource_scheduling_downgrade_and_upgrade_round_trip(scratch_db_url):
         command.check(cfg)
     finally:
         engine.dispose()
+
+
+def spray_log(db, farm_id):
+    return db.execute(
+        text(
+            "INSERT INTO log(farm_id,type,status,name,ts_start) "
+            "VALUES (:farm,'spray','done','Completed spray',now()) RETURNING id"
+        ),
+        {"farm": farm_id},
+    ).scalar_one()
+
+
+COMPLETE = (
+    "UPDATE planning_job SET status='completed',completed_by=:by,completed_at=now(),"
+    "operation_log_id=:log,operation_request_key=:key WHERE id=:id"
+)
+
+
+def test_completed_jobs_link_one_same_farm_operation_with_consistent_metadata(database):
+    db = database
+    first, second, args = _planning_fixture(db)
+    job, other = planned_job(db, first, **args), planned_job(db, first, **args)
+    mine, foreign = spray_log(db, first), spray_log(db, second)
+    complete = {"id": job, "by": "user:1", "log": mine, "key": "k1"}
+    # Completion metadata is all-or-nothing and only on completed jobs; actors are non-blank.
+    for change in (
+        "status='completed'",
+        "completed_by='user:1'",
+        "operation_request_key='k1'",
+        f"operation_log_id={mine}",
+    ):
+        with pytest.raises(IntegrityError, match="complete_metadata"), db.begin_nested():
+            db.execute(text(f"UPDATE planning_job SET {change} WHERE id=:id"), {"id": job})
+    for name, values in (("completed_by", {"by": " "}), ("operation_request_key", {"key": " "})):
+        with pytest.raises(IntegrityError, match=name), db.begin_nested():
+            db.execute(text(COMPLETE), complete | values)
+    with pytest.raises(IntegrityError, match="cancelled_by"), db.begin_nested():
+        db.execute(
+            text(
+                "UPDATE planning_job SET status='cancelled',cancelled_by=' ',cancelled_at=now() "
+                "WHERE id=:id"
+            ),
+            {"id": job},
+        )
+    # Another farm's operation cannot be linked, even by guessed id.
+    with pytest.raises(IntegrityError, match="operation_log_id"), db.begin_nested():
+        db.execute(text(COMPLETE), complete | {"log": foreign})
+    db.execute(text(COMPLETE), complete)
+    # Cancel metadata stays NULL on a completed job.
+    with pytest.raises(IntegrityError, match="cancel_metadata"), db.begin_nested():
+        db.execute(
+            text("UPDATE planning_job SET cancelled_by='user:1',cancelled_at=now() WHERE id=:id"),
+            {"id": job},
+        )
+    # One completion per idempotency key per farm.
+    with pytest.raises(IntegrityError, match="ix_planning_job_farm_request_key"), db.begin_nested():
+        db.execute(text(COMPLETE), complete | {"id": other})
+    # The linked operation cannot be deleted from under its completed job.
+    with pytest.raises(IntegrityError), db.begin_nested():
+        db.execute(text("DELETE FROM log WHERE id=:id"), {"id": mine})
+
+
+@pytest.mark.parametrize(
+    ("action", "status", "valid"),
+    [
+        ("completed", "completed", True),
+        ("cancelled", "cancelled", True),
+        ("edited", "planned", True),
+        ("completed", "planned", False),
+        ("edited", "completed", False),
+        ("cancelled", "completed", False),
+    ],
+)
+def test_revision_actions_imply_their_status(database, action, status, valid):
+    db = database
+    first, _, args = _planning_fixture(db)
+    job = planned_job(db, first, **args)
+    insert = text(
+        "INSERT INTO planning_job_revision(farm_id,job_id,revision,action,status,snapshot,actor) "
+        "VALUES (:farm,:job,1,:action,:status,'{}'::jsonb,'user:1')"
+    )
+    values = {"farm": first, "job": job, "action": action, "status": status}
+    if valid:
+        db.execute(insert, values)
+    else:
+        with pytest.raises(IntegrityError, match="action_status"), db.begin_nested():
+            db.execute(insert, values)
+
+
+def test_job_completion_downgrade_refuses_completed_history_then_round_trips(scratch_db_url):
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "head")
+    engine = create_engine(scratch_db_url)
+    try:
+        with engine.begin() as db:
+            first, _, args = _planning_fixture(db)
+            job = planned_job(db, first, **args)
+            log = spray_log(db, first)
+            db.execute(
+                text(
+                    "INSERT INTO log_source(log_id,source_type,external_key,precision_rank) "
+                    "VALUES (:log,'planning','job:1',1)"
+                ),
+                {"log": log},
+            )
+            db.execute(text(COMPLETE), {"id": job, "by": "user:1", "log": log, "key": "k1"})
+        with pytest.raises(RuntimeError, match="downgrade refused"):
+            command.downgrade(cfg, "planning_0002")
+        with engine.connect() as db:
+            assert db.execute(text("SELECT version_num FROM alembic_version")).scalar() == (
+                "planning_0003"
+            )
+            assert db.execute(text("SELECT status FROM planning_job")).scalar() == "completed"
+        with engine.begin() as db:
+            db.execute(text("DELETE FROM planning_job"))
+            db.execute(text("DELETE FROM log_source"))
+        command.downgrade(cfg, "planning_0002")
+        with engine.connect() as db:
+            columns = db.execute(
+                text(
+                    "SELECT count(*) FROM information_schema.columns "
+                    "WHERE table_name='planning_job' AND column_name='operation_log_id'"
+                )
+            ).scalar_one()
+            assert columns == 0
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+    finally:
+        engine.dispose()

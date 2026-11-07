@@ -28,7 +28,7 @@ from farmcore.settings import get_settings
 
 AGE = shutil.which("age")
 AGE_KEYGEN = shutil.which("age-keygen")
-HEAD = "planning_0002"  # the single supported Alembic head of this release
+HEAD = "planning_0003"  # the single supported Alembic head of this release
 # Next to this interpreter in the project venv; on PATH when the interpreter is an overlay
 # (`uv run --with …` has no entry scripts of its own).
 FARMCORE = Path(sys.executable).with_name("farmcore")

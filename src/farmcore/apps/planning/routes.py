@@ -8,11 +8,12 @@ serve the planning page and redirect with a plain error. Every write requires an
 from __future__ import annotations
 
 from datetime import date, datetime, time
+from decimal import Decimal
 from typing import Literal
 from urllib.parse import urlencode
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from pydantic import (
     AwareDatetime,
@@ -86,6 +87,40 @@ class AssignmentChange(BaseModel):
     expected_revision: StrictInt = Field(ge=1)
     kind: Literal["machine", "operator"]
     resource_id: StrictInt | None = Field(default=None, gt=0, le=2**63 - 1)
+
+
+class CompletionDose(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product_id: StrictInt = Field(gt=0, le=2**63 - 1)
+    value: Decimal = Field(gt=0, allow_inf_nan=False)
+    unit: Literal["kg/ha", "L/ha", "l/ha", "g/ha", "ml/ha"]
+
+
+class JobCompletion(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: StrictInt = Field(ge=1)
+    request_key: StrictStr = Field(min_length=1, max_length=128)
+    actual_start: AwareDatetime
+    duration_minutes: StrictInt = Field(ge=1, le=1440)
+    parcel_ids: list[StrictInt] = Field(min_length=1, max_length=80)
+    quantities: list[CompletionDose] = Field(min_length=1, max_length=50)
+    notes: StrictStr = Field(default="", max_length=10000)
+
+    @field_validator("parcel_ids")
+    @classmethod
+    def parcels_are_distinct(cls, value: list[int]) -> list[int]:
+        if len(set(value)) != len(value):
+            raise ValueError("choose each parcel once")
+        return value
+
+    @field_validator("request_key")
+    @classmethod
+    def key_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("request key must not be blank")
+        return value
 
 
 def _now(request: Request, repo: Repo) -> datetime:
@@ -207,6 +242,148 @@ def cancel_job(request: Request, repo: Repo, job_id: int, body: JobCancel):
     except (service.JobError, service.JobNotFound, service.JobConflict) as exc:
         raise _translate(exc) from None
     return service.job_json(repo, job, now=_now(request, repo), tz=_tz(request))
+
+
+def _completion_kwargs(body: JobCompletion) -> dict[str, object]:
+    return {
+        "expected_revision": body.expected_revision,
+        "request_key": body.request_key,
+        "actual_start": body.actual_start,
+        "duration_minutes": body.duration_minutes,
+        "parcel_ids": body.parcel_ids,
+        "quantities": [dose.model_dump() for dose in body.quantities],
+        "notes": body.notes,
+    }
+
+
+def _completion_body(form, tz: str) -> JobCompletion:
+    products = form.getlist("product_id")
+    values = form.getlist("dose_value")
+    units = form.getlist("dose_unit")
+    if not (len(products) == len(values) == len(units)):
+        raise ValueError("each applied product needs a dose and a unit")
+    quantities = []
+    for product, value, unit in zip(products, values, units, strict=True):
+        product_text, value_text = str(product).strip(), str(value).strip()
+        if not product_text and not value_text:
+            continue
+        if not product_text or not value_text:
+            raise ValueError("each applied product needs a dose and a unit")
+        quantities.append({"product_id": int(product_text), "value": value_text, "unit": str(unit)})
+    return JobCompletion(
+        expected_revision=int(str(form.get("expected_revision", "0"))),
+        request_key=str(form.get("request_key", "")),
+        actual_start=parse_local(str(form.get("actual_start", "")), tz),
+        duration_minutes=int(str(form.get("duration_minutes", "0"))),
+        parcel_ids=[int(value) for value in form.getlist("parcel_ids") if str(value).strip()],
+        quantities=quantities,
+        notes=str(form.get("notes", "")),
+    )
+
+
+def _schedule_advice(request: Request, repo: Repo, tasks: BackgroundTasks) -> None:
+    """Only a committed completion triggers a new evaluation; BackgroundTasks run after commit."""
+    from farmcore.core import jobs
+
+    tasks.add_task(
+        jobs.run_now,
+        request.app.state.session_factory,
+        request.app.state.manifests,
+        "advisor.evaluate",
+        request.app.state.settings,
+        farm_ids=(repo.farm_id,),
+    )
+
+
+@router.post("/jobs/{job_id}/completion/preview", dependencies=[Depends(require_farm_owner)])
+def completion_preview(request: Request, repo: Repo, job_id: int, body: JobCompletion):
+    try:
+        row = service.job(repo, job_id)
+        return service.completion_preview(repo, row, tz=_tz(request), **_completion_kwargs(body))
+    except (service.JobError, service.JobNotFound, service.JobConflict) as exc:
+        raise _translate(exc) from None
+
+
+@router.post("/jobs/{job_id}/complete", dependencies=[Depends(require_farm_owner)])
+def complete_job(
+    request: Request, repo: Repo, job_id: int, body: JobCompletion, tasks: BackgroundTasks
+):
+    try:
+        row, _operation, replayed = service.complete(
+            repo,
+            _now(request, repo),
+            _tz(request),
+            job_id,
+            reader=getattr(request.app.state, "spray_weather_reader", None),
+            **_completion_kwargs(body),
+        )
+    except (service.JobError, service.JobNotFound, service.JobConflict) as exc:
+        raise _translate(exc) from None
+    if not replayed:
+        _schedule_advice(request, repo, tasks)
+    return service.job_json(repo, row, now=_now(request, repo), tz=_tz(request))
+
+
+@router.post("/jobs/{job_id}/complete-preview-form", dependencies=[Depends(require_farm_owner)])
+async def completion_preview_form(request: Request, repo: Repo, job_id: int):
+    form = await request.form()
+    try:
+        body = _completion_body(form, _tz(request))
+        row = service.job(repo, job_id)
+        preview = service.completion_preview(repo, row, tz=_tz(request), **_completion_kwargs(body))
+    except service.JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    except service.JobConflict as exc:
+        return _back(repo, str(exc))
+    except (ValueError, TypeError, service.JobError) as exc:
+        return _back(repo, f"Check the completion details: {exc}")
+    return render(
+        request,
+        "planning/completion_preview.html",
+        preview=preview,
+        completion_form={
+            "job_id": job_id,
+            "expected_revision": body.expected_revision,
+            "request_key": body.request_key,
+            "actual_start": str(form.get("actual_start", "")),
+            "duration_minutes": body.duration_minutes,
+            "parcel_ids": body.parcel_ids,
+            "quantities": [
+                {
+                    "product_id": dose.product_id,
+                    "value": str(dose.value),
+                    "unit": dose.unit,
+                }
+                for dose in body.quantities
+            ],
+            "notes": body.notes,
+        },
+        timezone=_tz(request),
+    )
+
+
+@router.post("/jobs/{job_id}/complete-form", dependencies=[Depends(require_farm_owner)])
+async def complete_form(request: Request, repo: Repo, job_id: int, tasks: BackgroundTasks):
+    form = await request.form()
+    try:
+        body = _completion_body(form, _tz(request))
+        _row, _operation, replayed = service.complete(
+            repo,
+            _now(request, repo),
+            _tz(request),
+            job_id,
+            reader=getattr(request.app.state, "spray_weather_reader", None),
+            **_completion_kwargs(body),
+        )
+    except service.JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    except service.JobConflict as exc:
+        return _back(repo, str(exc))
+    except (ValueError, TypeError, service.JobError) as exc:
+        return _back(repo, f"Check the completion details: {exc}")
+    if not replayed:
+        _schedule_advice(request, repo, tasks)
+    return _back(repo)
 
 
 def _prefill(
