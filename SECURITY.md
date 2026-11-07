@@ -21,7 +21,7 @@ explicitly bound to the grant. This also applies to intentionally public demo fa
 |---|---|
 | Installation operator (`ADMIN_TOKEN`) | Installation controls, all configured farms, global model-call audit and legacy capture |
 | Farm owner | Read/export assigned farms, import machine operations, log and confirm sprays from the assistant panel on the selected farm, preview/confirm/cancel corrections of confirmed sprays, set production/inventory thresholds, assign/revoke existing local identities and recipient-bound grants |
-| Farm advisor | Read/export assigned farms and finalized correction history; no spray capture, corrections, arbitrary operation writes, membership administration or installation controls |
+| Farm advisor | Read/export assigned farms and finalized correction history, and answer recommendation-review requests assigned to them with an opinion and note; no spray capture, corrections, arbitrary operation writes, membership administration or installation controls |
 | Farm owner or advisor: advisor parameters | Read the farm's parameter catalog and version history and saved assessment evidence; propose a bounded parameter version, record an approved/unsure/rejected opinion, and activate an approved version for that farm, crop, region and year. Each step needs CSRF and rechecks the membership under the farm lock |
 | Anonymous visitor | Health, static files and sign-in; no private farm reads or writes |
 | Explicit demo visitor | Read only explicitly designated demo farms; no model-call audit |
@@ -180,7 +180,8 @@ facts and each source's type and time, never transcripts, chat ids or machine fi
 correction is visible only to its author; finalized ones to the farm's members. Once confirmed or
 cancelled, a correction is immutable by application rule only: the database role can still
 update the row.
-Advisor recommendation-review writes arrive with the review feature; advisors currently read.
+Advisors answer owner recommendation-review requests with an opinion and note; a review never
+rewrites the stored assessment or substitutes for agronomic validation.
 The operator-token sign-in limiter remains per-process and in memory; ordinary member login
 uses the persisted budgets above. No independent validation of the agronomic rules is claimed.
 Advice is decision support; product labels and local regulations take precedence.

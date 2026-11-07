@@ -481,7 +481,7 @@ def test_migrate_refuses_a_server_or_role_it_cannot_make_safe_and_says_why(
         then()
 
 
-HOSTILE_PASSWORD = "p'\"%s%%{}$$\\;--\n" + secrets.token_hex(8)
+HOSTILE_PASSWORD = "p'\"%s%%{}$$\\;--\n" + secrets.token_hex(8)  # gauntlet:allow-secret
 
 
 def test_a_runtime_password_with_sql_and_format_characters_works_and_is_never_echoed(

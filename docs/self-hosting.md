@@ -179,10 +179,13 @@ docker compose exec app farmcore users set-password farmer
 ```
 
 Password replacement revokes existing sessions and re-enables the identity. The installation
-operator remains a separate break-glass identity at `/admin/sign-in`. Shared web voice/draft
-capture and global model-call audit remain operator-only in this phase. Ordinary members use
-the farm-scoped read-only assistant and existing owner-authorized machine import workflow.
-Sharing UI/grant recipients remain operator-only until recipient binding is implemented.
+operator remains a separate break-glass identity at `/admin/sign-in`. Global model-call audit
+and legacy unbound shared web drafts remain operator-only. Farm owners capture and confirm
+sprays from the assistant panel on the selected farm; advisors keep the farm-scoped read-only
+assistant and can answer recommendation-review requests assigned to them. Owners manage
+**Sharing** grants in the browser against existing recipient logins; a recipient signs in at
+`/login` and reads only active grants explicitly bound to that login, so a numeric grant URL
+alone confers no authority. Machine import remains owner-authorized.
 
 ## 3. Reverse proxy and TLS
 
