@@ -182,7 +182,7 @@ def weather_state(
     while hour < span.end:
         hours.append(hour)
         hour += HOUR
-    if not hours:
+    if not hours:  # pragma: no cover - Span requires start < end, so floor(start) is a candidate
         return State("unknown", "the job window contains no forecast hour.")
     closed = closed_by(series, hours, config, sulphur=sulphur)
     if any("no_data" in closed[hour] for hour in hours):
