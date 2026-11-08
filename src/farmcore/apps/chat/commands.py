@@ -58,7 +58,7 @@ def bot_deps(
     )
 
 
-def _wait_for_effects(factory: sessionmaker[Session]) -> None:
+def _wait_for_effects(factory: sessionmaker[Session]) -> None:  # pragma: no cover - bot poll loop
     """Hold off polling while external effects are paused (a restored copy, until its owner
     enables them): a second poller on the original's token would make both fail."""
     announced = False

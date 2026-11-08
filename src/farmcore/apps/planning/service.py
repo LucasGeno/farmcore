@@ -372,7 +372,7 @@ def edit(
                     "A booked resource already has another job at the new time.",
                     current_revision,
                 ) from None
-            raise
+            raise  # pragma: no cover - job constraints already fail at the query autoflush
 
     job.revision += 1
     job.updated_by = repo.actor
@@ -606,7 +606,7 @@ def set_assignments(
                     existing.updated_by = repo.actor
                     existing.updated_at = now
             repo.session.flush()
-    except IntegrityError as exc:
+    except IntegrityError as exc:  # pragma: no cover - DB race fallback; pre-check covers normal
         if "ex_planning_job_assignment" in str(exc.orig):
             repo.session.rollback()
             raise ResourceConflict(
@@ -908,7 +908,7 @@ def complete(
         if stored.get("fingerprint") != fingerprint:
             raise JobConflict("Request key already used for another completion.", job_row.revision)
         operation = repo.get(Log, job_row.operation_log_id, scope="logs:read")
-        if operation is None:
+        if operation is None:  # pragma: no cover - planning_0003 FK keeps the operation
             raise JobConflict("The linked operation is unavailable.", job_row.revision)
         return job_row, operation, True
     _completion_target(job_row, expected_revision)

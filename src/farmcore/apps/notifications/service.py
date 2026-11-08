@@ -173,7 +173,7 @@ def review_items(repo, now, tz):
     out = []
     for state in states:
         asked = state.request
-        if asked is None:
+        if asked is None:  # pragma: no cover - recommendations.states filters open requests
             continue
         payload = asked.payload or {}
         alias = payload.get("alias") or "A parcel"

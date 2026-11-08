@@ -421,8 +421,8 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             # already holds. A different message under it is refused.
             if not _same_message(log, ref, transcript):
                 return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
-            if log.status != "pending":
-                return Outgoing(
+            if log.status != "pending":  # pragma: no cover - race after the held lookup
+                return Outgoing(  # pragma: no cover - race after the held lookup
                     text=REPLY_ALREADY_LOGGED if log.type == "spray" else REPLY_ALREADY_RECORDED
                 )
             log_id = log.id
@@ -559,9 +559,9 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
                     buttons=[("❌ Cancel", f"{CANCEL}:{log_id}")],
                 )
             log, merged = logs.confirm(session, log_id, actor, now, source_app=SOURCE_APP)
-        except LookupError:  # a concurrent cancel won the row lock
+        except LookupError:  # pragma: no cover - concurrent cancel won the row lock
             return Outgoing(text=REPLY_GONE if is_spray else REPLY_GONE_RECORD)
-        except ValueError:  # a concurrent confirm won the row lock
+        except ValueError:  # pragma: no cover - concurrent confirm won the row lock
             return Outgoing(text=REPLY_ALREADY_LOGGED if is_spray else REPLY_ALREADY_RECORDED)
         saved_id = log.id
         farm_id = repo.farm_id

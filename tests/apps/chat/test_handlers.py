@@ -681,3 +681,24 @@ def test_replaying_either_source_of_a_merged_spray_returns_the_record(
     assert out.buttons == []
     assert count(session, Log) == 1
     assert count(session, LogSource) == 2
+
+
+def test_a_redelivered_message_id_with_a_different_transcript_is_refused(
+    session_factory, session, settings
+):
+    seed_farm(session, settings)
+    d = deps(
+        session_factory,
+        settings,
+        fake(parcels=["P1"], products=[COPPER], dose_value=2, dose_unit="kg/ha"),
+    )
+    on_message(d, voice("copper 2 kg this morning", message_id=77))
+    conflict = on_message(d, voice("sulphur 1 kg this morning", message_id=77))
+    assert conflict.status == 409
+
+
+def test_a_callback_with_a_non_positive_log_id_is_gone(session_factory, session, settings):
+    seed_farm(session, settings)
+    d = deps(session_factory, settings, fake())
+    assert on_callback(d, Callback(chat_id=CHAT, data="confirm:0")).text
+    assert on_callback(d, Callback(chat_id=CHAT, data="cancel:0")).text

@@ -347,7 +347,7 @@ def require_assigned_advisor(request: Request, repo: Repo) -> None:
         return
     principal = principal_for(request)
     if is_tour(request) or principal is None:
-        raise HTTPException(403, "Assigned advisor required")
+        raise HTTPException(403, "Assigned advisor required")  # pragma: no cover - tour middleware
     member = repo.session.scalar(
         select(FarmMembership.id)
         .join(LocalIdentity)
@@ -391,7 +391,7 @@ def assessment(repo: Repo, advice_id: int, now):
     if row is None or row.evaluated_at > now:
         raise HTTPException(404, "Assessment unavailable")
     parcel = repo.get(Parcel, row.parcel_id, scope="fields:read")
-    if parcel is None:
+    if parcel is None:  # pragma: no cover - advice.parcel_id is a foreign key
         raise HTTPException(404, "Assessment unavailable")
     return row, parcel
 
@@ -467,7 +467,7 @@ def farm_reviews(request: Request, repo: Repo):
         if row is None or row.evaluated_at > now:
             continue
         parcel = repo.get(Parcel, row.parcel_id, scope="fields:read")
-        if parcel is None:
+        if parcel is None:  # pragma: no cover - advice.parcel_id is a foreign key
             continue
         out.append(
             recommendation_json(
@@ -544,7 +544,7 @@ def respond_to_request(request: Request, repo: Repo, request_id: int, body: Chec
             note=body.note.strip(),
             reviewer=actor_name(request),
         )
-    except recommendations.ReviewNotFound as exc:
+    except recommendations.ReviewNotFound as exc:  # pragma: no cover - route passes its row
         raise HTTPException(404, str(exc)) from None
     except recommendations.ReviewConflict as exc:
         raise HTTPException(409, str(exc)) from None
