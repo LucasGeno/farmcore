@@ -25,7 +25,11 @@ Independent QA verifies milestones 1–4. Touchpoints: whole branch review; migr
 - [x] Fresh QA agent reports spec gaps separately from standards findings; all blocking findings fixed.
 - [x] Real PostGIS role/expiry/revoke/CSRF/retry/concurrency/rollback regressions and browser journeys pass.
 - [x] One Alembic head, fresh-install upgrade and relevant existing-database upgrade pass.
-- [x] verify tier3 evidence includes failure model, test/lint/frontend/build/security results and manual fallbacks for missing tooling; PRs integrated only after QA.
+- [ ] verify tier3 evidence includes failure model, test/lint/frontend/build/security results and manual fallbacks for missing tooling; PRs integrated only after QA.
+  - Ruling-accepted exception, not met: the milestone PRs were merged before QA under Lucas's
+    2026-11-07 ruling (head-recorded in `run-2026-11-06-48h.md`), and QA ran post-merge on
+    `main`. The tier-3 evidence clause is verified on the merged tree; the sequencing clause
+    is recorded as an exception, not claimed.
 
 ## Execution discipline
 
@@ -252,36 +256,47 @@ docker, slow all successful).
 |---|---|---|
 | SG-1 — ticket 11 not closed | **RESOLVED** | `11-job-completion.md:5` is `status: done`, all five Verification boxes are `[x]`, and `:182` records the Dell Codex review, green CI and PR #58 merge. |
 | ST-1 — stale sharing/advisor docs | **RESOLVED** | `docs/self-hosting.md:181-188` now states that owners capture/confirm sprays, advisors answer recommendation-review requests, owners manage Sharing grants in the browser, and only active bound grants reach a recipient. `SECURITY.md:24` grants advisors "answer recommendation-review requests … with an opinion and note" and `SECURITY.md:183-184` replaces the stale "writes arrive with the review feature" sentence. Read against `share/routes.py`/`review/routes.py` and the passing share/review suites (`test_owner_browser_binds_existing_login_and_revokes_next_recipient_read`, `test_recommendation_review.py:94-106`). |
-| ST-2 — secrets layer false positives | **RESOLVED** | `tests/instances/test_bundle_checks.py:339` and `tests/instances/test_isolation.py:492` now carry `# gauntlet:allow-secret`. Exact `SECRET_RE` replay over `git diff -U0 bf3ae84...HEAD` with the allowlist removed: **0 unmarked hits, 9 allowlisted lines**. Fresh gauntlet on the merged tree (tier 1, `--base=bf3ae84`): **verdict pass**, `secrets: ok — no secret patterns in the diff (9 line(s) allowlisted)`, lint and tests pass. |
-| ST-3 — coverage scope | **SCOPE RESOLVED; residual NON-BLOCKING** | Head ruling applied: the gate is scoped to milestones 1–4; operator installation/backup/restore/upgrade work is out of scope. Scoping and figure below. |
+| ST-2 — secrets layer false positives | **RESOLVED** | `tests/instances/test_bundle_checks.py:339` and `tests/instances/test_isolation.py:492` now carry `# gauntlet:allow-secret`. Exact `SECRET_RE` replay over `git diff -U0 bf3ae84...HEAD` with the allowlist removed: **0 unmarked hits, 9 allowlisted lines at that point** (10 after #62). Fresh gauntlet on the merged tree (tier 1, `--base=bf3ae84`): **verdict pass**, `secrets: ok — no secret patterns in the diff (9 line(s) allowlisted)`, lint and tests pass. |
+| ST-3 — coverage scope and figure | **RESOLVED** | Head ruling applied: the gate is scoped to milestones 1–4; operator installation/backup/restore/upgrade work is out of scope. After #62 the final scoped tier-3 run passes with **scoped coverage 100% (4550 changed lines, 0 missing)**. Pre-#62 figure was 94.2%; #62 adds the missing milestone tests and six Codex-accepted `pragma: no cover` lines, each with a stated invariant. Scoping and layers below. |
 | ST-4 — ticket 03 verification boxes | **OPEN (recorded NON-BLOCKING)** | Left exactly as recorded; not part of this re-verification. |
 | ST-5 — README feature list | **RESOLVED** | `README.md:57-75` now lists audited record corrections, field observations/irrigation, private member accounts, authenticated sharing, reviewed advice and persistent planned jobs. |
 
-Coverage re-measurement, stated exactly:
+Coverage re-measurement and final tier-3 run, stated exactly:
 
-- Scope: `git diff bf3ae84...HEAD` restricted to milestone 1–4 product paths — every changed file
-  under `src/farmcore/apps/{activity,advisor,assistant,chat,forecast,inventory,kpi,notifications,planning,review,share,stations,today}`,
+- Scope (unchanged from the recorded milestone scope): `git diff bf3ae84...HEAD` restricted to
+  milestone 1–4 product paths — every changed file under
+  `src/farmcore/apps/{activity,advisor,assistant,chat,forecast,inventory,kpi,notifications,planning,review,share,stations,today}`,
   `apps/fields/{service.py,static,templates}`, and
   `apps/operations/{corrections.py,facts.py,manifest.py,routes.py,templates}`; `core/**` except
   the operator installation/backup/restore/upgrade commands; plus `core/commands/users.py`,
-  `main.py`, `settings.py`, `web.py`, and `migrations/versions/**`. Explicitly excluded under the
-  head ruling: `core/commands/{apps,backup,effects,farms,migrate,restore,upgrade}.py`,
-  `core/startup.py`, `db.py`, `apps/demo_es/**`, `apps/fields/commands.py` and
-  `apps/operations/isoxml.py`.
-- Suite: the gate's own selection, `tests/core tests/apps -m 'not data and not slow'`, run in six
-  shards with `--cov-append` (each under 600 s): 760 + 794 + 706 + 149 + 178 + 296 = **2883
-  passed, 3 skipped**. Coverage XML from the merged HEAD `bfbc30c`.
-  `diff-cover … --diff-file=<scoped diff> --fail-under=100` reports **94.2%: 4342 changed lines,
-  250 missing** (4092 covered).
-- Residual: the strict 100% layer is **not green**. The 250 lines are concentrated in untested
-  browser form/error branches — `planning/routes.py` 81.2% (new/edit/assign/cancel form paths),
-  `planning/resources.py` 86.4%, `planning/service.py` 88.6%, `planning/offers.py` 88.8%,
-  `planning/engine.py` 92.6%, `advisor/routes.py` 89.7%, `advisor/tools.py` 90.0%,
-  `notifications/service.py` 91.5% — and in data/instance-only paths such as `chat/push.py` 60%,
-  `chat/commands.py` 71.4%, `advisor/debug.py` 0% (one line) and `core/cookie_scope.py` 73.5%
-  (request-cookie filtering only activates after `farmcore migrate`; exercised by the green
-  `tests/instances` CI job). The previously untested browser new/edit paths were independently
-  exercised below.
+  `main.py`, `settings.py`, `web.py`, and `migrations/versions/**` (revision files only).
+  Explicitly excluded under the head ruling: `core/commands/{apps,backup,effects,farms,migrate,restore,upgrade}.py`,
+  `core/startup.py`, `db.py`, `apps/demo_es/**`, `apps/fields/commands.py`,
+  `apps/operations/isoxml.py`, and `migrations/env.py` (the supplied-connection branch used only
+  by the operator `farmcore migrate` path; its tests are the green `tests/instances` CI job).
+- Fresh tier-3 command on merged HEAD `ef11ff4` (main `cf0792c`), run through
+  `fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD`:
+  `SCOPED_DIFF=$PWD/.qa-scratch/qa12-milestone-scope.diff bash .qa-scratch/gauntlet-scoped.sh
+  --tier=3 --base=bf3ae8475470dcb531ec0bb100a1adf8f251a28f --suite-timeout=1800`, with
+  `PYTEST_ADDOPTS="tests/core tests/apps -m 'not data and not slow' --randomly-seed=12012026 …"`.
+  The only difference from `~/.claude/scripts/gauntlet.sh` is the coverage layer's
+  `--diff-file="$SCOPED_DIFF"` instead of `--compare-branch="$BASE"` (recorded diff shown above);
+  the diagnostic copy of the XML is retained only for this evidence.
+- **Verdict: pass.** Layers: tests **2942 passed, 3 skipped, 264 deselected in 1404.96s**;
+  suite_health ok (pytest-randomly, randomized order); lint_python and lint_shell ok;
+  `coverage_changed: Coverage: 100%` (**4550 changed lines, 0 missing**); secrets ok (10
+  allowlisted lines, 0 unmarked); types/deps/execution/mutation skipped honestly (no mypy or
+  tsconfig, dependency set changed but no pip-audit/npm audit, no `.gauntlet-smoke`, no mutation
+  tool).
+- Two earlier runs of the same scoped gate failed at 99% with 4 missing lines. Those four lines
+  are `src/farmcore/migrations/env.py:103-106`, the operator `farmcore migrate` supplied-connection
+  branch; the recorded scope is `migrations/versions/**`, so the first two diff files were
+  over-broad. With the recorded scope they are out, and the coverage layer is 100%.
+- Pre-#62 history for the record: 94.2% (4342 lines, 250 missing). #62 covered those milestone
+  branches with tests and left six `pragma: no cover` lines, each with a stated invariant
+  (recommendations.states filtering in notifications, Span/forecast non-empty guarantee, FK
+  guarantees for the completion operation, the advice parcel FK in two review reads, and "other
+  assignment constraints are pre-validated"); Codex accepted all six across four review rounds.
 
 Other re-verification results on the merged tree:
 
@@ -294,13 +309,14 @@ Other re-verification results on the merged tree:
   login cookies, advisor assignment, owner request, advisor answer, job create, **job replan via
   `/planning/jobs/<id>/edit-form`**, preview/complete, correction to `0.4 kg/ha`, CSRF refusal;
   uvicorn stopped and the scratch database dropped.
-- No blocking finding remains. The residual coverage figure is reported above and is not treated
-  as blocking under the head's scope ruling; if a green 100% coverage layer is required later,
-  the cheapest additions are browser-form tests for the planning edit/assign/cancel routes and
-  running the dataset-marked path under coverage.
+- No blocking finding remains. ST-3 is resolved by the passing scoped run above; ST-4 remains the
+  single recorded non-blocking item (ticket 03's unticked verification boxes). The only unmet
+  acceptance clause is the "PRs integrated only after QA" sequencing, recorded above as a
+  ruling-accepted exception rather than a pass.
 
-Acceptance criteria and Verification boxes above are ticked on this evidence; ticket status is
-`done`. The two non-blocking residuals (ST-3 figure, ST-4 ticket-03 boxes) are recorded, not
-silently waived. New evidence: `.qa-scratch/qa12-reverify-secrets-gate.log`,
-`qa12-reverify-coverage-shards{,-d}.log`, `qa12-reverify-coverage-scoped.log`,
-`qa12-milestone-scope.diff`, `qa12-merged-coverage.xml`.
+Acceptance criteria 1–3 and every Verification box are ticked on this evidence. Criterion 4 stays
+unticked because of its sequencing clause, as instructed by the head review; every other
+criterion is proven and the ticket status is `done`. New evidence:
+`.qa-scratch/qa12-tier3-scoped3.log`, `qa12-tier3-diffcover.log`,
+`qa12-tier3-coverage.xml`, `qa12-milestone-scope.diff`; earlier secrets/re-verification logs
+remain under `.qa-scratch/`.
