@@ -688,42 +688,20 @@ def test_review_validation_and_form_error_branches(committed_session_factory, se
         assert listed.json()["reviews"] == []
 
 
-class _PausedSecondRequestRepo:
-    """A real scoped repository that pauses the route's second request lookup."""
-
-    def __init__(self, repo, *, ready, release):
-        self._repo = repo
-        self.ready = ready
-        self.release = release
-        self.calls = 0
-
-    def __getattr__(self, name):
-        return getattr(self._repo, name)
-
-    def execute(self, stmt, *, scope, resource):
-        self.calls += 1
-        if self.calls == 2:
-            self.ready.set()
-            assert self.release.wait(timeout=10)
-        return self._repo.execute(stmt, scope=scope, resource=resource)
-
-
-def test_advice_events_deleted_between_reads_answer_404(committed_session_factory, settings):
+def test_http_review_response_after_events_are_deleted_is_404(committed_session_factory, settings):
     import threading
-    from types import SimpleNamespace
+    import time
 
-    from fastapi import HTTPException
-    from sqlalchemy import delete
-    from starlette.requests import Request
+    from sqlalchemy import delete, select, text
 
-    from farmcore.apps.review import recommendations, routes
+    from farmcore.apps.review import recommendations
     from farmcore.core.access import ScopedRepository, ensure_owner_grant
     from farmcore.core.clock import set_replay
     from farmcore.core.models.canonical import Advice, Event, Farm
     from tests.apps.share.conftest import make_parcel
 
     with committed_session_factory() as session:
-        farm = Farm(name="Deleted review event farm", props={})
+        farm = Farm(name="HTTP deleted review event farm", props={})
         session.add(farm)
         session.flush()
         ensure_owner_grant(session, farm)
@@ -744,55 +722,51 @@ def test_advice_events_deleted_between_reads_answer_404(committed_session_factor
         state = recommendations.request_check(
             repo, NOW, advice, parcel, note="Check this", requested_by="owner"
         )
-        request_id, farm_id = state.request.id, farm.id
+        request_id, farm_id, advice_id = state.request.id, farm.id, advice.id
         session.commit()
 
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": f"/review/requests/{request_id}/response",
-            "query_string": b"",
-            "headers": [(b"x-admin-token", settings.admin_token.get_secret_value().encode())],
-            "app": SimpleNamespace(state=SimpleNamespace(settings=settings)),
-            "state": {},
-        }
-    )
-    ready, release = threading.Event(), threading.Event()
+    app = create_app(settings, session_factory=committed_session_factory)
+    headers = {"X-Admin-Token": settings.admin_token.get_secret_value()}
     result = {}
 
     def answer():
-        with committed_session_factory() as session:
-            farm_row = session.get(Farm, farm_id)
-            repo = _PausedSecondRequestRepo(
-                ScopedRepository(
-                    session,
-                    farm_id,
-                    ensure_owner_grant(session, farm_row),
-                    "operator",
-                    "web",
-                ),
-                ready=ready,
-                release=release,
+        with TestClient(app, headers=headers) as browser:
+            result["response"] = browser.post(
+                f"/review/requests/{request_id}/response",
+                params={"farm": farm_id},
+                json={"opinion": "agree", "note": "Checked"},
             )
-            try:
-                routes.respond_to_request(
-                    request,
-                    repo,
-                    request_id,
-                    routes.CheckAnswer(opinion="agree", note="Checked"),
-                )
-            except HTTPException as exc:
-                result["status"] = exc.status_code
-            else:
-                result["ok"] = True
 
+    blocker = committed_session_factory()
+    blocker.execute(text("LOCK TABLE parcel IN ACCESS EXCLUSIVE MODE"))
+    blocker.execute(delete(Event).where(Event.id == request_id))
     thread = threading.Thread(target=answer)
     thread.start()
-    assert ready.wait(timeout=10)
-    with committed_session_factory.begin() as session:
-        session.execute(delete(Event).where(Event.id == request_id))
-    release.set()
+    try:
+        for _ in range(1000):
+            with committed_session_factory() as watcher:
+                blocked = watcher.scalar(
+                    text(
+                        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                        "AND query ILIKE '%from parcel%' LIMIT 1"
+                    )
+                )
+            if blocked:
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("the response route never reached the parcel read")
+    except BaseException:
+        blocker.rollback()
+        blocker.close()
+        thread.join(timeout=15)
+        raise
+    blocker.commit()
+    blocker.close()
     thread.join(timeout=15)
     assert not thread.is_alive()
-    assert result.get("status") == 404
+    response = result["response"]
+    assert response.status_code == 404, response.text
+    with committed_session_factory() as session:
+        assert session.scalar(select(Event.id).where(Event.id == request_id)) is None
+        assert session.get(Advice, advice_id) is not None

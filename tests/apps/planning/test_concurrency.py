@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, text
 
 from farmcore.apps.operations.seed import ensure_products
 from farmcore.apps.planning import resources, service
@@ -219,29 +220,27 @@ def test_two_sessions_past_the_pre_check_hit_the_database_overlap_guard(
         )
 
 
-class _PausedMachineReadRepo(ScopedRepository):
-    """Pause after the machine read, before the assignment insert."""
-
-    def __init__(self, *args, ready, release, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.ready = ready
-        self.release = release
-        self.paused = False
-
-    def get(self, model, id, *, scope):
-        row = super().get(model, id, scope=scope)
-        if model is resources.PlanningMachine and not self.paused:
-            self.paused = True
-            self.ready.set()
-            assert self.release.wait(timeout=10)
-        return row
+def _wait_for_query_lock(committed_session_factory, needle: str) -> None:
+    for _ in range(1000):
+        with committed_session_factory() as session:
+            blocked = session.scalar(
+                text(
+                    "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                    "AND query ILIKE :needle LIMIT 1"
+                ),
+                {"needle": f"%{needle}%"},
+            )
+        if blocked:
+            return
+        time.sleep(0.02)
+    raise AssertionError(f"no statement blocked on {needle!r}")
 
 
-def test_a_resource_deleted_between_the_read_and_flush_is_a_clean_conflict(
+def test_http_assignment_after_the_machine_is_deleted_is_a_clean_conflict(
     settings, committed_session_factory
 ):
     with committed_session_factory.begin() as session:
-        farm = Farm(name="Deleted machine race farm", props={"region": "FRI12"})
+        farm = Farm(name="HTTP deleted machine farm", props={"region": "FRI12"})
         session.add(farm)
         session.flush()
         ensure_owner_grant(session, farm)
@@ -261,13 +260,13 @@ def test_a_resource_deleted_between_the_read_and_flush_is_a_clean_conflict(
         set_replay(session, NOW, settings)
         repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "t", "t")
         machine = resources.create_machine(
-            repo, NOW, name="Vanishing sprayer", kind="sprayer", work_rate_ha_per_hour="2"
+            repo, NOW, name="HTTP vanishing sprayer", kind="sprayer", work_rate_ha_per_hour="2"
         )
         job = service.create(
             repo,
             NOW,
             "Europe/Paris",
-            name="Booking a vanishing machine",
+            name="HTTP booking race",
             parcel_ids=[parcel.id],
             assessment_id=advice.id,
             product_id=products["copper-contact"].id,
@@ -276,49 +275,38 @@ def test_a_resource_deleted_between_the_read_and_flush_is_a_clean_conflict(
         )
         farm_id, machine_id, job_id = farm.id, machine.id, job.id
 
-    ready, release = threading.Event(), threading.Event()
+    app = create_app(settings, session_factory=committed_session_factory)
+    headers = {"X-Admin-Token": settings.admin_token.get_secret_value()}
     result = {}
 
     def assign():
-        with committed_session_factory() as session:
-            farm_row = session.get(Farm, farm_id)
-            repo = _PausedMachineReadRepo(
-                session,
-                farm_id,
-                ensure_owner_grant(session, farm_row),
-                "race",
-                "test",
-                ready=ready,
-                release=release,
+        with TestClient(app, headers=headers) as browser:
+            result["response"] = browser.post(
+                f"/planning/jobs/{job_id}/assignments",
+                params={"farm": farm_id},
+                json={"expected_revision": 1, "kind": "machine", "resource_id": machine_id},
             )
-            job = service.locked(repo, job_id)
-            try:
-                service.set_assignments(
-                    repo,
-                    NOW,
-                    "Europe/Paris",
-                    job,
-                    expected_revision=1,
-                    changes={"machine": machine_id},
-                )
-            except Exception as exc:
-                result["error"] = exc
-            else:
-                result["ok"] = True
 
+    blocker = committed_session_factory()
+    blocker.execute(
+        delete(resources.PlanningMachine).where(resources.PlanningMachine.id == machine_id)
+    )
     thread = threading.Thread(target=assign)
     thread.start()
-    assert ready.wait(timeout=10)
-    with committed_session_factory.begin() as session:
-        from farmcore.apps.planning.models import PlanningMachine
-
-        machine = session.get(PlanningMachine, machine_id)
-        session.delete(machine)
-    release.set()
+    try:
+        _wait_for_query_lock(committed_session_factory, "insert into planning_job_assignment")
+    except BaseException:
+        blocker.rollback()
+        blocker.close()
+        thread.join(timeout=15)
+        raise
+    blocker.commit()
+    blocker.close()
     thread.join(timeout=15)
     assert not thread.is_alive()
-    assert isinstance(result.get("error"), service.ResourceConflict)
-    assert "no longer configured" in str(result["error"])
+    response = result["response"]
+    assert response.status_code == 409, response.text
+    assert "no longer configured" in response.json()["detail"]
     with committed_session_factory() as session:
         assert (
             session.scalar(
