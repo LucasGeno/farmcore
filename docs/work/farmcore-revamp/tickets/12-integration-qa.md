@@ -320,3 +320,103 @@ criterion is proven and the ticket status is `done`. New evidence:
 `.qa-scratch/qa12-tier3-scoped3.log`, `qa12-tier3-diffcover.log`,
 `qa12-tier3-coverage.xml`, `qa12-milestone-scope.diff`; earlier secrets/re-verification logs
 remain under `.qa-scratch/`.
+
+### Integrated acceptance follow-up — 2026-11-08
+
+Reviewed current `main` **`f4ed86661f4770fb8bcab0bbd794d56185ff3d6a`** in isolated
+`~/dev/farmcore-worktrees/integrated-acceptance-20261108`. No product changes were needed.
+This adds a real rendering-engine journey to the earlier HTTP/HTML fallback; it does not
+change the recorded pre-QA merge sequencing exception.
+
+Fresh checks, all substantial execution through `fleet-build --min-free-gib 30.15`:
+
+| Check | Actual result |
+|---|---|
+| `uv run pytest -q tests/apps/review tests/apps/planning tests/core/test_revamp_migrations.py -m 'not data and not slow'` | **189 passed**, no skips, 108.46s. Includes role/CSRF isolation, overlap/revision conflicts, separate-session booking/completion races, retry and rollback. |
+| `node --test tests/core/*.mjs tests/apps/fields/*.mjs` | **32 passed**, no failures/skips. |
+| Ruff lint/format of `src tests`; `alembic heads`; `git diff --check` | Pass; **552** formatted files, sole head **`planning_0003`**, clean whitespace. |
+| Visible Chromium **153.0.8010.12**, real HTTPS uvicorn, migrated/seeded disposable PostGIS database | **18/18 checks passed**; zero page exceptions and HTTP 5xx; desktop and 390px mobile screenshots inspected, mobile has no horizontal overflow. |
+
+The browser used ordinary member forms and default motion: anonymous HTML redirects to
+sign-in without private metadata, anonymous JSON is 403, owner signs in with installation-scoped
+Secure/HttpOnly/Strict cookies, assigns an existing advisor, requests review of saved
+assessment #1, and the advisor records an opinion visible on that exact assessment. The owner
+then creates a job from that assessment, configures a sprayer/operator and both availability
+windows, books them, replans from 08:00/90 minutes to 09:00/60 minutes, previews actual work at
+05:00 with 0.5 kg/ha, and explicitly confirms. The identical completion form retry returns
+303; refresh shows one completed job and the confirmed register renders. Fixture dates and
+weather are replayed demo inputs; no agronomic accuracy or current-weather claim is made.
+
+Independent database/inventory assertions after browser completion and retry:
+
+- Job #1 is `completed`, revision **4**, linked to confirmed operation #11. History is
+  `(1, created), (2, edited [booking]), (3, edited [replan]), (4, completed)`.
+- Original assessment row is byte-equal. The planning source retains assessment #1 and plan
+  revision **3**; the terminal history snapshot keeps both resource assignments.
+- Active bookings are released (**0** assignment rows). Exactly **one** new planning source
+  and one product quantity exist, including after retry.
+- Actual dose **0.5 kg/ha × 5.55 ha = 2.775 kg**. Inventory service reports used
+  **0 → 2.775 kg**, on hand **150 → 147.225 kg**, spray count **0 → 1**.
+- Final database `farmcore_qa12_walk_00aa14c0` was dropped; uvicorn was terminated and reaped
+  (exit -15). A separate catalog read found no remaining `farmcore_qa12_walk_*` databases.
+
+Local evidence: `/tmp/farmcore-acceptance-focused-20261108.xml`,
+`/tmp/farmcore-acceptance-integrated-20261108.json`,
+`/tmp/farmcore-acceptance-browser-20261108.json`,
+`/tmp/farmcore-acceptance-{planned,completed-mobile}-20261108.png`.
+Harness: `.qa-scratch/run_acceptance.py`, `.qa-scratch/qa12_helpers.py`, and
+`/tmp/playwright-test-farmcore-acceptance-20261108.js`; the first two are local ignored files,
+not permanent regression coverage. Final integrated JSON SHA-256:
+`c5f1b481c01b7d8dfa211b076c57b4052843a122193bacc024e8ca73be637c99`.
+
+Harness failures were retained as limitations, not product regressions: the default Playwright
+browser revision was absent, so the installed cached Chromium was selected explicitly;
+initial assertions expected API-style anonymous denial and unscoped cookie names, and were
+corrected to existing tested browser contracts. One immediate post-login navigation attempt
+reported Chromium `net::ERR_TOO_MANY_RETRIES`; waiting for navigation's network-idle terminal
+state produced the final complete pass. This is one successful final browser journey, not a
+claim of long-run browser stability. Preflight collected 3383 tests but reported unavailable
+`mypy`; no type-check pass is claimed. Full default/data/slow/Compose suites, live providers,
+production routing, and load tests were not rerun by this follow-up.
+
+#### Draft #50 reassessment
+
+[PR #50](https://github.com/LucasGeno/farmcore/pull/50) remains **open, draft and untouched**,
+head **`345008c31958aa3669685b1fdf3cd0e11e700cf5`**. It supplies operator-only private fleet
+inventory validation, `plan`, one-installation `apply`, ownership/credential journals and
+`status`. It is **not a prerequisite** for recommendation review, resource planning or
+completion. No hosting manager/customer portal is supplied.
+
+Its four CI jobs are green on that old head
+([run 42212570872](https://github.com/LucasGeno/farmcore/actions/runs/42212570872)); this does
+not verify the present integrated tree. Current main has **97** commits absent from the PR,
+and the PR has **11** absent from main. A disposable detached checkout merged the two without
+committing: **no conflicts**, tree **`2c3c01161b01a7d93e9301d2dee5696522332330`**,
+27 changed files relative to current main (4838 additions, 20 deletions). The merge retains
+`planning_0003` in the instance-test helper and has one Alembic head. PyYAML becomes a direct
+runtime dependency without a package-version change; the pyasn1 security pin already exists
+on main. Restore's role-catalog busy translation remains a separate behavior change.
+
+| Current-main + #50 check | Fresh result |
+|---|---|
+| `uv run pytest -q tests/core/test_fleet_plan.py tests/instances/test_data_guard.py tests/instances/test_private_bytes_guard.py` | **243 passed**, 25.21s. `/tmp/farmcore-hosting-composed-20261108.xml`. |
+| `uv run pytest -q tests/instances/test_fleet_apply.py -m 'not slow'` | **39 passed**, **45 deselected**, 43.48s. `/tmp/farmcore-hosting-state-20261108.xml`. Exercises bounded state/refusal contracts; it does not provision installations. |
+| Focused hosting Python lint, whitespace, Alembic head | Pass; **`planning_0003`**. |
+
+The first composition run reused main's editable-install environment and had **2 failed,
+241 passed**: audited subprocesses intentionally clear `PYTHONPATH`, so those two imported
+main's CLI without `fleet`. A dedicated environment installed from the composed checkout
+resolved the harness mistake; the exact 243-case rerun above passed. No source/assertion
+change or skip was used. No Compose provisioning, restore or full integrated CI was run
+for the new composition; old-head green CI is not substituted for those missing checks.
+
+Merge danger remains operator provisioning: persistent resources and partial state survive
+failure; state-root/Docker trust, image availability, external HTTPS routing/certificates and
+configured-limit rather than OOM-stress evidence remain as documented in #50. Fleet commands
+do not upgrade, move or delete installations. The bounded checks found no new blocker,
+but do not establish release readiness.
+
+**Next action:** keep #50 draft; update it by ordinary merge from current main, retain the
+current migration head, and rerun its complete Python/Node/image/slow-instance CI on that
+new head before a merge decision. This report changes neither #50 nor any deployment, live
+installation, production service, external-effects switch or paid-model configuration.
