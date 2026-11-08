@@ -950,3 +950,22 @@ def test_an_edit_changes_only_the_edited_fact(correction_case, committed_session
         assert edited == [(c.ids[COPPER], Decimal("1"))]
     else:
         assert after == before
+
+
+def test_form_cancel_redirects_and_a_bad_preview_renders_an_error(correction_case):
+    c = correction_case
+    pending = c.browser.post(c.endpoint, json={**c.body, "request_key": "form-cancel"})
+    assert pending.status_code == 200, pending.text
+    correction_id = pending.json()["id"]
+    cancelled = c.browser.post(
+        f"/operations/corrections/{correction_id}/cancel?farm={c.farm_id}",
+        data={"unused": "1"},
+        follow_redirects=False,
+    )
+    assert cancelled.status_code == 303
+    bad = c.browser.post(
+        f"/operations/logs/{c.log_id}/corrections/preview?farm={c.farm_id}",
+        data={"request_key": "bad-preview", "reason": "", "ts_start": "not-a-date"},
+    )
+    assert bad.status_code == 422
+    assert "correction_error" in bad.text or "Check parcels" in bad.text

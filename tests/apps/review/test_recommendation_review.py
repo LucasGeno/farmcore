@@ -567,3 +567,206 @@ def test_review_events_are_bounded_by_the_farm_clock(committed_session_factory, 
                 .count()
                 == 4
             )
+
+
+def test_review_validation_and_form_error_branches(committed_session_factory, settings):
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from farmcore.core.clock import set_replay
+    from farmcore.core.models.canonical import Event
+
+    farm_id, _, advice_id = _farm_with_assessment(committed_session_factory)
+    app = create_app(settings, session_factory=committed_session_factory)
+    params = {"farm": farm_id}
+    with (
+        TestClient(app, base_url="https://testserver") as owner,
+        TestClient(app, base_url="https://testserver") as advisor,
+    ):
+        assert _login(owner, login="owner").status_code == 303
+        assert _login(advisor, login="expert").status_code == 303
+        blank_evidence = owner.post(
+            "/review/versions",
+            params=params,
+            json={"overrides": {"season_gate": "2024-04-10"}, "evidence": "   "},
+            headers=_registered(owner, farm_id),
+        )
+        assert blank_evidence.status_code == 422
+        unsupported = owner.post(
+            "/review/propose-form",
+            params=params,
+            data={"parameter": "not_a_parameter", "value": "1"},
+            headers=_registered(owner, farm_id),
+        )
+        assert unsupported.status_code == 422
+        long_note = owner.post(
+            f"/review/assessments/{advice_id}/request-form",
+            params=params,
+            data={"note": "x" * 2001},
+            headers=_registered(owner, farm_id),
+            follow_redirects=False,
+        )
+        assert long_note.status_code == 303 and "error=" in long_note.headers["location"]
+        asked = owner.post(
+            f"/review/assessments/{advice_id}/request-form",
+            params=params,
+            data={"note": "Please check"},
+            headers=_registered(owner, farm_id),
+            follow_redirects=False,
+        )
+        assert asked.status_code == 303
+        with committed_session_factory() as session:
+            request_id = session.scalar(
+                select(Event.id).where(Event.kind == "advice.review_requested")
+            )
+        duplicate = owner.post(
+            f"/review/assessments/{advice_id}/request-form",
+            params=params,
+            data={"note": "Again"},
+            headers=_registered(owner, farm_id),
+            follow_redirects=False,
+        )
+        assert duplicate.status_code == 303 and "error=" in duplicate.headers["location"]
+        with TestClient(
+            app,
+            base_url="https://testserver",
+            headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+        ) as operator:
+            operator_answer = operator.post(
+                f"/review/requests/{request_id}/response",
+                params=params,
+                json={"opinion": "agree", "note": "Operator answer"},
+            )
+            assert operator_answer.status_code == 201
+        missing = advisor.post(
+            "/review/requests/999999/response",
+            params=params,
+            json={"opinion": "agree", "note": "No such request"},
+            headers=_registered(advisor, farm_id),
+        )
+        assert missing.status_code == 404
+        missing_form = advisor.post(
+            "/review/requests/999999/response-form",
+            params=params,
+            data={"opinion": "agree", "note": "No such request"},
+            headers=_registered(advisor, farm_id),
+        )
+        assert missing_form.status_code == 404
+
+        advisor.cookies.set("farmcore_tour", "1")
+        tour_answer = advisor.post(
+            f"/review/requests/{request_id}/response",
+            params=params,
+            json={"opinion": "agree", "note": "Tour"},
+            headers=_registered(advisor, farm_id),
+        )
+        assert tour_answer.status_code == 403
+        advisor.cookies.delete("farmcore_tour")
+
+        with TestClient(
+            app,
+            base_url="https://testserver",
+            headers={"X-Admin-Token": settings.admin_token.get_secret_value()},
+        ) as operator:
+            operator_ask = operator.post(
+                f"/review/assessments/{advice_id}/request",
+                params=params,
+                json={"note": "Operator check"},
+            )
+            assert operator_ask.status_code == 201
+
+    with committed_session_factory.begin() as session:
+        row = session.get(Advice, advice_id)
+        session.delete(row)
+        session.flush()
+        set_replay(session, NOW + timedelta(hours=1))
+    with TestClient(app, base_url="https://testserver") as owner:
+        assert _login(owner, login="owner").status_code == 303
+        listed = owner.get("/review/recommendations.json", params=params)
+        assert listed.status_code == 200
+        assert listed.json()["reviews"] == []
+
+
+def test_http_review_response_after_events_are_deleted_is_404(committed_session_factory, settings):
+    import threading
+    import time
+
+    from sqlalchemy import delete, select, text
+
+    from farmcore.apps.review import recommendations
+    from farmcore.core.access import ScopedRepository, ensure_owner_grant
+    from farmcore.core.clock import set_replay
+    from farmcore.core.models.canonical import Advice, Event, Farm
+    from tests.apps.share.conftest import make_parcel
+
+    with committed_session_factory() as session:
+        farm = Farm(name="HTTP deleted review event farm", props={})
+        session.add(farm)
+        session.flush()
+        ensure_owner_grant(session, farm)
+        parcel = make_parcel(session, farm, 1)
+        advice = Advice(
+            farm_id=farm.id,
+            parcel_id=parcel.id,
+            evaluated_at=NOW,
+            decision="wait",
+            reasons=[],
+            products=[],
+            props={"headline": "Stored check", "assessment_status": "evaluable"},
+        )
+        session.add(advice)
+        session.flush()
+        set_replay(session, NOW, settings)
+        repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "t", "t")
+        state = recommendations.request_check(
+            repo, NOW, advice, parcel, note="Check this", requested_by="owner"
+        )
+        request_id, farm_id, advice_id = state.request.id, farm.id, advice.id
+        session.commit()
+
+    app = create_app(settings, session_factory=committed_session_factory)
+    headers = {"X-Admin-Token": settings.admin_token.get_secret_value()}
+    result = {}
+
+    def answer():
+        with TestClient(app, headers=headers) as browser:
+            result["response"] = browser.post(
+                f"/review/requests/{request_id}/response",
+                params={"farm": farm_id},
+                json={"opinion": "agree", "note": "Checked"},
+            )
+
+    blocker = committed_session_factory()
+    blocker.execute(text("LOCK TABLE parcel IN ACCESS EXCLUSIVE MODE"))
+    blocker.execute(delete(Event).where(Event.id == request_id))
+    thread = threading.Thread(target=answer)
+    thread.start()
+    try:
+        for _ in range(1000):
+            with committed_session_factory() as watcher:
+                blocked = watcher.scalar(
+                    text(
+                        "SELECT 1 FROM pg_stat_activity WHERE wait_event_type = 'Lock' "
+                        "AND query ILIKE '%from parcel%' LIMIT 1"
+                    )
+                )
+            if blocked:
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("the response route never reached the parcel read")
+    except BaseException:
+        blocker.rollback()
+        blocker.close()
+        thread.join(timeout=15)
+        raise
+    blocker.commit()
+    blocker.close()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    response = result["response"]
+    assert response.status_code == 404, response.text
+    with committed_session_factory() as session:
+        assert session.scalar(select(Event.id).where(Event.id == request_id)) is None
+        assert session.get(Advice, advice_id) is not None

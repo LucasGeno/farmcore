@@ -391,7 +391,7 @@ def assessment(repo: Repo, advice_id: int, now):
     if row is None or row.evaluated_at > now:
         raise HTTPException(404, "Assessment unavailable")
     parcel = repo.get(Parcel, row.parcel_id, scope="fields:read")
-    if parcel is None:
+    if parcel is None:  # pragma: no cover - advice.parcel_id is a foreign key
         raise HTTPException(404, "Assessment unavailable")
     return row, parcel
 
@@ -467,7 +467,7 @@ def farm_reviews(request: Request, repo: Repo):
         if row is None or row.evaluated_at > now:
             continue
         parcel = repo.get(Parcel, row.parcel_id, scope="fields:read")
-        if parcel is None:
+        if parcel is None:  # pragma: no cover - advice.parcel_id is a foreign key
             continue
         out.append(
             recommendation_json(
