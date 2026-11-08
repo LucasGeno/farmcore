@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from farmcore.apps.advisor.engine import AdvisorConfig
-from farmcore.apps.review import parameters, recommendations, tools
+from farmcore.apps.review import parameters, recommendations, routes, tools
 from farmcore.apps.review.models import ParameterVersion
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.models.canonical import Advice
@@ -110,3 +110,12 @@ def test_saved_config_unverifiable_branches(session, farm, parcels, advice):
     }
     session.flush()
     assert service.saved_config(repo, advice) == (None, "unverifiable")
+
+
+def test_tour_request_is_refused_by_the_assigned_advisor_guard(session, farm):
+    from fastapi import HTTPException
+    from starlette.requests import Request
+
+    request = Request({"type": "http", "method": "POST", "headers": [], "state": {"tour": True}})
+    with pytest.raises(HTTPException, match="Assigned advisor required"):
+        routes.require_assigned_advisor(request, _repo(session, farm))

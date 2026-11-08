@@ -58,7 +58,7 @@ def test_an_irrigation_with_an_unknown_basis_is_refused(session, farm, parcels):
         service.check(draft, ctx)
 
 
-def test_advice_push_skips_while_external_effects_are_paused(session, farm, settings):
+def test_advice_push_skips_while_external_effects_are_paused(session, farm, settings, caplog):
     from pydantic import SecretStr
     from sqlalchemy import text
 
@@ -67,6 +67,39 @@ def test_advice_push_skips_while_external_effects_are_paused(session, farm, sett
     session.execute(text(f"ALTER DATABASE \"{name}\" SET farmcore.external_effects = 'paused'"))
     configured = settings.model_copy(update={"telegram_bot_token": SecretStr("synthetic-token")})
     try:
-        push_advice(JobContext(session=session, now=NOW, settings=configured, farm_ids=(farm.id,)))
+        with caplog.at_level("INFO", logger="farmcore.apps.chat.push"):
+            push_advice(
+                JobContext(session=session, now=NOW, settings=configured, farm_ids=(farm.id,))
+            )
     finally:
         session.execute(text(f'ALTER DATABASE "{name}" RESET farmcore.external_effects'))
+    assert "external effects are paused; advice push skipped" in caplog.text
+
+
+def test_the_bot_pause_loop_announces_once_and_resumes(
+    committed_session_factory, monkeypatch, capsys
+):
+    from sqlalchemy import text
+
+    from farmcore.apps.chat import commands
+
+    with committed_session_factory.begin() as session:
+        name = session.execute(text("SELECT current_database()")).scalar()
+        session.execute(text(f"ALTER DATABASE \"{name}\" SET farmcore.external_effects = 'paused'"))
+    calls = []
+
+    def fake_sleep(seconds):
+        calls.append(seconds)
+        with committed_session_factory.begin() as session:
+            session.execute(
+                text(f"ALTER DATABASE \"{name}\" SET farmcore.external_effects = 'enabled'")
+            )
+
+    monkeypatch.setattr(commands, "sleep", fake_sleep)
+    try:
+        commands._wait_for_effects(committed_session_factory)
+    finally:
+        with committed_session_factory.begin() as session:
+            session.execute(text(f'ALTER DATABASE "{name}" RESET farmcore.external_effects'))
+    assert calls == [commands.EFFECTS_RECHECK_SECONDS]
+    assert "External effects are paused" in capsys.readouterr().out

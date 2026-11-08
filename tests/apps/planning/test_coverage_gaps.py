@@ -513,13 +513,14 @@ def test_service_edit_branches(session, farm, parcels, products):
             expected_revision=3,
             changes={"parcel_ids": [parcels[1].id]},
         )
+    fresh = _job(session, farm, parcels[0], products["copper-contact"])
     with pytest.raises(IntegrityError):
         service.edit(
             repo,
             NOW,
             "Europe/Paris",
-            job,
-            expected_revision=3,
+            fresh,
+            expected_revision=1,
             changes={"scheduled_start": NOW + timedelta(hours=3), "notes": "x" * 10001},
         )
     session.rollback()

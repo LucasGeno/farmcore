@@ -5,17 +5,27 @@ Synthetic parcels and products only.
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
+from sqlalchemy import text as sql_text
 
 from farmcore.apps.chat.audit import DbAuditSink
 from farmcore.apps.chat.dto import Callback, Incoming
 from farmcore.apps.chat.extractor import DraftOperation, FakeExtractor, RegexExtractor
-from farmcore.apps.chat.handlers import ChatDeps, build_deps, on_callback, on_message
+from farmcore.apps.chat.handlers import (
+    REPLY_ALREADY_LOGGED,
+    REPLY_GONE,
+    ChatDeps,
+    build_deps,
+    on_callback,
+    on_message,
+)
 from farmcore.core.clock import set_replay
 from farmcore.core.manifest import JobContext, JobSpec, Manifest
 from farmcore.core.models.canonical import Event, Log, LogSource, Parcel, Product, Quantity
@@ -702,3 +712,139 @@ def test_a_callback_with_a_non_positive_log_id_is_gone(session_factory, session,
     d = deps(session_factory, settings, fake())
     assert on_callback(d, Callback(chat_id=CHAT, data="confirm:0")).text
     assert on_callback(d, Callback(chat_id=CHAT, data="cancel:0")).text
+
+
+class _BlockingExtractor(FakeExtractor):
+    """A real extractor boundary that pauses the handler after its early replay lookup."""
+
+    def __init__(self, draft):
+        super().__init__(draft)
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def extract(self, req):
+        self.started.set()
+        assert self.release.wait(timeout=10)
+        return super().extract(req)
+
+
+def _draft():
+    return DraftOperation(
+        parcels=["P1"], products=[COPPER], dose_value=2, dose_unit="kg/ha", adapter="fake"
+    )
+
+
+def test_a_handler_that_loses_the_creation_race_answers_already_logged(
+    committed_session_factory, settings
+):
+    with committed_session_factory() as session:
+        seed_farm(session, settings)
+    extractor = _BlockingExtractor(_draft())
+    result = {}
+
+    def slow_handler():
+        result["out"] = on_message(
+            deps(committed_session_factory, settings, extractor),
+            voice("copper 2 kg this morning", message_id=91),
+        )
+
+    thread = threading.Thread(target=slow_handler)
+    thread.start()
+    assert extractor.started.wait(timeout=10)
+    first = on_message(
+        deps(committed_session_factory, settings, fake(**_draft().model_dump())),
+        voice("copper 2 kg this morning", message_id=91),
+    )
+    confirmed = on_callback(
+        deps(committed_session_factory, settings, fake()),
+        Callback(chat_id=CHAT, data=first.buttons[0][1]),
+    )
+    assert confirmed.text.startswith("✅")
+    extractor.release.set()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert result["out"].text == REPLY_ALREADY_LOGGED
+
+
+def _wait_for_race_lock(committed_session_factory):
+    with committed_session_factory() as session:
+        for _ in range(200):
+            blocked = session.scalar(
+                sql_text(
+                    "SELECT 1 FROM pg_stat_activity WHERE application_name = 'chat-race-A' "
+                    "AND wait_event_type = 'Lock' LIMIT 1"
+                )
+            )
+            if blocked:
+                return
+            time.sleep(0.02)
+    raise AssertionError("the second callback never reached the row lock")
+
+
+def _pending_log(committed_session_factory, settings):
+    with committed_session_factory() as session:
+        seed_farm(session, settings)
+    out = on_message(
+        deps(committed_session_factory, settings, fake(**_draft().model_dump())),
+        voice("copper 2 kg this morning", message_id=92),
+    )
+    with committed_session_factory() as session:
+        row = session.scalar(select(Log).order_by(Log.id.desc()).limit(1))
+        return row.id, out.buttons[0][1]
+
+
+def _tagged_factory(committed_session_factory):
+    def factory():
+        session = committed_session_factory()
+        session.execute(sql_text("SET application_name = 'chat-race-A'"))
+        return session
+
+    return factory
+
+
+def test_a_callback_confirm_race_answers_already_logged(committed_session_factory, settings):
+    log_id, _confirm = _pending_log(committed_session_factory, settings)
+    result = {}
+    blocker = committed_session_factory()
+    log = blocker.get(Log, log_id, with_for_update=True)
+    assert log.status == "pending"
+
+    def race():
+        result["out"] = on_callback(
+            deps(_tagged_factory(committed_session_factory), settings, fake()),
+            Callback(chat_id=CHAT, data=f"confirm:{log_id}"),
+        )
+
+    thread = threading.Thread(target=race)
+    thread.start()
+    _wait_for_race_lock(committed_session_factory)
+    log.status = "done"
+    blocker.commit()
+    blocker.close()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert result["out"].text == REPLY_ALREADY_LOGGED
+
+
+def test_a_callback_cancel_race_answers_gone(committed_session_factory, settings):
+    log_id, _confirm = _pending_log(committed_session_factory, settings)
+    result = {}
+    blocker = committed_session_factory()
+    log = blocker.get(Log, log_id, with_for_update=True)
+    assert log.status == "pending"
+
+    def race():
+        result["out"] = on_callback(
+            deps(_tagged_factory(committed_session_factory), settings, fake()),
+            Callback(chat_id=CHAT, data=f"confirm:{log_id}"),
+        )
+
+    thread = threading.Thread(target=race)
+    thread.start()
+    _wait_for_race_lock(committed_session_factory)
+    blocker.delete(log)
+    blocker.commit()
+    blocker.close()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert result["out"].text == REPLY_GONE

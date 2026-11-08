@@ -347,7 +347,7 @@ def require_assigned_advisor(request: Request, repo: Repo) -> None:
         return
     principal = principal_for(request)
     if is_tour(request) or principal is None:
-        raise HTTPException(403, "Assigned advisor required")  # pragma: no cover - tour middleware
+        raise HTTPException(403, "Assigned advisor required")
     member = repo.session.scalar(
         select(FarmMembership.id)
         .join(LocalIdentity)

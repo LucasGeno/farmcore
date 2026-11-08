@@ -307,10 +307,16 @@ def edit(
     if not isinstance(new_start, datetime):
         new_start = job.scheduled_start
     new_end = new_start + timedelta(minutes=int(new_duration))  # type: ignore[arg-type]
-    if (old_start, old_duration) != (new_start, new_duration):
-        for assignment in repo.list(
-            PlanningJobAssignment, PlanningJobAssignment.job_id == job.id, scope=SCOPE
-        ):
+    time_changed = (old_start, old_duration) != (new_start, new_duration)
+    # Read the bookings before mutating the job: the access check flushes, and a later job
+    # constraint failure must reach the handler below, not escape through an autoflush query.
+    assignments = (
+        repo.list(PlanningJobAssignment, PlanningJobAssignment.job_id == job.id, scope=SCOPE)
+        if time_changed
+        else []
+    )
+    if time_changed:
+        for assignment in assignments:
             kind, resource_id = _resource_label(assignment)
             message = _booking_conflict(
                 repo,
@@ -353,11 +359,9 @@ def edit(
     if "notes" in changes:
         job.notes = str(changes["notes"])
 
-    if (old_start, old_duration) != (job.scheduled_start, job.duration_minutes):
+    if time_changed:
         end = job.scheduled_start + timedelta(minutes=job.duration_minutes)
-        for assignment in repo.list(
-            PlanningJobAssignment, PlanningJobAssignment.job_id == job.id, scope=SCOPE
-        ):
+        for assignment in assignments:
             assignment.starts_at = job.scheduled_start
             assignment.ends_at = end
             assignment.updated_by = repo.actor
@@ -372,7 +376,7 @@ def edit(
                     "A booked resource already has another job at the new time.",
                     current_revision,
                 ) from None
-            raise  # pragma: no cover - job constraints already fail at the query autoflush
+            raise
 
     job.revision += 1
     job.updated_by = repo.actor
@@ -606,13 +610,13 @@ def set_assignments(
                     existing.updated_by = repo.actor
                     existing.updated_at = now
             repo.session.flush()
-    except IntegrityError as exc:  # pragma: no cover - DB race fallback; pre-check covers normal
+    except IntegrityError as exc:
         if "ex_planning_job_assignment" in str(exc.orig):
             repo.session.rollback()
             raise ResourceConflict(
                 "That machine or operator is already booked for an overlapping time."
             ) from None
-        raise
+        raise  # pragma: no cover - non-overlap assignment constraint, not the race fallback
 
     job.revision += 1
     job.updated_by = repo.actor
