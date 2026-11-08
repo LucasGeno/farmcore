@@ -392,7 +392,22 @@ correct historical resource presentation. Canonical completion/stock/history ass
 hold. A separate fix uses the saved terminal revision for displayed resources and suppresses
 live feasibility/alternatives on completed and cancelled cards; planned-job warnings remain.
 The public-page regression reproduced both terminal cases before the fix (**2 failed**),
-then passed after the minimum change (**2 passed**). Fix PR and final verification follow.
+then passed after the minimum change (**2 passed**).
+
+Draft [fix PR #64](https://github.com/LucasGeno/farmcore/pull/64), frozen
+`087a12bbe9ef6a657a5b287a75679f8a3a1f2c86`, passes **191** focused planning/review/migration
+tests (96.17s), lint/format/whitespace and one-head checks. A new Chromium journey on that
+exact commit passes **19/19** checks, including saved resource names and absence of future
+booking/feasibility alternatives on the completed card; stock still changes exactly once by
+**2.775 kg**. The new database was dropped and server stopped. After screenshot:
+`/tmp/farmcore-terminal-history-completed-mobile-20261108.png`; it was inspected separately
+from the unchanged before screenshot. Exact-commit JSON:
+`/tmp/farmcore-terminal-history-integrated-20261108.json` (SHA-256
+`4d4dd53854a70f72fb446debdbec4c933a6782332cb7cec0ad8501f324d8c578`);
+regression XML `/tmp/farmcore-terminal-history-focused-20261108.xml`.
+Independent review and hosted CI remain pending; #64 is not merged, so the display finding
+remains open on current main. No migration, booking-release, completion, stock or authorization
+behavior was changed by this display fix.
 
 #### Draft #50 reassessment
 
