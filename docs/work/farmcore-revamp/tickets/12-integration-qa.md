@@ -324,7 +324,9 @@ remain under `.qa-scratch/`.
 ### Integrated acceptance follow-up — 2026-11-08
 
 Reviewed current `main` **`f4ed86661f4770fb8bcab0bbd794d56185ff3d6a`** in isolated
-`~/dev/farmcore-worktrees/integrated-acceptance-20261108`. No product changes were needed.
+`~/dev/farmcore-worktrees/integrated-acceptance-20261108`. The initial pass made no product
+changes; subsequent screenshot review found the terminal-card defect below. Acceptance is
+qualified until that fix is integrated.
 This adds a real rendering-engine journey to the earlier HTTP/HTML fallback; it does not
 change the recorded pre-QA merge sequencing exception.
 
@@ -335,7 +337,7 @@ Fresh checks, all substantial execution through `fleet-build --min-free-gib 30.1
 | `uv run pytest -q tests/apps/review tests/apps/planning tests/core/test_revamp_migrations.py -m 'not data and not slow'` | **189 passed**, no skips, 108.46s. Includes role/CSRF isolation, overlap/revision conflicts, separate-session booking/completion races, retry and rollback. |
 | `node --test tests/core/*.mjs tests/apps/fields/*.mjs` | **32 passed**, no failures/skips. |
 | Ruff lint/format of `src tests`; `alembic heads`; `git diff --check` | Pass; **552** formatted files, sole head **`planning_0003`**, clean whitespace. |
-| Visible Chromium **153.0.8010.12**, real HTTPS uvicorn, migrated/seeded disposable PostGIS database | **18/18 checks passed**; zero page exceptions and HTTP 5xx; desktop and 390px mobile screenshots inspected, mobile has no horizontal overflow. |
+| Visible Chromium **153.0.8010.12**, real HTTPS uvicorn, migrated/seeded disposable PostGIS database | **18/18 checks passed**; zero page exceptions and HTTP 5xx; desktop and 390px mobile screenshots captured, mobile has no horizontal overflow. See the terminal-card finding below. |
 
 The browser used ordinary member forms and default motion: anonymous HTML redirects to
 sign-in without private metadata, anonymous JSON is 403, owner signs in with installation-scoped
@@ -378,6 +380,19 @@ state produced the final complete pass. This is one successful final browser jou
 claim of long-run browser stability. Preflight collected 3383 tests but reported unavailable
 `mypy`; no type-check pass is claimed. Full default/data/slow/Compose suites, live providers,
 production routing, and load tests were not rerun by this follow-up.
+
+#### Terminal-card display finding
+
+Subsequent review of the completed-mobile screenshot found a **product defect**, not a harness
+failure: after completion releases active bookings, the card says no machine/operator is
+booked and shows future resource/capacity warnings and scheduling alternatives. Both resource
+names remain in the saved terminal revision, but the card renders only live assignments.
+The 18 browser assertions above did not assert this wording; their pass does not establish
+correct historical resource presentation. Canonical completion/stock/history assertions still
+hold. A separate fix uses the saved terminal revision for displayed resources and suppresses
+live feasibility/alternatives on completed and cancelled cards; planned-job warnings remain.
+The public-page regression reproduced both terminal cases before the fix (**2 failed**),
+then passed after the minimum change (**2 passed**). Fix PR and final verification follow.
 
 #### Draft #50 reassessment
 
