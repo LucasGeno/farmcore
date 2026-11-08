@@ -37,7 +37,7 @@ Use tdd through the spec's approved public seams. Observe one expected RED befor
 
 ## Verification
 
-- [x] `bash ~/.claude/scripts/gauntlet.sh --tier=3 --base=origin/main; node --test tests/core/*.mjs tests/apps/fields/*.mjs` — focused relevant regression passes. Adapt test directories only when real repo names differ; record exact commands.
+- [x] Scoped tier-3 command that actually passed on merged HEAD `ef11ff4`: `SCOPED_DIFF=$PWD/.qa-scratch/qa12-milestone-scope.diff bash .qa-scratch/gauntlet-scoped.sh --tier=3 --base=bf3ae8475470dcb531ec0bb100a1adf8f251a28f --suite-timeout=1800` through `fleet-build --min-free-gib 30.15 --wait 21600 --timeout 3600 --workdir $PWD`, plus `node --test tests/core/*.mjs tests/apps/fields/*.mjs` — verdict pass, scoped coverage 100% (4550 changed lines, 0 missing). Instructed: `bash ~/.claude/scripts/gauntlet.sh --tier=3 --base=origin/main; node --test tests/core/*.mjs tests/apps/fields/*.mjs`; the scoped run is the recorded adaptation.
 - [x] `uv run ruff check src tests` and `uv run ruff format --check src tests` — pass.
 - [x] `uv run alembic heads` — one head after integration.
 - [x] Auth/concurrency/public contracts: verify tier 3 with written failure model, adversarial cases and mutation or documented manual mutant fallback. Other behavior: tier 2, plus ticket-specific checks.
