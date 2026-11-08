@@ -616,7 +616,13 @@ def set_assignments(
             raise ResourceConflict(
                 "That machine or operator is already booked for an overlapping time."
             ) from None
-        raise  # pragma: no cover - non-overlap assignment constraint, not the race fallback
+        if "fk_planning_job_assignment_" in str(exc.orig):
+            # The resource was removed after the read but before this flush.
+            repo.session.rollback()
+            raise ResourceConflict(
+                "That machine or operator is no longer configured on this farm."
+            ) from None
+        raise  # pragma: no cover - other assignment constraints are pre-validated
 
     job.revision += 1
     job.updated_by = repo.actor

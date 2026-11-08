@@ -686,3 +686,113 @@ def test_review_validation_and_form_error_branches(committed_session_factory, se
         listed = owner.get("/review/recommendations.json", params=params)
         assert listed.status_code == 200
         assert listed.json()["reviews"] == []
+
+
+class _PausedSecondRequestRepo:
+    """A real scoped repository that pauses the route's second request lookup."""
+
+    def __init__(self, repo, *, ready, release):
+        self._repo = repo
+        self.ready = ready
+        self.release = release
+        self.calls = 0
+
+    def __getattr__(self, name):
+        return getattr(self._repo, name)
+
+    def execute(self, stmt, *, scope, resource):
+        self.calls += 1
+        if self.calls == 2:
+            self.ready.set()
+            assert self.release.wait(timeout=10)
+        return self._repo.execute(stmt, scope=scope, resource=resource)
+
+
+def test_advice_events_deleted_between_reads_answer_404(committed_session_factory, settings):
+    import threading
+    from types import SimpleNamespace
+
+    from fastapi import HTTPException
+    from sqlalchemy import delete
+    from starlette.requests import Request
+
+    from farmcore.apps.review import recommendations, routes
+    from farmcore.core.access import ScopedRepository, ensure_owner_grant
+    from farmcore.core.clock import set_replay
+    from farmcore.core.models.canonical import Advice, Event, Farm
+    from tests.apps.share.conftest import make_parcel
+
+    with committed_session_factory() as session:
+        farm = Farm(name="Deleted review event farm", props={})
+        session.add(farm)
+        session.flush()
+        ensure_owner_grant(session, farm)
+        parcel = make_parcel(session, farm, 1)
+        advice = Advice(
+            farm_id=farm.id,
+            parcel_id=parcel.id,
+            evaluated_at=NOW,
+            decision="wait",
+            reasons=[],
+            products=[],
+            props={"headline": "Stored check", "assessment_status": "evaluable"},
+        )
+        session.add(advice)
+        session.flush()
+        set_replay(session, NOW, settings)
+        repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "t", "t")
+        state = recommendations.request_check(
+            repo, NOW, advice, parcel, note="Check this", requested_by="owner"
+        )
+        request_id, farm_id = state.request.id, farm.id
+        session.commit()
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/review/requests/{request_id}/response",
+            "query_string": b"",
+            "headers": [(b"x-admin-token", settings.admin_token.get_secret_value().encode())],
+            "app": SimpleNamespace(state=SimpleNamespace(settings=settings)),
+            "state": {},
+        }
+    )
+    ready, release = threading.Event(), threading.Event()
+    result = {}
+
+    def answer():
+        with committed_session_factory() as session:
+            farm_row = session.get(Farm, farm_id)
+            repo = _PausedSecondRequestRepo(
+                ScopedRepository(
+                    session,
+                    farm_id,
+                    ensure_owner_grant(session, farm_row),
+                    "operator",
+                    "web",
+                ),
+                ready=ready,
+                release=release,
+            )
+            try:
+                routes.respond_to_request(
+                    request,
+                    repo,
+                    request_id,
+                    routes.CheckAnswer(opinion="agree", note="Checked"),
+                )
+            except HTTPException as exc:
+                result["status"] = exc.status_code
+            else:
+                result["ok"] = True
+
+    thread = threading.Thread(target=answer)
+    thread.start()
+    assert ready.wait(timeout=10)
+    with committed_session_factory.begin() as session:
+        session.execute(delete(Event).where(Event.id == request_id))
+    release.set()
+    thread.join(timeout=15)
+    assert not thread.is_alive()
+    assert result.get("status") == 404

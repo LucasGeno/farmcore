@@ -544,7 +544,7 @@ def respond_to_request(request: Request, repo: Repo, request_id: int, body: Chec
             note=body.note.strip(),
             reviewer=actor_name(request),
         )
-    except recommendations.ReviewNotFound as exc:  # pragma: no cover - route passes its row
+    except recommendations.ReviewNotFound as exc:
         raise HTTPException(404, str(exc)) from None
     except recommendations.ReviewConflict as exc:
         raise HTTPException(409, str(exc)) from None
