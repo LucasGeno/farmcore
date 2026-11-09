@@ -605,6 +605,10 @@ def set_assignments(
                         )
                     )
                 else:
+                    if kind == "machine":
+                        existing.machine_id = resource_id
+                    else:
+                        existing.operator_id = resource_id
                     existing.starts_at = start
                     existing.ends_at = end
                     existing.updated_by = repo.actor
