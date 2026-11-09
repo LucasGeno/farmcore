@@ -170,6 +170,27 @@ def test_period_washoff_uses_gt_expiry_for_each_targeted_product(
     assert advice.reason("powdery_pass").verdict == (
         "sulphur due" if washed or expired else "covered"
     )
+    assert ("washed_off" in advice.flags) is washed
+
+
+@pytest.mark.parametrize("age_days", [6, 8])
+def test_gt_powdery_cover_preserves_downy_washoff_flag(age_days):
+    sprayed = _local(BLOOM, 6)
+    now = sprayed + age_days * D
+    penetrant = ProductRef(name="penetrant-x", product_type="penetrant", targets=("powdery",))
+    rows = series(
+        _local(BLOOM - 20 * D, 0),
+        now + 6 * H,
+        t=18.0,
+        overrides=rain(sprayed + H, 30.0, 1),
+    )
+
+    advice = evaluate(rows, [Spray(ts=sprayed, products=(COPPER, SULPHUR, penetrant))], CONFIG, now)
+
+    assert advice.reason("protection_powdery").verdict == "protected"
+    assert advice.reason("powdery_pass").verdict == "covered"
+    assert advice.reason("protection_downy").verdict == "washed off"
+    assert "washed_off" in advice.flags
 
 
 # --- Sulphur-only pass ----------------------------------------------------------------------

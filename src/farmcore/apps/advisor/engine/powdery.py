@@ -33,6 +33,7 @@ from farmcore.apps.advisor.engine.config import AdvisorConfig
 from farmcore.apps.advisor.engine.types import (
     EXPIRED,
     REPLAY_FORECAST,
+    WASHED_OFF,
     Advice,
     HourlyObs,
     RuleResult,
@@ -269,6 +270,10 @@ def rule(ctx: EvalContext) -> None:
         advice.flags.discard(EXPIRED)
     if cover.expired:
         advice.flags.add(EXPIRED)
+    if not ctx.covers["downy"].washed_off:
+        advice.flags.discard(WASHED_OFF)
+    if cover.washed_off:
+        advice.flags.add(WASHED_OFF)
 
     due = cover.ended and not ctx.downy_due
     if not cover.ended:
