@@ -539,6 +539,10 @@ def _powdery(
         advice.flags.discard(EXPIRED)
     if cover.expired:
         advice.flags.add(EXPIRED)
+    if not covers["downy"].washed_off:
+        advice.flags.discard(WASHED_OFF)
+    if cover.washed_off:
+        advice.flags.add(WASHED_OFF)
 
     if not cover.ended:
         verdict = "covered"
