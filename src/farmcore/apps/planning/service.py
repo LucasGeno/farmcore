@@ -1082,6 +1082,16 @@ def job_json(
     product = repo.get(Product, job.product_id, scope="logs:read")
     parcels = _job_parcels(repo, job.id)
     assigned = _assigned_rows(repo, job.id)
+    saved_assignments = []
+    if job.status != "planned":
+        revisions = repo.list(
+            PlanningJobRevision,
+            PlanningJobRevision.job_id == job.id,
+            PlanningJobRevision.revision == job.revision,
+            scope=SCOPE,
+        )
+        if revisions:
+            saved_assignments = revisions[0].snapshot.get("assignments", [])
     assessed_at = now or job.updated_at
     completion = (job.props or {}).get(COMPLETION)
     if isinstance(completion, dict):
@@ -1151,6 +1161,7 @@ def job_json(
         "notes": job.notes,
         "availability": _state(repo, job.scheduled_start, tz),
         "assignments": assigned,
+        "saved_assignments": saved_assignments,
         "resource_assessment": offers.job_assessment(
             repo,
             job,
@@ -1160,7 +1171,9 @@ def job_json(
             parcels=parcels,
             product=product,
             forecast=forecast,
-        ),
+        )
+        if job.status == "planned"
+        else None,
         "created_by": job.created_by,
         "created_at": job.created_at,
         "updated_by": job.updated_by,

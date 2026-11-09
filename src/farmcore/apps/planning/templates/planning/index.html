@@ -128,13 +128,19 @@
     <div><dt class="inline font-semibold">Parcels:</dt> <dd class="inline">{% for p in job.parcels %}{{ p.alias }} {{ p.name }}{{ ', ' if not loop.last }}{% endfor %}</dd></div>
     <div><dt class="inline font-semibold">Product:</dt> <dd class="inline">{{ job.product.name if job.product else 'Unknown product' }}</dd></div>
     <div><dt class="inline font-semibold">Assessment:</dt> <dd class="inline">#{{ job.assessment.id }} · {{ job.assessment.decision }} · parameter version {{ job.assessment.config_version.id if job.assessment.config_version.id else 'unversioned' }} · {{ job.assessment.config_version.status }}</dd></div>
+    {% if job.status == 'planned' %}
     <div><dt class="inline font-semibold">Resources:</dt> <dd class="inline">{% if job.assignments %}{% for a in job.assignments %}{{ a.kind|capitalize }} {{ a.name }}{% if a.kind == 'machine' and a.work_rate_ha_per_hour %}{% elif a.kind == 'machine' %} (capacity unknown){% endif %}{{ ', ' if not loop.last }}{% endfor %}{% else %}No machine or operator booked{% endif %}</dd></div>
+    {% else %}
+    <div><dt class="inline font-semibold">Saved plan resources:</dt> <dd class="inline">{% if job.saved_assignments %}{% for a in job.saved_assignments %}{{ a.kind|capitalize }} {{ a.name }}{{ ', ' if not loop.last }}{% endfor %}{% else %}No resources recorded on the saved plan{% endif %}</dd></div>
+    {% endif %}
+    {% if job.status == 'planned' %}
     <div><dt class="inline font-semibold">Farmer availability:</dt> <dd class="inline">{{ 'Available' if job.availability.available else 'Marked Busy' }}{% if not job.availability.available %} · {{ pill('Unavailable day', 'warn') }}{% endif %}</dd></div>
     {% set ra = job.resource_assessment %}
     <div><dt class="inline font-semibold">Resource plan:</dt> <dd class="inline">{{ pill(ra.status|capitalize, 'ok' if ra.status == 'feasible' else 'bad' if ra.status == 'infeasible' else 'warn') }}{% if ra.weather %} · weather {{ ra.weather.status }}{% endif %}{% if ra.capacity %} · capacity {{ ra.capacity.status }}{% endif %}</dd></div>
+    {% endif %}
   </dl>
-  {% if ra.reasons %}<ul class="mt-2 grid gap-1 text-[15px]">{% for reason in ra.reasons %}<li class="text-wait">{{ reason }}</li>{% endfor %}</ul>{% endif %}
-  {% if ra.status != 'feasible' %}
+  {% if job.status == 'planned' and ra.reasons %}<ul class="mt-2 grid gap-1 text-[15px]">{% for reason in ra.reasons %}<li class="text-wait">{{ reason }}</li>{% endfor %}</ul>{% endif %}
+  {% if job.status == 'planned' and ra.status != 'feasible' %}
   {% if ra.offers.time %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another eligible time:</span> {{ ra.offers.time.start|local }}–{{ ra.offers.time.end|local }} · {{ ra.offers.time.reason }}</p>{% endif %}
   {% for offer in ra.offers.jobs %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another planned job:</span> {{ offer.name }} · {{ offer.start|local }} · {{ offer.reason }}</p>{% endfor %}
   {% for offer in ra.offers.machines %}{% if offer.status == 'available' %}<p class="mt-2 text-[15px]"><span class="font-semibold">Another configured machine:</span> {{ offer.name }} · {{ offer.reason }}</p>{% elif offer.status == 'unknown' %}<p class="mt-2 text-sm text-muted">{{ offer.name }}: {{ offer.reason }}</p>{% endif %}{% endfor %}
