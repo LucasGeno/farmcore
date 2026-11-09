@@ -7,7 +7,10 @@ assumed); copper wash-off at ≥ 20 mm since the spray. Event = 3-10 crossing on
 
 from datetime import timedelta
 
+import pytest
+
 from farmcore.apps.advisor.engine import AdvisorConfig, ProductRef, Spray, evaluate
+from farmcore.apps.advisor.engine.protection import latest_cover
 from tests.apps.advisor.engine.synth import merge, rain, series, utc
 
 H = timedelta(hours=1)
@@ -152,3 +155,44 @@ def test_powdery_cover_is_tracked_separately_from_downy():
     assert advice.decision == "spray"  # sulphur does not cover downy
     assert advice.reason("protection_powdery").verdict == "protected"
     assert advice.reason("protection_downy").verdict == "no cover"
+
+
+@pytest.mark.parametrize(
+    "age_hours,rain_hours,rain_gap,decision",
+    [
+        pytest.param(48, 20, False, "protected", id="contact-washed-off"),
+        pytest.param(192, 10, False, "protected", id="contact-expired"),
+        pytest.param(239, 10, False, "protected", id="before-penetrant-expiry"),
+        pytest.param(144, 10, True, "protected", id="historical-rain-gap"),
+        pytest.param(240, 10, False, "spray", id="exact-penetrant-expiry"),
+    ],
+)
+def test_mixed_contact_penetrant_cover(age_hours, rain_hours, rain_gap, decision):
+    now = utc(2024, 4, 17, 12)
+    sprayed = now - age_hours * H
+    spray = Spray(ts=sprayed, products=(COPPER, SYSTEMIC))
+    overrides = [rain(utc(2024, 4, 16), 1.0, rain_hours)]
+    if rain_gap:
+        # Outside the current disease lookback, but inside this cover's history.
+        overrides.append(rain(utc(2024, 4, 12), None, 1))
+    rows = _series(*overrides, end=now)
+
+    cover = latest_cover(rows, [spray], CONFIG, now, "downy")
+    advice = evaluate(rows, [spray], CONFIG, now)
+
+    assert advice.decision == decision
+    assert advice.assessment_status == "evaluable"
+    assert advice.reason("downy_3_10").verdict == "risk"
+    until = sprayed + timedelta(days=10)
+    expired = decision == "spray"
+    assert cover.until == until
+    assert cover.valid is not expired
+    assert cover.expired is expired
+    assert cover.washed_off is False
+    assert cover.data_gap is rain_gap
+    assert cover.rain_required is False
+    assert cover.mm_since_spray == rain_hours
+    assert advice.protected_until == (None if expired else until)
+    assert ("expired" in advice.flags) is expired
+    assert "washed_off" not in advice.flags
+    assert advice.reason("protection_downy").verdict == ("expired" if expired else "protected")
