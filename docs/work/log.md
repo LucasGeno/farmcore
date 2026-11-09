@@ -123,7 +123,7 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 Milestones 1–4 are done: tickets 01–12 are all `done`. Later work is planned privately and is not listed here.
 
 **Evidence**
-- Main `6689e17` (PRs #63–#69 on top of the revamp): [CI run 42648835905](https://github.com/LucasGeno/farmcore/actions/runs/42648835905) passed python, slow, node and docker. CI runs for #64–#68 were cancelled by the workflow's `cancel-in-progress`, so only this tip run verifies them.
+- Main `6689e17` (PRs #63–#69 on top of the revamp): [CI run 42648835905](https://github.com/LucasGeno/farmcore/actions/runs/42648835905) passed python, slow, node and docker. Push CI for #63–#68 was cancelled by the workflow's `cancel-in-progress`, so this tip run is the only main-branch run covering them; each PR had its own green CI per the coordinator.
 - Independent QA and integrated acceptance: [ticket 12](farmcore-revamp/tickets/12-integration-qa.md). The terminal-card defect it left open is fixed by #64 (`399e688`).
 - Revamp implementation: tickets 06–12 through PRs #45–#62; earlier tickets are linked from their own files.
 - Two private synthetic pilot installations upgraded to `6689e17` with `farmcore upgrade` (`review_0001` to `planning_0003`, pre-upgrade bundle written for each). Health reports `ok`; login page renders; anonymous reads are refused. No signed-in journey was run on them.
