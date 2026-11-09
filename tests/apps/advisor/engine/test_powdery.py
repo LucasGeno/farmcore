@@ -2,6 +2,7 @@
 and the sulphur interval it sets."""
 
 import random
+from dataclasses import replace
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -51,6 +52,48 @@ def _index(kinds: list[str]) -> int:
 
 def test_three_qualifying_days_reach_60():
     assert _index(["Q", "Q", "Q"]) == 60
+
+
+def test_identical_hourly_temperatures_preserve_gt_risk_regardless_of_order():
+    rows, now = _season(["Q", "Q", "Q"])
+    expected = gubler_thomas(rows, CONFIG, now)
+    # Other weather fields do not affect this temperature-only calculation.
+    duplicated = rows + [replace(o, rr1_mm=1.0) for o in rows]
+    random.Random(1).shuffle(duplicated)
+
+    assert gubler_thomas(duplicated, CONFIG, now) == expected
+    reason = evaluate(duplicated, [], CONFIG, now).reason("powdery_gubler_thomas")
+    assert reason.inputs["index"] == 60
+    assert reason.inputs["interval_days"] == 7
+    assert reason.inputs["incomplete_days"] == 0
+
+
+@pytest.mark.parametrize(
+    "gap", ["missing", "minutes", "seconds", "microseconds", "conflict", "null"]
+)
+def test_ambiguous_hourly_temperatures_cannot_establish_low_pressure(gap):
+    rows, now = _season(["Q", "Q", "Q"])
+    noon = {_local(BLOOM + i * D, 12) for i in range(3)}
+    selected = [o for o in rows if o.ts in noon]
+    if gap in ("conflict", "null"):
+        rows += [replace(o, t_c=36.0 if gap == "conflict" else None) for o in selected]
+        rows += selected  # Later valid duplicates cannot heal a conflict.
+    else:
+        rows = [o for o in rows if o.ts not in noon]
+        if gap != "missing":
+            rows += [replace(o, ts=o.ts + timedelta(**{gap: 1})) for o in selected]
+    expected = gubler_thomas(rows, CONFIG, now)
+    assert expected.incomplete_days == 3
+    assert not any(day.qualifies or day.hot for day in expected.days)
+    for ordered in (rows, list(reversed(rows))):
+        assert gubler_thomas(ordered, CONFIG, now) == expected
+        advice = evaluate(ordered, [], CONFIG, now)
+        reason = advice.reason("powdery_gubler_thomas")
+        assert advice.assessment_status == "limited"
+        assert "data_gap" in advice.flags
+        assert reason.verdict == "not evaluable"
+        assert reason.inputs["risk"] is None
+        assert reason.inputs["interval_days"] is None
 
 
 def test_before_60_a_failing_day_resets_to_zero():

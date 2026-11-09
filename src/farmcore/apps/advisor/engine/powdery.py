@@ -36,6 +36,7 @@ from farmcore.apps.advisor.engine.types import (
     Advice,
     HourlyObs,
     RuleResult,
+    floor_hour,
 )
 
 if TYPE_CHECKING:
@@ -108,7 +109,17 @@ def gubler_thomas(past: Sequence[HourlyObs], config: AdvisorConfig, now: datetim
     start, end = config.powdery_start.value, config.powdery_end.value
     today = now.astimezone(tz).date()
     by_day: dict[date, list[HourlyObs]] = defaultdict(list)
-    for obs in sorted((o for o in past if o.ts <= now), key=lambda o: o.ts):
+    by_hour: dict[datetime, HourlyObs] = {}
+    for obs in past:
+        # Assumed: only exact UTC hourly readings are usable; never round or interpolate.
+        if obs.ts > now or obs.ts != floor_hour(obs.ts):
+            continue
+        previous = by_hour.get(obs.ts)
+        # Conflicts (including known + null) stay unavailable regardless of input order.
+        by_hour[obs.ts] = (
+            replace(obs, t_c=None) if previous is not None and previous.t_c != obs.t_c else obs
+        )
+    for obs in sorted(by_hour.values(), key=lambda o: o.ts):
         by_day[obs.ts.astimezone(tz).date()].append(obs)
 
     index = 0
