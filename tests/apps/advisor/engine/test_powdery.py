@@ -138,6 +138,40 @@ def test_powdery_cover_in_the_period_lasts_the_gubler_thomas_interval():
     assert "expired" not in advice.flags
 
 
+@pytest.mark.parametrize("age_days", [6, 7, 8, 18])
+@pytest.mark.parametrize("rain_mm", [29.0, 30.0])
+@pytest.mark.parametrize("penetrant_targets", [None, ("powdery",), ("downy",)])
+def test_period_washoff_uses_gt_expiry_for_each_targeted_product(
+    age_days, rain_mm, penetrant_targets
+):
+    sprayed = _local(BLOOM, 6)
+    now = sprayed + age_days * D
+    products = (SULPHUR,)
+    if penetrant_targets is not None:
+        products += (
+            ProductRef(name="penetrant-x", product_type="penetrant", targets=penetrant_targets),
+        )
+    rows = series(
+        _local(BLOOM - 20 * D, 0),
+        now + 6 * H,
+        t=18.0,
+        overrides=rain(sprayed + H, rain_mm, 1),
+    )
+
+    advice = evaluate(rows, [Spray(ts=sprayed, products=products)], CONFIG, now)
+
+    # Existing model assumption: GT sets the lifetime of every powdery-targeting product.
+    expired = age_days >= 18
+    washed = rain_mm >= 30 and (expired or penetrant_targets != ("powdery",))
+    cover = advice.reason("protection_powdery")
+    assert cover.inputs["until"] == sprayed + 18 * D
+    assert cover.inputs["mm_since_spray"] == rain_mm
+    assert cover.verdict == ("washed off" if washed else "expired" if expired else "protected")
+    assert advice.reason("powdery_pass").verdict == (
+        "sulphur due" if washed or expired else "covered"
+    )
+
+
 # --- Sulphur-only pass ----------------------------------------------------------------------
 
 
