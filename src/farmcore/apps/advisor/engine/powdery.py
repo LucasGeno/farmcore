@@ -33,6 +33,7 @@ from farmcore.apps.advisor.engine.config import AdvisorConfig
 from farmcore.apps.advisor.engine.types import (
     EXPIRED,
     REPLAY_FORECAST,
+    WASHED_OFF,
     Advice,
     HourlyObs,
     RuleResult,
@@ -215,8 +216,16 @@ def period_cover(ctx: EvalContext, state: GTState) -> tuple[PowderyCover, RuleRe
     else:
         until = base.spray.ts + timedelta(days=interval)
         expired = ctx.now >= until
-        cover = PowderyCover(base.spray.ts, until, interval, base.washed_off, expired)
-        verdict = "washed off" if base.washed_off else ("expired" if expired else "protected")
+        # All targeted products use the GT lifetime here. The generic cover's wash-off
+        # flag also depends on generic expiry, so it cannot be reused for this interval.
+        washed = [
+            p.product_type == "contact" and base.mm_since_spray >= config.washoff_sulphur_mm.value
+            for p in base.spray.products
+            if "powdery" in p.targets
+        ]
+        washed_off = any(washed) if expired else all(washed)
+        cover = PowderyCover(base.spray.ts, until, interval, washed_off, expired)
+        verdict = "washed off" if washed_off else ("expired" if expired else "protected")
     cover = (
         replace(
             cover,
@@ -272,6 +281,10 @@ def rule(ctx: EvalContext) -> None:
         advice.flags.discard(EXPIRED)
     if cover.expired:
         advice.flags.add(EXPIRED)
+    if not ctx.covers["downy"].washed_off:
+        advice.flags.discard(WASHED_OFF)
+    if cover.washed_off:
+        advice.flags.add(WASHED_OFF)
 
     due = cover.ended and not ctx.downy_due
     if not cover.ended:

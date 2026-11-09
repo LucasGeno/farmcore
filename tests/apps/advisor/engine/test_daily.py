@@ -428,3 +428,41 @@ def test_every_daily_and_calendar_threshold_is_echoed_with_its_changed_value():
     echoed |= _assert_echo(hourly.threshold, hourly.source, changed, "simulate")
     nested = {n for n in echoed if "." in n}
     assert nested == set(AdvisorConfig.nested_threshold_names())
+
+
+@pytest.mark.parametrize("age_days", [6, 8])
+def test_daily_gt_powdery_cover_preserves_downy_washoff_flag(age_days):
+    copper = ProductRef(name="copper", product_type="contact", targets=("downy",))
+    sulphur = ProductRef(name="sulphur", product_type="contact", targets=("powdery",))
+    penetrant = ProductRef(name="penetrant-x", product_type="penetrant", targets=("powdery",))
+    sprayed = date(2024, 5, 28)
+    series = days(
+        date(2024, 4, 1),
+        date(2024, 6, 10),
+        overrides={date(2024, 5, 29): {"precip_mm": 30.0}},
+    )
+    spray = Spray(ts=_at6(sprayed), products=(copper, sulphur, penetrant))
+
+    advice = evaluate_daily(series, [spray], CONFIG, _at6(sprayed + timedelta(days=age_days)))
+
+    assert advice.reason("protection_powdery").verdict == "protected"
+    assert advice.reason("powdery_pass").verdict == "covered"
+    assert advice.reason("protection_downy").verdict == "washed off"
+    assert "washed_off" in advice.flags
+
+
+def test_daily_gt_powdery_cover_clears_washoff_flag_when_only_the_gt_cover_survives_rain():
+    sulphur = ProductRef(name="sulphur", product_type="contact", targets=("powdery",))
+    penetrant = ProductRef(name="penetrant-x", product_type="penetrant", targets=("powdery",))
+    sprayed = date(2024, 5, 28)
+    series = days(
+        date(2024, 4, 1),
+        date(2024, 6, 10),
+        overrides={date(2024, 5, 29): {"precip_mm": 30.0}},
+    )
+    spray = Spray(ts=_at6(sprayed), products=(sulphur, penetrant))
+
+    advice = evaluate_daily(series, [spray], CONFIG, _at6(sprayed + timedelta(days=8)))
+
+    assert advice.reason("protection_powdery").verdict == "protected"
+    assert "washed_off" not in advice.flags
