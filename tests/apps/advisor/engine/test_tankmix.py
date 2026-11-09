@@ -4,6 +4,8 @@ ended) in the powdery period — 1 pass, 2 treatments; sulphur stays out above 3
 from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from farmcore.apps.advisor.engine import AdvisorConfig, ProductRef, Spray, evaluate
 from tests.apps.advisor.engine.synth import merge, rain, series
 
@@ -112,6 +114,50 @@ def test_copper_window_opening_later_at_32c_names_the_sulphur_limit():
     assert "sulphur_temp" not in sulphur.inputs["closed_by"]
     assert "copper alone: sulphur blocked: T ≥ 32 °C" in sulphur.note
     assert "33 °C" in sulphur.note
+
+
+@pytest.mark.parametrize("temperature", [32.0, None], ids=["heat", "missing-temperature"])
+def test_tankmix_window_is_shortened_when_sulphur_becomes_blocked(temperature):
+    now = IN_PERIOD
+    extra = {now + k * H: {"t_c": temperature} for k in range(3, 81)}
+    advice = _downy_due(now, extra=extra)
+
+    assert advice.decision == "spray"
+    assert advice.next_window == (now, now + 3 * H)
+    assert _names(advice) == ["copper", "sulphur"]
+    assert (advice.passes, advice.treatments) == (1, 2)
+    assert advice.reason("tankmix").verdict == "tank-mix due: sulphur with copper"
+    copper = advice.reason("spray_window")
+    assert copper.inputs["sulphur"] is False
+    assert copper.inputs["next_window"] == (now, now + 72 * H)
+    sulphur = _sulphur_window(advice)
+    assert sulphur.inputs["next_window"] == advice.next_window
+    assert sulphur.verdict == "open"
+    assert sulphur.note == (
+        "copper + sulphur: 1 pass, 2 treatments; replay: observed weather used as forecast"
+        " (assumed: window_rain_next_max_mm, window_horizon_h)"
+    )
+
+
+def test_one_mild_hour_before_heat_leaves_the_full_copper_window():
+    now = IN_PERIOD
+    extra = {now + k * H: {"t_c": 32.0} for k in range(1, 81)}
+    advice = _downy_due(now, extra=extra)
+
+    assert advice.decision == "spray"
+    assert advice.next_window == (now, now + 72 * H)
+    assert _names(advice) == ["copper"]
+    assert (advice.passes, advice.treatments) == (1, 1)
+    assert advice.reason("tankmix").verdict == "tank-mix due: sulphur with copper"
+    sulphur = _sulphur_window(advice)
+    assert sulphur.inputs["next_window"] is None
+    assert sulphur.verdict == "closed"
+    assert sulphur.note == (
+        "copper alone: sulphur blocked: T ≥ 32 °C (window_sulphur_tmax_c), "
+        f"32 °C at {now + H:%Y-%m-%d %H:%M} UTC in copper's window; "
+        "replay: observed weather used as forecast"
+        " (assumed: window_rain_next_max_mm, window_horizon_h)"
+    )
 
 
 def test_powdery_pass_reason_does_not_claim_the_tank_mix_outcome():
