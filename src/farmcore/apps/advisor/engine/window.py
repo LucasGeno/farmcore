@@ -2,9 +2,9 @@
 
 The search runs on the hourly grid: `now` is floored to the UTC hour (the "current hour"), so a
 wall-clock `now` such as 12:30 or 12:00:07 reads the 12:00 row, as 12:00 does. Hour h is open
-when: ff(h) ≤ wind max; rr1(h) < rain-rate max; the rain over rows with ts ∈ (h, h + lookahead]
-(RR1 at hour H covers the hour before H) is complete and sums to < next-rain max; and, for
-sulphur, t(h) < sulphur max. Missing values close the hour.
+when: ff(h) ≤ wind max; rr1(h) < rain-rate max; the rain at every exact hour from h + 1
+through h + lookahead (RR1 at hour H covers the hour before H) is complete and sums to
+< next-rain max; and, for sulphur, t(h) < sulphur max. Missing values close the hour.
 
 The next window is the first run of ≥ min-open-hours consecutive open hours whose start hours lie
 in [current hour, current hour + horizon); its end is the first closed hour and never later than
@@ -58,10 +58,6 @@ class _Series:
         self.ts = [o.ts for o in self.rows]
         self.by_ts = {o.ts: o for o in self.rows}
 
-    def between(self, after: datetime, until: datetime) -> list[HourlyObs]:
-        """Rows with ts ∈ (after, until]."""
-        return self.rows[bisect_right(self.ts, after) : bisect_right(self.ts, until)]
-
     def any_in(self, after: datetime, until: datetime) -> bool:
         return bisect_right(self.ts, after) < bisect_right(self.ts, until)
 
@@ -79,8 +75,9 @@ def _hour(
     if obs.rr1_mm is None or obs.rr1_mm >= config.window_rr1_max_mm_h.value:
         closed.append("rain_rate")
     lookahead = config.window_rain_lookahead_h.value
-    ahead = [o.rr1_mm for o in s.between(h, h + lookahead * HOUR) if o.rr1_mm is not None]
-    rain_next = round(sum(ahead), 6) if len(ahead) >= lookahead else None
+    ahead = [s.by_ts.get(h + offset * HOUR) for offset in range(1, lookahead + 1)]
+    rain_values = [o.rr1_mm for o in ahead if o is not None and o.rr1_mm is not None]
+    rain_next = round(sum(rain_values), 6) if len(rain_values) == lookahead else None
     if rain_next is None or rain_next >= config.window_rain_next_max_mm.value:
         closed.append("rain_next")
     if sulphur and (obs.t_c is None or obs.t_c >= config.window_sulphur_tmax_c.value):
