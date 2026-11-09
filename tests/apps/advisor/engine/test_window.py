@@ -85,6 +85,19 @@ def test_row_at_now_is_not_counted_in_next_two_hours():
     assert advice.decision == "spray"
 
 
+def test_off_grid_rain_row_does_not_mask_a_missing_lookahead_hour():
+    observations = (
+        series(NOW, NOW)
+        + series(NOW + timedelta(minutes=30), NOW + timedelta(minutes=30))
+        + series(NOW + 2 * H, NOW + 2 * H)
+    )
+
+    window = spray_window(observations, CONFIG, NOW)
+
+    assert window.reason.inputs["rain_next_mm"] is None
+    assert "rain_next" in window.reason.inputs["closed_by"]
+
+
 def test_next_window_is_the_first_run_of_at_least_two_open_hours():
     # Closed 0–5 h, a lone open hour at +6 (closed +7), then open +8..+11, closed +12.
     closed = _calm_except([0, 1, 2, 3, 4, 5, 7, 12], ff_kmh=30.0)
