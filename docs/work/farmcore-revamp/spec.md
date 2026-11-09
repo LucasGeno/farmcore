@@ -1,7 +1,7 @@
 ---
 type: Change Spec
 title: FarmCore private, reviewed and actionable farm workflows
-status: approved
+status: done
 authorization: User requested milestones 1–4, specification, tickets and autonomous implementation on 2026-10-18.
 ---
 
@@ -58,14 +58,16 @@ Keep FastAPI, PostgreSQL/PostGIS, Jinja/HTMX, manifest apps, scoped repository a
 - Save the assessment, review, plan revision and immutable available weather receipt independently. Actual work may differ from the plan and records show that difference. Re-evaluation runs only after successful commit.
 
 ## Acceptance Criteria
-- [ ] M1: public/private/demo, farm-member, grant-recipient and admin role matrix passes across pages, exports, fragments and assistant.
-- [ ] M1: expiry/revoke/CSRF/foreign selector tests pass; denied accesses expose no farm or global audit details.
-- [ ] M1: live input retries preserve good runs; stale/missing data is explicit; replay cannot see future data.
-- [ ] M2: one parameter change yields a new scoped version; old assessment evidence remains unchanged.
-- [ ] M2: expert review and a request/check/response journey work end to end; parameter review and recommendation review remain distinct.
-- [ ] M3: plan persistence, revision conflicts, resource exclusion and alternatives are demonstrated without recording planned work as done.
-- [ ] M4: draft/confirm/cancel/correct/complete flows pass retry, rollback and cross-farm tests; stock and advice update once.
-- [ ] Full regression, migration, frontend and security verification passes with fresh evidence and independent QA.
+- [x] M1: public/private/demo, farm-member, grant-recipient and admin role matrix passes across pages, exports, fragments and assistant.
+- [x] M1: expiry/revoke/CSRF/foreign selector tests pass; denied accesses expose no farm or global audit details.
+- [x] M1: live input retries preserve good runs; stale/missing data is explicit; replay cannot see future data.
+- [x] M2: one parameter change yields a new scoped version; old assessment evidence remains unchanged.
+- [x] M2: expert review and a request/check/response journey work end to end; parameter review and recommendation review remain distinct.
+- [x] M3: plan persistence, revision conflicts, resource exclusion and alternatives are demonstrated without recording planned work as done.
+- [x] M4: draft/confirm/cancel/correct/complete flows pass retry, rollback and cross-farm tests; stock and advice update once.
+- [x] Full regression, migration, frontend and security verification passes with fresh evidence and independent QA.
+
+Verified by independent QA in [ticket 12](tickets/12-integration-qa.md), which found no product-level spec gap. One recorded exception: milestone PRs merged before QA by maintainer ruling on 2026-11-07, so QA ran on merged `main`. Closed 2026-11-09; see the [work log](../log.md).
 
 ## Testing Decisions
 Approved public seams selected under the user's explicit autonomous implementation authorization:
