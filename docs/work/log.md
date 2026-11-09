@@ -117,3 +117,21 @@ Independent spec QA: clarified coordinator-only migration authorship; owner memb
 ## 2026-10-21 — Isolated-installation pointer removed
 
 - The pointer README for the isolated-installations initiative was removed; this repository keeps no planning docs for it. Shipped operator docs: [docs/self-hosting.md](../self-hosting.md).
+
+## 2026-11-09 — FarmCore revamp closed
+
+Milestones 1–4 are done: tickets 01–12 are all `done`. Later work is planned privately and is not listed here.
+
+**Evidence**
+- Main `6689e17` (PRs #63–#69 on top of the revamp): [CI run 42648835905](https://github.com/LucasGeno/farmcore/actions/runs/42648835905) passed python, slow, node and docker. Push CI for #63–#68 was cancelled by the workflow's `cancel-in-progress`, so this tip run is the only main-branch run covering them; each PR had its own green CI per the coordinator.
+- Independent QA and integrated acceptance: [ticket 12](farmcore-revamp/tickets/12-integration-qa.md). The terminal-card defect it left open is fixed by #64 (`399e688`).
+- Revamp implementation: tickets 06–12 through PRs #45–#62; earlier tickets are linked from their own files.
+- Two private synthetic pilot installations upgraded to `6689e17` with `farmcore upgrade` (`review_0001` to `planning_0003`, pre-upgrade bundle written for each). Health reports `ok`; login page renders; anonymous reads are refused. No signed-in journey was run on them.
+
+**What did not ship or was not established**
+- Ticket 12's clause "PRs integrated only after QA" is not met: a recorded exception, by maintainer ruling on 2026-11-07.
+- Field or agronomic validity: acceptance used replayed demo inputs. No live-provider, load or long-run browser stability evidence. The browser acceptance harness is local and is not permanent regression coverage. `mypy` is not configured, so no type-check pass is claimed.
+- Spec non-goals remain out: production deployment, irrigation recommendations, soil trafficability, new crops and CAP filing.
+- Ticket 03's unticked verification boxes remain as recorded non-blocking drift (ST-4).
+- Open drafts, outside this sprint: #42 and #43 await independent review (#43 also needs conflicts resolved), and #50 stays draft until refreshed with full CI. Reasons are on each PR.
+- Moving `docs/work/farmcore-revamp/` to private planning, which AGENTS.md calls for now that QA has closed, is not done.
