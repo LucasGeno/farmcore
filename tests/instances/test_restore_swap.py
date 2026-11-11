@@ -189,18 +189,26 @@ def test_a_swap_kept_waiting_for_the_database_list_renames_nothing_and_says_so(
     assert again.exit_code == 0, again.output
 
 
-def test_a_restore_kept_from_creating_its_copy_says_nothing_was_restored(
-    restore_at, member_bundle, owner_key, server_list
+@pytest.mark.parametrize(
+    ("step", "catalog"),
+    [("create", None),
+     ("create_loader", "LOCK TABLE pg_catalog.pg_authid IN EXCLUSIVE MODE")],
+    ids=["CREATE DATABASE", "CREATE ROLE"],
+)  # fmt: skip
+def test_a_restore_kept_from_creating_its_copy_or_loader_says_nothing_was_restored(
+    restore_at, member_bundle, owner_key, server_list, step, catalog
 ):
-    """CREATE DATABASE cannot be stopped while it waits for `pg_database` (a signal waits for
-    it, review round 6): it gives up after the lock timeout, so a stop never ends in SIGKILL
-    and a left staging copy."""
+    """CREATE DATABASE and CREATE ROLE cannot be stopped while they wait for a catalog (a
+    signal waits for them, review round 6): each gives up after the lock timeout, so a stop
+    never ends in SIGKILL and a left staging copy or loader role."""
     key, _ = owner_key
+    if catalog:
+        server_list.statement = catalog  # the role catalog, held as another session's role step
 
-    result, _, env, untouched = restore_at(create=lambda _t: server_list.lock())
+    result, _, env, untouched = restore_at(**{step: lambda _t: server_list.lock()})
     server_list.unlock()
 
-    refused(result, "busy", "nothing restored")
+    refused(result, "busy", "busy catalog", "nothing restored")  # true for either catalog
     untouched.check()
     again = restore(member_bundle, key, env)
     assert again.exit_code == 0, again.output

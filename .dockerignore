@@ -2,6 +2,8 @@
 data/
 backups/
 secrets/
+**/fleet-inventory/
+**/fleet-state/
 .env
 .env.*
 # Per-installation env files (docs/self-hosting.md): farm-a.env, ...

@@ -103,10 +103,17 @@ def _hold_the_role_catalog(dbs, target: str):
     ids=["CREATE DATABASE", "CREATE ROLE"],
 )  # fmt: skip
 def test_a_stop_while_a_server_statement_runs_waits_for_it_then_removes_what_it_made(
-    restore_at, module_dbs, caught_signals, step, statement, hold
+    restore_at, module_dbs, caught_signals, monkeypatch, step, statement, hold
 ):
     """The server finishes a create its client gave up on: restore must wait for it and then
     drop what it made, not leave it behind."""
+    from farmcore.core.commands import migrate, restore
+
+    # The release below, not the lock timeout, must end the wait: the production bound (5 s,
+    # within compose's 10 s) outlasts this stop's detect, signal and release; the suite's
+    # 200 ms does not on a loaded host, which is a busy refusal, owned by test_restore_swap.
+    for module in (migrate, restore):
+        monkeypatch.setattr(module, "LOCK_TIMEOUT", "5s")
     holding: list = []
 
     def stop_while_waiting(target: str) -> None:

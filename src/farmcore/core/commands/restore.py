@@ -61,7 +61,7 @@ import typer
 from alembic import command
 from alembic.script import ScriptDirectory
 from alembic.util import CommandError
-from psycopg import sql
+from psycopg import errors, sql
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import DBAPIError
@@ -675,10 +675,15 @@ class Copy:
                     )
                     for s in self.sequences
                 ]
-                for i, statement in enumerate(statements):
-                    raw.execute(statement)
-                    if i == 0:
-                        self.loader_created = True
+                # `lock_databases` bounds every lock wait after it in this transaction, CREATE
+                # ROLE's for the role catalog too: past it, a busy server, as for `create`.
+                try:
+                    for i, statement in enumerate(statements):
+                        raw.execute(statement)
+                        if i == 0:
+                            self.loader_created = True
+                except errors.LockNotAvailable:
+                    raise ServerBusy() from None
         finally:
             engine.dispose()
 

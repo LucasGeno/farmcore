@@ -51,6 +51,7 @@ OUTCOMES = {
     "holds data": "already holds data",
     "incompatible": "incompatible",
     "busy": "server is busy",
+    "busy catalog": "kept a server catalog",
     "nothing restored": "nothing was restored",
     "restored": ") restored",
     "revert image": "set the previous image again",
