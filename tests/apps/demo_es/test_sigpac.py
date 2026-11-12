@@ -79,6 +79,60 @@ def test_rings_rejects_point_count_past_record_end():
         sigpac._rings(shape)
 
 
+def polygon(parts, points, starts, coords):
+    head = struct.pack("<i", 15) + b"\0" * 32 + struct.pack("<ii", parts, points)
+    return (
+        head
+        + struct.pack(f"<{parts}i", *starts)
+        + b"".join(struct.pack("<dd", x, y) for x, y in coords)
+    )
+
+
+def test_rings_splits_valid_rings_at_start_indices():
+    shape = polygon(2, 6, (0, 3), [(0, 0), (1, 0), (1, 1), (2, 2), (3, 2), (3, 3)])
+    assert (
+        sigpac._rings(shape)
+        == "MULTILINESTRING((0.0 0.0,1.0 0.0,1.0 1.0),(2.0 2.0,3.0 2.0,3.0 3.0))"
+    )
+
+
+def test_rings_rejects_first_start_not_zero():
+    shape = polygon(1, 3, (1,), [(0, 0), (1, 0), (1, 1)])
+    with pytest.raises(ValueError, match="ring start indices"):
+        sigpac._rings(shape)
+
+
+def test_rings_rejects_non_increasing_starts():
+    shape = polygon(2, 4, (0, 0), [(0, 0), (1, 0), (1, 1), (2, 1)])
+    with pytest.raises(ValueError, match="ring start indices"):
+        sigpac._rings(shape)
+
+
+def test_rings_rejects_start_past_point_count():
+    shape = polygon(2, 3, (0, 3), [(0, 0), (1, 0), (1, 1)])
+    with pytest.raises(ValueError, match="ring start indices"):
+        sigpac._rings(shape)
+
+
+def test_rings_allows_an_empty_polygon():
+    assert sigpac._rings(polygon(0, 0, (), [])) == "MULTILINESTRING EMPTY"
+
+
+def test_rings_rejects_points_without_a_ring():
+    shape = polygon(0, 2, (), [(0, 0), (1, 1)])
+    with pytest.raises(ValueError, match="points without a ring"):
+        sigpac._rings(shape)
+
+
+def test_archive_member_size_cap_is_enforced(tmp_path, monkeypatch):
+    path = tmp_path / "archive.zip"
+    with ZipFile(path, "w") as archive_file:
+        archive_file.writestr("47180_RECFE.dbf", "x" * 20)
+    monkeypatch.setattr(sigpac, "MAX_MEMBER_BYTES", 10)
+    with pytest.raises(ValueError, match="unexpectedly large"):
+        sigpac.read(path)
+
+
 def test_archive_missing_member_is_reported(tmp_path):
     path = tmp_path / "archive.zip"
     with ZipFile(path, "w") as archive_file:
