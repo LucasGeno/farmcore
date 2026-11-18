@@ -10,33 +10,25 @@ label it as such. available_at and fetched_at are wall time after receipt, never
 an inferred model issue time. Saved as-issued sources keep their existing semantics.
 """
 
-import asyncio
 import json
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
-from math import isfinite
 
-import httpx
 from sqlalchemy import func, or_, select
 
-from farmcore.apps.forecast._fetch_loop import FetchLoop
+from farmcore.apps.forecast import provider
 from farmcore.apps.forecast.models import ForecastRun
-from farmcore.apps.forecast.sources import (
-    UNITS,
-    VARIABLES,
-    Run,
-    _utc,
-    endpoint_kind,
-    forecast_url,
-    parse_hourly,
-    with_api_key,
-)
-from farmcore.apps.forecast.store import import_runs
+from farmcore.apps.forecast.provider import _finite
+from farmcore.apps.forecast.sources import UNITS, VARIABLES, Run
+from farmcore.apps.forecast.store import RECEIPT, import_runs
 from farmcore.core import tasks
 from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Asset, Farm
+from farmcore.core.weather.contract import Fetched, Point
+from farmcore.core.weather.store import receive
 from farmcore.db import session_scope
 
 logger = logging.getLogger(__name__)
@@ -45,77 +37,6 @@ JOB_NAME = "forecast.fetch_live"
 SOURCE = "open-meteo-live-receipt"
 CACHE = timedelta(hours=1)
 MAX_FARMS = 5
-
-
-def _finite(value) -> bool:
-    try:
-        return not isinstance(value, bool) and isfinite(float(value))
-    except (ValueError, TypeError, OverflowError):
-        return False
-
-
-def _validated_values(doc, now):
-    if not isinstance(doc, dict) or doc.get("utc_offset_seconds") != 0:
-        raise ValueError("UTC response required")
-    hourly, units = doc["hourly"], doc["hourly_units"]
-    if not isinstance(hourly, dict) or not isinstance(units, dict):
-        raise ValueError("hourly data and units must be objects")
-    for key, bound in (("latitude", 90), ("longitude", 180)):
-        value = doc.get(key)
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not _finite(value)
-            or abs(value) > bound
-        ):
-            raise ValueError("invalid provider location")
-    if not isinstance(hourly.get("time"), list):
-        raise ValueError("hourly time array required")
-    if any(not isinstance(t, str) for t in hourly["time"]):
-        raise ValueError("hourly timestamps must be strings")
-    times = [_utc(t) for t in hourly["time"]]
-    if not 1 <= len(times) <= 6 * 24 or any(
-        b - a != timedelta(hours=1) for a, b in zip(times, times[1:], strict=False)
-    ):
-        raise ValueError("bounded consecutive hourly values required")
-    if times[-1] <= now or times[-1] > now + timedelta(days=7):
-        raise ValueError("forecast coverage outside request")
-    for name in VARIABLES:
-        if name not in hourly:
-            continue  # missing variable is retained as missing, never zero
-        if (
-            not isinstance(hourly[name], list)
-            or units.get(name) != UNITS[name]
-            or len(hourly[name]) != len(times)
-        ):
-            raise ValueError("incompatible units or incomplete array")
-        for value in hourly[name]:
-            if value is not None and not _finite(value):
-                raise ValueError("non-finite weather value")
-            if value is not None and (
-                (name in ("precipitation", "wind_speed_10m", "wind_gusts_10m") and float(value) < 0)
-                or (name == "relative_humidity_2m" and not 0 <= float(value) <= 100)
-            ):
-                raise ValueError("weather value outside unit bounds")
-    values = parse_hourly(hourly)
-    if not values:
-        raise ValueError("empty forecast")
-    return values
-
-
-async def _fetch(url: str, timeout: float):
-    # A read timeout alone permits an endless drip. This deadline cancels header
-    # and body waits, then unwinds both contexts before the next farm can run.
-    async with asyncio.timeout(timeout):
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("GET", url) as response:
-                response.raise_for_status()
-                body = bytearray()
-                async for chunk in response.aiter_bytes(chunk_size=65_536):
-                    if len(body) + len(chunk) > 256_000:
-                        raise ValueError("response too large")
-                    body.extend(chunk)
-            return json.loads(body)
 
 
 def fetch_live(ctx: JobContext) -> None:
@@ -170,7 +91,8 @@ def fetch_farm(ctx: tasks.TaskContext) -> None:
             return
         location = _location(session, farm)
     attempted = datetime.now(UTC)
-    receipt = error = None
+    receipt = fetched = error = None
+    open_meteo = None
     try:
         if location is None:
             raise ValueError("location unavailable")
@@ -183,30 +105,13 @@ def fetch_farm(ctx: tasks.TaskContext) -> None:
         ):
             raise ValueError("invalid location")
         location = {key: float(location[key]) for key in ("latitude", "longitude")}
-        base_url = ctx.settings.open_meteo_base_url
-        request_url = forecast_url(
-            base_url,
-            {
-                **location,
-                "hourly": ",".join(VARIABLES),
-                "forecast_days": 6,
-                "timezone": "UTC",
-                "wind_speed_unit": "kmh",
-                "temperature_unit": "celsius",
-                "precipitation_unit": "mm",
-            },
-        )
-        api_key = (
-            ctx.settings.open_meteo_api_key.get_secret_value()
-            if ctx.settings.open_meteo_api_key is not None
-            else None
-        )
-        url = with_api_key(request_url, base_url, api_key)
         timeout = min(ctx.settings.forecast_fetch_timeout_seconds, ctx.attempt.remaining())
-        with asyncio.Runner(loop_factory=FetchLoop) as runner:
-            doc = runner.run(_fetch(url, timeout))
-        received = datetime.now(UTC)
-        values = _validated_values(doc, received)
+        open_meteo = provider.provider(ctx.settings, timeout)
+        fetched = open_meteo.fetch_forecast(
+            Point(location["latitude"], location["longitude"]), (), None
+        )
+        doc = json.loads(fetched.payload)
+        values = provider.legacy_values(fetched)
         coverage = {
             variable: {
                 "known": sum(v == variable for _, v, _ in values),
@@ -226,6 +131,7 @@ def fetch_farm(ctx: tasks.TaskContext) -> None:
                 sort_keys=True,
             ).encode()
         ).hexdigest()
+        received = fetched.fetched_at
         receipt = Run(
             source=SOURCE,
             issued_at=received,
@@ -242,8 +148,8 @@ def fetch_farm(ctx: tasks.TaskContext) -> None:
                 "fetched_at": received.isoformat(),
                 "requested_location": location,
                 "units": doc.get("hourly_units", UNITS),
-                "request_url": request_url,
-                "endpoint_kind": endpoint_kind(base_url),
+                "request_url": fetched.request.url,
+                "endpoint_kind": fetched.request.endpoint_kind,
                 "coverage": coverage,
                 "coverage_start": min(t for t, _, _ in values).isoformat(),
                 "coverage_end": max(t for t, _, _ in values).isoformat(),
@@ -253,7 +159,7 @@ def fetch_farm(ctx: tasks.TaskContext) -> None:
     except Exception as exc:  # any failure is recorded, never a silent re-plan every deadline
         error = type(exc).__name__
     try:
-        _publish(ctx, attempted, receipt, error)
+        _publish(ctx, attempted, receipt, error, (open_meteo, fetched))
     except Exception as exc:
         # The receipt could not be written: record that instead, under the same fence, so the
         # farm waits for the cache like any failed attempt.
@@ -263,8 +169,16 @@ def fetch_farm(ctx: tasks.TaskContext) -> None:
         _publish(ctx, attempted, None, type(exc).__name__)
 
 
-def _publish(ctx: tasks.TaskContext, attempted: datetime, receipt: Run | None, error) -> None:
-    """Write the receipt and health, or the failure, only if the attempt is still current."""
+def _publish(
+    ctx: tasks.TaskContext,
+    attempted: datetime,
+    receipt: Run | None,
+    error,
+    response: tuple[provider.OpenMeteo, Fetched] | tuple[None, None] = (None, None),
+) -> None:
+    """Write the receipt and health, or the failure, only if the attempt is still current. A new
+    receipt is written twice: the provider's response into the normalised schema (`receive`),
+    then the forecast run that links to it."""
     with session_scope(ctx.session_factory) as session:
         if not tasks.publish_if_current(session, ctx.attempt):
             return
@@ -283,6 +197,9 @@ def _publish(ctx: tasks.TaskContext, attempted: datetime, receipt: Run | None, e
                 )
                 .limit(1)
             )
+            if not duplicate:
+                weather = receive(session, response[0], response[1], farm_id=farm.id)
+                receipt = replace(receipt, props={**receipt.props, RECEIPT: weather.id})
             import_runs(session, farm.id, [] if duplicate else [receipt])
             health = {
                 "last_attempt": attempted.isoformat(),

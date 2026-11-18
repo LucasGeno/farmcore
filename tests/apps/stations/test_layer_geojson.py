@@ -12,8 +12,9 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
 from farmcore.core.seed import ensure_default_farm
+from tests.apps.stations.synth import observe
 
 NOW = datetime(2024, 4, 10, 4, 0, tzinfo=UTC)  # 06:00 Europe/Paris
 URL = "/stations/layer.geojson"
@@ -26,17 +27,15 @@ def _station(session) -> Asset:
 
 def _hours(session, asset: Asset, hours: dict[int, tuple]) -> None:
     """hours: offset from NOW -> (rr1_mm, t_c, rh_pct, ff_kmh); None = no reading."""
-    for offset, values in hours.items():
-        for variable, value in zip(VARIABLES, values, strict=True):
-            if value is not None:
-                session.add(
-                    Observation(
-                        asset_id=asset.id,
-                        ts=NOW + timedelta(hours=offset),
-                        variable=variable,
-                        value=value,
-                    )
-                )
+    observe(
+        session,
+        asset,
+        [
+            (NOW + timedelta(hours=offset), variable, value)
+            for offset, values in hours.items()
+            for variable, value in zip(VARIABLES, values, strict=True)
+        ],
+    )
     session.flush()
 
 

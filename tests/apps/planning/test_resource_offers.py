@@ -415,6 +415,7 @@ def test_an_alternate_machine_also_needs_open_weather(
     from sqlalchemy import update
 
     from farmcore.apps.forecast.models import ForecastValue
+    from farmcore.core.models.weather import WeatherForecast
 
     _forecast(session, farm)
     # Rain from 06:00 UTC closes the 06:00-07:30 job window through the two-hour lookahead.
@@ -424,6 +425,15 @@ def test_an_alternate_machine_also_needs_open_weather(
             ForecastValue.variable == "rr1_mm",
             ForecastValue.ts >= NOW + timedelta(hours=2),
             ForecastValue.ts < NOW + timedelta(hours=6),
+        )
+        .values(value=10.0)
+    )
+    session.execute(
+        update(WeatherForecast)
+        .where(
+            WeatherForecast.variable == "lwe_thickness_of_precipitation_amount",
+            WeatherForecast.valid_time >= NOW + timedelta(hours=2),
+            WeatherForecast.valid_time < NOW + timedelta(hours=6),
         )
         .values(value=10.0)
     )

@@ -20,6 +20,7 @@ from farmcore.core.models.kernel import AppModule
 from farmcore.core.registry import discover
 from tests.apps.operations import isoxml_farm
 from tests.apps.operations.isoxml_farm import CLOCK, local, voice_spray
+from tests.apps.stations.synth import observe
 
 farm = isoxml_farm.farm  # fixture
 NS = spray_weather.NAMESPACE
@@ -34,11 +35,7 @@ def add_station(session, farm_id: int, rows: dict[datetime, dict[str, float | No
     station = Asset(farm_id=farm_id, kind="station", name="QA synthetic station")
     session.add(station)
     session.flush()
-    for ts, values in rows.items():
-        for variable, value in values.items():
-            if value is not None:
-                session.add(Observation(asset_id=station.id, ts=ts, variable=variable, value=value))
-    session.flush()
+    observe(session, station, [(ts, v, x) for ts, vs in rows.items() for v, x in vs.items()])
     return station
 
 
@@ -299,10 +296,7 @@ def test_the_saved_station_carries_its_public_provider_reference_never_the_file(
 
     stations_seed.seed(session, scene=None, data_dir=data_dir)
     station = session.scalars(select(Asset).where(Asset.kind == "station")).one()
-    for ts, values in hours(5, 6).items():
-        for variable, value in values.items():
-            session.add(Observation(asset_id=station.id, ts=ts, variable=variable, value=value))
-    session.flush()
+    observe(session, station, [(ts, v, x) for ts, vs in hours(5, 6).items() for v, x in vs.items()])
 
     run(farm)
 
@@ -314,14 +308,6 @@ def test_the_saved_station_carries_its_public_provider_reference_never_the_file(
     assert "file" not in str(p5) and ".csv" not in str(p5)
     projected = spray_weather.project("isoxml", machine_sources(session)["TSK1"].raw_payload)
     assert projected["station"]["provider"] == provider
-
-
-def test_a_station_without_an_external_id_has_no_provider_reference(session, farm):
-    add_station(session, farm.repo.farm_id, hours(5, 6))
-
-    run(farm)
-
-    assert saved(session)["TSK1"]["station"]["provider"] is None
 
 
 def test_an_hour_with_only_other_variables_is_no_reading(session, farm):

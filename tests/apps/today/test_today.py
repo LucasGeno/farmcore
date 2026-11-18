@@ -17,10 +17,11 @@ from farmcore.apps.today.manifest import MANIFEST as TODAY
 from farmcore.core import jobs
 from farmcore.core.access import FARM_COOKIE
 from farmcore.core.manifest import Manifest, Widget
-from farmcore.core.models.canonical import AccessLog, Asset, Observation, Parcel
+from farmcore.core.models.canonical import AccessLog, Asset, Parcel
 from farmcore.main import create_app
 from tests.apps.advisor import scenes
 from tests.apps.advisor.scenes import confirm_spray, local
+from tests.apps.stations.synth import observe
 
 manifests, seeded, step = scenes.manifests, scenes.seeded, scenes.step
 
@@ -184,9 +185,7 @@ def test_stations_today_reads_the_station_only(client, session, seeded, step) ->
     regional = Asset(farm_id=station.farm_id, kind="regional", name="Organiser region")
     session.add(regional)
     session.flush()
-    session.add(
-        Observation(asset_id=regional.id, ts=local("2024-04-10 05:00"), variable="t_c", value=99.0)
-    )
+    observe(session, regional, [(local("2024-04-10 05:00"), "t_c", 99.0)])
     session.commit()
     after = client.get("/stations/today").text
     assert after == before

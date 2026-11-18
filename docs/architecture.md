@@ -52,6 +52,13 @@ database, a small core and installable apps, in the style of Odoo.
   zone comes from the offline `timezonefinder` data and the country from bundled Natural Earth
   boundaries; sea and border points ask the owner. Farm-scoped times use the farm's zone, with
   the installation `display_tz` as the fallback.
+- **Weather providers.** A weather source implements one contract (`core/weather/contract.py`)
+  and is declared by its app (`Manifest.weather_providers`); an installation offers the
+  providers of its enabled apps. Providers write one normalised schema (`weather_receipt`,
+  `weather_station`, `weather_observation`, `weather_forecast`: CF variables, licence and
+  attribution per receipt), which the station and forecast views and the advisor read. The
+  replayed Météo-France station and Open-Meteo are the two providers today; the legacy
+  `observation` and `forecast_value` rows are still written beside them until the contract step.
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
 

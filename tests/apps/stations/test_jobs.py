@@ -10,7 +10,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import func, select
 
+from farmcore.apps.stations import connector, service
 from farmcore.apps.stations.jobs import ingest_meteofrance
+from farmcore.core.access import repo_for_job
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import AccessLog, Asset, Observation
 from tests.apps.stations.synth import FILE, hourly, write_csv
@@ -159,3 +161,22 @@ def test_a_good_run_clears_an_earlier_error(session, seeded, ctx_at, tmp_path):
     ingest_meteofrance(ctx_at(NOW))
 
     assert "error" not in _station(session).props
+
+
+def test_an_installation_holding_only_legacy_rows_fills_the_normalised_schema_on_next_run(
+    session, seeded, ctx_at, tmp_path
+):
+    # Upgraded from before the provider port: the observation table holds hours the
+    # normalised schema (what the consumers read now) does not.
+    seeded()
+    write_csv(tmp_path, hourly(START, 240))
+    station = _station(session)
+    connector.upsert(session, station.id, [(START, "t_c", 10.0), (NOW, "t_c", 12.0)])
+    repo = repo_for_job(session, station.farm_id, "test")
+    assert service.load_hourly(repo, station.id, START, NOW) == []
+
+    ingest_meteofrance(ctx_at(NOW))
+
+    rows = service.load_hourly(repo, station.id, START, HORIZON)
+    assert (rows[0]["ts"], rows[-1]["ts"], len(rows)) == (START, HORIZON, 126)
+    assert len(_obs(session)) == 126 * 4  # the legacy rows are the same hours, not doubled

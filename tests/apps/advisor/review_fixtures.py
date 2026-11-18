@@ -2,9 +2,8 @@
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import insert
-
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
+from tests.apps.stations.synth import observe
 
 
 def complete_station(session, farm_id, now):
@@ -15,7 +14,7 @@ def complete_station(session, farm_id, now):
     values = []
     while ts <= now:
         for variable, value in (("rr1_mm", 0.0), ("t_c", 15.0), ("rh_pct", 70.0), ("ff_kmh", 5.0)):
-            values.append({"asset_id": station.id, "ts": ts, "variable": variable, "value": value})
+            values.append((ts, variable, value))
         ts += timedelta(hours=1)
-    session.execute(insert(Observation), values)
+    observe(session, station, values)
     return station

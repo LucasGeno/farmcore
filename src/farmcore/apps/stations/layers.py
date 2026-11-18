@@ -26,7 +26,7 @@ from sqlalchemy import func, select
 from farmcore.apps.stations import service
 from farmcore.core.access import Repo
 from farmcore.core.clock import get_clock
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
 from farmcore.web import context_url
 
 router = APIRouter()
@@ -49,17 +49,9 @@ def weather_layer(request: Request, repo: Repo) -> JSONResponse:
     station = service.station_for_farm(repo)
     if station is None:
         return _geojson([])
-    latest = repo.list(
-        Observation,
-        Observation.asset_id == station.id,
-        Observation.ts <= now,
-        scope=service.SCOPE,
-        order_by=Observation.ts.desc(),
-        limit=1,
-    )
-    if not latest:
+    at = service.latest_reading(repo, station.id, now)
+    if at is None:
         return _geojson([])
-    at = latest[0].ts
     zone = ZoneInfo(settings.display_tz)
     row = service.load_hourly(repo, station.id, at, at)[0]
     window = [

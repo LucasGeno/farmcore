@@ -3,13 +3,20 @@
 `register` checks the contract once, up front: every method is there and `licence()` and
 `capabilities()` answer with the contract's types. A name is taken once; registering a second
 provider under it raises instead of replacing the first.
+
+`installed(manifests, settings)` is the registry of an installation: the providers the given
+(active) apps declare in `Manifest.weather_providers`, each built from the settings (its data
+directory, endpoint and credentials). A disabled app's provider is not offered; the core imports
+no app module except through those declarations.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
+from farmcore.core.manifest import Manifest, import_string
 from farmcore.core.weather.contract import Capabilities, Licence, WeatherProvider
+from farmcore.settings import Settings
 
 
 class ProviderError(ValueError):
@@ -42,4 +49,9 @@ class Registry:
         return iter(self._providers.values())
 
 
-PROVIDERS = Registry()
+def installed(manifests: Iterable[Manifest], settings: Settings) -> Registry:
+    registry = Registry()
+    for manifest in manifests:
+        for factory in manifest.weather_providers:
+            registry.register(import_string(factory)(settings))
+    return registry

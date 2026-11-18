@@ -236,6 +236,10 @@ def fetch_single_runs(
 ) -> tuple[int, int]:
     """Save the 00Z and 12Z runs of every day in [first, last] to `out` (one file per run);
     a run already saved is skipped. Returns (saved, skipped)."""
+    from farmcore.apps.forecast.provider import OpenMeteo  # the provider builds on this module
+    from farmcore.core.weather.contract import Point
+
+    provider = OpenMeteo(base_url=base_url, single_runs_base_url=base_url, api_key=api_key)
     out.mkdir(parents=True, exist_ok=True)
     saved = skipped = 0
     day = first
@@ -246,14 +250,14 @@ def fetch_single_runs(
             if path.exists():
                 skipped += 1
                 continue
-            request_url = single_run_url(run, latitude, longitude, base_url)
+            fetched = provider.fetch_forecast(Point(latitude, longitude), (SINGLE_RUNS_MODEL,), run)
             doc = {
                 "source": "open-meteo single-runs",
                 "model": SINGLE_RUNS_MODEL,
                 "run": f"{run:%Y-%m-%dT%H:%M}",
-                "request_url": request_url,
-                "endpoint_kind": endpoint_kind(base_url),
-                "response": get_json(with_api_key(request_url, base_url, api_key)),
+                "request_url": fetched.request.url,
+                "endpoint_kind": fetched.request.endpoint_kind,
+                "response": json.loads(fetched.payload),
             }
             path.write_text(json.dumps(doc, ensure_ascii=False) + "\n", encoding="utf-8")
             saved += 1

@@ -449,6 +449,8 @@ class Manifest:
     record_types: tuple[RecordType, ...] = ()  # facts the Record sheet can capture
     draft_kinds: tuple[DraftKind, ...] = ()  # validator + review fragment per draft kind
     attention: str = ""  # provider "module:func" returning at most N home-strip items
+    # Weather providers (core.weather): "module:factory", factory(settings) -> WeatherProvider.
+    weather_providers: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         keys = [view.key for view in self.parcel_views]

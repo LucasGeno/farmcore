@@ -246,6 +246,7 @@ def test_switching_to_replay_mid_fetch_publishes_nothing(
         rows = session.execute(
             text(
                 "SELECT coalesce(json_agg(r ORDER BY r.id), '[]')::text FROM forecast_run r "
+                "UNION ALL SELECT count(*)::text FROM weather_receipt "
                 "UNION ALL SELECT props::text FROM farm WHERE id = :f"
             ),
             {"f": farm},

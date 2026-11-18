@@ -18,6 +18,7 @@ from sqlalchemy import select
 from farmcore.apps.forecast import sources
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.core import clock
+from farmcore.core.models.weather import WeatherReceipt
 from farmcore.settings import Settings
 from tests.apps.forecast.conftest import fetch_live_now, provider_client
 
@@ -83,6 +84,16 @@ def test_customer_base_url_sends_key_and_records_kind_without_the_key(
     assert row is not None
     assert row.props["endpoint_kind"] == "customer"
     assert key not in json.dumps(row.props)
+    # The provider's normalised receipt: the keyless request, its endpoint kind, CC BY 4.0.
+    receipt = session.scalar(select(WeatherReceipt).where(WeatherReceipt.farm_id == farm.id))
+    assert receipt.request["url"] == row.props["request_url"]
+    assert receipt.request["endpoint_kind"] == "customer"
+    assert (receipt.provider, receipt.licence, receipt.redistribution) == (
+        "open-meteo",
+        "CC-BY-4.0",
+        True,
+    )
+    assert key not in json.dumps(receipt.request)
     assert key not in client.get("/forecast/home-weather", params={"farm": farm.id}).text
 
     from farmcore.core.models.canonical import Farm

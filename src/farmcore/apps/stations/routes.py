@@ -17,7 +17,7 @@ from farmcore.apps.stations import conditions, service
 from farmcore.apps.stations.connector import REPLAY_HORIZON, VARIABLES
 from farmcore.core.access import Repo, ScopedRepository
 from farmcore.core.clock import ReplayClock, get_clock
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
 from farmcore.web import LOCAL_FORMAT, render
 
 router = APIRouter()
@@ -37,15 +37,7 @@ def _span(delta: timedelta) -> str:
 
 def _newest_at_or_before(repo: ScopedRepository, station: Asset, now: datetime) -> datetime | None:
     """The newest stored reading hour of `station` at or before `now`, or None."""
-    rows = repo.list(
-        Observation,
-        Observation.asset_id == station.id,
-        Observation.ts <= now,
-        scope=service.SCOPE,
-        order_by=Observation.ts.desc(),
-        limit=1,
-    )
-    return rows[0].ts if rows else None
+    return service.latest_reading(repo, station.id, now)
 
 
 def _health(repo: ScopedRepository, station: Asset, now: datetime) -> dict[str, Any]:
