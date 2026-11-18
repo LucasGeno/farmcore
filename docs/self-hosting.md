@@ -229,14 +229,16 @@ call is logged with its payload on `/chat/`.
 ## 6. Open-Meteo weather data (optional)
 
 Live weather and the saved single-run archive request [Open-Meteo](https://open-meteo.com/)
-directly. The free public API is for **non-commercial use only**; Open-Meteo asks installations
-above 10,000 requests per day to contact them, and commercial use needs one of two lawful routes:
+directly. [Open-Meteo's terms](https://open-meteo.com/en/terms) limit the free API to fewer than
+10,000 calls per day, 5,000 per hour and 600 per minute, and to **non-commercial use**.
+Commercial use, or more calls, needs one of two lawful routes:
 
 1. **Customer API with a key.** Set `OPEN_METEO_API_KEY` and point both base URLs at the customer
-   hosts: `OPEN_METEO_BASE_URL=https://customer-api.open-meteo.com` and
-   `OPEN_METEO_SINGLE_RUNS_BASE_URL=https://customer-single-runs-api.open-meteo.com`. The key is
-   sent as the `apikey` query parameter and is never logged, stored in a receipt or shown in the
-   UI. Rotate it in `.env` and restart; no FarmCore data changes.
+   hosts. `OPEN_METEO_BASE_URL` is `https://customer-api.open-meteo.com`; take the Single Runs
+   hostname for `OPEN_METEO_SINGLE_RUNS_BASE_URL` from your Open-Meteo customer dashboard. The
+   key is sent as the `apikey` query parameter only to a `customer-` host and is never logged,
+   stored in a receipt or shown in the UI. A key requires `https` base URLs; startup refuses a
+   key combined with `http`. Rotate it in `.env` and restart; no FarmCore data changes.
 2. **Self-hosted server.** The optional compose profile runs the upstream Open-Meteo image as a
    separate container, with a data volume:
 
@@ -248,10 +250,12 @@ above 10,000 requests per day to contact them, and commercial use needs one of t
    ```
 
    The upstream server is licensed **AGPL-3.0**. FarmCore only names its published container
-   image (default `ghcr.io/open-meteo/open-meteo:latest`); it does not include or modify that
-   code, so the AGPL obligations attach to that separate container, if you redistribute it.
-   Open-Meteo recommends 8 GB of memory (16 GB preferred) and at least 100 GB of storage; the
-   container reads the public open-data distribution and caches locally
+   image (pinned default `ghcr.io/open-meteo/open-meteo:1.8.0`, override with
+   `OPEN_METEO_IMAGE`); it does not include or modify that code, so the AGPL obligations attach
+   to that separate container, if you redistribute it. If you modify the server and make it
+   available over a network, AGPL-3.0 §13 also requires offering its corresponding source to
+   those users. Open-Meteo recommends 8 GB of memory (16 GB preferred) and at least 100 GB of
+   storage; the container reads the public open-data distribution and caches locally
    (`CACHE_SIZE`, default `8GB`).
 
 Both base-URL settings take a scheme and host (and an optional path prefix); FarmCore appends
@@ -268,10 +272,11 @@ routing alias; the server itself accepts `run=` and stores each run's full horiz
 [API routing](https://github.com/open-meteo/open-meteo/blob/main/Sources/App/Controllers/ForecastapiController.swift),
 [self-hosting guide](https://github.com/open-meteo/open-meteo/blob/main/docs/getting-started.md),
 [Single Runs docs](https://open-meteo.com/en/docs/single-runs-api)). A self-hosted instance can
-only serve runs present in its data directory or in the open-data window it reads; it does not
-hold the hosted service's whole archive. Run `farmcore forecast fetch` (or your own archiver) for
-the runs you need, and keep them under `DATA_DIR`. If you would rather not operate that data,
-leave `OPEN_METEO_SINGLE_RUNS_BASE_URL` on the public or customer Single Runs API.
+only serve runs still present in its data directory or in the open-data window it reads; it does
+not hold the hosted service's whole archive. While a run is available there, fetch it from the
+self-hosted server (or your own archiver); FarmCore keeps its own JSON copies under `DATA_DIR`.
+If you would rather not operate that data, leave `OPEN_METEO_SINGLE_RUNS_BASE_URL` on the public
+or customer Single Runs API.
 
 ## Backups and restore
 

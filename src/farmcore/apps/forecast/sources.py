@@ -52,9 +52,12 @@ def forecast_url(base_url: str, params: Mapping[str, object]) -> str:
     return f"{base_url.rstrip('/')}{FORECAST_PATH}?{urlencode(params, safe=':,')}"
 
 
-def with_api_key(url: str, api_key: str | None) -> str:
-    """Append the customer API key; the caller keeps the keyless URL for provenance."""
-    return f"{url}&apikey={quote(api_key, safe='')}" if api_key else url
+def with_api_key(url: str, base_url: str, api_key: str | None) -> str:
+    """Append the customer API key only to a customer endpoint; keep it off public and
+    self-hosted hosts. The caller keeps the keyless URL for provenance."""
+    if api_key and endpoint_kind(base_url) == "customer":
+        return f"{url}&apikey={quote(api_key, safe='')}"
+    return url
 
 
 SINGLE_RUNS = "open-meteo-single-runs"
@@ -250,7 +253,7 @@ def fetch_single_runs(
                 "run": f"{run:%Y-%m-%dT%H:%M}",
                 "request_url": request_url,
                 "endpoint_kind": endpoint_kind(base_url),
-                "response": get_json(with_api_key(request_url, api_key)),
+                "response": get_json(with_api_key(request_url, base_url, api_key)),
             }
             path.write_text(json.dumps(doc, ensure_ascii=False) + "\n", encoding="utf-8")
             saved += 1

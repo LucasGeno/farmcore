@@ -128,7 +128,7 @@ services:
   # OPEN_METEO_SINGLE_RUNS_BASE_URL=http://openmeteo:8080 in .env (docs/self-hosting.md).
   # The upstream image caches model data from the Open-Meteo open-data distribution.
   openmeteo:
-    image: ${OPEN_METEO_IMAGE:-ghcr.io/open-meteo/open-meteo:latest}
+    image: ${OPEN_METEO_IMAGE:-ghcr.io/open-meteo/open-meteo:1.8.0}
     profiles: ["openmeteo"]
     restart: unless-stopped
     environment:

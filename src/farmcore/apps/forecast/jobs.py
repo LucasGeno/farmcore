@@ -173,7 +173,7 @@ def fetch_live(ctx: JobContext) -> None:
                 if ctx.settings.open_meteo_api_key is not None
                 else None
             )
-            url = with_api_key(request_url, api_key)
+            url = with_api_key(request_url, base_url, api_key)
             with asyncio.Runner(loop_factory=FetchLoop) as runner:
                 doc = runner.run(_fetch(url, ctx.settings.forecast_fetch_timeout_seconds))
             received = datetime.now(UTC)
@@ -242,6 +242,7 @@ def fetch_live(ctx: JobContext) -> None:
             health = {"last_attempt": attempted.isoformat(), "last_success": received.isoformat()}
         except (
             httpx.HTTPError,
+            httpx.InvalidURL,
             ValueError,
             KeyError,
             TypeError,

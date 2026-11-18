@@ -91,11 +91,27 @@ class Settings(BaseSettings):
     @classmethod
     def _http_url_without_credentials(cls, v: str) -> str:
         url = urlsplit(v)
+        try:
+            port = url.port
+        except ValueError:
+            raise ValueError("must use a numeric port") from None
         if url.scheme not in ("http", "https") or not url.hostname:
             raise ValueError("must be an http(s) URL")
         if url.username is not None or url.password is not None:
             raise ValueError("must not contain credentials")
+        if url.query or url.fragment:
+            raise ValueError("must not contain a query or fragment")
+        if port is not None and not 0 < port < 65536:
+            raise ValueError("must use a valid port")
         return v
+
+    @model_validator(mode="after")
+    def _key_requires_https(self) -> Settings:
+        if self.open_meteo_api_key is not None and self.open_meteo_api_key.get_secret_value():
+            for url in (self.open_meteo_base_url, self.open_meteo_single_runs_base_url):
+                if urlsplit(url).scheme != "https":
+                    raise ValueError("OPEN_METEO_API_KEY requires https Open-Meteo base URLs")
+        return self
 
     @model_validator(mode="after")
     def _derive_test_database_url(self) -> Settings:

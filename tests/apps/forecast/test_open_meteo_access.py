@@ -87,6 +87,25 @@ def test_customer_base_url_sends_key_and_records_kind_without_the_key(
     assert key not in json.dumps(row.props)
     assert key not in client.get("/forecast/home-weather", params={"farm": farm.id}).text
 
+    from farmcore.core.models.canonical import Farm
+
+    failed_farm = session.get(Farm, farm.id)
+    failed_farm.props = {
+        **failed_farm.props,
+        "forecast_health": {"last_attempt": "2020-01-01T00:00:00+00:00"},
+    }
+    session.commit()
+
+    def unauthorized(url, **kwargs):
+        return httpx.Response(401, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "AsyncClient", provider_client(unauthorized))
+    assert run_now(session_factory, [MANIFEST], JOB, configured).ok
+    session.expire_all()
+    failed_farm = session.get(Farm, farm.id)
+    assert failed_farm.props["forecast_health"]["error"] == "HTTPStatusError"
+    assert key not in json.dumps(failed_farm.props)
+
 
 def test_self_hosted_base_url_needs_no_key_and_records_self_hosted(
     session, session_factory, settings, farm, monkeypatch, live_payload
@@ -120,13 +139,23 @@ def test_self_hosted_base_url_needs_no_key_and_records_self_hosted(
         ("open_meteo_base_url", "ftp://api.open-meteo.com"),
         ("open_meteo_base_url", "not-a-url"),
         ("open_meteo_base_url", "https://user:password@api.open-meteo.com"),
-        ("open_meteo_single_runs_base_url", "file:///tmp/open-meteo"),
-        ("open_meteo_single_runs_base_url", "https://key@single-runs-api.open-meteo.com"),
+        ("open_meteo_base_url", "https://api.open-meteo.com?x=1"),
+        ("open_meteo_base_url", "http://host:abc"),
     ],
 )
 def test_open_meteo_urls_must_be_http_without_credentials(field, value):
     with pytest.raises(ValidationError, match=field):
         Settings(_env_file=None, **{field: value})
+
+
+@pytest.mark.parametrize("field", ["open_meteo_base_url", "open_meteo_single_runs_base_url"])
+def test_api_key_requires_https_for_both_open_meteo_endpoints(field):
+    with pytest.raises(ValidationError, match="https"):
+        Settings(
+            _env_file=None,
+            **{field: "http://openmeteo:8080"},
+            open_meteo_api_key=SecretStr("key"),
+        )
 
 
 def test_single_runs_http_error_does_not_echo_the_key(monkeypatch):
@@ -135,7 +164,5 @@ def test_single_runs_http_error_does_not_echo_the_key(monkeypatch):
 
     monkeypatch.setattr(httpx, "get", unauthorized)
     with pytest.raises(ValueError) as exc:
-        sources.get_json(
-            "https://customer-single-runs-api.open-meteo.com/v1/forecast?apikey=top-secret"
-        )
+        sources.get_json("https://customer-api.open-meteo.com/v1/forecast?apikey=top-secret")
     assert "top-secret" not in str(exc.value)

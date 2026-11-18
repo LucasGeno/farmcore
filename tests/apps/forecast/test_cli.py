@@ -83,14 +83,19 @@ def test_fetch_saves_one_file_per_run_and_skips_runs_already_saved(env, tmp_path
     assert "2 runs saved" in first.output and "0 runs saved, 2 already saved" in second.output
 
 
-def test_fetch_uses_configured_single_runs_endpoint_and_key_without_storing_the_key(
-    env, tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    ("base_url", "customer"),
+    [
+        ("https://customer-api.open-meteo.com", True),
+        ("https://single-runs-api.open-meteo.com", False),
+    ],
+)
+def test_fetch_uses_configured_single_runs_endpoint_and_key_only_for_customer(
+    env, tmp_path, monkeypatch, base_url, customer
 ):
     from farmcore.apps.forecast import sources
 
-    monkeypatch.setenv(
-        "OPEN_METEO_SINGLE_RUNS_BASE_URL", "https://customer-single-runs-api.open-meteo.com"
-    )
+    monkeypatch.setenv("OPEN_METEO_SINGLE_RUNS_BASE_URL", base_url)
     monkeypatch.setenv("OPEN_METEO_API_KEY", "single-runs-secret")
     get_settings.cache_clear()
     calls: list[str] = []
@@ -109,11 +114,10 @@ def test_fetch_uses_configured_single_runs_endpoint_and_key_without_storing_the_
 
     assert result.exit_code == 0, result.output
     assert "single-runs-secret" not in result.output
-    assert all("apikey=single-runs-secret" in url for url in calls)
-    assert saved["endpoint_kind"] == "customer"
-    assert saved["request_url"].startswith(
-        "https://customer-single-runs-api.open-meteo.com/v1/forecast?"
-    )
+    assert len(calls) == 2
+    assert all(("apikey=single-runs-secret" in url) is customer for url in calls)
+    assert saved["endpoint_kind"] == ("customer" if customer else "public")
+    assert saved["request_url"].startswith(f"{base_url}/v1/forecast?")
     assert "single-runs-secret" not in saved["request_url"]
 
 
