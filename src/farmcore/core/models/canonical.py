@@ -199,6 +199,7 @@ class Log(Base):
         # Farm-scoped target for composite references (planning_job.operation_log_id).
         UniqueConstraint("id", "farm_id"),
         Index("ix_log_farm_id_type_ts_start", "farm_id", "type", "ts_start"),
+        CheckConstraint("crop_eppo IS NULL OR crop_eppo ~ '^[0-9A-Z]{5,6}$'", name="crop_eppo"),
     )
 
     id: Mapped[int] = _pk()
@@ -209,6 +210,8 @@ class Log(Base):
     ts_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     ts_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     bbch: Mapped[int | None] = mapped_column(Integer)
+    # Reg. (EU) 2023/564 record content: the treated crop's EPPO code; None for legacy rows.
+    crop_eppo: Mapped[str | None] = mapped_column(Text)
     notes: Mapped[str] = mapped_column(Text, server_default="", default="")
     props: Mapped[dict[str, Any]] = _props()
     created_at: Mapped[datetime] = _now()

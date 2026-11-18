@@ -235,6 +235,8 @@ def test_correction_retry_scope_and_terminal_metadata_are_atomic(database):
 def test_new_history_upgrade_and_round_trip_preserve_existing_records(scratch_db_url):
     cfg = alembic_config(scratch_db_url)
     command.upgrade(cfg, "core_0003")
+    # Later additive columns (core_0006 `crop_eppo`, null for legacy rows) are not record changes.
+    LOG_ROW = "SELECT to_jsonb(t) - 'crop_eppo' FROM log t WHERE id=:id"
     engine = create_engine(scratch_db_url)
     try:
         with engine.begin() as db:
@@ -254,20 +256,13 @@ def test_new_history_upgrade_and_round_trip_preserve_existing_records(scratch_db
                 ),
                 {"farm": f},
             )
-            original = db.execute(
-                text("SELECT to_jsonb(t) FROM log t WHERE id=:id"), {"id": log}
-            ).scalar_one()
+            original = db.execute(text(LOG_ROW), {"id": log}).scalar_one()
         for target in ("head", "core_0004_grant_recipients", "head"):
             (command.downgrade if target == "core_0004_grant_recipients" else command.upgrade)(
                 cfg, target
             )
             with engine.connect() as db:
-                assert (
-                    db.execute(
-                        text("SELECT to_jsonb(t) FROM log t WHERE id=:id"), {"id": log}
-                    ).scalar_one()
-                    == original
-                )
+                assert db.execute(text(LOG_ROW), {"id": log}).scalar_one() == original
                 assert db.execute(
                     text("SELECT grantee,recipient_identity_id FROM data_grant")
                 ).all() == [("Legacy name", None)]

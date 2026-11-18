@@ -23,6 +23,7 @@ dependencies = [
     "faster-whisper",
     "typer",
     "google-auth[requests]>=2.62.0",
+    "pint>=0.26.2",
 ]
 
 [project.urls]

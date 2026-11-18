@@ -22,6 +22,7 @@ Exact versions are pinned in `uv.lock`; each package keeps its own licence.
 | python-telegram-bot | **LGPL-3.0-only** | Telegram bot |
 | faster-whisper (ctranslate2, onnxruntime, av) | MIT; av BSD-3-Clause, its wheels bundle FFmpeg libraries (LGPL) | Local speech-to-text |
 | typer | MIT | Command line |
+| pint (flexcache, flexparser, platformdirs) | BSD-3-Clause; platformdirs MIT | Unit registry with Decimal arithmetic |
 
 The LGPL libraries are used unmodified, as separately installed packages imported by FarmCore.
 Transitive dependencies are permissive (MIT, BSD, Apache-2.0, ISC, PSF, MPL-2.0 for `certifi`
