@@ -207,8 +207,11 @@ def test_a_member_asking_for_another_farms_stock_sees_none_of_it(
     from tests.core.test_member_sessions import _account, _login
 
     _, own_farm = _account(committed_session_factory)
-    _, foreign_farm = _account(committed_session_factory, login="neighbour")
     with committed_session_factory.begin() as session:
+        foreign = Farm(name="Neighbour farm")
+        session.add(foreign)
+        session.flush()
+        foreign_farm = foreign.id
         product = next(iter(ensure_products(session).values()))
         for farm_id, lot in ((own_farm, "LOT-OWN"), (foreign_farm, "LOT-FOREIGN")):
             session.add(
