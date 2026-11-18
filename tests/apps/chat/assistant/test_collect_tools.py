@@ -8,11 +8,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from farmcore.core.tools import ToolResult, ToolSpec, call_tool, collect_tools
+from farmcore.core.tools import ToolResult, ToolSpec, call_tool, collect_tools, object_schema
 
 
 def spec(name: str, func: str = "tests.apps.chat.assistant.stub_tools:echo") -> ToolSpec:
-    return ToolSpec(name=name, description=name, params={}, func=func, scope="fields:read")
+    return ToolSpec(
+        name=name,
+        description=name,
+        params=object_schema(),
+        func=func,
+        scope="fields:read",
+        effect="read",
+    )
 
 
 def test_tools_come_in_manifest_order() -> None:

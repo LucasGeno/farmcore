@@ -199,7 +199,7 @@ def ask(
             model_args = {
                 k: v[:MAX_ARG_CHARS]
                 for k, v in choice.args.items()
-                if k in tool.params and isinstance(v, str)
+                if k in tool.param_names and isinstance(v, str)
             }
             named = model_args.get("parcel")
             if named and has_fields and not explicit_alias and (not followup or refers_to_parcel):
@@ -218,7 +218,7 @@ def ask(
     facts = {}
     if tool:
         args = {k: v for k, v in model_args.items() if k != "parcel"}
-        if "parcel" in tool.params:
+        if "parcel" in tool.param_names:
             args["parcel"] = explicit_alias or (parcel.alias if parcel else "")
         if tool.name == "assistant_plan":
             args["busy_days"] = tuple(

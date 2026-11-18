@@ -35,7 +35,7 @@ def test_every_tool_is_read_only_and_audited(session, settings, manifests, seede
 
     for tool in tools:
         rows = assistant_rows(session)
-        args = {k: v for k, v in ARGS.items() if k in tool.params}
+        args = {k: v for k, v in ARGS.items() if k in tool.param_names}
         result = call_tool(tool, ctx, args)
         assert "error" not in result.facts, tool.name
         assert assistant_rows(session) > rows, tool.name

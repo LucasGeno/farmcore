@@ -12,7 +12,7 @@ from datetime import datetime
 from farmcore.apps.advisor import service as advisor
 from farmcore.apps.fields import tools as fields_tools
 from farmcore.apps.review import recommendations
-from farmcore.core.tools import ToolContext, ToolResult, ToolSpec
+from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 CARD = "/advisor/parcels/{id}"
 OPINION_FR = {
@@ -28,7 +28,8 @@ TOOLS = (
             "time, opinion and note. A human opinion about one saved assessment; the model "
             "output and any newer assessment are unchanged."
         ),
-        params={"parcel": "STRING"},
+        params=object_schema({"parcel": {"type": "string"}}),
+        effect="read",
         func="farmcore.apps.review.tools:status",
         scope="advice:read",
         keywords=(

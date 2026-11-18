@@ -3,7 +3,7 @@
 `VertexToolChooser.choose(question, tools)` sends one request to the chat app's Vertex endpoint
 (same settings, auth and audit as `chat.extractor.vertex.VertexExtractor`, which it extends): the
 question (plus bounded previous question/tool/parcel routing context when supplied) as the single
-user part, and each tool's name, description and string parameters as a
+user part, and each tool's name, description and parameters (Vertex subset of its schema) as a
 function declaration. Nothing else leaves the host: no farm rows, no facts.
 The reply's first `functionCall` becomes a `Choice`; any model text rides along in `Choice.text`
 but the route never renders it (answers come from the tool's own text, facts and links), so a
@@ -19,7 +19,7 @@ from typing import Any, Protocol
 
 from farmcore.apps.chat.extractor.base import AuditRecord, ExtractorError
 from farmcore.apps.chat.extractor.vertex import VertexExtractor, _json_or_text
-from farmcore.core.tools import ToolSpec
+from farmcore.core.tools import ToolSpec, vertex_schema
 
 ADAPTER = "vertex_assistant"
 TIMEOUT_S = 6.0  # a web question; the keyword router answers when the model is slow
@@ -52,11 +52,8 @@ def declarations(tools: Sequence[ToolSpec]) -> list[dict[str, Any]]:
     out = []
     for tool in tools:
         decl: dict[str, Any] = {"name": tool.name, "description": tool.description}
-        if tool.params:
-            decl["parameters"] = {
-                "type": "OBJECT",
-                "properties": {name: {"type": kind} for name, kind in tool.params.items()},
-            }
+        if tool.param_names:
+            decl["parameters"] = vertex_schema(tool.params)
         out.append(decl)
     return out
 

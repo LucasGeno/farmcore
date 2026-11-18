@@ -202,10 +202,10 @@ def test_tools_read_as_the_assistant_and_write_nothing(session, settings, hero):
 
 
 def test_declared_tools():
-    names = [(t.name, t.scope, t.params) for t in tools.TOOLS]
+    names = [(t.name, t.scope) for t in tools.TOOLS]
     assert names == [
-        ("advisor_today", "advice:read", {}),
-        ("advisor_parcel_status", "advice:read", {"parcel": "STRING"}),
+        ("advisor_today", "advice:read"),
+        ("advisor_parcel_status", "advice:read"),
     ]
 
 

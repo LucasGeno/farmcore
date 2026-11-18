@@ -14,7 +14,7 @@ from typing import Any
 from farmcore.apps.fields.seed import alias_number
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.canonical import Parcel
-from farmcore.core.tools import ToolContext, ToolResult, ToolSpec
+from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = "fields:read"
 UNKNOWN_PARCEL = "unknown parcel"
@@ -25,7 +25,8 @@ TOOLS = (
     ToolSpec(
         name="fields_list_parcels",
         description="The farm's vine parcels: alias, name, grape variety and area in hectares.",
-        params={},
+        params=object_schema(),
+        effect="read",
         func="farmcore.apps.fields.tools:list_parcels",
         scope=SCOPE,
         keywords=("my parcels", "list parcels", "parcels", "mes parcelles", "parcelles"),
