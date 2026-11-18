@@ -220,6 +220,17 @@ def collect_parcel_views(manifests):
     return sorted(views, key=lambda item: item[1].order)
 
 
+def collect_draft_kinds(manifests):
+    """Draft kind key -> (manifest, kind); a duplicate key across loaded apps is an error."""
+    kinds = {}
+    for m in manifests:
+        for kind in m.draft_kinds:
+            if kind.key in kinds:
+                raise ValueError(f"duplicate draft kind key {kind.key!r} across manifests")
+            kinds[kind.key] = (m, kind)
+    return kinds
+
+
 def collect_record_types(manifests):
     """Record types in load order; a duplicate key across loaded apps is a configuration error."""
     types = [(m, rt) for m in manifests for rt in m.record_types]
@@ -373,15 +384,25 @@ class RecordType:
 
 @dataclass(frozen=True)
 class DraftKind:
-    """A draft kind: a validator (``module:func``) and its review fragment URL."""
+    """A draft kind: a validator (``module:func``), its review fragment URL and the app-owned
+    confirm service (``module:func``) that turns a confirmed draft into a record.
+
+    - validator: ``(session, farm_id, payload: dict) -> dict``, the normalised payload; raises
+      ``ValueError`` with a farmer-readable reason.
+    - confirm: ``(session, draft, *, actor: str, now: datetime) -> tuple[str, int]``, the record's
+      model and id; raises ``ValueError`` when the draft can no longer be recorded.
+    - review: a fragment URL, loaded with ``?draft=<id>``.
+    """
 
     key: str
     validator: str
     review: str
+    confirm: str = ""
 
     def __post_init__(self) -> None:
         _check_key(self.key, "draft kind", reserved=RESERVED_RECORD_TYPE_KEYS)
         _check_provider(self.validator, "draft kind")
+        _check_provider(self.confirm, "draft kind")
         _check_path(self.review, "draft kind")
 
 

@@ -120,6 +120,10 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "clock_state": frozenset({"audit:read"}),
     "crop_season": frozenset({"fields:read"}),
     "data_grant": frozenset({"audit:read"}),
+    # Proposed writes (`core/drafts.py`): the owner reviews them, an agent token proposes them.
+    # The farm filter alone shows every principal's drafts: a token's read goes through
+    # `drafts.get`, which also filters by actor, never a bare `repo.list(Draft)`.
+    "draft": frozenset({"logs:write", "drafts:propose"}),
     "event": frozenset({"logs:read", "advice:read"}),
     "ext_id": _ANY,  # shared reference; callers filter by model/res_id
     "farm": _ANY,

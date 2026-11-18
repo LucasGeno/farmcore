@@ -2,7 +2,10 @@
 ISOXML TaskData import."""
 
 from farmcore.apps.operations.tools import TOOLS
-from farmcore.core.manifest import Manifest, NavItem
+from farmcore.core.manifest import DraftKind, Manifest, NavItem
+
+_DRAFTS = "farmcore.apps.operations.drafts"
+_REVIEW = "/operations/drafts/review"
 
 MANIFEST = Manifest(
     data_sources="farmcore.apps.operations.data_sources:summary",
@@ -42,5 +45,10 @@ MANIFEST = Manifest(
     farm_sections=("/operations/map/farm",),
     parcel_sections=("/operations/map/parcels/{id}",),
     tools=TOOLS,
+    # Proposed records wait as drafts (`core/drafts.py`) until the farmer confirms them here.
+    draft_kinds=tuple(
+        DraftKind(key, f"{_DRAFTS}:validate_{key}", _REVIEW, f"{_DRAFTS}:confirm")
+        for key in ("spray", "irrigation", "observation")
+    ),
     maturity="alpha",
 )

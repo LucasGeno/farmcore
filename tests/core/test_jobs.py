@@ -237,7 +237,7 @@ def test_replay_command_skips_jobs_of_uninstalled_apps(
         )
         assert result.exit_code == 0, result.output
         assert "orchard.job" not in result.output
-        assert "0 job(s) ran" in result.output
+        assert "1 job(s) ran" in result.output  # only core's drafts.expire
         assert fake_jobs.CALLS == []
     finally:
         get_settings.cache_clear()

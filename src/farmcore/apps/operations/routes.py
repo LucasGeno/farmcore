@@ -77,6 +77,8 @@ BADGES: dict[str, tuple[str, str]] = {
     "isoxml": ("🚜", "machine"),
     "file": ("📄", "file"),
     "planning": ("🗓️", "planned work"),
+    "manual": ("✍️", "typed"),
+    "agent": ("🔌", "agent"),
 }
 KIND_LABELS: dict[str, str] = {
     "log.created": "Logged",
@@ -630,4 +632,39 @@ def correction_form_preview(
         return response
     return RedirectResponse(
         context_url(request, f"/operations/corrections/{item.id}"), status_code=303
+    )
+
+
+@router.get("/drafts/review", response_class=HTMLResponse)
+def draft_review(request: Request, repo: Repo, draft: Annotated[int, Query(ge=1, lt=2**63)]):
+    """The review fragment of a spray, irrigation or observation draft (`/drafts/<id>`)."""
+    from zoneinfo import ZoneInfo
+
+    from farmcore.apps.operations.drafts import MODELS
+    from farmcore.core import routes_drafts
+
+    require_farm_owner(request, repo)
+    item = routes_drafts.load(request, repo, draft)
+    if item.kind not in MODELS:
+        raise HTTPException(404, "Draft not found.")
+    record = MODELS[item.kind].model_validate(item.payload)
+    parcels = {
+        p.id: p for p in repo.list(Parcel, Parcel.id.in_(record.parcel_ids), scope=PARCEL_SCOPE)
+    }
+    doses = getattr(record, "doses", [])
+    products = {
+        p.id: p.name
+        for p in repo.list(
+            Product, Product.id.in_([d.product_id for d in doses]), scope="logs:read"
+        )
+    }
+    return render(
+        request,
+        "operations/_draft_review.html",
+        kind=item.kind,
+        record=record,
+        parcels=[parcels[i] for i in record.parcel_ids if i in parcels],
+        doses=[(products.get(d.product_id, f"Product {d.product_id}"), d) for d in doses],
+        fact=getattr(record, "fact", None),
+        local_start=record.ts_start.astimezone(ZoneInfo(_farm_tz(request, repo))),
     )

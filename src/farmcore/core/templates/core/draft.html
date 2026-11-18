@@ -1,0 +1,23 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% from "core/_fragment.html" import fragment_slot %}
+{% block title %}Review draft · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Draft " ~ status_label, "Nothing is recorded until you confirm.") %}{% endcall %}
+{% if problem %}<p role="alert" class="rounded-xl border border-line bg-surface p-3 font-semibold">{{ problem }}</p>{% endif %}
+<p class="mt-2 text-sm text-muted">Proposed by {{ draft.actor }} · revision {{ draft.revision }} · expires {{ draft.expires_at.strftime('%Y-%m-%d %H:%M') }} UTC</p>
+{% if draft.provenance.file_name or draft.provenance.registry_ref %}
+<p class="mt-1 break-words text-sm text-muted">Source: {{ draft.provenance.file_name or '' }}{% if draft.provenance.file_sha256 %} (SHA-256 {{ draft.provenance.file_sha256[:12] }}…){% endif %}{% if draft.provenance.registry_ref %} {{ draft.provenance.registry_ref }}{% endif %}</p>
+{% endif %}
+<div class="mt-4">
+{% if review_url %}{{ fragment_slot("draft-review-" ~ draft.id, "Draft details", review_url) }}
+{% else %}<p class="text-muted">The app that reviews this draft is not enabled.</p>{% endif %}
+</div>
+{% if can_finalize and review_url %}<div class="mt-4 flex flex-wrap gap-3">
+{% for action, label in [('confirm', 'Confirm'), ('cancel', 'Cancel draft')] %}
+<form method="post" action="{{ resolved_farm_url('/drafts/' ~ draft.id ~ '/' ~ action) }}">
+{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+<input type="hidden" name="revision" value="{{ draft.revision }}"><button type="submit" class="min-h-[44px] rounded-lg border border-line bg-surface px-4 font-semibold hover:bg-ground">{{ label }}</button></form>
+{% endfor %}
+</div>{% endif %}
+{% endblock %}

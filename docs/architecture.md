@@ -177,3 +177,29 @@ its task and farm, before its deadline, that the farm exists and that the clock 
 generation the attempt began in. A retry, a live/replay switch (`clock_state.generation`) and a
 restore (which loads no queue table and starts a new generation) therefore reject every older
 attempt. No transaction is open while a task waits on the network.
+
+### Drafts
+
+Every proposed write is meant to wait in one `draft` table (`core/drafts.py`, revision
+`core_0010`) until the farmer confirms it on `/drafts/<id>`. A draft holds its farm, the
+proposing actor (`identity:<id>`, `operator`, `token:<id>` for an agent, `chat:<id>`), a kind
+from an app's `draft_kinds`, the payload that kind validated, provenance (source type `voice`, `file`,
+`isoxml`, `manual` or `agent`; file name and SHA-256; registry reference), a status (open, confirmed, cancelled, expired), a revision and
+a wall-clock expiry (seven days by default, an assumed product choice).
+
+- Only the proposing principal sees a draft; an agent's draft is reviewed by the owner who
+  issued its token (stored on the draft when it is proposed; the token must be for that farm).
+  Anyone else, and any other farm, gets a 404. An agent token never confirms, cancels or edits.
+- Confirm runs the kind's app-owned confirm service under the farm's operations lock and a row
+  lock: retried and concurrent confirms record once and return the same record. A stale revision
+  or an expired draft is refused with the reason. Cancel is idempotent.
+- The Records app's kinds (`spray`, `irrigation`, `observation`) write through `core/logs.py`
+  (a pending log created and confirmed in one transaction, so the merge rule applies as in
+  chat) and keep the draft id, both actors and the provenance on the record's `log_source`.
+- `drafts.expire` (every 15 minutes, wall time) marks open drafts past their expiry. A restored
+  copy loads drafts as farm data; drafts that expired meanwhile are refused at once.
+
+Not yet moved onto drafts: the chat and web-assistant capture still keep their pre-confirm state
+as a pending `log` and their clarifications in `farm.props["clarifications"]`. The follow-up
+"Move chat and assistant capture onto drafts" removes both, so there is one pre-confirm state;
+until then no other entry path commits a pending `log`.
