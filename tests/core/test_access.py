@@ -37,6 +37,7 @@ from farmcore.core.models.canonical import (
     Product,
     Quantity,
 )
+from farmcore.core.models.catalog import TypedQuantity
 from farmcore.core.seed import ensure_default_farm
 
 T0 = datetime(2024, 4, 10, 4, 0, tzinfo=UTC)
@@ -60,6 +61,8 @@ def _farm_with_data(session, name: str) -> Farm:
     log.sources.append(LogSource(source_type="seed", external_key=name, precision_rank=5))
     session.add(log)
     session.add(Observation(asset_id=station.id, ts=T0, variable="t_c", value=11.5))
+    session.flush()
+    session.add(TypedQuantity(log_id=log.id, entered_value=Decimal("20"), entered_unit="mm"))
     session.flush()
     return farm
 
@@ -97,6 +100,7 @@ def test_other_farms_parcels_are_invisible(session):
         (Log, "logs:read"),
         (Quantity, "logs:read"),
         (LogSource, "logs:read"),
+        (TypedQuantity, "logs:read"),
         (Observation, "stations:read"),
         (Asset, "stations:read"),
         (Farm, "fields:read"),
@@ -129,6 +133,7 @@ def test_logs_read_grant_reads_logs_and_is_denied_observations(session):
         (Asset, "logs:read"),
         (Parcel, "stations:read"),
         (Log, "stations:read"),
+        (TypedQuantity, "stations:read"),
         (Advice, "logs:read"),
         (AccessLog, "logs:read"),
     ],

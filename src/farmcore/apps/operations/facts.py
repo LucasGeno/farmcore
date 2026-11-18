@@ -2,8 +2,10 @@
 
 An irrigation is a depth (mm) or an entered volume (m3, L), not a product rate: the canonical
 `quantity` rows stay empty for `irrigate` and `observation` logs, and the fact lives in the log's
-`props` (the canonical model's slot for app data). These models are the only writer's shape and
-the reader's guard: a row whose props do not validate is not shown as a fact, never guessed.
+`props` (the canonical model's slot for app data). Capture also stores an irrigation's amount as
+one entered `typed_quantity` (`logs.EnteredQuantity`); these props stay what the pages show.
+These models are the only writer's shape and the reader's guard: a row whose props do not
+validate is not shown as a fact, never guessed.
 
 No efficiency is stored or derived: `basis` is only the gross/net word the farmer said, and an
 absent basis stays absent. No irrigation advice and no spray stock follow from these records.
