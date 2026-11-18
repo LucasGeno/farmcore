@@ -56,12 +56,12 @@ An app is a package under `src/farmcore/apps/<name>/` with a `manifest.py` expor
 `routes`, `jobs`, `seed`, and what it adds to the UI (`nav`, Today `widgets`, `map_layers`, map
 panel sections, debug panels, read-only assistant `tools`). The core never imports an app; it
 renders what enabled apps declare. Read farm data through `ScopedRepository` so grants and the
-access log apply. Declare every farm table your app reads in
+access log apply. Declare every farm table your app owns in
 `resource_scopes=(("<table>", ("<scope>", ...)), ...)`: the scoped repository denies any
-resource that core or an app manifest has not declared, and the registry refuses conflicting
-redefinitions. Migrations go in `src/farmcore/migrations/versions/` as
-`<app>_<NNNN>_<slug>.py` on the single linear chain (`uv run alembic heads` must print one
-head).
+resource that core or an app manifest has not declared, and the registry refuses a table from
+another app's `models` and conflicting redefinitions. Migrations go in
+`src/farmcore/migrations/versions/` as `<app>_<NNNN>_<slug>.py` on the single linear chain
+(`uv run alembic heads` must print one head).
 
 ## Licence
 

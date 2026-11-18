@@ -9,8 +9,10 @@ A repository is bound to one farm, one grant, an actor and a purpose. Each read:
    `ScopeDenied`; every farm table must be declared by core or by the owning app manifest —
    an undeclared resource is denied;
 3. filters rows to the farm: directly (`farm_id`), via `log` (quantity, log_source,
-   log_parcel) or via `asset` (observation); shared reference tables (product, source) are
-   not farm-owned; any other table has no farm path and is read only through `execute`;
+   log_parcel), via `asset` (observation), via `data_grant` (access_token) or via
+   `weather_receipt` (weather observations and forecasts); a weather station is the farm's own
+   or public (no owner); shared reference tables (product, source) are not farm-owned; any
+   other table has no farm path and is read only through `execute`;
 4. writes exactly one `access_log` row (actor, farm, grant, resource, scope, purpose).
 
 `execute(stmt, scope, resource)` runs a caller-built statement as-is (the caller scopes it); it is
@@ -24,7 +26,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
@@ -52,6 +54,12 @@ from farmcore.core.models.canonical import (
 )
 from farmcore.core.models.catalog import TypedQuantity
 from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIdentity
+from farmcore.core.models.weather import (
+    WeatherForecast,
+    WeatherObservation,
+    WeatherReceipt,
+    WeatherStation,
+)
 from farmcore.db import get_session
 from farmcore.settings import Settings
 
@@ -90,7 +98,12 @@ _VIA_PARENT: dict[type[Base], tuple[Any, type[Base]]] = {
     LogSource: (LogSource.log_id, Log),
     LogParcel: (LogParcel.log_id, Log),
     Observation: (Observation.asset_id, Asset),
+    AccessToken: (AccessToken.grant_id, DataGrant),
+    WeatherObservation: (WeatherObservation.receipt_id, WeatherReceipt),
+    WeatherForecast: (WeatherForecast.receipt_id, WeatherReceipt),
 }
+# Rows a farm owns or every farm shares (null owner: a public network station).
+_OWNED_OR_PUBLIC: dict[type[Base], Any] = {WeatherStation: WeatherStation.owner_farm_id}
 # Reference data shared by every farm (product catalogue, data sources).
 _SHARED: frozenset[type[Base]] = frozenset({Product, Source})
 
@@ -139,22 +152,32 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "recommendation_review": frozenset({"advice:read"}),
     "source": _ANY,
     "typed_quantity": _LOG_READS,
+    "weather_forecast": frozenset({"stations:read"}),
+    "weather_observation": frozenset({"stations:read"}),
+    "weather_receipt": frozenset({"stations:read"}),
+    "weather_station": frozenset({"stations:read"}),
 }
-_RESOURCE_OWNERS: dict[str, str] = dict.fromkeys(RESOURCE_SCOPES, "core")
+RESOURCE_OWNERS: dict[str, str] = dict.fromkeys(RESOURCE_SCOPES, "core")
 
 
 def register_resource_scopes(
-    owner: str, declarations: tuple[tuple[str, tuple[str, ...]], ...]
+    owner: str,
+    declarations: tuple[tuple[str, tuple[str, ...]], ...],
+    *,
+    owned: Collection[str],
 ) -> None:
     """Register an app manifest's resource -> scopes declarations (idempotent for equal sets).
 
-    Called by the registry at load. An identical re-declaration keeps the first owner so conflict
-    messages keep naming the app that actually declared the table; conflicting redefinitions are
-    refused so two apps cannot silently widen each other's access.
+    Called by the registry at discovery. An app may declare only tables it owns (`owned`), so it
+    cannot claim another app's table or a legacy view. An identical re-declaration keeps the first
+    owner so conflict messages keep naming the app that actually declared the table; conflicting
+    redefinitions are refused so two apps cannot silently widen each other's access.
     """
     for resource, scopes in declarations:
         if not resource:
             raise ValueError(f"app {owner!r}: empty resource name")
+        if resource not in owned:
+            raise ValueError(f"app {owner!r}: resource {resource!r} is not one of its own tables")
         allowed = frozenset(scopes)
         if not allowed:
             raise ValueError(f"app {owner!r}: resource {resource!r} declares no scopes")
@@ -167,14 +190,14 @@ def register_resource_scopes(
         if existing is not None:
             if existing != allowed:
                 raise ValueError(
-                    f"resource {resource!r} is already declared by {_RESOURCE_OWNERS[resource]} "
+                    f"resource {resource!r} is already declared by {RESOURCE_OWNERS[resource]} "
                     f"with {sorted(existing)}; {owner!r} asked for {sorted(allowed)}"
                 )
             # Identical re-declaration: keep the first owner so the conflict message keeps naming
             # the app that actually declared the table, and do not broaden the scope set.
             continue
         RESOURCE_SCOPES[resource] = allowed
-        _RESOURCE_OWNERS[resource] = owner
+        RESOURCE_OWNERS[resource] = owner
 
 
 class ScopeDenied(PermissionError):
@@ -313,6 +336,9 @@ class ScopedRepository:
         if model in _VIA_PARENT:
             fk, parent = _VIA_PARENT[model]
             return stmt.where(fk.in_(select(parent.id).where(parent.farm_id == self.farm_id)))
+        if model in _OWNED_OR_PUBLIC:
+            owner = _OWNED_OR_PUBLIC[model]
+            return stmt.where(or_(owner == self.farm_id, owner.is_(None)))
         if model in _SHARED:
             return stmt
         raise TypeError(
