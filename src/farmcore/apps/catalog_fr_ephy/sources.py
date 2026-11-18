@@ -2,9 +2,9 @@
 
 The Anses publishes two ZIP archives each week — one UTF-8, one Windows-1252 — with identical
 data. The files are semicolon-delimited CSV with no byte-order mark, so `decode` tries UTF-8
-first and falls back to Windows-1252 only when the bytes are not valid UTF-8. Parsing is strict
-about the column count: a row whose fields do not line up with the header is reported and
-skipped, never imported half-way.
+first and falls back to Windows-1252 only when the bytes are not valid UTF-8. Parsing is strict:
+a row whose fields do not line up with the header, a non-empty value that does not parse, or an
+unknown authorisation/use state is reported and skipped, never imported half-way.
 """
 
 from __future__ import annotations
@@ -12,9 +12,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import re
 import zipfile
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -23,12 +24,21 @@ import httpx
 # The data.gouv.fr dataset that republishes the Anses E-Phy catalogue weekly.
 DATASET_URL = "https://www.data.gouv.fr/api/1/datasets/575e9fac88ee38072a640390/"
 SOURCE = "ephy-fr"
-LICENCE = "Licence Ouverte / Open Licence 2.0"
+# data.gouv.fr reports `license: fr-lo` — Licence Ouverte / Open Licence v1.0, not 2.0.
+LICENCE = "Licence Ouverte / Open Licence"
+LICENCE_ID = "fr-lo"
+ATTRIBUTION = "Données E-Phy - Anses"
+
+# The archive's exact file names. `produits_*.csv` is not enough: the UTF-8 archive also ships
+# `produits_classe_et_mention_danger_utf8.csv`, which sorts before `produits_utf8.csv`.
+_PRODUCT_FILES = ("produits_utf8.csv", "produits_Windows-1252.csv")
+_USE_FILES = ("produits_usages_utf8.csv", "produits_usages_Windows-1252.csv")
 
 # Column names exactly as the source publishes them (products.CSV / produits_usages.CSV).
 _PRODUCT_COLUMNS = {
     "amm": "numero AMM",
     "name": "nom produit",
+    "trade_names": "seconds noms commerciaux",
     "etat": "Etat d’autorisation",
     "holder": "titulaire",
     "gamme": "gamme usage",
@@ -43,7 +53,10 @@ _USE_COLUMNS = {
     "etat": "etat usage",
     "dose": "dose retenue",
     "dose_unit": "dose retenue unite",
+    "phi": "delai avant recolte jour",
     "applications": "nombre max d'application",
+    "distribution_end": "date fin distribution",
+    "use_end": "date fin utilisation",
     "interval": "intervalle minimum entre applications (jour)",
 }
 
@@ -59,6 +72,22 @@ class SourceError(RuntimeError):
     """The source cannot be downloaded or read."""
 
 
+class InvalidRow(ValueError):
+    """A non-empty value the importer cannot type; the caller reports and skips the row."""
+
+
+@dataclass(frozen=True)
+class SourceMeta:
+    """Provenance of a downloaded archive, recorded on `catalog_import` (C5: source and date)."""
+
+    licence: str = LICENCE
+    licence_id: str = LICENCE_ID
+    attribution: str = ATTRIBUTION
+    resource_url: str = ""
+    archive_name: str = ""
+    archive_date: str = ""
+
+
 @dataclass(frozen=True)
 class ProductRow:
     amm: str
@@ -69,7 +98,8 @@ class ProductRow:
     fonctions: tuple[str, ...]
     formulation: str
     substances: tuple[dict[str, str], ...]
-    withdrawal_date: str
+    trade_names: tuple[str, ...]
+    withdrawal_date: str  # ISO YYYY-MM-DD
 
 
 @dataclass(frozen=True)
@@ -82,6 +112,9 @@ class UseRow:
     max_dose_unit: str | None
     interval_days: Decimal | None
     max_applications: int | None
+    phi_days: int | None
+    distribution_end: date | None
+    use_end: date | None
     state: str
 
 
@@ -89,7 +122,7 @@ class UseRow:
 class Parsed:
     rows: tuple[ProductRow | UseRow, ...]
     skipped: int
-    reasons: tuple[str, ...] = field(default=())
+    reasons: tuple[str, ...]
 
 
 def decode(raw: bytes) -> str:
@@ -132,7 +165,7 @@ def _decimal(value: str) -> Decimal | None:
     try:
         return Decimal(value)
     except InvalidOperation:
-        return None
+        raise InvalidRow(f"malformed decimal {value!r}") from None
 
 
 def _integer(value: str) -> int | None:
@@ -142,35 +175,56 @@ def _integer(value: str) -> int | None:
     try:
         return int(value)
     except ValueError:
+        raise InvalidRow(f"malformed integer {value!r}") from None
+
+
+def _date(value: str) -> date | None:
+    value = value.strip()
+    if not value:
         return None
+    try:
+        return datetime.strptime(value, "%d/%m/%Y").date()
+    except ValueError:
+        raise InvalidRow(f"malformed date {value!r}") from None
+
+
+def _split(text: str) -> tuple[str, ...]:
+    return tuple(part.strip() for part in text.split("|") if part.strip())
 
 
 def _substances(text: str) -> tuple[dict[str, str], ...]:
-    """`diméthoate (Dimethoate) 400.0 g/L | ...` -> one dict per substance. Best effort: a token
-    that does not match the name/ref/concentration shape is kept whole under `name`."""
+    """`diméthoate (Dimethoate) 400.0 g/L | ...` -> one dict per substance. The reference is the
+    last parenthesised group; concentration and unit are the two trailing tokens. Best effort: a
+    token with no concentration/unit keeps name and reference only."""
     result: list[dict[str, str]] = []
     for token in text.split("|"):
         token = token.strip()
         if not token:
             continue
-        name, _, rest = token.partition("(")
-        name = name.strip()
-        if not rest:
-            result.append({"name": token})
-            continue
-        ref, _, tail = rest.partition(")")
-        pieces = tail.strip().split()
-        if len(pieces) >= 2:
-            result.append(
-                {"name": name, "ref": ref.strip(), "concentration": pieces[0], "unit": pieces[1]}
-            )
+        ref = ""
+        body = token
+        parens = list(re.finditer(r"\([^()]*\)", token))
+        if parens:
+            last = parens[-1]
+            ref = last.group(0)[1:-1].strip()
+            body = (token[: last.start()] + token[last.end() :]).strip()
+        parts = body.split()
+        if len(parts) >= 3 and _looks_decimal(parts[-2]):
+            name = " ".join(parts[:-2]).strip()
+            result.append({"name": name, "ref": ref, "concentration": parts[-2], "unit": parts[-1]})
+        elif ref:
+            result.append({"name": body, "ref": ref})
         else:
-            result.append({"name": name, "ref": ref.strip()})
+            result.append({"name": body or token})
     return tuple(result)
 
 
-def _split(text: str) -> tuple[str, ...]:
-    return tuple(part.strip() for part in text.split("|") if part.strip())
+def _looks_decimal(value: str) -> bool:
+    try:
+        Decimal(value)
+        return True
+    except InvalidOperation:
+        return False
 
 
 def parse_products(raw: bytes) -> Parsed:
@@ -180,21 +234,31 @@ def parse_products(raw: bytes) -> Parsed:
     for line, cells in enumerate(rows, start=2):
         amm = cells[cols["amm"]].strip()
         name = cells[cols["name"]].strip()
-        if not amm or not amm.isdigit() or not name or len(name) > 200:
+        if not amm or not name or len(name) > 200:
             reasons.append(f"line {line}: missing or invalid AMM/product name")
             continue
         etat = cells[cols["etat"]].strip()
+        withdrawn = _PRODUCT_ETAT.get(etat)
+        if withdrawn is None:
+            reasons.append(f"line {line}: unknown authorisation state {etat!r}")
+            continue
+        try:
+            withdrawal_date = _date(cells[cols["withdrawal_date"]])
+        except InvalidRow as exc:
+            reasons.append(f"line {line}: {exc}")
+            continue
         parsed.append(
             ProductRow(
                 amm=amm,
                 name=name,
-                withdrawn=_PRODUCT_ETAT.get(etat, False),
+                withdrawn=withdrawn,
                 holder=cells[cols["holder"]].strip(),
                 gamme=cells[cols["gamme"]].strip(),
                 fonctions=_split(cells[cols["fonctions"]]),
                 formulation=cells[cols["formulation"]].strip(),
                 substances=_substances(cells[cols["substances"]]),
-                withdrawal_date=cells[cols["withdrawal_date"]].strip(),
+                trade_names=_split(cells[cols["trade_names"]]),
+                withdrawal_date=withdrawal_date.isoformat() if withdrawal_date else "",
             )
         )
     return Parsed(tuple(parsed), len(reasons), tuple(reasons))
@@ -214,12 +278,27 @@ def parse_uses(raw: bytes) -> Parsed:
     for line, cells in enumerate(rows, start=2):
         amm = cells[cols["amm"]].strip()
         identifiant = cells[cols["identifiant"]].strip()
-        if not amm or not amm.isdigit() or not identifiant:
+        if not amm or not identifiant:
             reasons.append(f"line {line}: missing or invalid AMM/usage identifier")
             continue
         crop, target = _identifiant(identifiant)
         if not crop:
             reasons.append(f"line {line}: unparseable usage identifier")
+            continue
+        etat = cells[cols["etat"]].strip()
+        state = _USE_ETAT.get(etat)
+        if state is None:
+            reasons.append(f"line {line}: unknown use state {etat!r}")
+            continue
+        try:
+            dose = _decimal(cells[cols["dose"]])
+            interval = _decimal(cells[cols["interval"]])
+            applications = _integer(cells[cols["applications"]])
+            phi = _integer(cells[cols["phi"]])
+            distribution_end = _date(cells[cols["distribution_end"]])
+            use_end = _date(cells[cols["use_end"]])
+        except InvalidRow as exc:
+            reasons.append(f"line {line}: {exc}")
             continue
         parsed.append(
             UseRow(
@@ -227,31 +306,23 @@ def parse_uses(raw: bytes) -> Parsed:
                 identifiant=identifiant,
                 crop=crop,
                 target=target,
-                max_dose=_decimal(cells[cols["dose"]]),
+                max_dose=dose,
                 max_dose_unit=cells[cols["dose_unit"]].strip() or None,
-                interval_days=_decimal(cells[cols["interval"]]),
-                max_applications=_integer(cells[cols["applications"]]),
-                state=_USE_ETAT.get(cells[cols["etat"]].strip(), "withdrawn"),
+                interval_days=interval,
+                max_applications=applications,
+                phi_days=phi,
+                distribution_end=distribution_end,
+                use_end=use_end,
+                state=state,
             )
         )
     return Parsed(tuple(parsed), len(reasons), tuple(reasons))
 
 
-def _csv_zip_url() -> str:
-    """The current UTF-8 CSV archive URL, resolved from the dataset's resources."""
-    response = httpx.get(DATASET_URL, timeout=30)
-    response.raise_for_status()
-    resources = response.json()["resources"]
-    for resource in resources:
-        if resource.get("format") == "zip" and "utf8" in resource.get("title", "").lower():
-            return resource["url"]
-    raise SourceError("data.gouv.fr returned no UTF-8 CSV archive for the E-Phy dataset")
-
-
 def find_files(dest: Path) -> tuple[Path, Path]:
-    """The `products` and `products_usages` files in an extracted archive."""
-    products = sorted(dest.glob("produits_*.csv"))
-    uses = sorted(dest.glob("produits_usages_*.csv"))
+    """The `products` and `products_usages` files in an extracted archive, by exact name."""
+    products = [dest / name for name in _PRODUCT_FILES if (dest / name).is_file()]
+    uses = [dest / name for name in _USE_FILES if (dest / name).is_file()]
     if not products or not uses:
         raise SourceError(f"{dest} did not contain produits/produits_usages CSV files")
     return products[0], uses[0]
@@ -265,16 +336,44 @@ def extract(zip_path: Path, dest: Path) -> tuple[Path, Path]:
     return find_files(dest)
 
 
-def download(dest: Path) -> tuple[Path, Path]:
+def _resource_date(resource: dict) -> str:
+    last = resource.get("last_modified") or ""
+    try:
+        return datetime.fromisoformat(last.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return ""
+
+
+def _csv_zip_resource() -> tuple[str, SourceMeta]:
+    """The current UTF-8 CSV archive URL and its provenance, from the dataset's resources."""
+    response = httpx.get(DATASET_URL, timeout=30)
+    response.raise_for_status()
+    dataset = response.json()
+    licence_id = dataset.get("license") or LICENCE_ID
+    for resource in dataset["resources"]:
+        if resource.get("format") == "zip" and "utf8" in resource.get("title", "").lower():
+            name = resource.get("title", "")
+            return resource["url"], SourceMeta(
+                licence_id=licence_id,
+                resource_url=resource["url"],
+                archive_name=name,
+                archive_date=_resource_date(resource),
+            )
+    raise SourceError("data.gouv.fr returned no UTF-8 CSV archive for the E-Phy dataset")
+
+
+def download(dest: Path) -> tuple[Path, Path, SourceMeta]:
     """Download the E-Phy CSV archive and extract `products` and `products_usages`. Returns their
-    paths. Only the CLI and the weekly job call this; tests read recorded fixtures."""
-    url = _csv_zip_url()
+    paths and the archive's provenance. Only the CLI and the weekly job call this; tests read
+    recorded fixtures."""
+    url, meta = _csv_zip_resource()
     response = httpx.get(url, timeout=120)
     response.raise_for_status()
     dest.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         archive.extractall(dest)
-    return find_files(dest)
+    products, uses = find_files(dest)
+    return products, uses, meta
 
 
 def now() -> datetime:
@@ -282,11 +381,15 @@ def now() -> datetime:
 
 
 __all__ = [
+    "ATTRIBUTION",
     "LICENCE",
+    "LICENCE_ID",
     "SOURCE",
+    "InvalidRow",
     "Parsed",
     "ProductRow",
     "SourceError",
+    "SourceMeta",
     "UseRow",
     "content_hash",
     "decode",

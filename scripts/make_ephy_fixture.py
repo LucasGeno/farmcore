@@ -2,12 +2,15 @@
 
 The committed fixture under `tests/apps/catalog_fr_ephy/fixtures/` is a small, frozen subset of
 the weekly E-Phy archive (about 200 products — half authorised, half withdrawn — with all their
-usage rows, in both the UTF-8 and Windows-1252 encodings the source publishes). It is regenerated
-only when the upstream format drifts, and it is what the tests read: tests never download.
+usage rows, in both the UTF-8 and Windows-1252 encodings the source publishes). It also pins a
+composite-AMM product and a product with an `Autorisé (Provisoire)` use, so those rows are tested
+too. It is regenerated only when the upstream format drifts, and it is what the tests read: tests
+never download.
 
-Source: the two "decisionamm-intrant-format-csv-<date>-{utf8,windows-1252}.zip" archives of
+Source: the two "decisionamm-intrant-format-csv-20261117-{utf8,windows-1252}.zip" archives of
 https://www.data.gouv.fr/fr/datasets/donnees-ouvertes-du-catalogue-e-phy-des-produits-phytopharmaceutiques-matieres-fertilisantes-et-supports-de-culture-adjuvants-produits-mixtes-et-melanges
-(Anses, Licence Ouverte / Open Licence 2.0; cite « Données E-Phy - Anses »).
+(Anses, Licence Ouverte / Open Licence; cite « Données E-Phy - Anses »). The committed fixture was
+generated from the 2026-11-17 archive.
 
 Usage:
     uv run python scripts/make_ephy_fixture.py /extracted/utf8 /extracted/windows-1252
@@ -22,6 +25,9 @@ from pathlib import Path
 FIXTURES = Path("tests/apps/catalog_fr_ephy/fixtures")
 AUTHORISED = 100
 WITHDRAWN = 100
+
+# Always include a composite AMM (a MELANGE product) and a product whose uses are provisional.
+EXTRA_AMMS = {"2190686/2161101", "2000125"}
 
 AMM = "numero AMM"
 ETAT = "Etat d’autorisation"
@@ -65,6 +71,10 @@ def main(utf8_dir: str, cp1252_dir: str) -> None:
                 taken += 1
                 if taken >= (AUTHORISED if bucket == "AUTORISE" else WITHDRAWN):
                     break
+    for row in product_rows:
+        if row[amm_at].strip() in EXTRA_AMMS and row[amm_at].strip() not in amms:
+            chosen.append(row)
+            amms.add(row[amm_at].strip())
 
     use_header, use_rows = _load(utf8 / uses, "utf-8")
     use_amm_at = use_header.index(AMM)

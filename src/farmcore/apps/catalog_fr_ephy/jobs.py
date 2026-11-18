@@ -12,5 +12,5 @@ JOB_NAME = "catalog_fr_ephy.import"
 def import_ephy(ctx: JobContext) -> None:
     if not isinstance(get_clock(ctx.session, ctx.settings), LiveClock):
         return
-    products, uses = sources.download(ctx.settings.data_dir / "ephy-fr")
-    service.import_ephy(ctx.session, products_path=products, uses_path=uses)
+    products, uses, meta = sources.download(ctx.settings.data_dir / "ephy-fr")
+    service.import_ephy(ctx.session, products_path=products, uses_path=uses, meta=meta)

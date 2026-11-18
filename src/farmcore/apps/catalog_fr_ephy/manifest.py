@@ -1,7 +1,7 @@
 """Manifest of app `catalog_fr_ephy`: France's official plant-protection product register.
 
-No UI surface: the catalog is imported weekly and read by the record sheet's product picker
-(records-compliance 04). The job only downloads in live clock mode.
+No UI surface: the catalog is imported weekly and read by the record sheet's product picker. The
+job only downloads in live clock mode.
 """
 
 from datetime import timedelta
