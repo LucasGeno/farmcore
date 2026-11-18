@@ -1,0 +1,187 @@
+{
+  "register_csv": [
+    {
+      "product_name": "BOUILLIE BORDELAISE RSR DISPERSS NC",
+      "authorisation_no": "9800474",
+      "authorisation_placeholder": "",
+      "active_substance": "copper",
+      "date": "2024-04-20",
+      "start_time": "10:00",
+      "dose": "2.4",
+      "dose_unit": "kg/ha",
+      "iacs_parcel_id": "",
+      "parcel_alias": "P1",
+      "area_treated_ha": "1.25",
+      "crop_name": "",
+      "crop_eppo": "VITVI",
+      "bbch": "15",
+      "bbch_source": "config",
+      "checks": "OK: Copper 0.48 of 4 kg Cu/ha this year; OK: 1 of 5 copper applications this season; OK: Copper dose 2.4 kg/ha, label max 3.75"
+    },
+    {
+      "product_name": "BOUILLIE BORDELAISE RSR DISPERSS NC",
+      "authorisation_no": "9800474",
+      "authorisation_placeholder": "",
+      "active_substance": "copper",
+      "date": "2024-04-20",
+      "start_time": "10:00",
+      "dose": "2.4",
+      "dose_unit": "kg/ha",
+      "iacs_parcel_id": "",
+      "parcel_alias": "P2",
+      "area_treated_ha": "0.75",
+      "crop_name": "",
+      "crop_eppo": "VITVI",
+      "bbch": "15",
+      "bbch_source": "config",
+      "checks": "OK: Copper 0.48 of 4 kg Cu/ha this year; OK: 1 of 5 copper applications this season; OK: Copper dose 2.4 kg/ha, label max 3.75"
+    },
+    {
+      "product_name": "MICROTHIOL SPECIAL DISPERSS",
+      "authorisation_no": "9800245",
+      "authorisation_placeholder": "",
+      "active_substance": "sulphur",
+      "date": "2024-05-10",
+      "start_time": "08:00",
+      "dose": "800",
+      "dose_unit": "g/ha",
+      "iacs_parcel_id": "",
+      "parcel_alias": "P1",
+      "area_treated_ha": "1.25",
+      "crop_name": "",
+      "crop_eppo": "VITVI",
+      "bbch": "53",
+      "bbch_source": "config",
+      "checks": "OK: 1 of 8 sulphur applications this season; OK: Sulphur dose 0.8 kg/ha, label max 12.5; Note: Harvest not before 13 May"
+    },
+    {
+      "product_name": "BOUILLIE BORDELAISE RSR DISPERSS NC",
+      "authorisation_no": "9800474",
+      "authorisation_placeholder": "",
+      "active_substance": "copper",
+      "date": "2024-05-10",
+      "start_time": "08:00",
+      "dose": "1",
+      "dose_unit": "L/ha",
+      "iacs_parcel_id": "",
+      "parcel_alias": "P2",
+      "area_treated_ha": "0.75",
+      "crop_name": "",
+      "crop_eppo": "VITVI",
+      "bbch": "53",
+      "bbch_source": "config",
+      "checks": "Warning: Copper at least 0.48 kg Cu/ha this year (incomplete); OK: 2 of 5 copper applications this season"
+    }
+  ],
+  "stock": [
+    {
+      "product": "BOUILLIE BORDELAISE RSR DISPERSS NC",
+      "purchased": "20",
+      "used": null,
+      "on_hand": null,
+      "sprays": 2,
+      "not_computable": 1,
+      "low": false
+    },
+    {
+      "product": "MICROTHIOL SPECIAL DISPERSS",
+      "purchased": "10",
+      "used": "1.00000",
+      "on_hand": "9.00000",
+      "sprays": 1,
+      "not_computable": 0,
+      "low": false
+    }
+  ],
+  "spray_evidence": {
+    "logs": [
+      [
+        "spray 2024-04-20",
+        "2024-04-20T08:00:00+00:00",
+        "done",
+        null
+      ],
+      [
+        "spray 2024-05-10",
+        "2024-05-10T06:00:00+00:00",
+        "done",
+        null
+      ]
+    ],
+    "quantities": [
+      [
+        "rate",
+        "2.4",
+        "kg/ha",
+        "BOUILLIE BORDELAISE RSR DISPERSS NC",
+        "BOUILLIE BORDELAISE RSR DISPERSS NC"
+      ],
+      [
+        "rate",
+        "800",
+        "g/ha",
+        "MICROTHIOL SPECIAL DISPERSS",
+        "MICROTHIOL SPECIAL DISPERSS"
+      ]
+    ],
+    "ignored_sprays": 0
+  },
+  "source_dedup": [
+    [
+      "2024-04-20T08:00:00+00:00",
+      [
+        [
+          "file",
+          "f1",
+          20
+        ],
+        [
+          "isoxml",
+          "task-1",
+          30
+        ]
+      ],
+      [
+        [
+          "rate",
+          "2.4",
+          "kg/ha"
+        ]
+      ]
+    ],
+    [
+      "2024-05-10T06:00:00+00:00",
+      [
+        [
+          "file",
+          "f2",
+          20
+        ]
+      ],
+      [
+        [
+          "rate",
+          "800",
+          "g/ha"
+        ]
+      ]
+    ],
+    [
+      "2024-05-10T06:00:00+00:00",
+      [
+        [
+          "file",
+          "f3",
+          20
+        ]
+      ],
+      [
+        [
+          "rate",
+          "1",
+          "L/ha"
+        ]
+      ]
+    ]
+  ]
+}
