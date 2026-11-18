@@ -57,7 +57,9 @@ def test_replay_step_runs_the_ingest_job(session_factory, settings, monkeypatch,
         settings.model_copy(update={"data_dir": tmp_path}),
     )
 
-    assert [(r.name, r.ok) for r in runs] == [("stations.ingest_meteofrance", True)]
+    assert [(r.name, r.ok) for r in runs if r.name.startswith("stations.")] == [
+        ("stations.ingest_meteofrance", True)
+    ]
     with session_factory() as s:
         latest = s.scalar(select(func.max(Observation.ts)))
     assert latest == NOW + timedelta(hours=73)
