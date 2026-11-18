@@ -89,15 +89,22 @@ def clock_dep(request: Request, session: Session = Depends(get_session)) -> Cloc
     return get_clock(session, request.app.state.settings)
 
 
+def _switch(row: ClockState, mode: str) -> None:
+    # A new generation fences every live task attempt that started before the switch.
+    if row.mode != mode:
+        row.mode = mode
+        row.generation += 1
+
+
 def set_replay(session: Session, t: datetime, settings: Settings | None = None) -> None:
     """Switch to replay mode at `t` (aware). The caller commits."""
     row = clock_row(session, settings)
-    row.mode = "replay"
+    _switch(row, "replay")
     row.replay_now = _as_utc(t)
     session.flush()
 
 
 def set_live(session: Session, settings: Settings | None = None) -> None:
     """Switch to live mode (replay_now is kept for the next replay). The caller commits."""
-    clock_row(session, settings).mode = "live"
+    _switch(clock_row(session, settings), "live")
     session.flush()

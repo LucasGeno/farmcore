@@ -11,13 +11,12 @@ from threading import enumerate as threads
 import httpx
 from sqlalchemy import select
 
-from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.apps.forecast.sources import Run
 from farmcore.apps.forecast.store import import_runs
 from farmcore.core import clock
-from farmcore.core.jobs import run_now
 from farmcore.core.models.canonical import Farm
+from tests.apps.forecast.conftest import fetch_live_now
 
 JOB = "forecast.fetch_live"
 
@@ -133,11 +132,9 @@ def test_stalled_dns_has_fixed_capacity_fails_fast_recovers_and_never_revives_ht
         prior_id, prior_props = prior.id, dict(prior.props)
         clock.set_live(session, configured)
         session.commit()
-        started = time.monotonic()
-        result = run_now(session_factory, [MANIFEST], JOB, configured)
-        elapsed = time.monotonic() - started
+        result = fetch_live_now(session_factory, configured)
         assert result.ok, result.error
-        assert elapsed < 0.55, "native DNS completion must not hold the job's global lock"
+        assert not complete.is_set(), "a fetch must never wait for native DNS completion"
         assert len(lookup_calls) == 2, "two total slots; saturated farms must fail immediately"
         assert maximum <= 2
         assert sum(t.name.startswith("forecast-dns-") for t in threads()) == 2
@@ -155,9 +152,8 @@ def test_stalled_dns_has_fixed_capacity_fails_fast_recovers_and_never_revives_ht
                 "forecast_health": {"last_attempt": "2020-01-01T00:00:00+00:00"},
             }
         session.commit()
-        again = time.monotonic()
-        assert run_now(session_factory, [MANIFEST], JOB, configured).ok
-        assert time.monotonic() - again < 0.25
+        assert fetch_live_now(session_factory, configured).ok
+        assert not complete.is_set(), "saturated farms fail at once, never wait for native DNS"
         assert len(lookup_calls) == 2
         release.set()
         assert complete.wait(1)
@@ -171,7 +167,7 @@ def test_stalled_dns_has_fixed_capacity_fails_fast_recovers_and_never_revives_ht
                 "forecast_health": {"last_attempt": "2020-01-01T00:00:00+00:00"},
             }
         session.commit()
-        assert run_now(session_factory, [MANIFEST], JOB, configured).ok
+        assert fetch_live_now(session_factory, configured).ok
         session.expire_all()
         assert all("last_success" in farm.props["forecast_health"] for farm in farms), [
             farm.props["forecast_health"] for farm in farms
@@ -184,7 +180,7 @@ def test_stalled_dns_has_fixed_capacity_fails_fast_recovers_and_never_revives_ht
             "forecast_health": {"last_attempt": "2020-01-01T00:00:00+00:00"},
         }
         session.commit()
-        assert run_now(session_factory, [MANIFEST], JOB, configured).ok
+        assert fetch_live_now(session_factory, configured).ok
         session.expire_all()
         assert farms[0].props["forecast_health"]["error"] == "ConnectError"
         assert len(requests) == 5
@@ -193,7 +189,7 @@ def test_stalled_dns_has_fixed_capacity_fails_fast_recovers_and_never_revives_ht
             "forecast_health": {"last_attempt": "2020-01-01T00:00:00+00:00"},
         }
         session.commit()
-        assert run_now(session_factory, [MANIFEST], JOB, configured).ok
+        assert fetch_live_now(session_factory, configured).ok
         session.expire_all()
         assert "last_success" in farms[0].props["forecast_health"]
         assert len(requests) == 6
@@ -239,7 +235,7 @@ def test_native_dns_failure_is_per_farm_and_keeps_saved_forecast(
     prior_id, prior_props = prior.id, dict(prior.props)
     clock.set_live(session, settings)
     session.commit()
-    result = run_now(session_factory, [MANIFEST], JOB, settings)
+    result = fetch_live_now(session_factory, settings)
     assert result.ok, result.error
     session.expire_all()
     held = session.scalars(select(ForecastRun)).all()

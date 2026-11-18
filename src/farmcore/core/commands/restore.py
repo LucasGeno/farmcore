@@ -125,8 +125,19 @@ _FOREIGN_KEYS = text(
 # Never loaded: the copy starts with no member session, no access token (a token revoked after
 # the backup must not work again) and fresh sign-in throttling, and its schema revision and
 # migration-seeded reference data are the ones restore's migration created (so a bundle can
-# never supply its own unit factors).
-NOT_LOADED = frozenset({"local_session", "login_bucket", "access_token", *MIGRATION_OWNED_TABLES})
+# never supply its own unit factors). Nor the task queue: the copy never runs the original's
+# queued or running tasks; its workers plan due work again.
+QUEUE_TABLES = (
+    "procrastinate_jobs",
+    "procrastinate_events",
+    "procrastinate_periodic_defers",
+    "procrastinate_workers",
+)
+NOT_LOADED = frozenset(
+    {"local_session", "login_bucket", "access_token", *QUEUE_TABLES, *MIGRATION_OWNED_TABLES}
+)
+# A new clock generation: no task attempt begun before the backup can publish in the copy.
+_NEW_CLOCK_GENERATION = "UPDATE clock_state SET generation = generation + 1"
 PLAIN_FILES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 LOADER_PREFIX = "farmcore_restore_"
 # Emptied again after the load (an older revision may not have them yet).
@@ -731,6 +742,8 @@ class Copy:
                     sessions = [t for t in SESSION_TABLES if t in self.present]
                     if sessions:
                         conn.exec_driver_sql(f"TRUNCATE {', '.join(sessions)}")
+                    if "task_attempt" in self.present:
+                        conn.exec_driver_sql(_NEW_CLOCK_GENERATION)
                     set_external_effects(conn, EFFECTS_PAUSED)
         finally:
             engine.dispose()

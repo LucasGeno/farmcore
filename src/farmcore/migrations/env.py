@@ -59,8 +59,16 @@ EXCLUDED_TABLES = {
 }
 
 
+# The task library's tables: created from its vendored schema (core_0009), not from models.
+LIBRARY_TABLE_PREFIX = "procrastinate_"
+
+
 def include_object(obj, name, type_, reflected, compare_to):
-    if type_ == "table" and (name in EXCLUDED_TABLES or obj.schema in EXCLUDED_SCHEMAS):
+    if type_ == "table" and (
+        name in EXCLUDED_TABLES
+        or obj.schema in EXCLUDED_SCHEMAS
+        or name.startswith(LIBRARY_TABLE_PREFIX)
+    ):
         return False
     return alembic_helpers.include_object(obj, name, type_, reflected, compare_to)
 

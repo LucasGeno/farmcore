@@ -7,13 +7,11 @@ from hypothesis import HealthCheck, given
 from hypothesis import settings as property_settings
 from hypothesis import strategies as st
 
-from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.apps.forecast.store import latest_run
 from farmcore.core import clock
 from farmcore.core.access import repo_for_job
-from farmcore.core.jobs import run_now
 from farmcore.core.models.canonical import Farm
-from tests.apps.forecast.conftest import provider_client
+from tests.apps.forecast.conftest import fetch_live_now, provider_client
 
 JOB = "forecast.fetch_live"
 # Exact binary fractions keep the oracle independent of float rounding/storage details.
@@ -80,7 +78,7 @@ def test_generated_weather_nulls_remain_unknown_in_stored_receipts(
                     )
                 ),
             )
-            result = run_now(session_factory, [MANIFEST], JOB, settings)
+            result = fetch_live_now(session_factory, settings)
         assert result is not None and result.ok
         with session_factory() as session:
             run = latest_run(repo_for_job(session, farm_id, JOB), datetime.now(UTC))

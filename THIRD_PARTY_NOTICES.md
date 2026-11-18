@@ -19,6 +19,7 @@ Exact versions are pinned in `uv.lock`; each package keeps its own licence.
 | httpx | BSD-3-Clause | HTTP client (Vertex AI) |
 | google-auth[requests] | Apache-2.0 | Vertex AI credentials |
 | apscheduler | MIT | Live-mode job scheduler |
+| procrastinate (asgiref, croniter, python-dateutil, psycopg-pool) | MIT; asgiref and python-dateutil BSD-3-Clause; psycopg-pool **LGPL-3.0-only** | Durable live tasks (`farmcore worker`); its schema is vendored, unchanged, in `src/farmcore/migrations/vendor/` with its licence, [`LICENSE-procrastinate.md`](src/farmcore/migrations/vendor/LICENSE-procrastinate.md) |
 | python-telegram-bot | **LGPL-3.0-only** | Telegram bot |
 | faster-whisper (ctranslate2, onnxruntime, av) | MIT; av BSD-3-Clause, its wheels bundle FFmpeg libraries (LGPL) | Local speech-to-text |
 | timezonefinder | MIT | Offline coordinates → time-zone lookup (code) |

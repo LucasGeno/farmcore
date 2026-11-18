@@ -98,7 +98,7 @@ explicit confirm.
 ## Stack
 
 Python 3.12, FastAPI, SQLAlchemy 2 + GeoAlchemy2, Alembic, Pydantic, Jinja + HTMX + Tailwind,
-MapLibre GL, PostgreSQL 17 + PostGIS, APScheduler (live mode), python-telegram-bot,
+MapLibre GL, PostgreSQL 17 + PostGIS, APScheduler (live mode), Procrastinate (durable live tasks), python-telegram-bot,
 faster-whisper, Docker. Front-end libraries and fonts are bundled
 ([inventory](../src/farmcore/core/static/vendor/README.md)); map tiles come from IGN and
 OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
@@ -106,7 +106,8 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 ## Deliberately simple, with upgrade paths
 
 - One linear migration chain (per-app branches later).
-- An in-process scheduler (a `job` table with `SKIP LOCKED` workers for real farms).
+- An in-process scheduler for most jobs; live forecast fetching is already a durable task
+  (Procrastinate, with a plain `SKIP LOCKED` table as the documented exit).
 - A plain `observation` table (a TimescaleDB hypertable has the same schema).
 - One administrator per installation: grants show the consent model but are not yet
   authenticated multi-tenant access.
@@ -116,16 +117,16 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 ### Live weather receipts
 
-The installed forecast app schedules `forecast.fetch_live` hourly in live clock mode.
-Each tick requests at most five farms, least recently attempted first, with a ten-second
-total HTTP deadline per farm (headers and body) and six UTC forecast days. Successful and failed attempts share
-an hour-long database cache. `forecast_fetch_timeout_seconds` configures the total
+In live clock mode `forecast.fetch_live` is durable work ([below](#durable-live-tasks)): it
+queues one fetch task per due farm, at most five per tick, least recently attempted first, and
+`farmcore worker` runs them, each with a ten-second total HTTP deadline (headers and body) and
+six UTC forecast days. Successful and failed attempts share an hour-long database cache. `forecast_fetch_timeout_seconds` configures the total
 per-farm deadline (default 10 seconds, bounded to 0.05–30); expiration cancels and closes
-the HTTP request before the next farm proceeds. Native OS DNS lookups cannot be killed
+the HTTP request, and the failure is recorded in the farm's forecast health. Native OS DNS lookups cannot be killed
 safely: at most two may continue after their HTTP request times out. The forecast's two
 process-shared daemon resolver workers start lazily; two admission slots cover both queued
 and running lookups and remain occupied until the native work finishes (or canceled queued
-work is skipped). Saturation fails immediately rather than holding the job lock or growing
+work is skipped). Saturation fails immediately rather than growing
 threads/queues. Late DNS completion never restarts a canceled HTTP request. Requests use the farm's `props.forecast_location`
 (`latitude`, `longitude` in degrees), or its first geolocated weather station; a farm
 without either reports an unavailable refresh. Requests go to `OPEN_METEO_BASE_URL` (default
@@ -156,3 +157,23 @@ the public Single Runs API) with the same optional key; saved files record the k
 URL and `endpoint_kind`. A self-hosted Open-Meteo server serves the per-run files its
 `data_run/` store holds, so archive the runs an installation needs; the hosted Single Runs
 service keeps the full archive.
+
+### Durable live tasks
+
+A manifest job with a `task` (`JobSpec.task`) is durable live work; today only
+`forecast.fetch_live`. In live mode its job function only enqueues, in the caller's transaction
+(a rolled-back request queues nothing): request handlers and the worker's tick never fetch.
+`farmcore worker` (the Compose `worker` service) plans due work every 15 seconds, runs the
+queued tasks (four at once by default, so one farm's slow provider does not hold up another's)
+and retries the tasks of a worker whose heartbeat stopped, at most three runs in all. Replay
+never enqueues: `step_to` stays in-process and deterministic.
+
+The queue is [Procrastinate](https://procrastinate.readthedocs.io/) (MIT, tables in `public`,
+schema applied from a checksummed vendored copy by revision `core_0009`); only
+`core/tasks.py` imports it. What may be written is decided by FarmCore's own fence, not by the
+library's job status: each run takes a new attempt in `task_attempt`, and the transaction that
+writes the result first checks, under row locks, that the attempt is still the current one for
+its task and farm, before its deadline, that the farm exists and that the clock is live in the
+generation the attempt began in. A retry, a live/replay switch (`clock_state.generation`) and a
+restore (which loads no queue table and starts a new generation) therefore reject every older
+attempt. No transaction is open while a task waits on the network.

@@ -16,12 +16,10 @@ from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 
 from farmcore.apps.forecast import sources
-from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.core import clock
-from farmcore.core.jobs import run_now
 from farmcore.settings import Settings
-from tests.apps.forecast.conftest import provider_client
+from tests.apps.forecast.conftest import fetch_live_now, provider_client
 
 JOB = "forecast.fetch_live"
 
@@ -71,7 +69,7 @@ def test_customer_base_url_sends_key_and_records_kind_without_the_key(
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-    assert run_now(session_factory, [MANIFEST], JOB, configured).ok
+    assert fetch_live_now(session_factory, configured).ok
     session.expire_all()
     assert len(calls) == 1
     parts = urlsplit(calls[0])
@@ -100,7 +98,7 @@ def test_customer_base_url_sends_key_and_records_kind_without_the_key(
         return httpx.Response(401, request=httpx.Request("GET", url))
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(unauthorized))
-    assert run_now(session_factory, [MANIFEST], JOB, configured).ok
+    assert fetch_live_now(session_factory, configured).ok
     session.expire_all()
     failed_farm = session.get(Farm, farm.id)
     assert failed_farm.props["forecast_health"]["error"] == "HTTPStatusError"
@@ -123,7 +121,7 @@ def test_self_hosted_base_url_needs_no_key_and_records_self_hosted(
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-    assert run_now(session_factory, [MANIFEST], JOB, configured).ok
+    assert fetch_live_now(session_factory, configured).ok
     session.expire_all()
     parts = urlsplit(calls[0])
     assert (parts.scheme, parts.netloc, parts.path) == ("http", "openmeteo:8080", "/v1/forecast")

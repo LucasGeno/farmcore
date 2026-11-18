@@ -116,6 +116,13 @@ services:
       retries: 6
       start_period: 30s
 
+  # Durable live tasks (today the live forecast fetch): plans due work, runs it with a deadline
+  # and retries the tasks of a worker that died. Idle while the clock replays; web requests only
+  # enqueue. Without it no live forecast is fetched. Several may run (`--scale worker=2`).
+  worker:
+    <<: *farmcore
+    command: ["farmcore", "worker"]
+
   # Telegram long polling: one poller per bot token. Starts only with `--profile telegram`.
   bot:
     <<: *farmcore

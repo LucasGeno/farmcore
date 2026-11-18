@@ -764,7 +764,7 @@ def test_app_and_bot_hold_only_runtime_credentials_and_never_migrate(two_install
     a, _ = two_installations
     config = json.loads(a.compose("--profile", "telegram", "config", "--format", "json").stdout)
     services = config["services"]
-    for name in ("app", "bot"):
+    for name in ("app", "worker", "bot"):
         service = services[name]
         env = service["environment"]
         assert env["DATABASE_URL"].startswith("postgresql+psycopg://farmcore_app:")

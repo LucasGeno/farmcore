@@ -83,9 +83,16 @@ LayerKind = Literal["parcels", "points"]
 
 @dataclass(frozen=True)
 class JobSpec:
+    """A job runs `func(ctx: JobContext)` every `interval`. With `task` it is durable live work
+    (`core/tasks.py`): in live mode `func` only enqueues one task per due farm in `ctx.session`,
+    and `farmcore worker` runs `task(ctx: TaskContext)`, which may publish only before its
+    attempt's `deadline`. In replay `func` runs in process, as for every job."""
+
     name: str
     func: str  # "module:attr"
     interval: timedelta
+    task: str | None = None  # "module:attr"
+    deadline: timedelta = timedelta(minutes=1)
 
 
 @dataclass(frozen=True)

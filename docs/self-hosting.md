@@ -1,12 +1,13 @@
 # Self-hosting
 
-`docker-compose.yml` is one installation: five services, one image, one Compose project.
+`docker-compose.yml` is one installation: six services, one image, one Compose project.
 
 | Service | What |
 |---|---|
 | `db` | PostgreSQL 17 + PostGIS; no published port |
 | `migrate` | One-shot `farmcore migrate` as the database owner, then exits; see below |
 | `app` | The web app on `127.0.0.1:8000`; starts after `migrate` exits 0, never migrates |
+| `worker` | Durable live tasks (the live forecast fetch); also waits for `migrate`; idle in replay |
 | `bot` | Telegram long-polling bot; only with `--profile telegram`; also waits for `migrate` |
 | `backup` | Daily `farmcore backup`: one encrypted bundle into the `backups` volume, kept 7 days |
 
@@ -16,7 +17,7 @@ roles that matter. `farmcore` (password `POSTGRES_PASSWORD`) is its bootstrap su
 image's `POSTGRES_USER`); it owns the `farmcore` database, its schema and the PostGIS
 extension. Only `migrate` and `backup` hold its password, and `migrate` refuses to run as any
 role that is not a superuser. `farmcore_app` (password `RUNTIME_DATABASE_PASSWORD`) is what the
-app, the bot and `docker compose exec app farmcore ...` use. After every `migrate` it holds
+app, the worker, the bot and `docker compose exec app farmcore ...` use. After every `migrate` it holds
 exactly:
 
 - `CONNECT` on the `farmcore` database, and `USAGE` on its `public` schema;
@@ -496,7 +497,7 @@ git pull                 # or point FARMCORE_IMAGE in farm-a.env at the new rele
 docker compose -p farm-a --env-file farm-a.env build    # the new image; nothing restarts yet
 docker compose -p farm-a --env-file farm-a.env run --rm --no-deps migrate \
   farmcore upgrade --check
-docker compose -p farm-a --env-file farm-a.env stop app bot
+docker compose -p farm-a --env-file farm-a.env stop app worker bot
 docker compose -p farm-a --env-file farm-a.env run --rm --no-deps migrate \
   farmcore upgrade --backup-dir /backups
 docker compose -p farm-a --env-file farm-a.env up -d --wait --wait-timeout 180
@@ -561,7 +562,7 @@ database is kept aside under another name, so nothing is lost:
 
 ```sh
 dc() { docker compose -p farm-a --env-file farm-a.env "$@"; }   # works in sh, bash and zsh
-dc stop app bot backup
+dc stop app worker bot backup
 # The previous image again: `git checkout` the previous release's tag, then `dc build`; or,
 # with FARMCORE_IMAGE, set it back to the previous tag in farm-a.env (no build).
 dc run --rm --no-deps --entrypoint ls backup -l /backups    # the pre-upgrade-*.age bundles
