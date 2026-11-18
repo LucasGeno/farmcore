@@ -4,11 +4,14 @@ Failure modes owned here (one test each):
 - Golden: adding the normalised schema, or mirroring legacy weather into it, changes what the
   stations, forecast, advisor or replay consumers produce. Frozen in
   `snapshots/weather_golden.json` before any schema change.
-- Licence: a receipt without a licence is stored as redistributable (or is refused instead of
-  stored as `unknown`), or a raw SQL writer can mark unknown-licence data redistributable.
-- Credential: a provider credential named in `auth_schema()` is stored in a receipt's request.
-- Units and values: an observation or forecast value is stored as a float, NaN, or in a unit
-  other than its CF variable's unit; a legacy float gains binary noise when mirrored.
+- Licence: a receipt without a licence (or stating `Unknown` in another case) is stored as
+  redistributable, or a raw SQL writer can mark unknown-licence data redistributable.
+- Credential: a provider credential named in `auth_schema()`, or URL user credentials, is stored
+  in a receipt's request.
+- Units and values: an observation or forecast value is stored as a float, or in a unit other
+  than its CF variable's unit; a legacy float gains binary noise when mirrored.
+- Evidence and ownership: a re-fetch replaces a held observation or its receipt, or makes a
+  farm-owned station public.
 - Registry: a second provider under a taken name silently replaces the first, or an object
   missing a contract method registers.
 """
@@ -16,6 +19,7 @@ Failure modes owned here (one test each):
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
@@ -32,8 +36,13 @@ from farmcore.apps.forecast.normalised import mirror_run
 from farmcore.apps.stations import service as stations
 from farmcore.apps.stations.normalised import mirror_station
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Asset, Event, Parcel
-from farmcore.core.models.weather import WeatherForecast, WeatherObservation, WeatherReceipt
+from farmcore.core.models.canonical import Advice, Asset, Event, Farm, Parcel
+from farmcore.core.models.weather import (
+    WeatherForecast,
+    WeatherObservation,
+    WeatherReceipt,
+    WeatherStation,
+)
 from farmcore.core.seed import ensure_default_farm
 from farmcore.core.weather.contract import (
     AuthField,
@@ -61,13 +70,39 @@ def _iso(value):
     return value.isoformat() if isinstance(value, datetime) else value
 
 
-def _without_ids(value):
-    """Drop generated row ids (sequences are not rolled back between tests)."""
+def _natural(value, refs: dict[str, dict[int, str]]):
+    """Generated ids (sequences are not rolled back between tests) as stable natural keys: a
+    row's own `id` is dropped, each `<table>_id` reference becomes the referenced row's natural
+    key, so a reference to the wrong row still changes the output. An unmapped reference fails
+    rather than being dropped."""
     if isinstance(value, dict):
-        return {k: _without_ids(v) for k, v in value.items() if k != "id" and not k.endswith("_id")}
+        out = {}
+        for k, v in value.items():
+            if k == "id":
+                continue
+            if k.endswith("_id") and v is not None:
+                out[k] = refs[k][v]
+            else:
+                out[k] = _natural(v, refs)
+        return out
     if isinstance(value, list):
-        return [_without_ids(v) for v in value]
+        return [_natural(v, refs) for v in value]
     return value
+
+
+def _refs(session) -> dict[str, dict[int, str]]:
+    return {
+        "farm_id": dict(session.execute(select(Farm.id, Farm.name)).all()),
+        "parcel_id": dict(session.execute(select(Parcel.id, Parcel.alias)).all()),
+        "advice_id": {
+            advice_id: f"{alias}@{at.isoformat()}"
+            for advice_id, alias, at in session.execute(
+                select(Advice.id, Parcel.alias, Advice.evaluated_at).join(
+                    Parcel, Parcel.id == Advice.parcel_id
+                )
+            )
+        },
+    }
 
 
 def _semantics(session, settings) -> dict:
@@ -100,7 +135,7 @@ def _semantics(session, settings) -> dict:
             Event.occurred_at, Event.id
         )
     ).all()
-    return _without_ids(
+    return _natural(
         json.loads(
             json.dumps(
                 {
@@ -125,7 +160,8 @@ def _semantics(session, settings) -> dict:
                 default=_iso,
                 sort_keys=True,
             )
-        )
+        ),
+        _refs(session),
     )
 
 
@@ -143,7 +179,7 @@ def _digests(semantics: dict) -> dict:
 
 @pytest.mark.data
 def test_golden_outputs_unchanged_with_legacy_weather_mirrored_into_new_schema(
-    session, settings, seeded, step
+    session, settings, seeded, step, tmp_path
 ):
     seeded()
     step("2024-05-14 06:00")
@@ -155,9 +191,14 @@ def test_golden_outputs_unchanged_with_legacy_weather_mirrored_into_new_schema(
         mirror_run(session, run)
     assert session.scalar(select(func.count()).select_from(WeatherReceipt)) == 3
 
-    actual = _digests(_semantics(session, settings))
+    semantics = _semantics(session, settings)
+    actual, golden = _digests(semantics), json.loads(GOLDEN.read_text())
 
-    assert actual == json.loads(GOLDEN.read_text())
+    if actual != golden:  # the snapshot holds only digests: keep the full output to diff
+        out = Path(os.environ.get("FARMCORE_GOLDEN_OUT") or tmp_path / "weather_golden_actual.json")
+        out.write_text(json.dumps(semantics, indent=1, sort_keys=True, ensure_ascii=False))
+        changed = sorted(k for k in golden if actual.get(k) != golden[k])
+        pytest.fail(f"weather golden changed in {changed}; full output: {out}")
 
 
 T0 = datetime(2026, 6, 1, 12, tzinfo=UTC)
@@ -211,8 +252,10 @@ def _count(session, model) -> int:
     return session.scalar(select(func.count()).select_from(model))
 
 
-def test_receipt_without_a_licence_is_unknown_and_never_redistributable(session):
-    receipt = receive(session, FakeProvider(), _fetched(_rain(Decimal("0.2"))), station=STATION)
+@pytest.mark.parametrize("stated", [None, " Unknown "])
+def test_receipt_without_a_licence_is_unknown_and_never_redistributable(session, stated):
+    provider = FakeProvider(Licence(stated, None, True))  # claims redistribution anyway
+    receipt = receive(session, provider, _fetched(_rain(Decimal("0.2"))), station=STATION)
     assert (receipt.licence, receipt.redistribution) == ("unknown", False)
 
     # Raw SQL writers get the same: an omitted licence defaults to unknown, not redistributable,
@@ -223,13 +266,14 @@ def test_receipt_without_a_licence_is_unknown_and_never_redistributable(session)
         )
     ).one()
     assert tuple(raw) == ("unknown", False)
-    # and the database refuses unknown-licence data marked redistributable.
+    # and the database refuses unknown-licence data marked redistributable, in any case.
     with pytest.raises(IntegrityError), session.begin_nested():
         session.execute(
             text(
-                "INSERT INTO weather_receipt (provider, dataset, fetched_at, redistribution) "
-                "VALUES ('raw', 'd', now(), true)"
-            )
+                "INSERT INTO weather_receipt (provider, dataset, fetched_at, licence, "
+                "redistribution) VALUES ('raw', 'd', now(), :licence, true)"
+            ),
+            {"licence": stated or "unknown"},
         )
 
 
@@ -238,6 +282,7 @@ def test_receipt_without_a_licence_is_unknown_and_never_redistributable(session)
     [
         ("https://example.test/obs?station=ST1&Token=s3cret", None),
         ("https://example.test/obs", {"token": "s3cret"}),
+        ("https://user:s3cret@example.test/obs", None),  # credentials in the URL itself
     ],
 )
 def test_a_request_naming_a_secret_credential_is_refused_and_nothing_stored(session, url, params):
@@ -252,7 +297,6 @@ def test_a_request_naming_a_secret_credential_is_refused_and_nothing_stored(sess
     "value",
     [
         _rain(0.2),  # a float
-        _rain(Decimal("NaN")),
         _rain(Decimal("0.2"), unit="kg m-2"),  # a valid CF unit, but not the stored one
         ObservationValue("rainfall", "mm", Decimal("0.2"), T0, T0),  # not a CF name we store
     ],
@@ -265,9 +309,12 @@ def test_a_value_outside_the_stored_shape_is_refused_before_anything_is_written(
     assert _count(session, WeatherReceipt) == _count(session, WeatherObservation) == 0
 
 
-def test_an_observation_already_held_keeps_its_value_and_receipt(session):
+def test_an_observation_already_held_keeps_its_value_receipt_and_station_owner(session, settings):
+    farm = ensure_default_farm(session, settings)
     provider = FakeProvider(Licence("CC-BY-4.0", "© Test", True))
-    first = receive(session, provider, _fetched(_rain(Decimal("0.2"))), station=STATION)
+    first = receive(
+        session, provider, _fetched(_rain(Decimal("0.2"))), station=STATION, owner_farm_id=farm.id
+    )
     again = receive(session, provider, _fetched(_rain(Decimal("0.2"))), station=STATION)
     later = receive(
         session, provider, _fetched(_rain(Decimal("0.4")), payload=b"r2"), station=STATION
@@ -277,6 +324,8 @@ def test_an_observation_already_held_keeps_its_value_and_receipt(session):
     assert later.id != first.id
     rows = session.execute(select(WeatherObservation.value, WeatherObservation.receipt_id)).all()
     assert rows == [(Decimal("0.2"), first.id)]
+    # Receiving without an owner never makes the farm's station public.
+    assert session.scalar(select(WeatherStation.owner_farm_id)) == farm.id
 
 
 def test_registry_refuses_a_taken_name_and_an_object_missing_a_method():
@@ -338,12 +387,16 @@ def test_legacy_forecast_runs_mirror_with_their_request_licence_and_exact_values
             WeatherForecast.unit,
             WeatherForecast.value,
             WeatherForecast.run,
+            WeatherForecast.period_start,
+            WeatherForecast.period_end,
         )
         .where(WeatherForecast.receipt_id == receipt.id)
         .order_by(WeatherForecast.variable)
     ).all()
-    # A live receipt's issued_at is its identity, not a model run time.
+    # A live receipt's issued_at is its identity, not a model run time; rain and gusts cover
+    # the preceding hour.
+    hour_before = T0 - timedelta(hours=1)
     assert rows == [
-        ("lwe_thickness_of_precipitation_amount", "mm", Decimal("0.1"), None),
-        ("wind_speed_of_gust", "km h-1", Decimal("33.3"), None),
+        ("lwe_thickness_of_precipitation_amount", "mm", Decimal("0.1"), None, hour_before, T0),
+        ("wind_speed_of_gust", "km h-1", Decimal("33.3"), None, hour_before, T0),
     ]

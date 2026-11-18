@@ -7,14 +7,16 @@ these tables sit beside them until the consumers move (expand, migrate, contract
   only by the migration (`migrate.MIGRATION_OWNED_TABLES`).
 - `weather_receipt`: one provider response: provider, dataset, the keyless request, fetch time,
   licence (an SPDX identifier or a named licence; `unknown` when none is known), attribution,
-  whether the data may be redistributed, payload hash and library version. An unknown licence is
-  never redistributable: a database check, so no writer can bypass it.
+  whether the data may be redistributed, payload hash and library version. An unknown licence
+  (`unknown`, `noassertion` or `none`, in any case or padding) is never redistributable: a
+  database check, so no writer can bypass it.
 - `weather_station`: WIGOS ID (when the station has one), provider ID, location, elevation and
   the owning farm (null: a public network station).
 - `weather_observation` / `weather_forecast`: a CF variable, a decimal value in that variable's
   unit (a composite foreign key, so a value in another unit cannot be stored) and its receipt.
   A forecast's `run` is null when the provider does not say when the model was issued; member 0
-  is the deterministic (or control) forecast.
+  is the deterministic (or control) forecast. Both carry the period a value covers
+  (`variables.Variable.cell_method` says how); a forecast's period may be unknown (null).
 """
 
 from __future__ import annotations
@@ -44,6 +46,11 @@ from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import _pk, _props
 
 UNKNOWN_LICENCE = "unknown"
+# Licence values that state no licence (SPDX `NOASSERTION`, `none`), compared case-folded.
+UNKNOWN_LICENCES = ("unknown", "noassertion", "none")
+UNKNOWN_NOT_REDISTRIBUTED = (
+    f"lower(btrim(licence)) NOT IN {UNKNOWN_LICENCES!r} OR NOT redistribution"
+)
 QC_FLAGS = ("unchecked", "passed", "suspect", "failed")
 WIGOS_ID = "^[0-9]{1,5}-[0-9]{1,5}-[0-9]{1,5}-[0-9A-Za-z]{1,16}$"
 
@@ -71,7 +78,7 @@ class WeatherReceipt(Base):
     __table_args__ = (
         CheckConstraint("length(btrim(licence)) BETWEEN 1 AND 100", name="licence"),
         CheckConstraint(
-            f"licence <> '{UNKNOWN_LICENCE}' OR NOT redistribution",
+            UNKNOWN_NOT_REDISTRIBUTED,
             name="unknown_not_redistributed",
         ),
         CheckConstraint(
@@ -144,6 +151,10 @@ class WeatherForecast(Base):
     __table_args__ = (
         *_value_constraints(),
         CheckConstraint("member >= 0", name="member"),
+        CheckConstraint(
+            "(period_start IS NULL AND period_end IS NULL) OR period_end >= period_start",
+            name="period",
+        ),
         UniqueConstraint(
             "receipt_id",
             "model",
@@ -160,6 +171,8 @@ class WeatherForecast(Base):
     run: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     valid_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     member: Mapped[int] = mapped_column(Integer, server_default="0")
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     variable: Mapped[str] = mapped_column(Text)
     unit: Mapped[str] = mapped_column(Text)
     value: Mapped[Decimal] = mapped_column(Numeric)

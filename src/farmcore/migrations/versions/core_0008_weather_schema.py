@@ -6,10 +6,12 @@ equal to `farmcore.core.weather.variables`) and the normalised tables every weat
 writes: `weather_receipt` (provider, dataset, keyless request, fetch time, licence, attribution,
 redistribution flag, payload hash, library version), `weather_station` (WIGOS ID, provider ID,
 location, elevation, owner), `weather_observation` and `weather_forecast` (CF variable, decimal
-value in that variable's unit, receipt).
+value in that variable's unit, the period it covers, receipt; a forecast's period is null when
+the provider does not say).
 
 A receipt written without a licence reads `unknown` and is not redistributable; the database
-refuses an `unknown` licence marked redistributable, whoever writes it.
+refuses an unknown licence (`unknown`, `noassertion` or `none`, in any case or padding) marked
+redistributable, whoever writes it.
 
 Purely additive: `observation`, `forecast_run` and `forecast_value` stay the only source every
 current consumer reads. Downgrade drops the new tables.
@@ -41,6 +43,7 @@ VARIABLES = {
     "wind_speed_of_gust": ("km h-1", "fx_kmh"),
 }
 WIGOS_ID = "^[0-9]{1,5}-[0-9]{1,5}-[0-9]{1,5}-[0-9A-Za-z]{1,16}$"
+FORECAST_PERIOD = "(period_start IS NULL AND period_end IS NULL) OR period_end >= period_start"
 QC_FLAGS = "qc_flag IN ('unchecked', 'passed', 'suspect', 'failed')"
 
 
@@ -97,7 +100,7 @@ def upgrade() -> None:
             "length(btrim(licence)) BETWEEN 1 AND 100", name=op.f("ck_weather_receipt_licence")
         ),
         sa.CheckConstraint(
-            "licence <> 'unknown' OR NOT redistribution",
+            "lower(btrim(licence)) NOT IN ('unknown', 'noassertion', 'none') OR NOT redistribution",
             name=op.f("ck_weather_receipt_unknown_not_redistributed"),
         ),
         sa.CheckConstraint(
@@ -184,8 +187,11 @@ def upgrade() -> None:
         sa.Column("run", sa.DateTime(timezone=True), nullable=True),
         sa.Column("valid_time", sa.DateTime(timezone=True), nullable=False),
         sa.Column("member", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("period_start", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("period_end", sa.DateTime(timezone=True), nullable=True),
         *_variable("weather_forecast"),
         sa.CheckConstraint("member >= 0", name=op.f("ck_weather_forecast_member")),
+        sa.CheckConstraint(FORECAST_PERIOD, name=op.f("ck_weather_forecast_period")),
         sa.ForeignKeyConstraint(
             ["receipt_id"],
             ["weather_receipt.id"],

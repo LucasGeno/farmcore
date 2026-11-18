@@ -112,6 +112,8 @@ class ForecastValue:
     unit: str
     value: Decimal
     member: int = 0  # 0: the deterministic or control forecast
+    period_start: datetime | None = None  # the period the value covers; None: not stated
+    period_end: datetime | None = None
 
 
 @dataclass(frozen=True)

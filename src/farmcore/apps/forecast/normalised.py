@@ -7,6 +7,8 @@ provider port reads from and checks against.
 - The request URL and `endpoint_kind` come from the run's own props (written by the fetch,
   never with the key), not rebuilt here.
 - A live receipt's `issued_at` is only the receipt's identity: its model run is unknown (None).
+- Periods: rain is the hour's total and a gust the hour's maximum, both ending at the
+  timestamp; the other variables are instantaneous.
 - Values become decimals through their shortest float text, so 0.1 stays 0.1.
 - Saved Open-Meteo responses are CC BY 4.0; any other source states no licence and is stored as
   `unknown`, not redistributable. The payload is the run's canonical JSON, so mirroring a run
@@ -16,7 +18,7 @@ provider port reads from and checks against.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from sqlalchemy import select
@@ -34,6 +36,9 @@ PROVIDER = "open-meteo"
 AUTH = (AuthField("apikey", secret=True, description="Open-Meteo customer API key"),)
 LIVE_LICENCE = Licence("CC-BY-4.0", "Weather data by Open-Meteo.com (CC BY 4.0)", True)
 SINGLE_RUNS_LICENCE = Licence("CC-BY-4.0", sources.ATTRIBUTION, True)
+# Open-Meteo hourly: precipitation is the preceding-hour sum and wind gusts the preceding-hour
+# maximum; temperature, humidity and wind speed are instantaneous (https://open-meteo.com/en/docs).
+PERIODS = {"rr1_mm": timedelta(hours=1), "fx_kmh": timedelta(hours=1)}
 
 
 def licence_for(run: ForecastRun) -> Licence:
@@ -78,6 +83,8 @@ def mirror_run(session: Session, run: ForecastRun) -> WeatherReceipt:
                 variable=BY_LEGACY[v.variable].name,
                 unit=BY_LEGACY[v.variable].unit,
                 value=Decimal(repr(v.value)),
+                period_start=v.ts - PERIODS.get(v.variable, timedelta(0)),
+                period_end=v.ts,
             )
             for v in values
         ],

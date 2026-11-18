@@ -3,7 +3,8 @@
 `mirror_station` copies a station asset's `observation` rows into `weather_station`,
 `weather_receipt` and `weather_observation`. `observation` stays what every consumer reads.
 
-- The station is a public network station (no owning farm) under its Météo-France number; its
+- Only an asset imported as a Météo-France station (its `meteofrance` external key) is
+  mirrored. It is a public network station (no owning farm) under its Météo-France number; its
   WIGOS ID is not in the file, so it stays unknown rather than guessed.
 - Periods: rain is the total over the hour ending at the timestamp; wind speed is the 10-minute
   mean ending at it (Météo-France hourly data: RR1, FF); temperature and humidity are
@@ -43,9 +44,11 @@ def mirror_station(session: Session, asset: Asset, fetched_at: datetime) -> Weat
     latitude, longitude = session.execute(
         select(func.ST_Y(Asset.geom), func.ST_X(Asset.geom)).where(Asset.id == asset.id)
     ).one()
+    if key is None:  # a farm's own sensor is never published as a Météo-France station
+        raise ValueError(f"asset {asset.id} is not a Météo-France station")
     altitude = (asset.props or {}).get("alti_m")
     station = Station(
-        provider_station_id=key or str(asset.id),
+        provider_station_id=key,
         name=asset.name,
         latitude=latitude,
         longitude=longitude,

@@ -1,10 +1,12 @@
 """Write provider responses into the normalised weather schema.
 
 - `record_receipt`: one `weather_receipt` per distinct response. No licence identifier stores as
-  `unknown` with redistribution blocked, whatever the provider claims. A request naming a secret
-  credential field is refused. The same payload from the same provider, dataset and farm returns
-  the receipt already held (the first receipt is the evidence).
-- `upsert_station`: one `weather_station` per provider station ID.
+  `unknown` with redistribution blocked, whatever the provider claims; so does a stated
+  `unknown`, `NOASSERTION` or `none` in any case. A request naming a secret credential field,
+  or a URL with user credentials, is refused. The same payload from the same provider, dataset
+  and farm returns the receipt already held (the first receipt is the evidence).
+- `upsert_station`: one `weather_station` per provider station ID; its owner is never cleared
+  implicitly.
 - `store_observations` / `store_forecast`: decimal values in their CF variable's stored unit only
   (a float, a non-finite value, an unknown variable or another unit raises `WeatherValueError`
   before anything is written). An observation already held for the same station, variable and
@@ -25,6 +27,7 @@ from sqlalchemy.orm import Session
 from farmcore.core import units
 from farmcore.core.models.weather import (
     UNKNOWN_LICENCE,
+    UNKNOWN_LICENCES,
     WeatherForecast,
     WeatherObservation,
     WeatherReceipt,
@@ -55,7 +58,10 @@ def _check_keyless(fetched: Fetched, secret_fields: Iterable[str]) -> None:
     secrets = {name.lower() for name in secret_fields}
     named = {key.lower() for key in fetched.request.params}
     if fetched.request.url:
-        named |= {key.lower() for key, _ in parse_qsl(urlsplit(fetched.request.url).query)}
+        url = urlsplit(fetched.request.url)
+        if url.username or url.password:
+            raise CredentialInRequest("the request URL carries user credentials")
+        named |= {key.lower() for key, _ in parse_qsl(url.query)}
     leaked = sorted(named & secrets)
     if leaked:
         raise CredentialInRequest(f"the request names credential field(s) {', '.join(leaked)}")
@@ -82,7 +88,9 @@ def record_receipt(
     )
     if held is not None:
         return held
-    identifier = (licence.identifier or "").strip() or UNKNOWN_LICENCE
+    identifier = (licence.identifier or "").strip()
+    if identifier.casefold() in UNKNOWN_LICENCES or not identifier:
+        identifier = UNKNOWN_LICENCE
     receipt = WeatherReceipt(
         provider=provider,
         dataset=fetched.request.dataset,
@@ -107,6 +115,8 @@ def record_receipt(
 def upsert_station(
     session: Session, provider: str, station: Station, owner_farm_id: int | None = None
 ) -> WeatherStation:
+    """Insert or refresh a station. `owner_farm_id` None leaves the current owner as it is
+    (never makes an owned station public); a different owner than the one held is refused."""
     row = session.scalar(
         select(WeatherStation).where(
             WeatherStation.provider == provider,
@@ -120,7 +130,10 @@ def upsert_station(
     row.name = station.name
     row.geom = f"SRID=4326;POINT({station.longitude} {station.latitude})"
     row.elevation_m = station.elevation_m
-    row.owner_farm_id = owner_farm_id
+    if owner_farm_id is not None:
+        if row.owner_farm_id not in (None, owner_farm_id):
+            raise WeatherValueError(f"station {station.provider_station_id} has another owner")
+        row.owner_farm_id = owner_farm_id
     session.flush()
     return row
 
@@ -161,10 +174,7 @@ def store_observations(
         }
         for v in values
     ]
-    for i in range(0, len(rows), 5000):
-        session.execute(
-            insert(WeatherObservation).values(rows[i : i + 5000]).on_conflict_do_nothing()
-        )
+    _insert(session, WeatherObservation, rows)
 
 
 def store_forecast(
@@ -178,6 +188,8 @@ def store_forecast(
             "run": v.run,
             "valid_time": v.valid_time,
             "member": v.member,
+            "period_start": v.period_start,
+            "period_end": v.period_end,
         }
         for v in values
     ]
@@ -190,9 +202,11 @@ def receive(
     fetched: Fetched,
     *,
     station: Station | None = None,
+    owner_farm_id: int | None = None,
     farm_id: int | None = None,
 ) -> WeatherReceipt:
-    """Store one provider response: receipt, station and values."""
+    """Store one provider response: receipt, station and values. `owner_farm_id` names the
+    farm that owns the station (an on-farm sensor); None keeps the station's current owner."""
     observations = [v for v in fetched.values if isinstance(v, ObservationValue)]
     forecasts = [v for v in fetched.values if isinstance(v, ForecastValue)]
     for value in fetched.values:
@@ -209,7 +223,10 @@ def receive(
     )
     if observations:
         store_observations(
-            session, receipt, upsert_station(session, provider.name, station), observations
+            session,
+            receipt,
+            upsert_station(session, provider.name, station, owner_farm_id),
+            observations,
         )
     if forecasts:
         store_forecast(session, receipt, forecasts)
