@@ -10,19 +10,23 @@ from __future__ import annotations
 
 import re
 import secrets
+from datetime import date
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit
+from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 from sqlalchemy import select
 
+from farmcore.apps.fields import seasons
 from farmcore.apps.fields.service import (
     NOT_ADVISED_LABEL,
     parcels_feature_collection,
     styles_for,
 )
-from farmcore.core.access import Repo
+from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.manifest import collect_parcel_views
 from farmcore.core.models.canonical import Farm, Parcel
@@ -153,6 +157,18 @@ def panel_sections(request: Request, kind: PanelKind, parcel_id: int | None = No
     return sections
 
 
+def _season_today(request: Request, repo: Repo, parcel: Parcel) -> dict:
+    """The season covering the clock's local today (None in a gap or with no seasons), and
+    whether the parcel has any season, so a gap never reads as an unknown crop history."""
+    settings: Settings = request.app.state.settings
+    today = get_clock(repo.session, settings).now().astimezone(ZoneInfo(settings.display_tz))
+    row = seasons.season_on(repo, parcel.id, today.date())
+    return {
+        "season": seasons.season_json(row) if row else None,
+        "has_seasons": bool(row) or bool(seasons.seasons(repo, parcel.id)),
+    }
+
+
 def _panel(request: Request, repo: Repo, parcel: Parcel | None, note: str | None = None) -> dict:
     if parcel is None:
         farm = repo.get(Farm, repo.farm_id, scope="fields:read")
@@ -171,6 +187,7 @@ def _panel(request: Request, repo: Repo, parcel: Parcel | None, note: str | None
             "name": parcel.name,
             "area_ha": float(parcel.area_ha),
             "variety": (parcel.props or {}).get("variety"),
+            **_season_today(request, repo, parcel),
         },
         "sections": panel_sections(request, "parcel", parcel.id),
         "close_url": resolved_url(request, "/fields/"),
@@ -387,3 +404,87 @@ def map_page(
         mode_notice="Unknown presentation. Showing Map." if view != "map" else None,
         **_map_context(request, freeze_farm=True),
     )
+
+
+EPPO_CODE = r"^[0-9A-Z]{5,6}$"
+
+
+class SeasonCreate(BaseModel):
+    """A new season. Omitted crop, end or BBCH stage stays unknown."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    starts_on: date
+    ends_on: date | None = None
+    crop_eppo: StrictStr | None = Field(default=None, pattern=EPPO_CODE)
+    crop_name: StrictStr | None = Field(default=None, min_length=1, max_length=200)
+    bbch: StrictInt | None = Field(default=None, ge=0, le=99)
+
+
+class SeasonEdit(BaseModel):
+    """Changes to the current season; an explicit null makes a value unknown again."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: StrictInt = Field(ge=1, le=2**31 - 1)
+    starts_on: date | None = None
+    ends_on: date | None = None
+    crop_eppo: StrictStr | None = Field(default=None, pattern=EPPO_CODE)
+    crop_name: StrictStr | None = Field(default=None, min_length=1, max_length=200)
+    bbch: StrictInt | None = Field(default=None, ge=0, le=99)
+
+    @field_validator("starts_on")
+    @classmethod
+    def start_is_known(cls, value: date | None) -> date:
+        if value is None:
+            raise ValueError("a season keeps its start date")
+        return value
+
+
+def _season_parcel(repo: Repo, parcel_id: int) -> Parcel:
+    parcel = _scoped_parcel(repo, parcel_id)
+    if parcel is None:
+        raise HTTPException(status_code=404, detail="No such parcel on this farm.")
+    return parcel
+
+
+def _season_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, seasons.SeasonNotFound):
+        return HTTPException(404, str(exc))
+    if isinstance(exc, seasons.SeasonConflict):
+        return HTTPException(409, str(exc))
+    return HTTPException(422, str(exc))
+
+
+@router.get("/parcels/{parcel_id}/seasons.json")
+def parcel_seasons(repo: Repo, parcel_id: int) -> dict:
+    return seasons.seasons_json(repo, _season_parcel(repo, parcel_id))
+
+
+@router.post(
+    "/parcels/{parcel_id}/seasons",
+    status_code=201,
+    dependencies=[Depends(require_farm_owner)],
+)
+def add_season(repo: Repo, parcel_id: int, body: SeasonCreate) -> dict:
+    parcel = _season_parcel(repo, parcel_id)
+    try:
+        row = seasons.create(repo, parcel, body.model_dump())
+    except (seasons.SeasonError, seasons.SeasonConflict) as exc:
+        raise _season_error(exc) from None
+    return seasons.season_json(row)
+
+
+@router.patch(
+    "/parcels/{parcel_id}/seasons/{season_id}",
+    dependencies=[Depends(require_farm_owner)],
+)
+def edit_season(repo: Repo, parcel_id: int, season_id: int, body: SeasonEdit) -> dict:
+    parcel = _season_parcel(repo, parcel_id)
+    changes = body.model_dump(exclude_unset=True)
+    expected = changes.pop("expected_revision")
+    try:
+        row = seasons.edit(repo, parcel, season_id, expected_revision=expected, changes=changes)
+    except (seasons.SeasonError, seasons.SeasonNotFound, seasons.SeasonConflict) as exc:
+        raise _season_error(exc) from None
+    return seasons.season_json(row)

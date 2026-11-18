@@ -35,6 +35,7 @@ from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, S
 from farmcore.apps.advisor.engine.config import DEFAULT_REGION
 from farmcore.apps.advisor.engine.types import floor_hour
 from farmcore.apps.advisor.engine.window import forecast_span
+from farmcore.apps.fields.seasons import season_evidence
 from farmcore.apps.stations import service as stations
 from farmcore.core.access import ScopeDenied, ScopedRepository
 from farmcore.core.models.canonical import (
@@ -504,9 +505,9 @@ def runs_to_forecast_edge(end: datetime | None, evaluated_at: datetime, horizon_
 
 
 def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
-    """The exact hourly series the engine read, plus the spray evidence, with unknown receipt
-    semantics stated explicitly. Station rows are not copied: `hourly_inputs` is what was
-    evaluated, and rows written before this shape also carry `observations`."""
+    """The exact hourly series the engine read, plus the spray evidence and crop season, with
+    unknown receipt semantics stated explicitly. Station rows are not copied: `hourly_inputs` is
+    what was evaluated, and rows written before this shape also carry `observations`."""
     logs = repo.list(
         Log,
         Log.type == "spray",
@@ -575,6 +576,8 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
             {"quantity": columns(q), "product": columns(p) if p else None} for q, p in quantities
         ],
         "ignored_sprays": ignored,
+        # The parcel's season on the local evaluation day, copied with its revision.
+        "crop_season": season_evidence(repo, parcel_id, now.astimezone(ZoneInfo(tz)).date()),
     }
 
 

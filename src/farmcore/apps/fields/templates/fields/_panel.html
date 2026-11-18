@@ -4,8 +4,8 @@
     `fields/map.html` for the no-script path (`/fields/?parcel=<id>`).
 
     Context `panel` (routes._panel): kind ("farm" | "parcel"), parcel {id, alias, name, area_ha,
-    variety} or None, farm_name, sections [{slot_id, label, url}] (URLs already farm-qualified),
-    close_url (parcel only), note.
+    variety, season (the crop season covering today, or None), has_seasons} or None, farm_name,
+    sections [{slot_id, label, url}] (URLs already farm-qualified), close_url (parcel only), note.
 
     Fields shows only the parcel's own record (alias, name, area, variety). Every other fact
     comes from the apps' own section endpoints in the shared fragment slot, so a failed section
@@ -23,6 +23,16 @@
         <span class="text-muted">{{ p.alias }}</span> <span class="break-words">{{ p.name }}</span>
       </h2>
       <p class="text-[13px] text-muted">{{ "%.2f"|format(p.area_ha) }} ha · {{ p.variety or "Unknown variety" }}</p>
+      {%- set season = p.season %}
+      <p class="text-[13px] text-muted">
+        {%- if season -%}
+        {{ season.crop_name or season.crop_eppo or "Unknown crop" }} since {{ season.starts_on }}{% if season.ends_on %}, until {{ season.ends_on }}{% endif %}{% if season.bbch is not none %} · BBCH {{ season.bbch }}{% endif %}
+        {%- elif p.has_seasons -%}
+        No crop season today
+        {%- else -%}
+        Crop season unknown
+        {%- endif -%}
+      </p>
       {%- else %}
       <h2 id="map-panel-heading" data-panel-heading tabindex="-1" class="scroll-mt-20 text-[17px] font-semibold leading-snug outline-none focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700">Farm today</h2>
       {%- if panel.farm_name %}<p class="truncate text-[13px] text-muted">{{ panel.farm_name }}</p>{% endif %}

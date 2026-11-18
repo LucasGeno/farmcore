@@ -628,7 +628,7 @@ def test_revision_actions_imply_their_status(database, action, status, valid):
 
 def test_job_completion_downgrade_refuses_completed_history_then_round_trips(scratch_db_url):
     cfg = alembic_config(scratch_db_url)
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, "planning_0003")
     engine = create_engine(scratch_db_url)
     try:
         with engine.begin() as db:
