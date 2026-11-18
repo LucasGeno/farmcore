@@ -1,10 +1,10 @@
 """`GET /assistant/ask`, `GET /assistant/voice`, `POST /assistant/transcribe`.
 
-Ask: the visible read-only tools; when Gemini is configured (`model_configured`: Vertex extractor
-with usable auth)
-and the viewer is the admin (never anonymous visitors, never tour mode), `llm.VertexToolChooser`
-picks the tool and its declared string arguments; on no credentials, a non-admin or tour viewer,
-a model error or timeout, no call, or a tool name that is not offered, the keyword router picks
+Ask: the visible read-only tools; when a model is configured (`model_configured`: Vertex with
+usable auth, or an OpenAI-compatible server) and the viewer is the admin (never anonymous
+visitors, never tour mode), `llm.VertexToolChooser` or `llm.OpenAICompatibleToolChooser` picks
+the tool and its declared string arguments; on no credentials, a non-admin or tour viewer, a model
+error or timeout, no call, or a tool name that is not offered, the keyword router picks
 instead (`via` says which). Either way the answer is the tool's own text, facts and links, read
 as actor `web:assistant`.
 
@@ -457,8 +457,9 @@ def chat_deps(app) -> chat.ChatDeps:
 
 
 def chooser_for(app) -> llm.ToolChooser | None:
-    """The configured tool chooser: a test's `app.state.assistant_chooser`, else a Vertex one
-    when the chat extractor is Vertex (built once per app), else None (keyword router)."""
+    """The configured tool chooser: a test's `app.state.assistant_chooser`, else the one for
+    `assistant_provider` (Vertex or OpenAI-compatible; built once per app), else None (keyword
+    router)."""
     chooser = getattr(app.state, "assistant_chooser", None)
     if chooser is not None:
         return chooser
@@ -497,8 +498,8 @@ def model_configured(settings) -> bool:
 
 
 def model_ready(request: Request) -> bool:
-    """Whether this viewer's questions go to Gemini (the panel's AI-assisted hint): the same
-    rule as `ask`."""
+    """Whether this viewer's questions go to the configured model (the panel's AI-assisted
+    hint): the same rule as `ask`."""
     return is_admin(request) and chooser_for(request.app) is not None
 
 

@@ -28,7 +28,9 @@ from farmcore.core.tools import ToolSpec, vertex_schema
 
 ADAPTER = "vertex_assistant"
 OPENAI_ADAPTER = "openai_compatible_assistant"
-OPENAI_TIMEOUT_S = 20.0  # a local Ollama may load a model on the first question
+# 20 s per phase, 5 s to connect: a local Ollama may load a model on the first question, so the
+# read budget is deliberately generous; the keyword router answers when it is exceeded.
+OPENAI_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
 TIMEOUT_S = 6.0  # a web question; the keyword router answers when the model is slow
 SYSTEM_INSTRUCTION = (
     "You route a vineyard farmer's question to one read-only function. Call exactly one "
@@ -156,7 +158,7 @@ class OpenAICompatibleToolChooser:
         self.model = model
         self._key = api_key
         self._audit = audit
-        self._client = client or httpx.Client(timeout=OPENAI_TIMEOUT_S)
+        self._client = client or httpx.Client(timeout=OPENAI_TIMEOUT)
 
     def request_body(self, question: str, tools: Sequence[ToolSpec]) -> dict[str, Any]:
         return {
@@ -191,10 +193,10 @@ class OpenAICompatibleToolChooser:
         response_body: Any = None
         try:
             response = self._client.post(
-                self.endpoint, json=body, headers=headers, timeout=OPENAI_TIMEOUT_S
+                self.endpoint, json=body, headers=headers, timeout=OPENAI_TIMEOUT
             )
             status = response.status_code
-            response_body = _json_or_text(response)
+            response_body = _scrub(_json_or_text(response), self._key)
             if status != 200:
                 raise ChooserError(f"HTTP {status}")
             choice = _parse_openai(response_body)
@@ -222,6 +224,20 @@ class OpenAICompatibleToolChooser:
                 latency_ms=round((time.monotonic() - started) * 1000),
             )
         )
+
+
+def _scrub(value: Any, key: SecretStr | None) -> Any:
+    """The response body for the audit row with the API key removed: a gateway may echo it."""
+    secret = key.get_secret_value() if key is not None else ""
+    if not secret:
+        return value
+    if isinstance(value, str):
+        return value.replace(secret, "[redacted]")
+    if isinstance(value, list):
+        return [_scrub(v, key) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub(v, key) for k, v in value.items()}
+    return value
 
 
 def _parse_openai(response_body: Any) -> Choice | None:

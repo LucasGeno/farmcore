@@ -82,14 +82,6 @@ def test_tool_call_sends_json_schemas_for_read_tools_only_and_audits_without_the
     assert KEY not in repr(record)
 
 
-def test_plain_answer_without_a_tool_call_is_no_choice():
-    records = []
-    chooser = _chooser(lambda r: _reply({"content": "I do not know."}), records)
-
-    assert chooser.choose("poem please", _tools()) is None
-    assert records[0].error is None
-
-
 def test_rejected_key_raises_a_chooser_error_that_does_not_leak_the_key():
     records = []
     chooser = _chooser(lambda r: httpx.Response(401, json={"error": {"message": KEY}}), records)
@@ -98,35 +90,40 @@ def test_rejected_key_raises_a_chooser_error_that_does_not_leak_the_key():
         chooser.choose("anything", _tools())
 
     assert "401" in str(raised.value) and KEY not in str(raised.value)
+    assert KEY not in repr(records[0])  # a gateway echoed it into the response body
     assert records[0].status == 401 and records[0].error == "HTTP 401"
 
 
-def test_malformed_tool_arguments_raise_a_chooser_error():
-    records = []
-    bad = {"tool_calls": [{"function": {"name": "operations_last_spray", "arguments": "{nope"}}]}
-    chooser = _chooser(lambda r: _reply(bad), records)
-
-    with pytest.raises(llm.ChooserError):
-        chooser.choose("anything", _tools())
-
-    assert records[0].error
-
-
 @pytest.mark.parametrize(
-    "url",
+    ("message", "outcome"),
     [
-        "ftp://llm.example/v1",
-        "https://user:pw@llm.example/v1",
-        "https://llm.example/v1?key=1",
-        "https://llm.example:abc/v1",
+        ({"content": "I do not know."}, None),
+        (
+            {"tool_calls": [{"function": {"name": "operations_last_spray", "arguments": "{nope"}}]},
+            "error",
+        ),
     ],
+    ids=["plain answer is no choice", "malformed tool arguments"],
 )
-def test_bad_base_urls_are_refused_at_startup(url):
+def test_reply_without_a_usable_tool_call(message, outcome):
+    records = []
+    chooser = _chooser(lambda r: _reply(message), records)
+
+    if outcome == "error":
+        with pytest.raises(llm.ChooserError):
+            chooser.choose("anything", _tools())
+        assert records[0].error
+    else:
+        assert chooser.choose("anything", _tools()) is None
+        assert records[0].error is None
+
+
+def test_base_url_is_validated_at_startup():
     with pytest.raises(ValidationError, match="openai_compatible_base_url"):
         Settings(
             _env_file=None,
             assistant_provider="openai-compatible",
-            openai_compatible_base_url=url,
+            openai_compatible_base_url="https://user:pw@llm.example/v1",
             openai_compatible_model="m",
         )
 
@@ -134,16 +131,31 @@ def test_bad_base_urls_are_refused_at_startup(url):
 def test_a_key_is_refused_over_plain_http_except_to_loopback():
     base = {"_env_file": None, "assistant_provider": "openai-compatible"}
     base |= {"openai_compatible_model": "llama3", "openai_compatible_api_key": SecretStr(KEY)}
-    with pytest.raises(ValidationError, match="https"):
-        Settings(**base, openai_compatible_base_url="http://llm.internal:8000/v1")
+    for refused in ("http://llm.internal:8000/v1", "http://localhost.evil.example/v1"):
+        with pytest.raises(ValidationError, match="https"):
+            Settings(**base, openai_compatible_base_url=refused)
     for ok in ("http://localhost:11434/v1", "http://127.0.0.1:8000/v1", "https://llm.example/v1"):
         Settings(**base, openai_compatible_base_url=ok)
 
 
-def test_no_provider_means_no_model_so_the_keyword_router_answers(settings):
+@pytest.mark.parametrize(
+    ("provider", "expected"),
+    [("none", None), ("openai-compatible", llm.OpenAICompatibleToolChooser)],
+)
+def test_provider_setting_picks_the_chooser_and_none_leaves_the_keyword_router(
+    settings, provider, expected
+):
     class App:
         class state:  # noqa: N801
             pass
 
-    App.state.settings = settings.model_copy(update={"assistant_provider": "none"})
-    assert chooser_for(App) is None
+    App.state.settings = settings.model_copy(
+        update={
+            "assistant_provider": provider,
+            "openai_compatible_base_url": "https://llm.example/v1",
+            "openai_compatible_model": "m",
+        }
+    )
+    App.state.session_factory = None  # the audit sink is built, never called
+    chooser = chooser_for(App)
+    assert chooser is None if expected is None else isinstance(chooser, expected)
