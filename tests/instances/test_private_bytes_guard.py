@@ -37,6 +37,7 @@ ALLOWED = {
     ("apps/assistant/routes.py", "write_bytes"): TEMPORARY,
     ("apps/chat/bot.py", "TemporaryDirectory"): TEMPORARY,
     ("apps/chat/bot.py", "download_to_drive"): TEMPORARY,
+    ("apps/catalog_fr_ephy/sources.py", "mkdir"): "public E-Phy open-data download (data.gouv.fr)",
     ("apps/forecast/sources.py", "mkdir"): "open-data cache (DATA_DIR)",
     ("apps/forecast/sources.py", "write_text"): "open-data cache (DATA_DIR)",
     ("apps/operations/commands.py", "mkdir"): "synthetic demo file (`isoxml-demo` CLI)",
