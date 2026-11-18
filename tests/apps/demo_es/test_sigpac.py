@@ -96,22 +96,18 @@ def test_rings_splits_valid_rings_at_start_indices():
     )
 
 
-def test_rings_rejects_first_start_not_zero():
-    shape = polygon(1, 3, (1,), [(0, 0), (1, 0), (1, 1)])
+@pytest.mark.parametrize(
+    ("parts", "points", "starts", "coords"),
+    [
+        (1, 3, (1,), [(0, 0), (1, 0), (1, 1)]),  # first ring does not start at 0
+        (2, 4, (0, 0), [(0, 0), (1, 0), (1, 1), (2, 1)]),  # starts not increasing
+        (2, 3, (0, 3), [(0, 0), (1, 0), (1, 1)]),  # last start past the point count
+    ],
+    ids=["first-not-zero", "not-increasing", "past-point-count"],
+)
+def test_rings_rejects_invalid_ring_start_indices(parts, points, starts, coords):
     with pytest.raises(ValueError, match="ring start indices"):
-        sigpac._rings(shape)
-
-
-def test_rings_rejects_non_increasing_starts():
-    shape = polygon(2, 4, (0, 0), [(0, 0), (1, 0), (1, 1), (2, 1)])
-    with pytest.raises(ValueError, match="ring start indices"):
-        sigpac._rings(shape)
-
-
-def test_rings_rejects_start_past_point_count():
-    shape = polygon(2, 3, (0, 3), [(0, 0), (1, 0), (1, 1)])
-    with pytest.raises(ValueError, match="ring start indices"):
-        sigpac._rings(shape)
+        sigpac._rings(polygon(parts, points, starts, coords))
 
 
 def test_rings_allows_an_empty_polygon():
