@@ -215,36 +215,34 @@ def plan(
 def drain(
     session_factory: sessionmaker[Session], settings: Settings, manifests: Sequence[Manifest]
 ) -> int:
-    """Run every queued task in this process, one after another; how many ran. For a one-shot
-    `farmcore worker --once` and for tests: the worker is the normal way tasks run."""
+    """Claim every task queued now, run them in this process one after another, and record
+    their outcomes; how many ran. For a one-shot `farmcore worker --once` and for tests: the
+    worker is the normal way tasks run."""
     specs = {spec.name: spec for spec in durable_specs(manifests)}
-    ran = 0
-    while True:
-        with session_scope(session_factory) as session:
-            job = session.execute(
-                text(
-                    "SELECT id, task_name, args FROM procrastinate_fetch_job_v2(:q, NULL) "
-                    "WHERE id IS NOT NULL AND task_name = ANY(:names)"
-                ),
-                {"q": [QUEUE], "names": list(specs)},
-            ).first()
-        if job is None:
-            return ran
+    fetch = text("SELECT id, task_name, args FROM procrastinate_fetch_job_v2(:q, NULL)")
+    with session_scope(session_factory) as session:
+        claimed = []
+        while (job := session.execute(fetch, {"q": [QUEUE]}).first()).id is not None:
+            claimed.append(job)
+    outcomes = []
+    for job in claimed:
         status = "succeeded"
         try:
             run_task(session_factory, settings, specs[job.task_name], job.args["farm_id"])
         except Exception as exc:
             logger.error("task %s failed (%s)", job.task_name, type(exc).__name__)
             status = "failed"
+        outcomes.append({"id": job.id, "s": status})
+    if outcomes:
         with session_scope(session_factory) as session:
             session.execute(
                 text(
                     "SELECT procrastinate_finish_job_v1("
                     ":id, CAST(:s AS procrastinate_job_status), false)"
                 ),
-                {"id": job.id, "s": status},
+                outcomes,
             )
-        ran += 1
+    return len(outcomes)
 
 
 async def retry_stalled(job_manager: JobManager, seconds_since_heartbeat: float) -> dict[int, str]:
