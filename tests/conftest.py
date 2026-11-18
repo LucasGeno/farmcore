@@ -158,15 +158,19 @@ def client(settings: Settings, session_factory: sessionmaker[Session]) -> Iterat
 def committed_session_factory(engine: Engine) -> Iterator[sessionmaker[Session]]:
     """Plain sessions on the engine, for tests that need real commits across sessions.
 
-    Every table except `alembic_version` (and PostGIS's `spatial_ref_sys`) is truncated after.
+    Every table except the migration-owned ones (and PostGIS's `spatial_ref_sys`) is truncated
+    after.
     """
+    from farmcore.core.commands.migrate import MIGRATION_OWNED_TABLES
+
     yield sessionmaker(bind=engine, expire_on_commit=False)
     with engine.begin() as conn:
         tables = conn.execute(
             text(
                 "SELECT quote_ident(tablename) FROM pg_tables WHERE schemaname = 'public' "
-                "AND tablename NOT IN ('alembic_version', 'spatial_ref_sys')"
-            )
+                "AND tablename <> ALL(:kept)"
+            ),
+            {"kept": [*MIGRATION_OWNED_TABLES, "spatial_ref_sys"]},
         ).scalars()
         names = ", ".join(tables)
         if names:

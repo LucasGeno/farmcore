@@ -66,6 +66,13 @@ def ensure_installation_id(conn: Connection) -> str:
     return new
 
 
+# Written only by migrations: the schema revision and seeded reference data (core_0006's frozen
+# unit table). The runtime role only reads them, restore never loads them from a bundle (the
+# copy's own migration wrote them), and test fixtures that empty the database keep them.
+MIGRATION_OWNED_TABLES = ("alembic_version", "unit_definition")
+# Views over legacy tables that the runtime role only reads (a simple view is auto-updatable).
+READ_ONLY_VIEWS = ("legacy_catalog_item", "legacy_typed_quantity")
+
 RUNTIME_ATTRIBUTES = (
     "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS "
     "CONNECTION LIMIT -1 VALID UNTIL 'infinity'"
@@ -360,10 +367,19 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
         "GRANT USAGE, SELECT ON SEQUENCES TO {r}",
     ):
         statements.append(sql.SQL(statement).format(db=database, r=r, owner=owner))
-    for (table,) in [("alembic_version",), *_rows(conn, role, _EXTENSION_RELATIONS)]:
+    for table in [
+        *MIGRATION_OWNED_TABLES,
+        *(t for (t,) in _rows(conn, role, _EXTENSION_RELATIONS)),
+    ]:
         statements.append(
             sql.SQL("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON {} FROM {}, PUBLIC").format(
                 sql.Identifier(table), r
+            )
+        )
+    for view in READ_ONLY_VIEWS:
+        statements.append(
+            sql.SQL("REVOKE INSERT, UPDATE, DELETE ON {} FROM {}, PUBLIC").format(
+                sql.Identifier(view), r
             )
         )
     _run(conn, role, statements)

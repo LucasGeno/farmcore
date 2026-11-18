@@ -81,6 +81,7 @@ from farmcore.core.commands.backup import (
 from farmcore.core.commands.effects import set_external_effects
 from farmcore.core.commands.migrate import (
     LOCK_TIMEOUT,
+    MIGRATION_OWNED_TABLES,
     MigrateError,
     ServerBusy,
     alembic_config,
@@ -122,8 +123,9 @@ _FOREIGN_KEYS = text(
     "WHERE contype = 'f' AND connamespace = 'public'::regnamespace ORDER BY 1, 2"
 )
 # Never loaded: the copy starts with no member session and fresh sign-in throttling, and its
-# schema revision is the one restore created.
-NOT_LOADED = frozenset({"local_session", "login_bucket", "alembic_version"})
+# schema revision and migration-seeded reference data are the ones restore's migration created
+# (so a bundle can never supply its own unit factors).
+NOT_LOADED = frozenset({"local_session", "login_bucket", *MIGRATION_OWNED_TABLES})
 PLAIN_FILES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 LOADER_PREFIX = "farmcore_restore_"
 # Emptied again after the load (an older revision may not have them yet).
