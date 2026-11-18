@@ -151,6 +151,8 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     # farmer's or advisor's note by naming the generic `event` table.
     "recommendation_review": frozenset({"advice:read"}),
     "source": _ANY,
+    # Operational: which background task attempt is current per farm (core/tasks.py).
+    "task_attempt": frozenset({"audit:read"}),
     "typed_quantity": _LOG_READS,
     "weather_forecast": frozenset({"stations:read"}),
     "weather_observation": frozenset({"stations:read"}),
