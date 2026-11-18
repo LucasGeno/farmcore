@@ -410,11 +410,11 @@ def test_deleting_a_log_cascades_to_parcel_links_quantities_and_sources(session)
         assert session.execute(text(linked.format(table=table)), {"id": log.id}).scalar() == 0
 
 
-def test_catalog_upgrade_mirrors_legacy_rows_without_inventing_facts(scratch_db_url: str) -> None:
-    """A populated core_0005 database upgrades: each product gains a catalog item with its
-    crop-protection extension and each quantity a typed mirror keeping what was entered; no
-    authorisation country, crop code or standard value is guessed; downgrade refuses while a
-    catalog-only fact exists."""
+def test_catalog_upgrade_reads_legacy_rows_without_inventing_facts(scratch_db_url: str) -> None:
+    """A populated core_0005 database upgrades: its products and quantities read through the
+    neutral views with what was entered; no authorisation country, crop code or standard value
+    is guessed (an unknown unit and a NaN value stay null); downgrade refuses while an entered
+    catalog fact exists, then round-trips."""
     cfg = alembic_config(scratch_db_url)
     command.upgrade(cfg, "core_0005")
     engine = create_engine(scratch_db_url)
@@ -437,11 +437,15 @@ def test_catalog_upgrade_mirrors_legacy_rows_without_inventing_facts(scratch_db_
                 ),
                 {"farm": farm_id, "ts": T0},
             ).scalar_one()
-            for value, unit, product in (("800", "g / ha", product_id), ("3", "bottles/ha", None)):
+            for value, unit, product in (
+                ("800", "g/ha", product_id),
+                ("3", "bottles/ha", None),
+                ("NaN", "kg/ha", None),
+            ):
                 conn.execute(
                     text(
                         "INSERT INTO quantity (log_id, product_id, measure, value, unit, label) "
-                        "VALUES (:log, :product, 'rate', :value, :unit, 'legacy')"
+                        "VALUES (:log, :product, 'rate', CAST(:value AS numeric), :unit, 'x')"
                     ),
                     {"log": log_id, "product": product, "value": value, "unit": unit},
                 )
@@ -449,30 +453,24 @@ def test_catalog_upgrade_mirrors_legacy_rows_without_inventing_facts(scratch_db_
         with engine.begin() as conn:
             assert conn.execute(
                 text(
-                    "SELECT c.name, x.product_type, x.targets FROM catalog_item c "
-                    "JOIN crop_protection_item x ON x.catalog_item_id = c.id "
-                    "WHERE c.product_id = :p"
+                    "SELECT name, product_type, targets FROM legacy_catalog_item "
+                    "WHERE product_id = :p"
                 ),
                 {"p": product_id},
             ).one() == ("Copper", "contact", ["downy"])
-            assert conn.execute(
+            rows = conn.execute(
                 text(
-                    "SELECT entered_value, entered_unit, measure, value, unit, "
-                    "catalog_item_id IS NOT NULL, provenance FROM typed_quantity ORDER BY id"
+                    "SELECT entered_value::text, entered_unit, measure, value, unit "
+                    "FROM legacy_typed_quantity ORDER BY legacy_quantity_id"
                 )
-            ).all() == [
-                (
-                    Decimal("800"),
-                    "g / ha",
-                    "mass_rate",
-                    Decimal("0.800"),
-                    "kg/ha",
-                    True,
-                    "legacy_quantity",
-                ),
-                (Decimal("3"), "bottles/ha", None, None, None, False, "legacy_quantity"),
+            ).all()
+            assert rows == [
+                ("800", "g/ha", "mass_rate", Decimal("0.800"), "kg/ha"),
+                ("3", "bottles/ha", None, None, None),
+                ("NaN", "kg/ha", None, None, None),
             ]
-            assert conn.execute(text("SELECT count(*) FROM catalog_authorisation")).scalar() == 0
+            for entered in ("catalog_item", "catalog_authorisation", "typed_quantity"):
+                assert conn.execute(text(f"SELECT count(*) FROM {entered}")).scalar() == 0
             assert conn.execute(text("SELECT crop_eppo, bbch FROM log")).one() == (None, None)
             conn.execute(text("UPDATE log SET crop_eppo = 'VITVI'"))
         with pytest.raises(RuntimeError, match="downgrade refused"):
@@ -482,7 +480,7 @@ def test_catalog_upgrade_mirrors_legacy_rows_without_inventing_facts(scratch_db_
             conn.execute(text("UPDATE log SET crop_eppo = NULL"))
         command.downgrade(cfg, "core_0005")
         with engine.connect() as conn:
-            assert conn.execute(text("SELECT count(*) FROM quantity")).scalar_one() == 2
+            assert conn.execute(text("SELECT count(*) FROM quantity")).scalar_one() == 3
         command.upgrade(cfg, "head")
     finally:
         engine.dispose()

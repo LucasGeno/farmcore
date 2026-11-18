@@ -4,6 +4,8 @@ Failure modes owned here:
 - A float enters the quantity or stock path, or the entered value/unit is not kept exactly.
 - An incompatible dimension, or a conversion missing its density, area or composition, is
   silently converted instead of refused.
+- The runtime registry and the database's frozen `unit_definition` (core_0006, behind the legacy
+  views) type the same entered unit differently.
 """
 
 from __future__ import annotations
@@ -13,8 +15,10 @@ from decimal import Decimal
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
+from sqlalchemy import select
 
 from farmcore.core import units
+from farmcore.core.models.catalog import UnitDefinition
 
 # Entered unit -> (measure, standard unit, factor into it). Factors from SI prefixes.
 UNITS = {
@@ -69,9 +73,8 @@ DOSE = units.measure(Decimal("800"), "g/ha")
         (lambda: units.measure(Decimal("NaN"), "kg"), None, units.UnitError),
         (lambda: units.measure(Decimal(1), "lb"), None, units.UnknownUnit),
         (lambda: units.measure(Decimal(1), "kg*l"), None, units.UnknownUnit),
-        # Malformed units are refused, never a crash (a legacy write mirrors any unit string).
+        # A malformed unit is refused, never a crash.
         (lambda: units.measure(Decimal(1), "kg/(ha"), None, units.UnknownUnit),
-        (lambda: units.measure(Decimal(1), "10 kg"), None, units.UnknownUnit),
     ],
 )
 def test_conversions_need_their_factor_and_never_guess(refused, factored, expected):
@@ -80,3 +83,20 @@ def test_conversions_need_their_factor_and_never_guess(refused, factored, expect
         refused()
     if factored:
         assert factored() == expected
+
+
+def test_runtime_registry_and_database_unit_table_agree(session):
+    accepted = {}
+    for top in units.NAMES:
+        for entered in (top, *(f"{top}/{bottom}" for bottom in units.NAMES)):
+            try:
+                typed = units.measure(Decimal(1), entered)
+            except units.UnknownUnit:
+                continue
+            accepted[entered] = (typed.measure, typed.unit, typed.value)
+
+    stored = {
+        row.entered: (row.measure, row.unit, row.factor)
+        for row in session.scalars(select(UnitDefinition))
+    }
+    assert stored == accepted

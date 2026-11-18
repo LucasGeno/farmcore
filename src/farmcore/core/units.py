@@ -1,8 +1,11 @@
 """FarmCore's unit registry: typed quantities with `Decimal` arithmetic only.
 
 An explicit `pint` registry (no default definitions file) holds the units FarmCore accepts, with
-`non_int_type=Decimal`, so a stock or dose never passes through a float. `measure(value, unit)`
-keeps the value and unit exactly as entered and adds the value in the measure's standard unit.
+`non_int_type=Decimal`, so a stock or dose never passes through a float. A unit is exactly one
+registry name or alias, or a name per name (`kg/ha`), with no spaces; the database's frozen
+`unit_definition` table (core_0006) accepts exactly the same strings with the same factors.
+`measure(value, unit)` keeps the value and unit exactly as entered and adds the value in the
+measure's standard unit, as a plain decimal (never exponent form).
 `convert` changes units only with a known factor: a density between mass and volume, an area
 between a rate and a total. `component` needs the composition fraction. A missing factor raises
 `MissingFactor`; a dimension that no factor can bridge raises `IncompatibleUnits`. Nothing is
@@ -22,15 +25,26 @@ DEFINITIONS = (
     "gram = kilogram / 1000 = g",
     "milligram = gram / 1000 = mg",
     "tonne = 1000 * kilogram = t",
-    "litre = [volume] = l = L",
-    "millilitre = litre / 1000 = ml = mL",
-    "hectolitre = 100 * litre = hl = hL",
+    "litre = [volume] = l",
+    "millilitre = litre / 1000 = ml",
+    "hectolitre = 100 * litre = hl",
     "cubic_metre = 1000 * litre = m3",
     "hectare = [area] = ha",
     "are = hectare / 100",
     "square_metre = hectare / 10000 = m2",
     "item = [count] = count",
 )
+# Spellings people enter for a registry name. Explicit only: case carries meaning (`mL`/`ml` is
+# fine, `t`/`T` is not), so there is no blanket case-folding.
+ALIASES: dict[str, str] = {
+    "L": "l",
+    "mL": "ml",
+    "hL": "hl",
+    "lt": "l",
+    "Ha": "ha",
+    "KG": "kg",
+    "Kg": "kg",
+}
 # measure -> standard unit (farmOS-shaped measures; rates are per hectare).
 STANDARD_UNITS: dict[str, str] = {
     "mass": "kg",
@@ -75,7 +89,8 @@ class Measured:
     entered_unit: str
 
 
-def _decimal(value: object) -> Decimal:
+def decimal_value(value: object) -> Decimal:
+    """`value` when it is a finite Decimal, else `UnitError`."""
     if not isinstance(value, Decimal):
         raise UnitError(f"quantities take Decimal values, not {type(value).__name__}")
     if not value.is_finite():
@@ -83,28 +98,36 @@ def _decimal(value: object) -> Decimal:
     return value
 
 
-# Units are a registry name, or a name per name ("kg/ha"). pint's own expression parser is not
-# used: it accepts scaling factors and powers, and crashes on malformed input.
-_UNIT = re.compile(r"\s*([A-Za-z][A-Za-z0-9_]*)\s*(?:/\s*([A-Za-z][A-Za-z0-9_]*)\s*)?")
-_NAMES = frozenset(
+# pint's own expression parser is not used: it accepts scaling factors and powers, and crashes
+# on malformed input.
+_NAME = r"[A-Za-z][A-Za-z0-9_]*"
+_UNIT = re.compile(f"({_NAME})(?:/({_NAME}))?")
+NAMES = frozenset(
     name
     for definition in DEFINITIONS
     for name in (part.strip() for part in definition.split("="))
-    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", name)
-)
+    if re.fullmatch(_NAME, name)
+) | frozenset(ALIASES)
 
 
 def _units(unit: str) -> pint.Unit:
     match = _UNIT.fullmatch(unit) if isinstance(unit, str) else None
     names = [name for name in match.groups() if name] if match else []
-    if not names or any(name not in _NAMES for name in names):
+    if not names or any(name not in NAMES for name in names):
         raise UnknownUnit(f"unknown unit {unit!r}")
-    result = registry.Unit(names[0])
-    return result / registry.Unit(names[1]) if len(names) == 2 else result
+    result = registry.Unit(ALIASES.get(names[0], names[0]))
+    if len(names) == 2:
+        result = result / registry.Unit(ALIASES.get(names[1], names[1]))
+    return result
+
+
+def plain(value: Decimal) -> Decimal:
+    """`value` without exponent form, so `str()` in a CSV or JSON reads `10000`, not `1E+4`."""
+    return Decimal(format(value, "f"))
 
 
 def _quantity(value: Decimal, unit: str) -> pint.Quantity:
-    return registry.Quantity(_decimal(value), _units(unit))
+    return registry.Quantity(decimal_value(value), _units(unit))
 
 
 def _measured(quantity: pint.Quantity, entered_value: Decimal, entered_unit: str) -> Measured:
@@ -112,7 +135,8 @@ def _measured(quantity: pint.Quantity, entered_value: Decimal, entered_unit: str
     if name is None:
         raise UnknownUnit(f"{entered_unit!r} is not a FarmCore measure")
     standard = STANDARD_UNITS[name]
-    return Measured(name, quantity.to(standard).magnitude, standard, entered_value, entered_unit)
+    value = plain(quantity.to(standard).magnitude)
+    return Measured(name, value, standard, entered_value, entered_unit)
 
 
 def measure(value: Decimal, unit: str) -> Measured:
@@ -133,11 +157,11 @@ def convert(
     source = registry.Quantity(quantity.value, quantity.unit)
     target = _quantity(Decimal(1), unit)
     given = {
-        "area": None if area_ha is None else registry.Quantity(_decimal(area_ha), "ha"),
+        "area": None if area_ha is None else registry.Quantity(decimal_value(area_ha), "ha"),
         "density": (
             None
             if density_kg_per_l is None
-            else registry.Quantity(_decimal(density_kg_per_l), "kg/l")
+            else registry.Quantity(decimal_value(density_kg_per_l), "kg/l")
         ),
     }
     # A missing factor is a unit placeholder, so its dimension still matches and is reported.
@@ -168,16 +192,17 @@ def convert(
 
 def component(quantity: Measured, fraction: Decimal | None) -> Measured:
     """The amount of one component (e.g. copper in a product) from its composition fraction
-    (0..1). Without the composition the amount is unknown: `MissingFactor`."""
+    (0..1). Without the composition the amount is unknown: `MissingFactor`. The entered value
+    and unit stay the product's: nobody entered the component amount."""
     if fraction is None:
         raise MissingFactor("the component amount needs the product composition")
-    share = _decimal(fraction)
+    share = decimal_value(fraction)
     if not Decimal(0) <= share <= Decimal(1):
         raise UnitError("a composition fraction lies between 0 and 1")
     return Measured(
         quantity.measure,
-        quantity.value * share,
+        plain(quantity.value * share),
         quantity.unit,
-        quantity.entered_value * share,
+        quantity.entered_value,
         quantity.entered_unit,
     )

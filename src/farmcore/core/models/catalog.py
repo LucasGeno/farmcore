@@ -1,23 +1,26 @@
 """Neutral catalog items and typed quantities, beside the legacy spray data (migration core_0006).
 
-Expand step: `product` and `quantity` stay the source every consumer reads. Each product is
-mirrored as a `catalog_item` with a `crop_protection_item` extension (contact/penetrant,
-downy/powdery), and each quantity as a `typed_quantity` that keeps the entered value and unit
-and adds the standard value (`farmcore.core.units`). The mirror is written in the same flush as
-the legacy row (`_mirror_legacy`), so the two never drift; a unit outside the registry keeps a
-null standard value rather than a guessed one.
+Expand step: `product` and `quantity` stay the only copy of legacy data and the source every
+current consumer reads. Their neutral shape is two database views, so it cannot drift from them
+whoever writes (ORM, Core, raw SQL, a restore):
 
-`catalog_authorisation` holds one authorisation number per country (FR AMM, ES and IT
-registration numbers…). A legacy product's `authorisation_no` names no country, so it is never
-copied there. The crop-protection extension lives here, not in the advisor app, because app
-models register through manifests owned elsewhere; contraction (ticket 14) moves it.
+- `legacy_catalog_item`: each product as a catalog item with its crop-protection attributes.
+- `legacy_typed_quantity`: each quantity with its entered value and unit, and the standard
+  measure/value/unit from the frozen `unit_definition` table. A unit outside that table, or a
+  NaN value, has a null standard value: NaN is never a standard value.
+
+The tables hold only what is entered on the catalog itself (`provenance = 'entered'`): neutral
+`catalog_item`s, one `catalog_authorisation` number per country (FR AMM, ES and IT registration
+numbers…), the `crop_protection_item` extension (contact/penetrant, downy/powdery), and
+`typed_quantity`. A legacy product's `authorisation_no` names no country, so it never becomes an
+authorisation. The extension lives in core, not the advisor app, because app models register
+through manifests owned elsewhere this wave; contraction (ticket 14) moves it.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from itertools import chain
 from typing import Any
 
 from sqlalchemy import (
@@ -29,10 +32,9 @@ from sqlalchemy import (
     Numeric,
     Text,
     UniqueConstraint,
-    event,
-    select,
+    column,
+    table,
 )
-from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from farmcore.core import units
@@ -40,33 +42,39 @@ from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     PRODUCT_TARGETS,
     PRODUCT_TYPES,
-    Product,
-    Quantity,
     _in,
     _now,
     _pk,
     _props,
 )
 
-PROVENANCES = ("legacy_quantity", "entered")
 _STANDARD = " OR ".join(
     f"(measure = '{measure}' AND unit = '{unit}')" for measure, unit in units.STANDARD_UNITS.items()
 )
 
 
+class UnitDefinition(Base):
+    """Frozen copy of the runtime registry: every accepted unit string, its measure and the
+    factor into the standard unit. A parity test keeps it equal to `farmcore.core.units`."""
+
+    __tablename__ = "unit_definition"
+    __table_args__ = (
+        CheckConstraint(_STANDARD, name="standard"),
+        CheckConstraint("factor > 0", name="factor"),
+    )
+
+    entered: Mapped[str] = mapped_column(Text, primary_key=True)
+    measure: Mapped[str] = mapped_column(Text)
+    unit: Mapped[str] = mapped_column(Text)
+    factor: Mapped[Decimal] = mapped_column(Numeric)
+
+
 class CatalogItem(Base):
     __tablename__ = "catalog_item"
-    __table_args__ = (
-        CheckConstraint("length(btrim(name)) BETWEEN 1 AND 200", name="name"),
-        UniqueConstraint("product_id"),
-    )
+    __table_args__ = (CheckConstraint("length(btrim(name)) BETWEEN 1 AND 200", name="name"),)
 
     id: Mapped[int] = _pk()
     name: Mapped[str] = mapped_column(Text)
-    # The legacy product this item mirrors; None for items created on the catalog alone.
-    product_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("product.id", ondelete="SET NULL"), nullable=True
-    )
     props: Mapped[dict[str, Any]] = _props()
     created_at: Mapped[datetime] = _now()
 
@@ -107,19 +115,19 @@ class CropProtectionItem(Base):
 
 
 class TypedQuantity(Base):
-    """measure/value/unit in the standard unit (all null when the entered unit has none), plus
-    the entered value and unit, a label and the provenance."""
+    """An entered quantity: measure/value/unit in the standard unit (all null when the entered
+    unit has none), plus the entered value and unit, a label and the provenance."""
 
     __tablename__ = "typed_quantity"
     __table_args__ = (
         CheckConstraint(
-            f"(measure IS NULL AND value IS NULL AND unit IS NULL) OR {_STANDARD}", name="standard"
+            f"(measure IS NULL AND value IS NULL AND unit IS NULL) OR {_STANDARD}",
+            name="standard",
         ),
-        CheckConstraint("value IS NULL OR value::text <> 'NaN'", name="value"),
-        CheckConstraint("entered_value::text <> 'NaN'", name="entered_value"),
+        CheckConstraint("value IS NULL OR value <> 'NaN'::numeric", name="value"),
+        CheckConstraint("entered_value <> 'NaN'::numeric", name="entered_value"),
         CheckConstraint("length(btrim(entered_unit)) > 0", name="entered_unit"),
-        CheckConstraint(_in("provenance", PROVENANCES), name="provenance"),
-        UniqueConstraint("legacy_quantity_id"),
+        CheckConstraint("provenance = 'entered'", name="provenance"),
         Index("ix_typed_quantity_log_id", "log_id"),
     )
 
@@ -128,83 +136,64 @@ class TypedQuantity(Base):
     catalog_item_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("catalog_item.id"), nullable=True
     )
-    legacy_quantity_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("quantity.id", ondelete="CASCADE"), nullable=True
-    )
     measure: Mapped[str | None] = mapped_column(Text)
     value: Mapped[Decimal | None] = mapped_column(Numeric)
     unit: Mapped[str | None] = mapped_column(Text)
     entered_value: Mapped[Decimal] = mapped_column(Numeric)
     entered_unit: Mapped[str] = mapped_column(Text)
     label: Mapped[str | None] = mapped_column(Text)
-    provenance: Mapped[str] = mapped_column(Text)
+    provenance: Mapped[str] = mapped_column(Text, server_default="entered", default="entered")
 
 
-def typed(value: Any, unit: str) -> dict[str, Any]:
-    """Standard measure/value/unit for an entered value, or nulls when it does not type."""
+# Read-only handles on the legacy views (core_0006); not part of the ORM metadata.
+legacy_catalog_item = table(
+    "legacy_catalog_item",
+    column("product_id"),
+    column("name"),
+    column("product_type"),
+    column("targets"),
+    column("provenance"),
+)
+legacy_typed_quantity = table(
+    "legacy_typed_quantity",
+    column("legacy_quantity_id"),
+    column("log_id"),
+    column("product_id"),
+    column("measure"),
+    column("value"),
+    column("unit"),
+    column("entered_value"),
+    column("entered_unit"),
+    column("label"),
+    column("provenance"),
+)
+
+
+def enter_quantity(
+    session: Session,
+    *,
+    log_id: int,
+    value: Decimal,
+    unit: str,
+    catalog_item_id: int | None = None,
+    label: str | None = None,
+) -> TypedQuantity:
+    """Store an entered quantity. A unit outside the registry keeps a null standard value; a
+    float or non-finite value raises `units.UnitError`, never a silent null."""
+    units.decimal_value(value)
     try:
-        q = units.measure(value, unit)
-    except units.UnitError:
-        return {"measure": None, "value": None, "unit": None}
-    return {"measure": q.measure, "value": q.value, "unit": q.unit}
-
-
-def _mirror_product(connection, product: Product) -> None:
-    item_id = connection.execute(
-        insert(CatalogItem.__table__)
-        .values(name=product.name, product_id=product.id)
-        .on_conflict_do_update(index_elements=["product_id"], set_={"name": product.name})
-        .returning(CatalogItem.__table__.c.id)
-    ).scalar_one()
-    values = {"product_type": product.product_type, "targets": list(product.targets or [])}
-    connection.execute(
-        insert(CropProtectionItem.__table__)
-        .values(catalog_item_id=item_id, **values)
-        .on_conflict_do_update(index_elements=["catalog_item_id"], set_=values)
+        typed = units.measure(value, unit)
+        standard = {"measure": typed.measure, "value": typed.value, "unit": typed.unit}
+    except units.UnknownUnit:
+        standard = {"measure": None, "value": None, "unit": None}
+    row = TypedQuantity(
+        log_id=log_id,
+        catalog_item_id=catalog_item_id,
+        entered_value=value,
+        entered_unit=unit,
+        label=label,
+        **standard,
     )
-
-
-def _mirror_quantity(connection, quantity: Quantity) -> None:
-    # A quantity removed from `log.quantities` is deleted as an orphan in this flush but can
-    # still be listed as dirty; its row is gone and its mirror went with it (cascade).
-    kept = connection.scalar(
-        select(Quantity.__table__.c.id).where(Quantity.__table__.c.id == quantity.id)
-    )
-    if kept is None:
-        return
-    item = (
-        None
-        if quantity.product_id is None
-        else select(CatalogItem.__table__.c.id)
-        .where(CatalogItem.__table__.c.product_id == quantity.product_id)
-        .scalar_subquery()
-    )
-    values = {
-        "log_id": quantity.log_id,
-        "catalog_item_id": item,
-        "entered_value": quantity.value,
-        "entered_unit": quantity.unit,
-        "label": quantity.label,
-        "provenance": "legacy_quantity",
-        **typed(quantity.value, quantity.unit),
-    }
-    connection.execute(
-        insert(TypedQuantity.__table__)
-        .values(legacy_quantity_id=quantity.id, **values)
-        .on_conflict_do_update(index_elements=["legacy_quantity_id"], set_=values)
-    )
-
-
-@event.listens_for(Session, "after_flush")
-def _mirror_legacy(session: Session, _context) -> None:
-    """Mirror products and quantities written in this flush (deleted quantities cascade)."""
-    written = [o for o in chain(session.new, session.dirty) if o not in session.deleted]
-    products = [o for o in written if isinstance(o, Product)]
-    quantities = [o for o in written if isinstance(o, Quantity)]
-    if not products and not quantities:
-        return
-    connection = session.connection()
-    for product in products:
-        _mirror_product(connection, product)
-    for quantity in quantities:
-        _mirror_quantity(connection, quantity)
+    session.add(row)
+    session.flush()
+    return row

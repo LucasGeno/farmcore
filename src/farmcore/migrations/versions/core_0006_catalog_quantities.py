@@ -1,19 +1,19 @@
 """core: neutral catalog items and typed quantities beside the spray data (expand)
 
-Adds `catalog_item` (optionally mirroring a legacy `product`), `catalog_authorisation` (one
-number per country), the `crop_protection_item` extension (contact/penetrant, downy/powdery),
-`typed_quantity` (standard measure/value/unit plus the entered value and unit, label and
-provenance) and the nullable `log.crop_eppo` (Reg. (EU) 2023/564 record content).
+Adds the frozen `unit_definition` table (every unit string FarmCore accepts, its measure and its
+factor into the standard unit; a parity test keeps it equal to `farmcore.core.units`), the
+catalog tables for entered data (`catalog_item`, `catalog_authorisation` with one number per
+country, the `crop_protection_item` extension, `typed_quantity`) and the nullable
+`log.crop_eppo` (Reg. (EU) 2023/564 record content).
 
-Purely additive. Every existing product is mirrored with its extension, and every existing
-quantity as a `legacy_quantity` typed quantity keeping its entered value and unit. The standard
-value comes from the frozen unit table below (the legacy writers' units, SI factors); any other
-unit keeps a null standard value instead of a guess. No authorisation country is inferred from
-the legacy `authorisation_no`, and no crop code is set on existing logs.
+Legacy rows are not copied. Two views expose them in the neutral shape, so they cannot drift:
+`legacy_catalog_item` over `product`, and `legacy_typed_quantity` over `quantity` joined to
+`unit_definition` by the exact entered unit. An unknown unit or a NaN value has a null standard
+value. Nothing is inferred: no authorisation country from `authorisation_no`, no crop code on
+existing logs.
 
-Downgrade drops the mirror (it is derivable from `product` and `quantity`) but refuses while
-catalog-only facts exist: items without a product, authorisations, entered typed quantities or
-a log crop code.
+Downgrade refuses while entered catalog facts exist (catalog items, typed quantities or a log
+crop code); everything else is the views and the unit table.
 
 Revision ID: core_0006
 Revises: core_0005
@@ -32,38 +32,54 @@ down_revision: str | None = "core_0005"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
-# Frozen copy of the registry subset legacy rows use: entered unit -> (measure, unit, factor).
-_MASS = {"kg": Decimal(1), "g": Decimal("0.001"), "mg": Decimal("0.000001"), "t": Decimal(1000)}
-_VOLUME = {
-    "l": Decimal(1),
-    "L": Decimal(1),
-    "ml": Decimal("0.001"),
-    "mL": Decimal("0.001"),
-    "hl": Decimal(100),
-    "hL": Decimal(100),
+# Frozen unit names: name -> (base measure, factor into its standard unit). SI factors.
+NAMES: dict[str, tuple[str, Decimal]] = {
+    **{n: ("mass", Decimal(1)) for n in ("kg", "kilogram", "KG", "Kg")},
+    **{n: ("mass", Decimal("0.001")) for n in ("g", "gram")},
+    **{n: ("mass", Decimal("0.000001")) for n in ("mg", "milligram")},
+    **{n: ("mass", Decimal(1000)) for n in ("t", "tonne")},
+    **{n: ("volume", Decimal(1)) for n in ("l", "litre", "L", "lt")},
+    **{n: ("volume", Decimal("0.001")) for n in ("ml", "millilitre", "mL")},
+    **{n: ("volume", Decimal(100)) for n in ("hl", "hectolitre", "hL")},
+    **{n: ("volume", Decimal(1000)) for n in ("m3", "cubic_metre")},
+    **{n: ("area", Decimal(1)) for n in ("ha", "hectare", "Ha")},
+    "are": ("area", Decimal("0.01")),
+    **{n: ("area", Decimal("0.0001")) for n in ("m2", "square_metre")},
+    **{n: ("count", Decimal(1)) for n in ("count", "item")},
 }
-UNITS: dict[str, tuple[str, str, Decimal]] = {
-    **{u: ("mass", "kg", f) for u, f in _MASS.items()},
-    **{u: ("volume", "l", f) for u, f in _VOLUME.items()},
-    **{f"{u}/ha": ("mass_rate", "kg/ha", f) for u, f in _MASS.items()},
-    **{f"{u}/ha": ("volume_rate", "l/ha", f) for u, f in _VOLUME.items()},
-    "ha": ("area", "ha", Decimal(1)),
-    "m2": ("area", "ha", Decimal("0.0001")),
-    "count": ("count", "count", Decimal(1)),
-    "count/ha": ("count_rate", "count/ha", Decimal(1)),
+STANDARD = {
+    "mass": "kg",
+    "volume": "l",
+    "area": "ha",
+    "count": "count",
+    "mass_rate": "kg/ha",
+    "volume_rate": "l/ha",
+    "count_rate": "count/ha",
 }
-STANDARD = (
-    ("mass", "kg"),
-    ("volume", "l"),
-    ("area", "ha"),
-    ("count", "count"),
-    ("mass_rate", "kg/ha"),
-    ("volume_rate", "l/ha"),
-    ("count_rate", "count/ha"),
-)
-STANDARD_CHECK = "(measure IS NULL AND value IS NULL AND unit IS NULL) OR " + " OR ".join(
-    f"(measure = '{m}' AND unit = '{u}')" for m, u in STANDARD
-)
+STANDARD_CHECK = " OR ".join(f"(measure = '{m}' AND unit = '{u}')" for m, u in STANDARD.items())
+
+
+def unit_rows() -> list[dict[str, object]]:
+    """Every accepted string: a name, or an amount name per area name (a rate per hectare)."""
+    rows = [
+        {"entered": n, "measure": m, "unit": STANDARD[m], "factor": f}
+        for n, (m, f) in NAMES.items()
+    ]
+    for top, (measure, top_factor) in NAMES.items():
+        if measure == "area":
+            continue
+        for bottom, (bottom_measure, bottom_factor) in NAMES.items():
+            if bottom_measure == "area":
+                rate = f"{measure}_rate"
+                rows.append(
+                    {
+                        "entered": f"{top}/{bottom}",
+                        "measure": rate,
+                        "unit": STANDARD[rate],
+                        "factor": top_factor / bottom_factor,
+                    }
+                )
+    return rows
 
 
 def upgrade() -> None:
@@ -71,11 +87,21 @@ def upgrade() -> None:
     op.create_check_constraint(
         op.f("ck_log_crop_eppo"), "log", "crop_eppo IS NULL OR crop_eppo ~ '^[0-9A-Z]{5,6}$'"
     )
+    unit_definition = op.create_table(
+        "unit_definition",
+        sa.Column("entered", sa.Text(), nullable=False),
+        sa.Column("measure", sa.Text(), nullable=False),
+        sa.Column("unit", sa.Text(), nullable=False),
+        sa.Column("factor", sa.Numeric(), nullable=False),
+        sa.CheckConstraint(STANDARD_CHECK, name=op.f("ck_unit_definition_standard")),
+        sa.CheckConstraint("factor > 0", name=op.f("ck_unit_definition_factor")),
+        sa.PrimaryKeyConstraint("entered", name=op.f("pk_unit_definition")),
+    )
+    op.bulk_insert(unit_definition, unit_rows())
     op.create_table(
         "catalog_item",
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("name", sa.Text(), nullable=False),
-        sa.Column("product_id", sa.BigInteger(), nullable=True),
         sa.Column(
             "props",
             postgresql.JSONB(astext_type=sa.Text()),
@@ -91,14 +117,7 @@ def upgrade() -> None:
         sa.CheckConstraint(
             "length(btrim(name)) BETWEEN 1 AND 200", name=op.f("ck_catalog_item_name")
         ),
-        sa.ForeignKeyConstraint(
-            ["product_id"],
-            ["product.id"],
-            name=op.f("fk_catalog_item_product_id_product"),
-            ondelete="SET NULL",
-        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_catalog_item")),
-        sa.UniqueConstraint("product_id", name=op.f("uq_catalog_item_product_id")),
     )
     op.create_table(
         "catalog_authorisation",
@@ -149,99 +168,75 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("log_id", sa.BigInteger(), nullable=False),
         sa.Column("catalog_item_id", sa.BigInteger(), nullable=True),
-        sa.Column("legacy_quantity_id", sa.BigInteger(), nullable=True),
         sa.Column("measure", sa.Text(), nullable=True),
         sa.Column("value", sa.Numeric(), nullable=True),
         sa.Column("unit", sa.Text(), nullable=True),
         sa.Column("entered_value", sa.Numeric(), nullable=False),
         sa.Column("entered_unit", sa.Text(), nullable=False),
         sa.Column("label", sa.Text(), nullable=True),
-        sa.Column("provenance", sa.Text(), nullable=False),
-        sa.CheckConstraint(STANDARD_CHECK, name=op.f("ck_typed_quantity_standard")),
+        sa.Column("provenance", sa.Text(), server_default="entered", nullable=False),
         sa.CheckConstraint(
-            "value IS NULL OR value::text <> 'NaN'", name=op.f("ck_typed_quantity_value")
+            "(measure IS NULL AND value IS NULL AND unit IS NULL) OR " + STANDARD_CHECK,
+            name=op.f("ck_typed_quantity_standard"),
         ),
         sa.CheckConstraint(
-            "entered_value::text <> 'NaN'", name=op.f("ck_typed_quantity_entered_value")
+            "value IS NULL OR value <> 'NaN'::numeric", name=op.f("ck_typed_quantity_value")
+        ),
+        sa.CheckConstraint(
+            "entered_value <> 'NaN'::numeric", name=op.f("ck_typed_quantity_entered_value")
         ),
         sa.CheckConstraint(
             "length(btrim(entered_unit)) > 0", name=op.f("ck_typed_quantity_entered_unit")
         ),
-        sa.CheckConstraint(
-            "provenance IN ('legacy_quantity', 'entered')",
-            name=op.f("ck_typed_quantity_provenance"),
-        ),
+        sa.CheckConstraint("provenance = 'entered'", name=op.f("ck_typed_quantity_provenance")),
         sa.ForeignKeyConstraint(
             ["catalog_item_id"],
             ["catalog_item.id"],
             name=op.f("fk_typed_quantity_catalog_item_id_catalog_item"),
         ),
         sa.ForeignKeyConstraint(
-            ["legacy_quantity_id"],
-            ["quantity.id"],
-            name=op.f("fk_typed_quantity_legacy_quantity_id_quantity"),
-            ondelete="CASCADE",
-        ),
-        sa.ForeignKeyConstraint(
             ["log_id"], ["log.id"], name=op.f("fk_typed_quantity_log_id_log"), ondelete="CASCADE"
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_typed_quantity")),
-        sa.UniqueConstraint(
-            "legacy_quantity_id", name=op.f("uq_typed_quantity_legacy_quantity_id")
-        ),
     )
     op.create_index("ix_typed_quantity_log_id", "typed_quantity", ["log_id"])
-
-    # Mirror the legacy rows.
     op.execute(
-        "INSERT INTO catalog_item (name, product_id) SELECT name, id FROM product ORDER BY id"
+        "CREATE VIEW legacy_catalog_item AS "
+        "SELECT p.id AS product_id, p.name, p.product_type, p.targets, "
+        "'legacy_product'::text AS provenance FROM product p"
     )
     op.execute(
-        "INSERT INTO crop_protection_item (catalog_item_id, product_type, targets) "
-        "SELECT c.id, p.product_type, p.targets FROM catalog_item c JOIN product p "
-        "ON p.id = c.product_id"
-    )
-    op.get_bind().execute(
-        sa.text(
-            "INSERT INTO typed_quantity (log_id, catalog_item_id, legacy_quantity_id, measure, "
-            "value, unit, entered_value, entered_unit, label, provenance) "
-            "SELECT q.log_id, c.id, q.id, u.measure, q.value * u.factor, u.unit, q.value, "
-            "q.unit, q.label, 'legacy_quantity' FROM quantity q "
-            "LEFT JOIN catalog_item c ON c.product_id = q.product_id "
-            "LEFT JOIN (SELECT * FROM unnest(CAST(:entered AS text[]), CAST(:measure AS text[]), "
-            "CAST(:unit AS text[]), CAST(:factor AS numeric[])) "
-            "AS m(entered, measure, unit, factor)) u "
-            "ON u.entered = regexp_replace(q.unit, '\\s+', '', 'g') "
-            "WHERE q.value::text <> 'NaN' ORDER BY q.id"
-        ),
-        {
-            "entered": list(UNITS),
-            "measure": [row[0] for row in UNITS.values()],
-            "unit": [row[1] for row in UNITS.values()],
-            "factor": [row[2] for row in UNITS.values()],
-        },
+        "CREATE VIEW legacy_typed_quantity AS "
+        "SELECT q.id AS legacy_quantity_id, q.log_id, q.product_id, u.measure, "
+        "q.value * u.factor AS value, u.unit, q.value AS entered_value, q.unit AS entered_unit, "
+        "q.label, 'legacy_quantity'::text AS provenance FROM quantity q "
+        "LEFT JOIN unit_definition u ON u.entered = q.unit AND q.value <> 'NaN'::numeric"
     )
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    facts = bind.execute(
-        sa.text(
-            "SELECT (SELECT count(*) FROM catalog_item WHERE product_id IS NULL) "
-            "+ (SELECT count(*) FROM catalog_authorisation) "
-            "+ (SELECT count(*) FROM typed_quantity WHERE provenance <> 'legacy_quantity') "
-            "+ (SELECT count(*) FROM log WHERE crop_eppo IS NOT NULL)"
+    facts = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT (SELECT count(*) FROM catalog_item) "
+                "+ (SELECT count(*) FROM typed_quantity) "
+                "+ (SELECT count(*) FROM log WHERE crop_eppo IS NOT NULL)"
+            )
         )
-    ).scalar_one()
+        .scalar_one()
+    )
     if facts:
         raise RuntimeError(
-            f"core_0006 downgrade refused: {facts} catalog-only fact(s) exist (catalog items, "
-            "authorisations, entered quantities or log crop codes); back them up and remove "
-            "them first"
+            f"core_0006 downgrade refused: {facts} entered catalog fact(s) exist (catalog items, "
+            "typed quantities or log crop codes); back them up and remove them first"
         )
+    op.execute("DROP VIEW legacy_typed_quantity")
+    op.execute("DROP VIEW legacy_catalog_item")
     op.drop_table("typed_quantity")
     op.drop_table("crop_protection_item")
     op.drop_table("catalog_authorisation")
     op.drop_table("catalog_item")
+    op.drop_table("unit_definition")
     op.drop_constraint(op.f("ck_log_crop_eppo"), "log", type_="check")
     op.drop_column("log", "crop_eppo")

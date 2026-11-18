@@ -3,11 +3,13 @@
 Failure modes owned here:
 - Golden: adding the catalog changes what the register export, stock, spray evidence or source
   deduplication mean. Frozen in `snapshots/catalog_golden.json` before any schema change.
-- Drift: a legacy product or quantity written after the upgrade (new, merged, replaced) has no
-  matching typed mirror, a stale one, or a guessed standard value.
+- Drift: a legacy product or quantity written after the upgrade, by the ORM (new, merged,
+  replaced) or by Core SQL, reads differently through the neutral views, or gets a guessed
+  standard value.
 - Shape: a catalog item needs the crop-protection extension, the extension accepts a type or
   target outside contact/penetrant and downy/powdery, a second country authorisation is refused,
-  or an application's crop code, BBCH stage or dose is filled in for it.
+  or an application's crop code, BBCH stage or dose is filled in for it; a float dose is stored
+  as an unknown instead of refused.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 
 from farmcore.apps.advisor import service as advisor
@@ -35,7 +37,11 @@ from farmcore.core.models.catalog import (
     CatalogItem,
     CropProtectionItem,
     TypedQuantity,
+    enter_quantity,
+    legacy_catalog_item,
+    legacy_typed_quantity,
 )
+from farmcore.core.units import UnitError
 from tests.apps.inventory.conftest import inv, spray, stock  # noqa: F401
 
 GOLDEN = Path(__file__).parent / "snapshots" / "catalog_golden.json"
@@ -139,23 +145,24 @@ def test_golden_register_stock_evidence_and_dedup_keep_their_meaning(session, in
     assert actual == json.loads(GOLDEN.read_text())
 
 
-def _mirror(session, farm_id):
-    """(entered value, entered unit, measure, standard value, unit, catalog product id) per
-    typed quantity, and the same expectation per legacy quantity."""
-    typed = session.execute(
-        select(TypedQuantity, CatalogItem.product_id)
-        .outerjoin(CatalogItem, CatalogItem.id == TypedQuantity.catalog_item_id)
-        .join(Log, Log.id == TypedQuantity.log_id)
+def _legacy_quantities(session, farm_id):
+    view = legacy_typed_quantity.c
+    return session.execute(
+        select(
+            view.entered_value,
+            view.entered_unit,
+            view.measure,
+            view.value,
+            view.unit,
+            view.product_id,
+        )
+        .join(Log, Log.id == view.log_id)
         .where(Log.farm_id == farm_id)
-        .order_by(TypedQuantity.legacy_quantity_id)
+        .order_by(view.legacy_quantity_id)
     ).all()
-    return [
-        (t.legacy_quantity_id, t.entered_value, t.entered_unit, t.measure, t.value, t.unit, pid)
-        for t, pid in typed
-    ]
 
 
-def test_legacy_writes_after_upgrade_keep_an_exact_typed_mirror(session, inv):  # noqa: F811
+def test_legacy_writes_read_exactly_through_the_neutral_views(session, inv):  # noqa: F811
     copper = inv.products["copper-contact"]
     april = datetime(2024, 4, 20, 6, tzinfo=UTC)
     spray(session, inv.farm, inv.parcels, copper, at=april, value="2.5", unit="kg/ha", key="f1")
@@ -169,7 +176,7 @@ def test_legacy_writes_after_upgrade_keep_an_exact_typed_mirror(session, inv):  
         unit="bottles/ha",
         key="f2",
     )
-    # A machine file replaces the first spray's dose: the old quantity and its mirror go.
+    # A machine file replaces the first spray's dose (ORM merge: old row deleted, new row).
     logs.record_operation(
         session,
         farm_id=inv.farm.id,
@@ -183,53 +190,49 @@ def test_legacy_writes_after_upgrade_keep_an_exact_typed_mirror(session, inv):  
         occurred_at=april,
     )
     session.flush()
+    assert _legacy_quantities(session, inv.farm.id) == [
+        (Decimal("3"), "bottles/ha", None, None, None, copper.id),
+        (Decimal("2400"), "g/ha", "mass_rate", Decimal("2.4"), "kg/ha", copper.id),
+    ]
 
-    quantities = session.scalars(
-        select(Quantity).join(Log).where(Log.farm_id == inv.farm.id).order_by(Quantity.id)
-    ).all()
-    assert [(q.value, q.unit) for q in quantities] == [
-        (Decimal("3"), "bottles/ha"),
-        (Decimal("2400"), "g/ha"),  # the replacement is a new row
-    ]
-    assert _mirror(session, inv.farm.id) == [
-        (quantities[0].id, Decimal("3"), "bottles/ha", None, None, None, copper.id),
-        (
-            quantities[1].id,
-            Decimal("2400"),
-            "g/ha",
-            "mass_rate",
-            Decimal("2.4"),
-            "kg/ha",
-            copper.id,
-        ),
-    ]
-    assert quantities[0].log_id == odd.id
-    # Every product, including one added after the upgrade, has its extension mirrored.
-    new = Product(
-        name="Synthetic penetrant",
-        authorisation_no="X",
-        active_substance="x",
-        product_type="penetrant",
-        targets=["downy"],
+    # Core SQL writes bypass the ORM; the views still read them.
+    session.execute(
+        update(Quantity).where(Quantity.log_id == odd.id).values(value=Decimal(5), unit="mL/m2")
     )
-    session.add(new)
-    session.flush()
-    mirrored = session.execute(
-        select(CatalogItem.name, CropProtectionItem.product_type, CropProtectionItem.targets)
-        .join(CropProtectionItem)
-        .where(CatalogItem.product_id == new.id)
-    ).one()
-    assert tuple(mirrored) == ("Synthetic penetrant", "penetrant", ["downy"])
-    assert (
-        session.scalars(
-            select(CatalogAuthorisation).where(
-                CatalogAuthorisation.catalog_item_id.in_(
-                    select(CatalogItem.id).where(CatalogItem.product_id == new.id)
-                )
-            )
-        ).all()
-        == []
-    )  # the legacy number names no country
+    new_id = session.execute(
+        insert(Product)
+        .values(
+            name="Synthetic penetrant",
+            authorisation_no="X",
+            active_substance="x",
+            product_type="penetrant",
+            targets=["downy"],
+        )
+        .returning(Product.id)
+    ).scalar_one()
+    session.execute(update(Product).where(Product.id == copper.id).values(name="Renamed"))
+    # 5 mL/m2 is 50 l/ha.
+    assert _legacy_quantities(session, inv.farm.id)[0] == (
+        Decimal("5"),
+        "mL/m2",
+        "volume_rate",
+        Decimal("50"),
+        "l/ha",
+        copper.id,
+    )
+    view = legacy_catalog_item.c
+    rows = session.execute(
+        select(view.product_id, view.name, view.product_type, view.targets)
+        .where(view.product_id.in_([new_id, copper.id]))
+        .order_by(view.product_id)
+    ).all()
+    assert [tuple(r) for r in rows] == [
+        (copper.id, "Renamed", "contact", ["downy"]),
+        (new_id, "Synthetic penetrant", "penetrant", ["downy"]),
+    ]
+    # Legacy data is read, never copied: no catalog-only facts were created.
+    for model in (CatalogItem, CatalogAuthorisation, TypedQuantity):
+        assert session.scalar(select(func.count()).select_from(model)) == 0
 
 
 def test_catalog_items_extensions_authorisations_and_application_fields(session, inv):  # noqa: F811
@@ -274,8 +277,15 @@ def test_catalog_items_extensions_authorisations_and_application_fields(session,
     session.flush()
     session.refresh(legacy)
     assert (legacy.crop_eppo, legacy.bbch) == ("VITVI", 15)
-    dose = session.scalars(select(TypedQuantity).where(TypedQuantity.log_id == legacy.id)).one()
-    assert (dose.value, dose.unit, dose.entered_value) == (Decimal("2.5"), "kg/ha", Decimal("2.5"))
+    dose = enter_quantity(
+        session, log_id=legacy.id, value=Decimal("800"), unit="g/ha", catalog_item_id=seed.id
+    )
+    assert (dose.measure, dose.value, dose.unit) == ("mass_rate", Decimal("0.8"), "kg/ha")
+    assert (dose.entered_value, dose.entered_unit) == (Decimal("800"), "g/ha")
+    unknown = enter_quantity(session, log_id=legacy.id, value=Decimal(3), unit="bottles/ha")
+    assert (unknown.measure, unknown.value, unknown.unit) == (None, None, None)
+    with pytest.raises(UnitError):
+        enter_quantity(session, log_id=legacy.id, value=0.1, unit="kg/ha")
     with pytest.raises(IntegrityError), session.begin_nested():
         legacy.crop_eppo = "vine"
         session.flush()
