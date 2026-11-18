@@ -153,18 +153,17 @@ def test_optional_daily_apps_disappear_from_navigation_and_home(client):
     assert 'href="/planning/"' not in page
     assert 'hx-get="/forecast/' not in page
     assert client.post("/apps/activity/uninstall").status_code == 200
-    bottom = client.get("/today/").text.split('id="bottom-nav"', 1)[1].split("</nav>", 1)[0]
-    assert "Activity" not in bottom
+    assert 'href="/activity/"' not in client.get("/today/").text
 
 
 def test_home_alias_redirect_preserves_explicit_farm(client):
-    from farmcore.apps.today.manifest import MANIFEST
+    from farmcore.core.app_manifest import MANIFEST as CORE
     from farmcore.core.nav import active_path, build_nav
 
     response = client.get("/?farm=2", follow_redirects=False)
     assert response.status_code == 307
     assert response.headers["location"] == "/today/?farm=2"
-    home = build_nav([MANIFEST], is_admin=False)["farmer"]
+    home = build_nav([CORE], is_admin=False)["farmer"]
     assert active_path(home, "/today/") == "/"
     assert active_path(home, "/") == "/"
     assert active_path(home, "/unknown") is None

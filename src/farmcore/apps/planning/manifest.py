@@ -27,5 +27,13 @@ MANIFEST = Manifest(
     nav_group="apps",
     nav_order=15,
     nav_icon="calendar",
+    icon="clipboard",
+    color="wait",
+    keywords={
+        "en": ("planning", "planned", "job"),
+        "fr": ("planification", "travaux planifiés"),
+        "es": ("planificación", "trabajos planificados"),
+        "it": ("pianificazione", "lavori pianificati"),
+    },
     maturity="alpha",
 )

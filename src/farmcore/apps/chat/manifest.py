@@ -27,5 +27,13 @@ MANIFEST = Manifest(
     nav_group="more",
     nav_order=70,
     nav_icon="chat",
+    icon="chat",
+    color="spray",
+    keywords={
+        "en": ("chat", "telegram", "voice", "assistant"),
+        "fr": ("discussion", "telegram", "assistant"),
+        "es": ("chat", "telegram", "asistente"),
+        "it": ("chat", "telegram", "assistente"),
+    },
     maturity="alpha",
 )

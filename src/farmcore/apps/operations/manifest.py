@@ -28,6 +28,14 @@ MANIFEST = Manifest(
     nav_group="more",
     nav_order=5,
     nav_icon="diary",
+    icon="diary",
+    color="spray",
+    keywords={
+        "en": ("record", "diary", "spray", "log", "register"),
+        "fr": ("enregistrement", "journal", "pulvérisation", "registre", "traitement"),
+        "es": ("registro", "diario", "pulverización", "tratamiento"),
+        "it": ("registro", "diario", "irrorazione", "trattamento"),
+    },
     extra_nav=(NavItem("Register", "/operations/register", "more", 0, "register"),),
     # No Today widget: recent sprays show in the core Recent activity card.
     # Map panel sections: latest spray for Farm today, spray facts per parcel.

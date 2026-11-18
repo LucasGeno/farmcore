@@ -15,5 +15,13 @@ MANIFEST = Manifest(
     nav_group="apps",
     nav_order=40,
     nav_icon="share",
+    icon="share",
+    color="protected",
+    keywords={
+        "en": ("share", "sharing", "grant", "access"),
+        "fr": ("partage", "accès", "autorisation"),
+        "es": ("compartir", "acceso"),
+        "it": ("condivisione", "accesso"),
+    },
     maturity="alpha",
 )

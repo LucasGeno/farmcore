@@ -18,9 +18,17 @@ MANIFEST = Manifest(
     category="Essentials",
     required=True,
     nav=("Map", "/fields/"),
-    nav_group="farmer",
+    nav_group="apps",
     nav_order=20,
     nav_icon="map",
+    icon="map",
+    color="protected",
+    keywords={
+        "en": ("map", "parcel", "field", "plot"),
+        "fr": ("carte", "parcelle", "champ"),
+        "es": ("mapa", "parcela", "campo"),
+        "it": ("mappa", "parcella", "campo", "appezzamento"),
+    },
     # Home pairs the map preview with Recent activity on desktop.
     widgets=(Widget("/fields/today?desktop=1", 30, "half"),),
     tools=TOOLS,

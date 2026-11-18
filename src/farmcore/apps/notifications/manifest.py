@@ -9,4 +9,12 @@ MANIFEST = Manifest(
     scopes=("advice:read", "fields:read", "stations:read"),
     routes=("farmcore.apps.notifications.routes:router",),
     category="Your farm",
+    icon="bell",
+    color="spray",
+    keywords={
+        "en": ("notification", "alert"),
+        "fr": ("notification", "alerte"),
+        "es": ("notificación", "alerta"),
+        "it": ("notifica", "avviso"),
+    },
 )

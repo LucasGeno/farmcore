@@ -12,9 +12,17 @@ MANIFEST = Manifest(
     title="Activity",
     category="Records",
     nav=("Activity", "/activity/"),
-    nav_group="farmer",
+    nav_group="apps",
     nav_order=40,
     nav_icon="history",
+    icon="history",
+    color="brand",
+    keywords={
+        "en": ("activity", "timeline", "history"),
+        "fr": ("activité", "historique", "journal"),
+        "es": ("actividad", "historial"),
+        "it": ("attività", "cronologia"),
+    },
     maturity="alpha",
     parcel_views=(
         ParcelView(

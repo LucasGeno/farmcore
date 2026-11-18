@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import importlib
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, urlsplit
@@ -20,9 +21,60 @@ if TYPE_CHECKING:
     from farmcore.settings import Settings
 
 Maturity = Literal["alpha", "beta", "stable"]
-# Where a nav entry renders: `farmer` = phone bottom nav and the sidebar's first group; `apps` =
-# an app's own main page (sidebar "Apps", top of the phone "More" sheet); `more` = the Expert
-# group (collapsed); `admin` = only with the admin token.
+CORE_NAME = "core"
+# Core icon names from `core/templates/core/_icons.html`; an app `icon` is one of these, or a safe
+# SVG path the app ships.
+ICON_NAMES = frozenset(
+    {
+        "home",
+        "calendar",
+        "bell",
+        "database",
+        "today",
+        "map",
+        "register",
+        "diary",
+        "more",
+        "advisor",
+        "station",
+        "chart",
+        "history",
+        "landmark",
+        "chat",
+        "share",
+        "apps",
+        "spray",
+        "protected",
+        "wait",
+        "none",
+        "mic",
+        "tractor",
+        "chevron-right",
+        "chevron-left",
+        "alert",
+        "chevron-down",
+        "clock",
+        "rain",
+        "thermo",
+        "wind",
+        "dry",
+        "humidity",
+        "check",
+        "x",
+        "leaf",
+        "info",
+        "bug",
+        "box",
+        "clipboard",
+    }
+)
+# The shell's colour tokens an app tile may use as its accent (farmcore.css / tailwind.config.js).
+COLOR_TOKENS = frozenset({"brand", "spray", "protected", "wait", "ink", "muted"})
+# Record-type (and draft-kind) keys the Record sheet reserves for itself.
+RESERVED_RECORD_TYPE_KEYS = frozenset({"overview"})
+# Where a nav entry renders: `farmer` = phone bottom nav and the sidebar's first group (core only);
+# `apps` = an app's own main page (sidebar "Apps", top of the phone "More" sheet); `more` = the
+# Expert group (collapsed); `admin` = only with the admin token.
 NavGroup = Literal["farmer", "apps", "more", "admin"]
 NAV_GROUPS: tuple[NavGroup, ...] = ("farmer", "apps", "more", "admin")
 WidgetSpan = Literal["full", "half"]
@@ -161,6 +213,171 @@ def collect_parcel_views(manifests):
     return sorted(views, key=lambda item: item[1].order)
 
 
+def collect_record_types(manifests):
+    """Record types in load order; a duplicate key across loaded apps is a configuration error."""
+    types = [(m, rt) for m in manifests for rt in m.record_types]
+    keys = [rt.key for _, rt in types]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate record type key across manifests")
+    return types
+
+
+class FrozenMapping(Mapping[str, tuple[str, ...]]):
+    """An immutable, hashable mapping, so the frozen `Manifest` stays hashable.
+
+    `MappingProxyType` stays unhashable (it delegates to its dict); this wraps the same data in a
+    tuple-of-pairs so both ``m.keywords[locale]`` and ``hash(m)`` work.
+    """
+
+    __slots__ = ("_items", "_hash")
+
+    def __init__(self, data: Mapping[str, tuple[str, ...]]):
+        self._items = tuple(sorted(data.items()))
+        self._hash = hash(self._items)
+
+    def __getitem__(self, key: str) -> tuple[str, ...]:
+        for k, v in self._items:
+            if k == key:
+                return v
+        raise KeyError(key)
+
+    def __iter__(self):
+        return (k for k, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __hash__(self) -> int:
+        return self._hash
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FrozenMapping):
+            return self._items == other._items
+        if isinstance(other, Mapping):
+            return dict(self._items) == dict(other)
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"FrozenMapping({dict(self._items)!r})"
+
+
+_KEY = re.compile(r"[a-z][a-z0-9-]{0,31}")
+_DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
+_FRAGMENT = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{0,95}")
+
+
+def _check_key(value: str, field: str, *, reserved: frozenset[str]) -> None:
+    if not _KEY.fullmatch(value) or value in reserved:
+        raise ValueError(f"{field} key {value!r} is invalid or reserved")
+
+
+def _check_path(value: str, field: str, *, allow_fragment: bool = True) -> None:
+    """A local URL path: no scheme, netloc, whitespace, percent or `..` segment (ParcelView)."""
+    parts = urlsplit(value)
+    if (
+        not value.startswith("/")
+        or value.startswith("//")
+        or parts.netloc
+        or parts.scheme
+        or len(value) > 512
+        or re.search(r"[\s\\%]", value)
+        or any(segment in {".", ".."} for segment in parts.path.split("/"))
+        or (parts.fragment and not _FRAGMENT.fullmatch(parts.fragment))
+        or (not allow_fragment and parts.fragment)
+    ):
+        raise ValueError(f"{field}: invalid path")
+
+
+def _check_provider(value: str, field: str) -> None:
+    """``"module:attr"`` (attr may be dotted); resolved lazily, only the shape is checked."""
+    if not value:
+        return
+    module, sep, attr = value.partition(":")
+    if (
+        not sep
+        or not module
+        or not attr
+        or not _DOTTED.fullmatch(module)
+        or not _DOTTED.fullmatch(attr)
+    ):
+        raise ValueError(f"{field}: expected 'module:attr', got {value!r}")
+
+
+def _check_app_prefix(value: str, app_name: str, field: str) -> None:
+    if not value.startswith(f"/{app_name}/"):
+        raise ValueError(f"{field}: path must be under '/{app_name}/'")
+
+
+def _check_icon(value: str, field: str, *, app_name: str | None = None) -> None:
+    """An icon is a core icon name, an app-shipped SVG path, or empty.
+
+    A path icon must be the app's own asset: ``/static/<app>/...svg`` with no query or fragment,
+    so one app cannot point a grid tile at another app's asset or an arbitrary GET route.
+    """
+    if not value or value in ICON_NAMES:
+        return
+    if not value.startswith("/"):
+        raise ValueError(f"{field}: unknown icon name or unsafe path {value!r}")
+    _check_path(value, f"{field} icon", allow_fragment=False)
+    if app_name is not None:
+        parts = urlsplit(value)
+        if (
+            not value.startswith(f"/static/{app_name}/")
+            or not value.endswith(".svg")
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError(
+                f"{field}: icon path must be '/static/{app_name}/...svg' with no query or fragment"
+            )
+
+
+@dataclass(frozen=True)
+class Tab:
+    """An app's own top navigation entry, rendered inside the app, not in the shell chrome."""
+
+    label: str
+    path: str
+
+    def __post_init__(self) -> None:
+        if not self.label.strip():
+            raise ValueError("tab label must not be empty")
+        _check_path(self.path, "tab")
+
+
+@dataclass(frozen=True)
+class RecordType:
+    """One fact an app can record from the Record sheet: key, label, icon, form fragment URL and
+    the draft kind that validates it."""
+
+    key: str
+    label: str
+    icon: str = ""
+    form: str = ""  # the form fragment URL
+    draft_kind: str = ""  # a key from the manifest's `draft_kinds`
+
+    def __post_init__(self) -> None:
+        _check_key(self.key, "record type", reserved=RESERVED_RECORD_TYPE_KEYS)
+        if not self.label.strip():
+            raise ValueError("record type label must not be empty")
+        if self.form:
+            _check_path(self.form, "record type")
+
+
+@dataclass(frozen=True)
+class DraftKind:
+    """A draft kind: a validator (``module:func``) and its review fragment URL."""
+
+    key: str
+    validator: str
+    review: str
+
+    def __post_init__(self) -> None:
+        _check_key(self.key, "draft kind", reserved=RESERVED_RECORD_TYPE_KEYS)
+        _check_provider(self.validator, "draft kind")
+        _check_path(self.review, "draft kind")
+
+
 @dataclass(frozen=True)
 class Manifest:
     name: str
@@ -194,6 +411,15 @@ class Manifest:
     demo_presets: tuple[str, ...] = ()  # module:attr paths to core.demo.Preset objects
     demo_reset: tuple[str, ...] = ()  # module:attr (session, farm) hooks run by every demo reset
     tools: tuple[Any, ...] = ()  # read-only assistant tools
+    # Farmer-first experience (F1/F3): the app grid, search and Record sheet read these.
+    icon: str = ""  # a core icon name, or an app-shipped SVG path
+    color: str = ""  # a core palette token
+    keywords: Mapping[str, tuple[str, ...]] = field(default_factory=dict)  # locale -> synonyms
+    tabs: tuple[Tab, ...] = ()  # the app's own top navigation
+    search: str = ""  # provider "module:func" returning typed results
+    record_types: tuple[RecordType, ...] = ()  # facts the Record sheet can capture
+    draft_kinds: tuple[DraftKind, ...] = ()  # validator + review fragment per draft kind
+    attention: str = ""  # provider "module:func" returning at most N home-strip items
 
     def __post_init__(self) -> None:
         keys = [view.key for view in self.parcel_views]
@@ -201,6 +427,59 @@ class Manifest:
             raise ValueError(f"app {self.name!r}: duplicate parcel view key")
         if self.nav_group not in NAV_GROUPS:
             raise ValueError(f"app {self.name!r}: nav_group must be one of {NAV_GROUPS}")
+        if self.name != CORE_NAME:
+            if self.nav_group == "farmer":
+                raise ValueError(
+                    f"app {self.name!r}: only core may add a phone bottom-nav slot"
+                    " (nav_group='farmer')"
+                )
+            if any(item.group == "farmer" for item in self.extra_nav):
+                raise ValueError(
+                    f"app {self.name!r}: only core may add a phone bottom-nav slot"
+                    " (extra_nav, group='farmer')"
+                )
+        _check_icon(self.icon, f"app {self.name!r}", app_name=self.name)
+        if self.color and self.color not in COLOR_TOKENS:
+            raise ValueError(
+                f"app {self.name!r}: color {self.color!r} is not a palette token"
+                f" {sorted(COLOR_TOKENS)}"
+            )
+        _check_provider(self.search, f"app {self.name!r} search")
+        _check_provider(self.attention, f"app {self.name!r} attention")
+        for locale, words in self.keywords.items():
+            if not re.fullmatch(r"[a-z]{2}(-[A-Za-z]{2,4})?", locale):
+                raise ValueError(f"app {self.name!r}: invalid keyword locale {locale!r}")
+            if not isinstance(words, tuple) or any(not isinstance(w, str) for w in words):
+                raise ValueError(
+                    f"app {self.name!r}: keyword synonyms for {locale!r} must be a tuple of strings"
+                )
+            if not words or any(not w.strip() or w != w.strip() for w in words):
+                raise ValueError(
+                    f"app {self.name!r}: keyword synonyms for {locale!r} must be non-empty"
+                )
+            if len(set(words)) != len(words):
+                raise ValueError(f"app {self.name!r}: duplicate keyword synonyms for {locale!r}")
+        object.__setattr__(self, "keywords", FrozenMapping(self.keywords))
+        if len({tab.path for tab in self.tabs}) != len(self.tabs):
+            raise ValueError(f"app {self.name!r}: duplicate tab path")
+        for tab in self.tabs:
+            _check_app_prefix(tab.path, self.name, f"app {self.name!r} tab")
+        record_keys = [rt.key for rt in self.record_types]
+        if len(record_keys) != len(set(record_keys)):
+            raise ValueError(f"app {self.name!r}: duplicate record type key")
+        for rt in self.record_types:
+            _check_icon(rt.icon, f"app {self.name!r} record type", app_name=self.name)
+            if rt.form:
+                _check_app_prefix(rt.form, self.name, f"app {self.name!r} record type")
+        draft_kind_keys = {dk.key for dk in self.draft_kinds}
+        for dk in self.draft_kinds:
+            _check_app_prefix(dk.review, self.name, f"app {self.name!r} draft kind")
+        for rt in self.record_types:
+            if rt.draft_kind and rt.draft_kind not in draft_kind_keys:
+                raise ValueError(
+                    f"app {self.name!r}: record type {rt.key!r} names undeclared"
+                    f" draft_kind {rt.draft_kind!r}"
+                )
 
     @property
     def display_name(self) -> str:

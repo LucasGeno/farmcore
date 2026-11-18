@@ -1,13 +1,26 @@
-"""The optional manifest fields of the UX pass default to empty, and every real app loads."""
+"""The optional manifest fields default to empty, the new contract fields validate, and every
+real app loads with the values the app grid, search and Record sheet need."""
 
 from __future__ import annotations
 
 import dataclasses
+import re
+from pathlib import Path
 
 import pytest
 
 from farmcore.core import registry
-from farmcore.core.manifest import Manifest, MapLayer, NavItem, Widget
+from farmcore.core.manifest import (
+    CORE_NAME,
+    ICON_NAMES,
+    DraftKind,
+    Manifest,
+    MapLayer,
+    NavItem,
+    RecordType,
+    Tab,
+    Widget,
+)
 
 
 def test_bare_manifest_has_every_new_field_empty() -> None:
@@ -30,9 +43,21 @@ def test_nav_item_defaults_to_the_more_group() -> None:
     assert (item.group, item.order, item.icon) == ("more", 100, "")
 
 
-@pytest.mark.parametrize("group", ["farmer", "apps", "more", "admin"])
-def test_nav_group_accepts_the_four_groups(group: str) -> None:
+@pytest.mark.parametrize("group", ["apps", "more", "admin"])
+def test_nav_group_accepts_the_non_chrome_groups(group: str) -> None:
     assert Manifest(name="x", version="0.1.0", nav_group=group).nav_group == group  # type: ignore[arg-type]
+
+
+def test_only_core_may_place_nav_in_the_farmer_group() -> None:
+    Manifest(name=CORE_NAME, version="0.1.0", nav=("Home", "/"), nav_group="farmer")
+    with pytest.raises(ValueError, match="farmer"):
+        Manifest(name="x", version="0.1.0", nav=("X", "/x/"), nav_group="farmer")
+    with pytest.raises(ValueError, match="farmer"):
+        Manifest(
+            name="x",
+            version="0.1.0",
+            extra_nav=(NavItem("X", "/x/", "farmer"),),
+        )
 
 
 @pytest.mark.parametrize("bad", ["expert", "", "Farmer"])
@@ -66,6 +91,110 @@ def test_widget_and_map_layer_defaults() -> None:
     assert Widget("/x/today") == Widget("/x/today", 100, "full")
     layer = MapLayer("advice", "Spray advice", "/advisor/layer.geojson")
     assert (layer.kind, layer.order, layer.default_on, layer.icon) == ("parcels", 100, False, "")
+
+
+_VALID = {
+    "icon": "map",
+    "color": "brand",
+    "keywords": {"en": ("spray", "treatment")},
+    "tabs": (Tab("Plan", "/x/plan"),),
+    "search": "farmcore.apps.x.search:find",
+    "attention": "farmcore.apps.x.attention:items",
+    "record_types": (RecordType("spray", "Spray", form="/x/record/spray"),),
+    "draft_kinds": (DraftKind("spray", "farmcore.apps.x.drafts:validate", "/x/drafts/spray"),),
+}
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        pytest.param(lambda: {"icon": "no-such-icon-name"}, id="unknown-icon-name"),
+        pytest.param(lambda: {"icon": "https://evil.example/x.svg"}, id="remote-icon"),
+        pytest.param(lambda: {"icon": "/static/other/logo.svg"}, id="foreign-icon"),
+        pytest.param(lambda: {"icon": "/static/x/logo.png"}, id="non-svg-icon"),
+        pytest.param(lambda: {"icon": "/static/x/logo.svg?q=1"}, id="icon-query"),
+        pytest.param(lambda: {"color": "chartreuse"}, id="bad-colour"),
+        pytest.param(lambda: {"keywords": {"en": "spray"}}, id="str-keywords"),
+        pytest.param(lambda: {"keywords": {"english": ("spray",)}}, id="bad-locale"),
+        pytest.param(lambda: {"keywords": {"en": ("spray", "spray")}}, id="dup-synonym"),
+        pytest.param(
+            lambda: {"tabs": (Tab("Plan", "https://evil.example/"),)}, id="unsafe-tab-path"
+        ),
+        pytest.param(lambda: {"tabs": (Tab("Plan", "/other/plan"),)}, id="foreign-tab-prefix"),
+        pytest.param(lambda: {"search": "not-a-provider"}, id="bad-provider-shape"),
+        pytest.param(
+            lambda: {
+                "record_types": (RecordType("overview", "Overview", form="/x/record/overview"),)
+            },
+            id="reserved-record-key",
+        ),
+        pytest.param(
+            lambda: {"record_types": (RecordType("spray", "Spray", form="/other/spray"),)},
+            id="foreign-form-prefix",
+        ),
+        pytest.param(
+            lambda: {
+                "record_types": (
+                    RecordType("spray", "Spray", form="/x/record/spray", draft_kind="missing"),
+                )
+            },
+            id="undeclared-draft-kind",
+        ),
+        pytest.param(
+            lambda: {"record_types": (RecordType("spray", "Spray", form="/x/record/spray"),) * 2},
+            id="dup-record-key",
+        ),
+        pytest.param(
+            lambda: {
+                "draft_kinds": (
+                    DraftKind("spray", "farmcore.apps.x.drafts:validate", "/other/drafts/spray"),
+                )
+            },
+            id="foreign-review-prefix",
+        ),
+    ],
+)
+def test_invalid_manifest_field_fails_construction(override) -> None:
+    with pytest.raises(ValueError):
+        Manifest(name="x", version="0.1.0", **(_VALID | override()))
+
+
+def test_full_manifest_with_every_new_field_is_valid() -> None:
+    m = Manifest(name="x", version="0.1.0", **_VALID)
+    assert m.icon == "map"
+    assert m.color == "brand"
+    assert m.keywords["en"] == ("spray", "treatment")
+    assert m.tabs == (Tab("Plan", "/x/plan"),)
+    assert m.record_types[0].key == "spray"
+    assert m.draft_kinds[0].key == "spray"
+    hash(m)  # the frozen manifest stays hashable
+    with pytest.raises(TypeError):
+        m.keywords["en"] = ("",)  # type: ignore[index]
+
+
+def test_duplicate_record_type_keys_rejected_across_loaded_apps() -> None:
+    rt = RecordType("spray", "Spray")
+    with pytest.raises(ValueError, match="duplicate record type"):
+        registry.resolve_order(
+            [
+                Manifest(name="a", version="1", record_types=(rt,)),
+                Manifest(name="b", version="1", record_types=(rt,)),
+            ]
+        )
+
+
+def test_every_in_tree_app_declares_icon_color_and_the_four_locales() -> None:
+    for m in registry.discover():
+        assert m.icon, m.name
+        assert m.color, m.name
+        assert {"fr", "es", "it", "en"} <= set(m.keywords), m.name
+
+
+def test_icon_names_match_the_core_template() -> None:
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "src/farmcore/core/templates/core/_icons.html").read_text()
+    names = set(re.findall(r'name == "([a-z0-9-]+)"', template))
+    assert names == set(ICON_NAMES)
 
 
 @pytest.mark.parametrize(

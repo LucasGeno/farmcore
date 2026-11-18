@@ -45,8 +45,8 @@ def test_empty_page_says_so(client, farm) -> None:  # noqa: F811
 
 def test_menu_has_an_activity_entry(client, farm) -> None:  # noqa: F811
     page = client.get("/activity/").text
-    bottom = page.split('id="bottom-nav"', 1)[1].split("</nav>", 1)[0]
-    assert 'href="/activity/"' in bottom
+    side = page.split('id="nav-apps"', 1)[1].split("</div>", 1)[0]
+    assert 'href="/activity/"' in side
     assert 'href="/activity/" aria-current="page"' in page
 
 

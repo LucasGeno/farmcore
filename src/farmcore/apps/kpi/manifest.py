@@ -15,6 +15,14 @@ MANIFEST = Manifest(
     nav_group="apps",
     nav_order=30,
     nav_icon="chart",
+    icon="chart",
+    color="protected",
+    keywords={
+        "en": ("season", "impact", "kpi", "saving"),
+        "fr": ("saison", "impact", "économie"),
+        "es": ("temporada", "impacto", "ahorro"),
+        "it": ("stagione", "impatto", "risparmio"),
+    },
     # Map panel: Farm today's one link to Season & impact, no figures.
     farm_sections=("/kpi/map/farm",),
     maturity="alpha",

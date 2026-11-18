@@ -42,7 +42,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, configure_mappers, sessionmaker
 
 from farmcore.core.app_manifest import MANIFEST as CORE
-from farmcore.core.manifest import Manifest, collect_parcel_views, import_string
+from farmcore.core.manifest import (
+    Manifest,
+    collect_parcel_views,
+    collect_record_types,
+    import_string,
+)
 from farmcore.core.models.kernel import AppModule
 
 # id(manifest) -> (manifest, the package that holds it), for `static/` lookup. Keyed by object
@@ -81,6 +86,7 @@ def resolve_order(manifests: list[Manifest]) -> list[Manifest]:
     Raises `RegistryError` on a duplicate name, an unmet dependency or a cycle.
     """
     collect_parcel_views(manifests)
+    collect_record_types(manifests)
     by_name: dict[str, Manifest] = {}
     for m in manifests:
         if m.name in by_name and by_name[m.name] is not m:

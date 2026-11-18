@@ -2,8 +2,9 @@
 
 `build_nav(manifests, is_admin=)` -> `{"farmer", "apps", "more", "admin"}` lists of `NavItem`:
 each app's `nav` (in `nav_group`, at `nav_order`) plus its `extra_nav`, sorted by order, ties in
-load order. The `apps` group always ends with the kernel's "All apps" page (everyone sees it,
-read-only; only the admin can switch apps). The `more` group renders as collapsed Records.
+load order. The `farmer` group (phone bottom nav) is core-only. The `apps` group always ends with
+the kernel's "All apps" page (everyone sees it, read-only; only the admin can switch apps). The
+`more` group renders as collapsed Records.
 The admin group holds admin-only items and is empty
 for non-admins. `web.render` passes only the visible apps (`registry.visible_manifests`).
 `active_path(items, path)`: the item path that is the longest prefix of `path`, for
@@ -15,18 +16,24 @@ from __future__ import annotations
 from collections.abc import Iterable
 from urllib.parse import urlsplit
 
-from farmcore.core.manifest import NAV_GROUPS, Manifest, NavItem
+from farmcore.core.manifest import CORE_NAME, NAV_GROUPS, Manifest, NavItem
 
 APPS_ITEM = NavItem("All apps", "/apps", "apps", 99, "apps")
 
 
 def _items(manifests: Iterable[Manifest]) -> list[NavItem]:
     items: list[NavItem] = []
+    visible_paths = {m.nav[1] for m in manifests if m.name != CORE_NAME and m.nav is not None}
     for m in manifests:
         if m.nav is not None:
             label, path = m.nav
             items.append(NavItem(label, path, m.nav_group, m.nav_order, m.nav_icon))
-        items.extend(m.extra_nav)
+        for item in m.extra_nav:
+            # Core's phone bottom-nav shortcuts to an app's page only render while that app is
+            # visible (switching it off removes the shortcut, so no dead link).
+            if m.name == CORE_NAME and item.group == "farmer" and item.path not in visible_paths:
+                continue
+            items.append(item)
     return items
 
 
