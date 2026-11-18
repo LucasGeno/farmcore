@@ -10,6 +10,7 @@ propose.
 from __future__ import annotations
 
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
@@ -23,7 +24,7 @@ from farmcore.core.models.canonical import DataGrant, Farm, Log, LogSource, Parc
 from farmcore.core.models.drafts import Draft
 from farmcore.core.models.identity import AccessToken
 from farmcore.main import create_app
-from tests.apps.chat.test_handlers import COPPER, NOW_LOCAL, seed_farm
+from tests.apps.chat.test_handlers import COPPER, NOW_LOCAL, SQUARE, seed_farm
 from tests.core.test_member_sessions import _account, _login
 
 MANIFESTS = registry.discover()
@@ -88,15 +89,35 @@ def _stock(c):
 
 
 def test_concurrent_and_retried_confirms_record_once(case, committed_session_factory):
+    """Eight real sessions confirm at once behind a barrier, then the farmer's page retries."""
+    workers = 8
     with committed_session_factory() as session:
         draft = _propose(session, case.farm_id, case.ids)
         session.commit()
     assert _stock(case) == "20"
-    url = f"/drafts/{draft.id}/confirm?farm={case.farm_id}"
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        replies = list(pool.map(lambda _: case.browser.post(url, data={"revision": "1"}), range(2)))
-    retried = case.browser.post(url, data={"revision": "1"})
-    assert [r.status_code for r in [*replies, retried]] == [200, 200, 200]
+    barrier = threading.Barrier(workers)
+
+    def confirm(_):
+        with committed_session_factory() as session:
+            barrier.wait()
+            _, recorded = drafts.confirm(
+                session,
+                MANIFESTS,
+                farm_id=case.farm_id,
+                draft_id=draft.id,
+                actor="operator",
+                revision=1,
+                now=NOW_LOCAL,
+            )
+            session.commit()
+            return recorded
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        recorded = list(pool.map(confirm, range(workers)))
+    retried = case.browser.post(
+        f"/drafts/{draft.id}/confirm?farm={case.farm_id}", data={"revision": "1"}
+    )
+    assert (recorded.count(True), retried.status_code) == (1, 200)
     assert _stock(case) == "18"  # 20 kg - 2 kg/ha x 1 ha, once
     with committed_session_factory() as session:
         row = session.get(Draft, draft.id)
@@ -239,11 +260,38 @@ def test_a_token_draft_is_reviewed_by_the_owner_who_issued_the_token(session, se
             return False
         return True
 
-    assert [opens(a) for a in (f"identity:{issuer}", f"identity:{other}", "operator")] == [
-        True,
-        False,
-        False,
+    def confirms(actor):
+        try:
+            drafts.confirm(
+                session,
+                MANIFESTS,
+                farm_id=farm_id,
+                draft_id=draft.id,
+                actor=actor,
+                revision=1,
+                now=NOW_LOCAL,
+            )
+        except (drafts.DraftNotFound, drafts.DraftForbidden):
+            return False
+        return True
+
+    # The agent reads its own draft but never confirms it; only its issuer does.
+    actors = (agent, f"identity:{other}", "operator", f"identity:{issuer}")
+    assert [(opens(a), confirms(a)) for a in actors] == [
+        (True, False),
+        (False, False),
+        (False, False),
+        (True, True),
     ]
+    # A token whose grant is on another farm never stamps its issuer as a reviewer here.
+    neighbour = Farm(name="Neighbour")
+    session.add(neighbour)
+    session.flush()
+    their_parcel = Parcel(farm_id=neighbour.id, alias="N1", name="N", area_ha=1, geom=SQUARE)
+    session.add(their_parcel)
+    session.flush()
+    with pytest.raises(drafts.DraftInvalid):  # a valid payload there: only the token is refused
+        _propose(session, neighbour.id, {**ids, "P1": their_parcel.id}, actor=agent, key="n")
 
 
 def test_confirm_keeps_draft_provenance_on_the_record(session, settings):
@@ -294,14 +342,14 @@ def test_cancel_is_idempotent_and_final(session, settings):
     farm_id = _farm_id(session, ids)
     kw = {"farm_id": farm_id, "actor": "operator"}
     cancelled = _propose(session, farm_id, ids, key="c")
-    drafts.cancel(session, draft_id=cancelled.id, now=NOW_LOCAL, **kw)
-    drafts.cancel(session, draft_id=cancelled.id, now=NOW_LOCAL, **kw)
+    drafts.cancel(session, draft_id=cancelled.id, **kw)
+    drafts.cancel(session, draft_id=cancelled.id, **kw)
     with pytest.raises(drafts.DraftClosed):
         drafts.confirm(session, MANIFESTS, draft_id=cancelled.id, revision=1, now=NOW_LOCAL, **kw)
     confirmed = _propose(session, farm_id, ids, key="d")
     drafts.confirm(session, MANIFESTS, draft_id=confirmed.id, revision=1, now=NOW_LOCAL, **kw)
     with pytest.raises(drafts.DraftClosed):
-        drafts.cancel(session, draft_id=confirmed.id, now=NOW_LOCAL, **kw)
+        drafts.cancel(session, draft_id=confirmed.id, **kw)
     assert session.scalar(select(func.count(Log.id))) == 1
 
 

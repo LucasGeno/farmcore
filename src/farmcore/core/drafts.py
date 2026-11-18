@@ -6,8 +6,11 @@ time, its review fragment shows it on `/drafts/<id>`, and its confirm service tu
 record. "Draft" (not yet confirmed) is distinct from "planned" (planned work).
 
 - **Scope.** A draft is visible only on its farm, and only to the principal that proposed it; a
-  draft an agent proposed (`token:<id>`) is reviewed by the owner who issued that token. Anyone
-  else gets `DraftNotFound` (a 404), so a numeric id alone grants nothing.
+  draft an agent proposed (`token:<id>`) is reviewed by the owner who issued that token, stored on
+  the draft at propose time (`reviewer_identity_id`; the token's grant must be on the draft's
+  farm). Anyone else gets `DraftNotFound` (a 404), so a numeric id alone grants nothing.
+- **Agents only propose.** A `token:<id>` actor may read its own draft but never confirm, cancel
+  or edit it (`DraftForbidden`): confirmation is the farmer's action in FarmCore.
 - **Confirm and cancel** run under the farm's operations lock (`logs.lock_farm`) and a row lock,
   so retried and concurrent confirms record once: the first confirms, the others read the
   confirmed draft and return its record. Cancel is idempotent; a finished draft never changes.
@@ -37,13 +40,17 @@ from sqlalchemy.orm import Session
 
 from farmcore.core.logs import lock_farm
 from farmcore.core.manifest import JobContext, Manifest, collect_draft_kinds, import_string
+from farmcore.core.models.canonical import DataGrant
 from farmcore.core.models.drafts import Draft
 from farmcore.core.models.identity import AccessToken
 
-# Product choice, `assumed`: an import or agent draft stays reviewable for a week.
+# Product choice, `assumed` (open decision): an import or agent draft stays reviewable a week.
 DEFAULT_TTL = timedelta(days=7)
 MAX_TTL = timedelta(days=30)
 MAX_PAYLOAD_BYTES = 64_000
+# Provenance is copied onto the confirmed record's `log_source`; keep it a receipt, not a file.
+MAX_PROVENANCE_BYTES = 8_000
+TOKEN = "token"
 
 
 class DraftError(Exception):
@@ -62,6 +69,12 @@ class DraftNotFound(DraftError):
 
 class DraftInvalid(DraftError):
     status_code = 422
+
+
+class DraftForbidden(DraftError):
+    """An agent token proposes drafts; only a person confirms, cancels or edits them."""
+
+    status_code = 403
 
 
 class DraftConflict(DraftError):
@@ -84,7 +97,8 @@ class Provenance(BaseModel):
     """Where a proposed write came from. Text in it is data, never instructions."""
 
     model_config = ConfigDict(extra="forbid")
-    source_type: Literal["voice", "file", "isoxml"] = "file"
+    # manual: typed by a farmer; agent: proposed by an external agent through its token.
+    source_type: Literal["voice", "file", "isoxml", "manual", "agent"]
     file_name: str | None = Field(default=None, max_length=255)
     file_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     registry_ref: str | None = Field(default=None, max_length=200)
@@ -137,6 +151,9 @@ def propose(
         source = Provenance.model_validate(provenance).model_dump(mode="json", exclude_none=True)
     except ValidationError as exc:
         raise DraftInvalid(str(exc)) from exc
+    if len(json.dumps(source)) > MAX_PROVENANCE_BYTES:
+        raise DraftInvalid("This draft's provenance is too large.")
+    reviewer = _token_issuer(session, farm_id, actor)
     clean = _validated(session, manifests, farm_id, kind, payload)
     lock_farm(session, farm_id)
     held = session.scalar(
@@ -153,6 +170,7 @@ def propose(
         actor=actor,
         kind=kind,
         request_key=request_key,
+        reviewer_identity_id=reviewer,
         payload=clean,
         provenance=source,
         status="open",
@@ -164,30 +182,48 @@ def propose(
     return draft, True
 
 
-def reviewers(session: Session, draft: Draft) -> set[str]:
-    """The actors who may open, confirm and cancel `draft`."""
+def _token_issuer(session: Session, farm_id: int, actor: str) -> int | None:
+    """The identity that issued a `token:<id>` actor's token; None for any other actor.
+
+    The token's grant must be on `farm_id`: a token of another farm never stamps a reviewer here.
+    """
+    kind, _, raw_id = actor.partition(":")
+    if kind != TOKEN:
+        return None
+    row = None
+    if raw_id.isdigit() and int(raw_id) < 2**63:
+        row = session.execute(
+            select(AccessToken.created_by_identity_id, DataGrant.farm_id)
+            .join(DataGrant, DataGrant.id == AccessToken.grant_id)
+            .where(AccessToken.id == int(raw_id))
+        ).first()
+    if row is None or row.farm_id != farm_id:
+        raise DraftInvalid("This agent token is not for this farm.")
+    return row.created_by_identity_id
+
+
+def reviewers(draft: Draft) -> set[str]:
+    """The actors who may open `draft` (a token only reads; see `_load`)."""
     allowed = {draft.actor}
-    kind, _, raw_id = draft.actor.partition(":")
-    if kind == "token" and raw_id.isdigit():
-        issuer = session.scalar(
-            select(AccessToken.created_by_identity_id).where(AccessToken.id == int(raw_id))
-        )
-        if issuer is not None:
-            allowed.add(f"identity:{issuer}")
+    if draft.reviewer_identity_id is not None:
+        allowed.add(f"identity:{draft.reviewer_identity_id}")
     return allowed
 
 
 def _load(
     session: Session, farm_id: int, draft_id: int, actor: str, *, lock: bool = False
 ) -> Draft:
+    """The draft `actor` may review; `lock` (confirm, cancel, edit) also refuses agent tokens."""
     if not 1 <= draft_id < 2**63:
         raise DraftNotFound("Draft not found.")
     stmt = select(Draft).where(Draft.id == draft_id, Draft.farm_id == farm_id)
     if lock:
+        if actor.partition(":")[0] == TOKEN:
+            raise DraftForbidden("An agent proposes drafts; the farmer confirms them.")
         lock_farm(session, farm_id)
         stmt = stmt.with_for_update()
     draft = session.scalar(stmt.execution_options(populate_existing=True))
-    if draft is None or actor not in reviewers(session, draft):
+    if draft is None or actor not in reviewers(draft):
         raise DraftNotFound("Draft not found.")
     return draft
 
@@ -276,9 +312,7 @@ def confirm(
     return draft, True
 
 
-def cancel(
-    session: Session, *, farm_id: int, draft_id: int, actor: str, now: datetime
-) -> tuple[Draft, bool]:
+def cancel(session: Session, *, farm_id: int, draft_id: int, actor: str) -> tuple[Draft, bool]:
     """Discard an open draft; returns `(draft, cancelled_now)`. Cancelling twice is a no-op."""
     draft = _load(session, farm_id, draft_id, actor, lock=True)
     if draft.status == "cancelled":

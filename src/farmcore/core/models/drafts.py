@@ -25,7 +25,9 @@ DRAFT_STATUSES = ("open", "confirmed", "cancelled", "expired")
 class Draft(Base):
     """One proposed write: who proposed it (`actor`: `identity:<id>`, `operator`, `token:<id>`,
     `chat:<id>`), the kind that validates and confirms it, the validated payload and where it came
-    from. `revision` grows on every edit; a confirm names the revision the farmer reviewed."""
+    from. `revision` grows on every edit; a confirm names the revision the farmer reviewed.
+    `reviewer_identity_id` is the owner who issued a `token:<id>` actor's token, stored at propose
+    time so review never depends on `access_token` (a restore does not load it)."""
 
     __tablename__ = "draft"
     __table_args__ = (
@@ -53,6 +55,9 @@ class Draft(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     farm_id: Mapped[int] = mapped_column(ForeignKey("farm.id"), index=True)
     actor: Mapped[str] = mapped_column(String(128))
+    reviewer_identity_id: Mapped[int | None] = mapped_column(
+        ForeignKey("local_identity.id", ondelete="SET NULL"), index=True
+    )
     kind: Mapped[str] = mapped_column(String(32))
     request_key: Mapped[str] = mapped_column(String(128))
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)

@@ -26,7 +26,14 @@ from farmcore.core.models.drafts import Draft
 
 SOURCE_APP = "operations"
 RecordId = Annotated[int, Field(gt=0, lt=2**63)]
-RANKS = {"voice": logs.RANK_VOICE, "file": logs.RANK_FILE, "isoxml": logs.RANK_MACHINE}
+# A farmer's typed record ranks with a file; an agent's proposal with voice (both `assumed`).
+RANKS = {
+    "voice": logs.RANK_VOICE,
+    "agent": logs.RANK_VOICE,
+    "file": logs.RANK_FILE,
+    "manual": logs.RANK_FILE,
+    "isoxml": logs.RANK_MACHINE,
+}
 LOG_TYPES = {"spray": "spray", "irrigation": "irrigate", "observation": "observation"}
 
 
@@ -112,7 +119,7 @@ def confirm(session: Session, draft: Draft, *, actor: str, now: datetime) -> tup
     if record.ts_start > now:
         raise ValueError("This record is dated after the current time; nothing was recorded.")
     provenance = dict(draft.provenance)
-    source_type = provenance.get("source_type", "file")
+    source_type = provenance["source_type"]
     quantities, props = _fields(record)
     log, held = logs.create_pending_once(
         session,

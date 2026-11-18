@@ -2,7 +2,10 @@
 
 Adds `draft`: farm, proposing actor, kind (an app's `draft_kinds` key), validated payload,
 provenance, status (open, confirmed, cancelled, expired), revision, wall-clock expiry and, once
-confirmed, the record it produced. Purely additive; no existing row changes.
+confirmed, the record it produced; an agent draft also stores the owner who issued its token
+(`reviewer_identity_id`). Widens `log_source.source_type` with `manual` (typed by a farmer) and
+`agent` (proposed by an external agent). No existing row changes; a downgrade refuses while a
+`log_source` row uses either new type.
 
 Revision ID: core_0010
 Revises: core_0009
@@ -20,6 +23,9 @@ down_revision: str | None = "core_0009"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
+OLD_SOURCE_TYPES = ("voice", "seed", "isoxml", "file", "planning")
+SOURCE_TYPES = (*OLD_SOURCE_TYPES, "manual", "agent")
+
 
 def upgrade() -> None:
     op.create_table(
@@ -27,6 +33,7 @@ def upgrade() -> None:
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("farm_id", sa.BigInteger(), nullable=False),
         sa.Column("actor", sa.String(128), nullable=False),
+        sa.Column("reviewer_identity_id", sa.BigInteger(), nullable=True),
         sa.Column("kind", sa.String(32), nullable=False),
         sa.Column("request_key", sa.String(128), nullable=False),
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
@@ -63,12 +70,19 @@ def upgrade() -> None:
             name=op.f("ck_draft_result"),
         ),
         sa.ForeignKeyConstraint(["farm_id"], ["farm.id"], name=op.f("fk_draft_farm_id_farm")),
+        sa.ForeignKeyConstraint(
+            ["reviewer_identity_id"],
+            ["local_identity.id"],
+            name=op.f("fk_draft_reviewer_identity_id_local_identity"),
+            ondelete="SET NULL",
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_draft")),
         sa.UniqueConstraint(
             "farm_id", "actor", "request_key", name=op.f("uq_draft_farm_id_actor_request_key")
         ),
     )
     op.create_index(op.f("ix_draft_farm_id"), "draft", ["farm_id"])
+    op.create_index(op.f("ix_draft_reviewer_identity_id"), "draft", ["reviewer_identity_id"])
     op.create_index(
         "ix_draft_open_expiry",
         "draft",
@@ -76,8 +90,21 @@ def upgrade() -> None:
         postgresql_where=sa.text("status = 'open'"),
     )
 
+    _source_types(SOURCE_TYPES)
+
+
+def _source_types(values: tuple[str, ...]) -> None:
+    op.drop_constraint(op.f("ck_log_source_source_type"), "log_source", type_="check")
+    op.create_check_constraint(
+        op.f("ck_log_source_source_type"),
+        "log_source",
+        f"source_type IN ({', '.join(repr(v) for v in values)})",
+    )
+
 
 def downgrade() -> None:
+    _source_types(OLD_SOURCE_TYPES)  # fails while a row uses `manual` or `agent`
+    op.drop_index(op.f("ix_draft_reviewer_identity_id"), table_name="draft")
     op.drop_index("ix_draft_open_expiry", table_name="draft")
     op.drop_index(op.f("ix_draft_farm_id"), table_name="draft")
     op.drop_table("draft")

@@ -44,7 +44,8 @@ PRODUCT_TARGETS = ("downy", "powdery")
 LOG_TYPES = ("spray", "fertilise", "irrigate", "harvest", "observation")
 LOG_STATUSES = ("pending", "done")
 QUANTITY_MEASURES = ("rate", "volume", "area")
-LOG_SOURCE_TYPES = ("voice", "seed", "isoxml", "file", "planning")
+# `manual`: typed by a farmer (Record sheet); `agent`: proposed by an external agent (core_0010).
+LOG_SOURCE_TYPES = ("voice", "seed", "isoxml", "file", "planning", "manual", "agent")
 ADVICE_DECISIONS = ("spray", "wait", "protected", "none")
 
 

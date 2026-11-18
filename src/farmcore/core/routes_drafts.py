@@ -122,14 +122,9 @@ def confirm(
 @router.post("/drafts/{draft_id}/cancel")
 def cancel(draft_id: int, request: Request, repo: Repo):
     draft = load(request, repo, draft_id)
-    now = get_clock(repo.session, request.app.state.settings).now()
     try:
         drafts.cancel(
-            repo.session,
-            farm_id=repo.farm_id,
-            draft_id=draft.id,
-            actor=request_actor(request),
-            now=now,
+            repo.session, farm_id=repo.farm_id, draft_id=draft.id, actor=request_actor(request)
         )
     except drafts.DraftError as exc:
         repo.session.rollback()
