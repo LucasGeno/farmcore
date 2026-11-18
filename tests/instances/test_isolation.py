@@ -317,6 +317,7 @@ ALTER ROLE {r} IN DATABASE {db} SET work_mem = '64MB';
 PROBES = {
     "UPDATE alembic_version": "has_table_privilege({r!r}, 'alembic_version', 'UPDATE')",
     "DELETE alembic_version": "has_table_privilege({r!r}, 'alembic_version', 'DELETE')",
+    "UPDATE unit_definition": "has_table_privilege({r!r}, 'unit_definition', 'UPDATE')",
     "TRUNCATE farm": "has_table_privilege({r!r}, 'farm', 'TRUNCATE')",
     "TRIGGER farm": "has_table_privilege({r!r}, 'farm', 'TRIGGER')",
     "INSERT spatial_ref_sys": "has_table_privilege({r!r}, 'spatial_ref_sys', 'INSERT')",

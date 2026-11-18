@@ -115,7 +115,7 @@ def test_models_match_migrated_head_with_no_autogenerate_diff(scratch_db_url: st
 
 
 def test_single_migration_head_creates_every_core_table(session) -> None:
-    head = "core_0005"  # planning_0003 -> core_0005
+    head = "core_0006"  # core_0005 -> core_0006
     assert ScriptDirectory.from_config(alembic_config()).get_heads() == [head]
     assert session.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     assert _tables(session) >= CANONICAL_TABLES | IDENTITY_TABLES
@@ -408,3 +408,79 @@ def test_deleting_a_log_cascades_to_parcel_links_quantities_and_sources(session)
 
     for table in tables:
         assert session.execute(text(linked.format(table=table)), {"id": log.id}).scalar() == 0
+
+
+def test_catalog_upgrade_reads_legacy_rows_without_inventing_facts(scratch_db_url: str) -> None:
+    """A populated core_0005 database upgrades: its products and quantities read through the
+    neutral views with what was entered; no authorisation country, crop code or standard value
+    is guessed (an unknown unit and a NaN value stay null); downgrade refuses while an entered
+    catalog fact exists, then round-trips."""
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "core_0005")
+    engine = create_engine(scratch_db_url)
+    try:
+        with engine.begin() as conn:
+            farm_id = conn.execute(
+                text("INSERT INTO farm (name) VALUES ('Legacy') RETURNING id")
+            ).scalar_one()
+            product_id = conn.execute(
+                text(
+                    "INSERT INTO product (name, authorisation_no, active_substance, product_type, "
+                    "targets) VALUES ('Copper', '9800474', 'copper', 'contact', "
+                    "ARRAY['downy']) RETURNING id"
+                )
+            ).scalar_one()
+            log_id = conn.execute(
+                text(
+                    "INSERT INTO log (farm_id, type, status, name, ts_start, bbch) VALUES "
+                    "(:farm, 'spray', 'done', 'legacy spray', :ts, NULL) RETURNING id"
+                ),
+                {"farm": farm_id, "ts": T0},
+            ).scalar_one()
+            for value, unit, product in (
+                ("800", "g/ha", product_id),
+                ("3", "bottles/ha", None),
+                ("NaN", "kg/ha", None),
+            ):
+                conn.execute(
+                    text(
+                        "INSERT INTO quantity (log_id, product_id, measure, value, unit, label) "
+                        "VALUES (:log, :product, 'rate', CAST(:value AS numeric), :unit, 'x')"
+                    ),
+                    {"log": log_id, "product": product, "value": value, "unit": unit},
+                )
+        command.upgrade(cfg, "head")
+        with engine.begin() as conn:
+            assert conn.execute(
+                text(
+                    "SELECT name, product_type, targets FROM legacy_catalog_item "
+                    "WHERE product_id = :p"
+                ),
+                {"p": product_id},
+            ).one() == ("Copper", "contact", ["downy"])
+            rows = conn.execute(
+                text(
+                    "SELECT entered_value::text, entered_unit, measure, value, unit "
+                    "FROM legacy_typed_quantity ORDER BY legacy_quantity_id"
+                )
+            ).all()
+            assert rows == [
+                ("800", "g/ha", "mass_rate", Decimal("0.800"), "kg/ha"),
+                ("3", "bottles/ha", None, None, None),
+                ("NaN", "kg/ha", None, None, None),
+            ]
+            for entered in ("catalog_item", "catalog_authorisation", "typed_quantity"):
+                assert conn.execute(text(f"SELECT count(*) FROM {entered}")).scalar() == 0
+            assert conn.execute(text("SELECT crop_eppo, bbch FROM log")).one() == (None, None)
+            conn.execute(text("UPDATE log SET crop_eppo = 'VITVI'"))
+        with pytest.raises(RuntimeError, match="downgrade refused"):
+            command.downgrade(cfg, "core_0005")
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT crop_eppo FROM log")).scalar_one() == "VITVI"
+            conn.execute(text("UPDATE log SET crop_eppo = NULL"))
+        command.downgrade(cfg, "core_0005")
+        with engine.connect() as conn:
+            assert conn.execute(text("SELECT count(*) FROM quantity")).scalar_one() == 3
+        command.upgrade(cfg, "head")
+    finally:
+        engine.dispose()
