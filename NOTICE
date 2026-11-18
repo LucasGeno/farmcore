@@ -6,4 +6,7 @@ licences: see THIRD_PARTY_NOTICES.md and src/farmcore/core/static/vendor/.
 
 This product includes data from Météo-France (Licence Ouverte / Etalab 2.0), IGN
 (Registre Parcellaire Graphique, Licence Ouverte / Etalab 2.0) and Open-Meteo.com / ECMWF
-(CC BY 4.0). Parcel names, varieties and planting years in the sample data are fictional.
+(CC BY 4.0). Country boundaries are from Natural Earth (public domain). Offline time-zone
+lookups use the `timezonefinder-data` package (ODbL-1.0), built from OpenStreetMap data;
+attribution: © OpenStreetMap contributors. Parcel names, varieties and planting years in the
+sample data are fictional.

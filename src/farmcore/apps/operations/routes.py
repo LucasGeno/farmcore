@@ -50,11 +50,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from farmcore.apps.operations import bbch, checks, corrections, facts, isoxml, register
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel, Product
 from farmcore.core.navigation import return_destination
 from farmcore.web import context_url, render
 
 router = APIRouter()
+
+
+def _farm_tz(request: Request, repo: Repo) -> str:
+    """The selected farm's own time zone, else the installation `display_tz`."""
+    return time_zone_of(repo.session, repo.farm_id, request.app.state.settings)
+
 
 MAX_UPLOAD_BYTES = 20_000_000  # a TaskData zip with TLG logs; far above a demo file
 RECENT_LOGS = 20
@@ -309,8 +316,7 @@ def _by_spray(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 def register_page(request: Request, repo: Repo) -> HTMLResponse:
     """The register CSV as a table: the cells are read back from `register.to_csv`, so the page
     and the download never disagree. Each spray card lists its saved weather."""
-    settings = request.app.state.settings
-    tz = settings.display_tz
+    tz = _farm_tz(request, repo)
     now = _now(request, repo)
     rows = register.register_rows(repo, now, tz=tz, checks=True, weather=True)
     header, *cells = list(csv.reader(io.StringIO(register.to_csv(rows, weather=True, tz=tz))))
@@ -321,6 +327,7 @@ def register_page(request: Request, repo: Repo) -> HTMLResponse:
         request,
         "operations/register.html",
         now=now,
+        farm_tz=tz,
         header=header,
         rows=table,
         sprays=sprays,
@@ -340,7 +347,7 @@ ParcelId = Annotated[int | None, Query(ge=1, le=register.PARCEL_ID_MAX)]
 def _export_filter(
     request: Request, repo: Repo, season: int | None, parcel: int | None
 ) -> tuple[register.Window, Parcel | None]:
-    tz = request.app.state.settings.display_tz
+    tz = _farm_tz(request, repo)
     try:
         return register.export_filter(
             repo, _now(request, repo), tz, season=season, parcel_id=parcel
@@ -354,7 +361,7 @@ def register_csv(
     request: Request, repo: Repo, season: Season = None, parcel: ParcelId = None
 ) -> Response:
     """The register; `season` / `parcel` narrow it to one season and parcel (D4)."""
-    tz = request.app.state.settings.display_tz
+    tz = _farm_tz(request, repo)
     (since, until, before), chosen = _export_filter(request, repo, season, parcel)
     rows = register.register_rows(
         repo,
@@ -378,12 +385,11 @@ def register_csv(
 def register_json(
     request: Request, repo: Repo, season: Season = None, parcel: ParcelId = None
 ) -> JSONResponse:
-    settings = request.app.state.settings
     (since, until, before), chosen = _export_filter(request, repo, season, parcel)
     rows: list[dict[str, Any]] = register.register_rows(
         repo,
         until,
-        tz=settings.display_tz,
+        tz=_farm_tz(request, repo),
         checks=True,
         weather=True,
         aliases=True,

@@ -28,6 +28,7 @@ from farmcore.apps.fields.service import (
 )
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.core.manifest import collect_parcel_views
 from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.navigation import (
@@ -101,7 +102,8 @@ def _map_context(request: Request, *, freeze_farm: bool = False) -> dict:
 def _collection(request: Request, repo: Repo) -> dict:
     settings: Settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
-    return with_card_urls(request, parcels_feature_collection(repo, now, tz=settings.display_tz))
+    tz = time_zone_of(repo.session, repo.farm_id, settings)
+    return with_card_urls(request, parcels_feature_collection(repo, now, tz=tz))
 
 
 def with_card_urls(request: Request, collection: dict) -> dict:
@@ -161,7 +163,8 @@ def _season_today(request: Request, repo: Repo, parcel: Parcel) -> dict:
     """The season covering the clock's local today (None in a gap or with no seasons), and
     whether the parcel has any season, so a gap never reads as an unknown crop history."""
     settings: Settings = request.app.state.settings
-    today = get_clock(repo.session, settings).now().astimezone(ZoneInfo(settings.display_tz))
+    tz = time_zone_of(repo.session, repo.farm_id, settings)
+    today = get_clock(repo.session, settings).now().astimezone(ZoneInfo(tz))
     row = seasons.season_on(repo, parcel.id, today.date())
     return {
         "season": seasons.season_json(row) if row else None,

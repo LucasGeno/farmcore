@@ -271,6 +271,7 @@ dependencies = [
     { name = "python-multipart" },
     { name = "python-telegram-bot" },
     { name = "sqlalchemy" },
+    { name = "timezonefinder" },
     { name = "typer" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -301,6 +302,7 @@ requires-dist = [
     { name = "python-multipart" },
     { name = "python-telegram-bot", specifier = ">=21,<23" },
     { name = "sqlalchemy", specifier = ">=2" },
+    { name = "timezonefinder", specifier = ">=9.2.0" },
     { name = "typer" },
     { name = "uvicorn", extras = ["standard"] },
 ]
@@ -1204,6 +1206,34 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/e9/0c/6efb252d091ecccd7d62048ae11f0ea35cd75a4fbaeea5e30f9c3bf91d10/starlette-1.8.0.tar.gz", hash = "sha256:1565dc0b35d5737a271ed1e0e04e949f4e81198799f216d2667b0a0fb9cf9522", size = 2730457, upload-time = "2026-10-13T07:54:39.53Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c1/b0/5742e4ac7af5eb58ec3470a537a49d7aa507e5539413e504b3a65ef50ba8/starlette-1.8.0-py3-none-any.whl", hash = "sha256:dfdd6b29c26483288088d990eee59631dedadd66ce20d203402a7ca8e3c4656f", size = 79612, upload-time = "2026-10-13T07:54:38.019Z" },
+]
+
+[[package]]
+name = "timezonefinder"
+version = "9.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cffi" },
+    { name = "flatbuffers" },
+    { name = "numpy" },
+    { name = "timezonefinder-data" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ab/18/0c54c79fa61c6d0ac337d60066c7aa35049272c36a972e6f8d4abc5186a4/timezonefinder-9.2.0.tar.gz", hash = "sha256:19ce50b725890008c3b4cff3cea36bc723b717251b3186510b2f0be7e0466682", size = 1326956, upload-time = "2026-10-22T22:19:44.674Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/31/9a/d9fc995ce35a33905227ef736a95f6900e9eaed35a8ebac712dae449157a/timezonefinder-9.2.0-cp312-abi3-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:76dbc862a74a3706a1f88f99a059fe82150a4b06fd790f059bd39b8be977f55a", size = 156918, upload-time = "2026-10-22T22:19:35.793Z" },
+    { url = "https://files.pythonhosted.org/packages/23/b2/9a8de20e3e8075a8f843c3be7edb8b409a06ebef1ed74306a73233674446/timezonefinder-9.2.0-cp312-abi3-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:3da2fbb3dffc40f75291fabb471acf12e3bd7e179c0f25fdd4a4b8d6810135a9", size = 158176, upload-time = "2026-10-22T22:19:37.344Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/4a/6e4f9eaa89e25e90ac548e565b9db1c284f5d84d16274d3e7d1f89069f80/timezonefinder-9.2.0-cp312-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:7af4041bc04da0b5f70ec380b8a4eb955e3333f769629689c0bb348fa20b2dd7", size = 157853, upload-time = "2026-10-22T22:19:38.658Z" },
+    { url = "https://files.pythonhosted.org/packages/08/1b/3dcd8af6dfacc5046b4d9d469dcdcaf47678199eb3d13166d8cfba3dccf3/timezonefinder-9.2.0-cp315-abi3.abi3t-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:117e53c6579c34f91ef0032dff5a6a3ac26cdaed3c3e3179ae0793a7c010becf", size = 156342, upload-time = "2026-10-22T22:19:39.99Z" },
+    { url = "https://files.pythonhosted.org/packages/44/89/1ed4ee714ad7b2c1798ad3dac1ce741561e3ad94103fed935025669b5015/timezonefinder-9.2.0-cp315-abi3.abi3t-manylinux1_x86_64.manylinux_2_28_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:92b19875d2e443f0a0d459bb0b748fd71351267348fcbf8bef3440912f575539", size = 157846, upload-time = "2026-10-22T22:19:41.397Z" },
+    { url = "https://files.pythonhosted.org/packages/35/2e/cbc48374050884061ab2b077388fb9b559d70d1c94e6b02ce10bc2b60282/timezonefinder-9.2.0-cp315-abi3.abi3t-musllinux_1_2_x86_64.whl", hash = "sha256:338894db217c2d0473a0d726ff331d3de5c24fba4ebcea860507e1be9d872536", size = 157485, upload-time = "2026-10-22T22:19:42.975Z" },
+]
+
+[[package]]
+name = "timezonefinder-data"
+version = "4.2026.6"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d1/3a/11646d57c8f2d1651ff39cc825f2c8bf6566028f3098576ce5dc4c61ee82/timezonefinder_data-4.2026.6-py3-none-any.whl", hash = "sha256:35d6302b86e61693ff86c3aa2284da7126ec324df8c4254f6e910cf3e7e0e9e1", size = 32868199, upload-time = "2026-11-01T19:06:45.609Z" },
 ]
 
 [[package]]

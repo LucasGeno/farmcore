@@ -5,11 +5,11 @@ by the repository and written to `access_log` as the assistant's."""
 from __future__ import annotations
 
 from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from farmcore.core.access import ScopedRepository, default_farm, ensure_owner_grant
+from farmcore.core.farm_location import farm_zone
 from farmcore.core.tools import ToolContext
 from farmcore.settings import Settings
 
@@ -23,4 +23,4 @@ def tool_context(
     repo = ScopedRepository(
         session, farm.id, ensure_owner_grant(session, farm), f"chat:{chat_id}", PURPOSE
     )
-    return ToolContext(repo=repo, now=now, tz=ZoneInfo(settings.display_tz), lang=lang)
+    return ToolContext(repo=repo, now=now, tz=farm_zone(farm, settings), lang=lang)

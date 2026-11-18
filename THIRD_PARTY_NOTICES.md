@@ -21,6 +21,8 @@ Exact versions are pinned in `uv.lock`; each package keeps its own licence.
 | apscheduler | MIT | Live-mode job scheduler |
 | python-telegram-bot | **LGPL-3.0-only** | Telegram bot |
 | faster-whisper (ctranslate2, onnxruntime, av) | MIT; av BSD-3-Clause, its wheels bundle FFmpeg libraries (LGPL) | Local speech-to-text |
+| timezonefinder | MIT | Offline coordinates → time-zone lookup (code) |
+| timezonefinder-data | **ODbL-1.0** | Boundary data that `timezonefinder` queries; installed unmodified, not copied into FarmCore |
 | typer | MIT | Command line |
 | pint (flexcache, flexparser, platformdirs) | BSD-3-Clause; platformdirs MIT | Unit registry with Decimal arithmetic |
 
@@ -62,6 +64,7 @@ database server, not linked into FarmCore).
 | `sample-data/meteofrance/demo_station_33394002_2024_2025.csv` and `src/farmcore/apps/kpi/seasons/meteofrance_33394002_2020_2023_marsep.csv` | **Météo-France**, *Données climatologiques de base – horaires*, station 33394002 (St-Émilion), via data.gouv.fr | Licence Ouverte / Etalab 2.0 | Attribution: Météo-France. Hourly rows, columns renamed and wind converted to km/h; nothing filled or interpolated ([extract notes](src/farmcore/apps/kpi/seasons/README.md)) |
 | `sample-data/ign/demo_parcels_named.geojson` | **IGN**, Registre Parcellaire Graphique (RPG) 2024, via the Géoplateforme WFS | Licence Ouverte / Etalab 2.0 | Attribution: IGN. Ten real vine-parcel shapes near Saint-Émilion. Parcel names, varieties and planting years are **fictional**; no ownership is implied |
 | `sample-data/open-meteo/ecmwf_ifs/*.json` | **Open-Meteo** Single Runs API, ECMWF IFS model | CC BY 4.0 | Attribution: Open-Meteo.com; ECMWF. Raw API responses for April–May 2024 |
+| `src/farmcore/core/geo/countries.geojson` | **Natural Earth** 1:110m Admin 0 – Countries | Public domain | Attribution: Natural Earth. Trimmed to ISO alpha-2 code and English name; coordinates rounded to three decimals ([notes](src/farmcore/core/geo/README.md)) |
 
 ## Figures and identifiers in the code
 
@@ -86,5 +89,9 @@ database server, not linked into FarmCore).
   CC BY 4.0; Junta de Castilla y León regional catalogue, IGCYL-NC) and InfoRiego (ITACyL)
   station files from `DATA_DIR`. They are not bundled; check their terms before using or
   publishing them.
-- **Optional services.** Vertex AI (Google Cloud) and Telegram, under your own accounts and
-  their terms.
+- **Optional services.** Vertex AI (Google Cloud), Telegram and an optional address geocoder
+  (Nominatim or Photon, configured by the installation owner), under your own accounts and
+  their terms. The geocoder is off by default.
+- **Time-zone boundary data.** `timezonefinder-data` is ODbL-1.0 and is built by the
+  [timezone-boundary-builder](https://github.com/evansiroky/timezone-boundary-builder) project
+  from OpenStreetMap data; attribution: © OpenStreetMap contributors, ODbL.

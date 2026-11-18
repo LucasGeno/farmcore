@@ -29,7 +29,7 @@ from farmcore.core.models.canonical import AccessLog, DataGrant
 from farmcore.core.models.identity import AccessToken, LocalIdentity
 from farmcore.core.timeline import post_event
 
-DEFAULT_TZ = "Europe/Paris"
+DEFAULT_TZ = "UTC"  # routes pass the farm's zone; this is only a neutral direct-call default
 OPERATOR_WORD = "operator"  # the `owner` actor: the installation operator, not a signed-in user
 DELETED_USER = "deleted user"
 DATE_FORMAT = "%d %b %Y"

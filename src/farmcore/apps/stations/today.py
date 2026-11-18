@@ -35,6 +35,7 @@ from farmcore.apps.stations.conditions import spray_conditions
 from farmcore.apps.stations.connector import REPLAY_HORIZON
 from farmcore.core.access import Repo
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.web import render
 
 router = APIRouter()
@@ -206,21 +207,24 @@ def weather_card(rows: list[dict[str, Any]], now: datetime, tz: str) -> dict[str
 def today_fragment(request: Request, repo: Repo, compact: bool = False) -> HTMLResponse:
     settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
+    tz = time_zone_of(repo.session, repo.farm_id, settings)
     station = service.station_for_farm(repo)
     if station is not None and station.props.get("archive_only"):
         return render(
             request,
             "stations/_archive_summary.html",
+            farm_tz=tz,
             archive=station.props["archive"],
             archive_url=station.props.get("archive_page"),
         )
     card = None
     if station is not None:
         rows = service.load_hourly(repo, station.id, now - RAIN_WINDOW, now + REPLAY_HORIZON)
-        card = weather_card(rows, now, settings.display_tz)
+        card = weather_card(rows, now, tz)
     return render(
         request,
         "stations/_today_now.html" if compact else "stations/_today.html",
+        farm_tz=tz,
         station=None if station is None else {"id": station.id, "name": station.name},
         card=card,
     )

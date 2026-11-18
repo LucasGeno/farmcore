@@ -25,7 +25,6 @@ import shutil
 import tempfile
 from contextlib import suppress
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import av
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -49,6 +48,7 @@ from farmcore.apps.forecast import availability
 from farmcore.apps.operations.catalogue import products_for_farm
 from farmcore.core.access import Repo, ScopedRepository, has_farm_membership, require_farm_owner
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import farm_zone
 from farmcore.core.models.canonical import Farm
 from farmcore.core.registry import visible_manifests
 from farmcore.core.routes_clock import require_admin
@@ -123,7 +123,7 @@ def ask(
     ctx = ToolContext(
         scoped,
         get_clock(repo.session, settings).now(),
-        ZoneInfo(settings.display_tz),
+        farm_zone(repo.session.get(Farm, repo.farm_id), settings),
         member_role=member_role,
         is_admin=is_admin(request),
     )

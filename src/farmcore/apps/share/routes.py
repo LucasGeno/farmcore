@@ -39,8 +39,16 @@ from farmcore.core.access import (
 )
 from farmcore.core.clock import get_clock
 from farmcore.core.errors import wants_html
+from farmcore.core.farm_location import farm_time_zone
 from farmcore.core.identity import canonical_login, principal_for
-from farmcore.core.models.canonical import Advice, DataGrant, LlmAudit, Observation, Parcel
+from farmcore.core.models.canonical import (
+    Advice,
+    DataGrant,
+    Farm,
+    LlmAudit,
+    Observation,
+    Parcel,
+)
 from farmcore.core.models.identity import AccessToken, LocalIdentity
 from farmcore.core.routes_clock import require_admin
 from farmcore.db import get_session
@@ -70,8 +78,13 @@ GRANTEE_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _tz(request: Request) -> str:
-    return request.app.state.settings.display_tz
+def _tz(request: Request, repo: ScopedRepository | None = None) -> str:
+    """The farm's own time zone; the installation `display_tz` where there is no farm (the
+    grantee's cross-farm `/received` list)."""
+    settings = request.app.state.settings
+    if repo is None:
+        return settings.display_tz
+    return farm_time_zone(repo.session.get(Farm, repo.farm_id), settings)
 
 
 Season = Annotated[int | None, Query(ge=register.SEASON_MIN, le=register.SEASON_MAX)]
@@ -88,7 +101,7 @@ def _window(
     now = get_clock(repo.session, request.app.state.settings).now()
     try:
         (since, until, before), chosen = register.export_filter(
-            repo, now, _tz(request), season=season, parcel_id=parcel
+            repo, now, _tz(request, repo), season=season, parcel_id=parcel
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Parcel not found") from exc
@@ -100,7 +113,7 @@ def _exports(
 ) -> dict[str, Any]:
     """Sharing's export choices: seasons with sprays (default: the current one, for the demo)
     or all seasons, the parcels (default: all), and the export links narrowed to them."""
-    tz = _tz(request)
+    tz = _tz(request, repo)
     choices = register.seasons(repo, _clock_now(request, repo), tz)
     chosen_season: int | None = choices[0]
     if season == ALL_SEASONS:
@@ -213,7 +226,7 @@ def _index_page(
         if not service.is_owner_grant(g)
     ]
     tokens = service.grant_tokens(repo, [g.id for g in grants])
-    tz = _tz(request)
+    tz = _tz(request, repo)
     grantees_only = request.query_params.get("who") == WHO_GRANTEES
     views = [_grant_view(g, now, tz, tokens.get(g.id)) for g in grants]
     if scope != "all":
@@ -235,6 +248,7 @@ def _index_page(
         grantee_reads_url="/share/?"
         + urlencode({"scope": scope, "status": status, "who": WHO_GRANTEES})
         + "#access-log",
+        farm_tz=tz,
         access=service.access_rows(repo, grantees_only=grantees_only, tz=tz),
         grantees_only=grantees_only,
         access_limit=config.ACCESS_LOG_LIMIT,
@@ -278,7 +292,7 @@ def create(
     purpose: str = Form(""),
     valid_to: str = Form(""),
 ) -> Response:
-    tz = _tz(request)
+    tz = _tz(request, repo)
     try:
         try:
             normalized = canonical_login(recipient_login)
@@ -380,7 +394,7 @@ def revoke(request: Request, repo: Repo, grant_id: int) -> RedirectResponse:
     if not 0 < grant_id <= MAX_ID:
         raise HTTPException(404, "Not found.")
     try:
-        service.revoke_grant(repo, grant_id, tz=_tz(request))
+        service.revoke_grant(repo, grant_id, tz=_tz(request, repo))
     except LookupError as exc:
         raise HTTPException(status_code=404, detail="Not found.") from exc
     return RedirectResponse(context_url(request, "/share/"), status_code=303)
@@ -513,7 +527,7 @@ def _denied(key: str) -> HTTPException:
 
 @router.get("/as/{grant_id}/", response_class=HTMLResponse)
 def grantee_page(request: Request, repo: GrantRepo) -> HTMLResponse:
-    tz = _tz(request)
+    tz = _tz(request, repo)
     now = _clock_now(request, repo)
     rows = _register(repo, now, tz)
     probes = []
@@ -531,6 +545,7 @@ def grantee_page(request: Request, repo: GrantRepo) -> HTMLResponse:
         request,
         "share/grantee.html",
         grant=_banner(repo.grant, tz),
+        farm_tz=tz,
         now=now,
         columns=GRANTEE_COLUMNS,
         register_shared=rows is not None,
@@ -549,7 +564,13 @@ def grantee_register(
     except ScopeDenied as exc:
         raise _denied("register") from exc
     rows = _register(
-        repo, until, _tz(request), aliases=True, since=since, before=before, parcel_id=parcel_id
+        repo,
+        until,
+        _tz(request, repo),
+        aliases=True,
+        since=since,
+        before=before,
+        parcel_id=parcel_id,
     )
     if rows is None:
         raise _denied("register")

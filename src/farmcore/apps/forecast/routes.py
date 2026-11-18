@@ -27,6 +27,7 @@ from farmcore.apps.advisor.navigation import parcel_link
 from farmcore.apps.forecast import availability, planning, store
 from farmcore.core.access import Repo, has_farm_membership, require_farm_owner
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.core.models.canonical import Parcel
 from farmcore.core.models.kernel import ClockState
 from farmcore.core.registry import visible_manifests
@@ -44,8 +45,9 @@ _day_label = planning.day_label
 
 
 def _plan_view(request: Request, repo: Repo, *, sulphur=False):
-    tz = request.app.state.settings.display_tz
-    now = get_clock(repo.session, request.app.state.settings).now()
+    settings = request.app.state.settings
+    tz = time_zone_of(repo.session, repo.farm_id, settings)
+    now = get_clock(repo.session, settings).now()
     busy = availability.busy_days(
         repo,
         now.astimezone(ZoneInfo(tz)).date(),
@@ -99,11 +101,8 @@ def _window(
         if view["run"]
         else []
     )
-    cover = (
-        protected_until.astimezone(ZoneInfo(request.app.state.settings.display_tz)).date()
-        if protected_until
-        else None
-    )
+    tz = time_zone_of(repo.session, repo.farm_id, request.app.state.settings)
+    cover = protected_until.astimezone(ZoneInfo(tz)).date() if protected_until else None
     for d in preview:
         d["protected"] = (
             f"{cover.day} {cover:%b}" if cover and date.fromisoformat(d["day"]) <= cover else None
@@ -134,7 +133,7 @@ def set_busy(
         raise HTTPException(status_code=404, detail="Not found.")
     require_farm_owner(request, repo)
     settings = request.app.state.settings
-    zone = ZoneInfo(settings.display_tz)
+    zone = ZoneInfo(time_zone_of(repo.session, repo.farm_id, settings))
     # Do not initialize a missing clock just to validate a day: use the configured
     # initial clock instead.
     row = repo.session.get(ClockState, 1)
@@ -161,9 +160,10 @@ def parcel_window(parcel_id: int, request: Request, repo: Repo) -> HTMLResponse:
         return HTMLResponse("")
     if repo.get(Parcel, parcel_id, scope=PARCEL_SCOPE) is None:
         raise HTTPException(status_code=404, detail=f"parcel {parcel_id} not found")
-    now = get_clock(repo.session, request.app.state.settings).now()
+    settings = request.app.state.settings
+    now = get_clock(repo.session, settings).now()
     latest = advice.latest_advice(
-        repo, now, tz=request.app.state.settings.display_tz, parcel_id=parcel_id
+        repo, now, tz=time_zone_of(repo.session, repo.farm_id, settings), parcel_id=parcel_id
     ).get(parcel_id)
     products = (latest.products or []) if latest else []
     view = _window(
@@ -197,6 +197,7 @@ def today_window(request: Request, repo: Repo) -> HTMLResponse:
     return render(
         request,
         "forecast/_window.html",
+        farm_tz=time_zone_of(repo.session, repo.farm_id, request.app.state.settings),
         **_window(request, repo, top=True),
         on_card=False,
         window_id=f"spray-window-{repo.farm_id}-today",
@@ -214,19 +215,21 @@ def home_weather(request: Request, repo: Repo) -> HTMLResponse:
         return HTMLResponse("")
     settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
-    today = now.astimezone(ZoneInfo(settings.display_tz)).date()
+    tz = time_zone_of(repo.session, repo.farm_id, settings)
+    today = now.astimezone(ZoneInfo(tz)).date()
     run = store.latest_run(repo, now)
     days = [
         {
             "day": day.isoformat(),
             "label": _day_label(day, today),
-            **day_weather(run, day, settings.display_tz),
+            **day_weather(run, day, tz),
         }
         for day in (today + timedelta(days=i) for i in range(5))
     ]
     return render(
         request,
         "forecast/_home_weather.html",
+        farm_tz=tz,
         days=days,
         run=run,
         freshness=store.freshness(repo, now),

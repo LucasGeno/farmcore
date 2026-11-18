@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     open_meteo_single_runs_base_url: str = DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL
     # Customer API key, sent as `apikey`; never logged, stored or rendered.
     open_meteo_api_key: SecretStr | None = None
+    # Optional address search on the location step: a Nominatim or Photon base URL. Empty (the
+    # default) keeps the geocoder off; map, browser location and coordinates still work.
+    geocoder_base_url: str = ""
     clock_mode: Literal["replay", "live"] = "replay"
     # Local time (display_tz), naive.
     replay_start: datetime = datetime(2024, 4, 1, 6, 0)
@@ -131,6 +134,11 @@ class Settings(BaseSettings):
     @field_validator("openai_compatible_base_url")
     @classmethod
     def _openai_base_url(cls, v: str) -> str:
+        return _check_http_url(v) if v else v
+
+    @field_validator("geocoder_base_url")
+    @classmethod
+    def _geocoder_base_url(cls, v: str) -> str:
         return _check_http_url(v) if v else v
 
     @model_validator(mode="after")
