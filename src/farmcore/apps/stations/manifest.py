@@ -32,6 +32,14 @@ MANIFEST = Manifest(
     nav_group="apps",
     nav_order=20,
     nav_icon="station",
+    icon="station",
+    color="wait",
+    keywords={
+        "en": ("weather", "rain", "station", "forecast"),
+        "fr": ("météo", "pluie", "station"),
+        "es": ("tiempo", "lluvia", "estación"),
+        "it": ("meteo", "pioggia", "stazione"),
+    },
     widgets=(Widget("/stations/today?compact=1", 20),),
     map_layers=(
         MapLayer("weather", "Weather", "/stations/layer.geojson", "points", 20, False, "station"),

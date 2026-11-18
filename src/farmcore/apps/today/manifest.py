@@ -11,9 +11,13 @@ MANIFEST = Manifest(
     title="Home",
     category="Essentials",
     required=True,
-    nav=("Home", "/"),
-    nav_group="farmer",
-    nav_order=10,
-    nav_icon="home",
+    icon="home",
+    color="brand",
+    keywords={
+        "en": ("home", "today", "overview"),
+        "fr": ("accueil", "aujourd'hui", "aperçu"),
+        "es": ("inicio", "hoy", "resumen"),
+        "it": ("home", "oggi", "riepilogo"),
+    },
     maturity="alpha",
 )

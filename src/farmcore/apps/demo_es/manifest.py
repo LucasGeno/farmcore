@@ -10,4 +10,12 @@ MANIFEST = Manifest(
     scopes=("fields:read", "stations:read"),
     seed="farmcore.apps.demo_es.seed:seed",
     routes=("farmcore.apps.demo_es.routes:router",),
+    icon="landmark",
+    color="muted",
+    keywords={
+        "en": ("spanish", "demo", "archive"),
+        "fr": ("espagnol", "démo", "archive"),
+        "es": ("español", "demo", "archivo"),
+        "it": ("spagnolo", "demo", "archivio"),
+    },
 )

@@ -198,7 +198,7 @@ def _stub(name: str, **fields) -> Manifest:
 
 
 STUBS = [
-    _stub("alpha", nav_group="farmer", widgets=(Widget("/alpha/today", 10),), tools=("t1", "t2")),
+    _stub("alpha", nav_group="apps", widgets=(Widget("/alpha/today", 10),), tools=("t1", "t2")),
     _stub("parcelapp", debug_panels=("/parcelapp/debug/parcels/{id}",)),
     _stub("globalapp", debug_panels=("/globalapp/debug/summary",)),
 ]
@@ -218,10 +218,10 @@ def test_drawer_lists_every_loaded_manifest(settings, session_factory, farm) -> 
     for name in [*names, "alpha", "parcelapp", "globalapp"]:
         assert f'data-app="{name}"' in body
     assert "core" in names and "advisor" in names
-    # alpha: nav group farmer, 1 today fragment, 0 panels, 2 tools
+    # alpha: nav group apps, 1 today fragment, 0 panels, 2 tools
     assert (
         '<tr data-app="alpha"><td class="pr-3">alpha</td><td class="pr-3">9.9.9</td>'
-        '<td class="pr-3">beta</td><td class="pr-3">farmer</td><td class="pr-3">1</td>'
+        '<td class="pr-3">beta</td><td class="pr-3">apps</td><td class="pr-3">1</td>'
         '<td class="pr-3">0</td><td>2</td></tr>'
     ) in body
 

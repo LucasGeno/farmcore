@@ -19,5 +19,13 @@ MANIFEST = Manifest(
     ),
     nav_group="more",
     nav_order=35,
+    icon="check",
+    color="protected",
+    keywords={
+        "en": ("review", "parameter", "audit"),
+        "fr": ("examen", "paramètre"),
+        "es": ("revisión", "parámetro"),
+        "it": ("revisione", "parametro"),
+    },
     tools=TOOLS,
 )

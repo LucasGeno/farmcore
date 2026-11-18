@@ -9,4 +9,12 @@ MANIFEST = Manifest(
     scopes=("fields:read", "logs:read", "advice:read", "stations:read"),
     routes=("farmcore.apps.assistant.routes:router",),
     category="Your farm",
+    icon="mic",
+    color="brand",
+    keywords={
+        "en": ("assistant", "help", "question"),
+        "fr": ("assistant", "aide", "question"),
+        "es": ("asistente", "ayuda", "pregunta"),
+        "it": ("assistente", "aiuto", "domanda"),
+    },
 )

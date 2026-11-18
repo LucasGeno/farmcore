@@ -23,5 +23,13 @@ MANIFEST = Manifest(
     nav_group="apps",
     nav_order=25,
     nav_icon="leaf",
+    icon="box",
+    color="wait",
+    keywords={
+        "en": ("inventory", "stock", "product"),
+        "fr": ("stock", "inventaire", "produit"),
+        "es": ("inventario", "stock", "producto"),
+        "it": ("inventario", "scorte", "prodotto"),
+    },
     maturity="alpha",
 )

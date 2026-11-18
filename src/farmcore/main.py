@@ -115,7 +115,7 @@ def create_app(
         if any(m.name == "today" for m in request.app.state.manifests):
             return RedirectResponse(context_url(request, "/today/"))
         for manifest in request.app.state.manifests:
-            if manifest.nav is not None:
+            if manifest.name != "core" and manifest.nav is not None:
                 return RedirectResponse(context_url(request, manifest.nav[1]))
         return RedirectResponse("/health")
 

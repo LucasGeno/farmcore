@@ -2,8 +2,9 @@
 
 `build_nav(manifests, is_admin=)` -> `{"farmer", "apps", "more", "admin"}` lists of `NavItem`:
 each app's `nav` (in `nav_group`, at `nav_order`) plus its `extra_nav`, sorted by order, ties in
-load order. The `apps` group always ends with the kernel's "All apps" page (everyone sees it,
-read-only; only the admin can switch apps). The `more` group renders as collapsed Records.
+load order. The `farmer` group (phone bottom nav) is core-only. The `apps` group always ends with
+the kernel's "All apps" page (everyone sees it, read-only; only the admin can switch apps). The
+`more` group renders as collapsed Records.
 The admin group holds admin-only items and is empty
 for non-admins. `web.render` passes only the visible apps (`registry.visible_manifests`).
 `active_path(items, path)`: the item path that is the longest prefix of `path`, for

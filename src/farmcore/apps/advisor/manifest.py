@@ -39,6 +39,14 @@ MANIFEST = Manifest(
     nav_group="apps",
     nav_order=10,
     nav_icon="advisor",
+    icon="advisor",
+    color="protected",
+    keywords={
+        "en": ("crop protection", "spray", "disease", "mildew", "advice"),
+        "fr": ("protection des cultures", "pulvérisation", "mildiou", "conseil"),
+        "es": ("protección de cultivos", "mildiu", "consejo"),
+        "it": ("protezione delle colture", "peronospora", "consiglio"),
+    },
     widgets=(
         Widget("/advisor/today?view=attention", 10),
         Widget("/advisor/today?view=calm", 55),
