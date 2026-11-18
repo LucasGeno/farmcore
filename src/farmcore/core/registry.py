@@ -1,7 +1,7 @@
 """App registry: discover manifests, order them by dependency, load them into the app.
 
 - `discover(packages)`: core plus every subpackage holding a `manifest.py` with `MANIFEST`,
-  returned in load order.
+  returned in load order; registers each app's `resource_scopes` with the scoped repository.
 - `resolve_order(manifests)`: Kahn's algorithm, ties alphabetical, core first (every other app
   implicitly depends on it). A dependency on core is always met, even when core is not in the
   list, so `create_app(manifests=[MANIFEST])` loads just that app (01 contract). Cycles, unmet
@@ -41,6 +41,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, configure_mappers, sessionmaker
 
+from farmcore.core.access import register_resource_scopes
 from farmcore.core.app_manifest import MANIFEST as CORE
 from farmcore.core.manifest import (
     Manifest,
@@ -48,6 +49,7 @@ from farmcore.core.manifest import (
     collect_record_types,
     import_string,
 )
+from farmcore.core.models.base import Base
 from farmcore.core.models.kernel import AppModule
 
 # id(manifest) -> (manifest, the package that holds it), for `static/` lookup. Keyed by object
@@ -75,7 +77,26 @@ def discover(packages: tuple[str, ...] = ("farmcore.apps",)) -> list[Manifest]:
             manifest = importlib.import_module(f"{app_pkg}.manifest").MANIFEST
             _PACKAGES[id(manifest)] = (manifest, app_pkg)
             found.append(manifest)
-    return resolve_order(found)
+    ordered = resolve_order(found)
+    for manifest in ordered:
+        register_scopes(manifest)
+    return ordered
+
+
+def register_scopes(manifest: Manifest) -> None:
+    """Register `manifest.resource_scopes` with the scoped repository. Runs at discovery, so
+    every process that discovers apps (web, bot, replay, migrations) reads app tables the same
+    way. An app may declare only tables its own `models` define (imported here to check)."""
+    if not manifest.resource_scopes:
+        return
+    for module in manifest.models:
+        importlib.import_module(module)
+    owned = {
+        mapper.local_table.name
+        for mapper in Base.registry.mappers
+        if mapper.class_.__module__ in manifest.models
+    }
+    register_resource_scopes(manifest.name, manifest.resource_scopes, owned=owned)
 
 
 def resolve_order(manifests: list[Manifest]) -> list[Manifest]:
@@ -180,6 +201,8 @@ def load(
     manifests: list[Manifest] | None = None,
 ) -> list[Manifest]:
     ordered = resolve_order(discover() if manifests is None else list(manifests))
+    for manifest in ordered:
+        register_scopes(manifest)
     with session_factory() as session:
         states = sync_modules(session, ordered)
         session.commit()

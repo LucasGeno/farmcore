@@ -408,6 +408,7 @@ class Manifest:
     debug_panels: tuple[str, ...] = ()  # fragment URLs for the debug drawer
     section_labels: tuple[tuple[str, str], ...] = ()  # optional (section URL, display label)
     data_sources: str | None = None  # provider(repo, now, parcel_id) -> SourceSummary
+    resource_scopes: tuple[tuple[str, tuple[str, ...]], ...] = ()  # (table, allowed scopes)
     demo_presets: tuple[str, ...] = ()  # module:attr paths to core.demo.Preset objects
     demo_reset: tuple[str, ...] = ()  # module:attr (session, farm) hooks run by every demo reset
     tools: tuple[Any, ...] = ()  # read-only assistant tools
@@ -479,6 +480,15 @@ class Manifest:
                 raise ValueError(
                     f"app {self.name!r}: record type {rt.key!r} names undeclared"
                     f" draft_kind {rt.draft_kind!r}"
+                )
+        resources = [resource for resource, _ in self.resource_scopes]
+        duplicates = sorted({resource for resource in resources if resources.count(resource) > 1})
+        if duplicates:
+            raise ValueError(f"app {self.name!r}: duplicate resource scopes for {duplicates}")
+        for resource, scopes in self.resource_scopes:
+            if not resource or not scopes:
+                raise ValueError(
+                    f"app {self.name!r}: resource scopes need a table and non-empty scopes"
                 )
 
     @property

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 
+from farmcore.core import access, registry
 from farmcore.core.access import (
     FarmNotSeeded,
     Repo,
@@ -20,8 +22,10 @@ from farmcore.core.access import (
     default_farm,
     ensure_owner_grant,
     get_repo,
+    register_resource_scopes,
     repo_for_job,
 )
+from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
     Advice,
@@ -38,6 +42,7 @@ from farmcore.core.models.canonical import (
     Quantity,
 )
 from farmcore.core.models.catalog import TypedQuantity
+from farmcore.core.models.weather import WeatherStation
 from farmcore.core.seed import ensure_default_farm
 
 T0 = datetime(2024, 4, 10, 4, 0, tzinfo=UTC)
@@ -362,3 +367,86 @@ def test_get_repo_must_be_function_scoped():
         @app.get("/wrong")
         def wrong(repo: ScopedRepository = Depends(get_repo)) -> None:
             return None
+
+
+def test_an_undeclared_resource_is_denied(session):
+    farm = _farm_with_data(session, "undeclared")
+    repo = _owner_repo(session, farm)
+    with pytest.raises(ScopeDenied, match="not declared"):
+        repo.execute(select(1), scope="audit:read", resource="not_a_resource")
+
+
+@pytest.fixture
+def resource_scopes(monkeypatch):
+    """Registrations made by the test are dropped afterwards."""
+    monkeypatch.setattr(access, "RESOURCE_SCOPES", dict(access.RESOURCE_SCOPES))
+    monkeypatch.setattr(access, "RESOURCE_OWNERS", dict(access.RESOURCE_OWNERS))
+
+
+def test_an_app_declares_only_its_own_tables_and_cannot_redefine_another_apps(resource_scopes):
+    widget = (("test_widget", ("fields:read",)),)
+    register_resource_scopes("first-app", widget, owned={"test_widget"})
+    register_resource_scopes("second-app", widget, owned={"test_widget"})  # identical: a no-op
+
+    with pytest.raises(ValueError, match="already declared by first-app"):
+        register_resource_scopes(
+            "third-app", (("test_widget", ("fields:read", "logs:read")),), owned={"test_widget"}
+        )
+    with pytest.raises(ValueError, match="not one of its own tables"):
+        register_resource_scopes(
+            "third-app", (("legacy_catalog_item", ("fields:read",)),), owned={"test_widget"}
+        )
+    assert access.RESOURCE_SCOPES["test_widget"] == frozenset({"fields:read"})
+    assert "legacy_catalog_item" not in access.RESOURCE_SCOPES
+
+
+def test_every_farm_table_is_declared_and_filtered_to_the_farm(session):
+    """A table reaching `farm` (any FK path, or a `*farm_id` column) must be declared, and
+    `list()` must filter it to the farm rather than raise for want of a farm path."""
+    for manifest in registry.discover():
+        for module in manifest.models:
+            importlib.import_module(module)
+    tables = Base.metadata.tables
+    farm_tables = {"farm"}
+    grew = True
+    while grew:
+        reached = {
+            name
+            for name, table in tables.items()
+            if any(fk.column.table.name in farm_tables for fk in table.foreign_keys)
+            or any(column.name.endswith("farm_id") for column in table.c)
+        }
+        grew = not reached <= farm_tables
+        farm_tables |= reached
+    models = {mapper.local_table.name: mapper.class_ for mapper in Base.registry.mappers}
+    repo = _owner_repo(session, _farm_with_data(session, "A"))
+
+    undeclared = sorted(farm_tables - set(access.RESOURCE_SCOPES))
+    unfiltered = []
+    for name in sorted(farm_tables - set(undeclared)):
+        try:
+            repo.list(models[name], scope=min(access.RESOURCE_SCOPES[name]))
+        except (KeyError, TypeError):
+            unfiltered.append(name)
+
+    assert (undeclared, unfiltered) == ([], [])
+
+
+def test_a_farm_sees_its_own_and_public_weather_stations_but_not_another_farms(session):
+    farm_a = _farm_with_data(session, "A")
+    farm_b = _farm_with_data(session, "B")
+    for station_id, owner in (("own", farm_a.id), ("public", None), ("theirs", farm_b.id)):
+        session.add(
+            WeatherStation(
+                provider="test",
+                provider_station_id=station_id,
+                name=station_id,
+                geom="SRID=4326;POINT(2.35 48.85)",
+                owner_farm_id=owner,
+            )
+        )
+    session.flush()
+
+    stations = _owner_repo(session, farm_a).list(WeatherStation, scope="stations:read")
+
+    assert sorted(s.provider_station_id for s in stations) == ["own", "public"]
