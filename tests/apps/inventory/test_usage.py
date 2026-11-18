@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from sqlalchemy import text
 
 from farmcore.apps.inventory import service
+from farmcore.apps.operations import seed as ops_seed
 from farmcore.core import logs
+from farmcore.core import seed as core_seed
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.models.canonical import Farm
 from tests.apps.inventory.conftest import T_APR, make_parcel, spray, stock
@@ -192,11 +197,15 @@ def test_a_log_with_only_a_total_of_the_product_is_not_computable(session, inv):
     assert row.not_computable == 1
 
 
-@pytest.mark.parametrize("kind", ["irrigate", "observation"])
-def test_a_confirmed_fact_never_consumes_spray_stock(session, inv, kind):
-    """Only spray rates count: an irrigation or observation is a record, not a product use."""
+@pytest.mark.parametrize(
+    "kind,entered",
+    [("irrigate", [logs.EnteredQuantity(Decimal("12.5"), "m3")]), ("observation", [])],
+)
+def test_a_confirmed_fact_never_consumes_spray_stock(session, inv, kind, entered):
+    """Only spray doses count: an irrigation's 12.5 m3 shares the volume measure with a litre
+    product stock, yet it is a record, not a product use."""
     copper = inv.products["copper-contact"]
-    stock(session, inv.farm, copper, purchased="20")
+    stock(session, inv.farm, copper, purchased="20", unit="l")
     logs.record_operation(
         session,
         farm_id=inv.farm.id,
@@ -204,7 +213,7 @@ def test_a_confirmed_fact_never_consumes_spray_stock(session, inv, kind):
         parcel_ids=[p.id for p in inv.parcels],
         ts_start=T_APR,
         ts_end=None,
-        quantities=[],
+        quantities=entered,
         source=logs.SourceInput("voice", f"{kind}-1", {}, 0.9, logs.RANK_VOICE),
         actor="owner",
         occurred_at=T_APR,
@@ -213,3 +222,83 @@ def test_a_confirmed_fact_never_consumes_spray_stock(session, inv, kind):
     row = _row(session, inv.farm, T_APR + timedelta(hours=1))
 
     assert (row.used, row.sprays, row.on_hand) == (Decimal("0"), 0, Decimal("20"))
+
+
+@pytest.mark.parametrize(
+    "value,unit",
+    [("2", "oz/ha"), ("NaN", "kg/ha"), ("Infinity", "kg/ha")],
+    ids=["unknown-unit", "nan-dose", "infinite-dose"],
+)
+def test_a_dose_without_a_known_factor_never_gives_a_balance(session, inv, value, unit):
+    """A dose FarmCore cannot convert exactly makes the season not computable, even beside a
+    good dose on the same log and with a low-stock threshold set: no plausible, NaN or infinite
+    balance."""
+    copper = inv.products["copper-contact"]
+    stock(session, inv.farm, copper, purchased="20", low_stock=Decimal("5"))
+    bad = logs.QuantityInput("rate", Decimal(value), unit, copper.id, copper.name)
+    spray(session, inv.farm, inv.parcels, copper, at=T_APR, value="2", unit="kg/ha", key="mix",
+          extra=(bad,))  # fmt: skip
+
+    row = _row(session, inv.farm, T_APR + timedelta(hours=1))
+
+    assert (row.used, row.on_hand, row.low) == (None, None, False)
+    assert (row.sprays, row.not_computable) == (1, 1)
+
+
+def test_two_sessions_confirming_one_pending_spray_move_stock_once(
+    settings, committed_session_factory, monkeypatch
+):
+    """The second confirmation waits on the farm lock, then finds the spray no longer pending."""
+    monkeypatch.setattr(ops_seed, "get_settings", lambda: settings)
+    monkeypatch.setattr(core_seed, "get_settings", lambda: settings)
+    with committed_session_factory() as session:
+        farm = core_seed.ensure_default_farm(session, settings)
+        parcels = [make_parcel(session, farm, 1, "1.25"), make_parcel(session, farm, 2, "0.75")]
+        copper = ops_seed.ensure_products(session)["copper-contact"]
+        stock(session, farm, copper, purchased="20")
+        pending = logs.create_pending(
+            session,
+            farm_id=farm.id,
+            type="spray",
+            parcel_ids=[p.id for p in parcels],
+            ts_start=T_APR,
+            ts_end=None,
+            quantities=[logs.QuantityInput("rate", Decimal("2"), "kg/ha", copper.id)],
+            source=logs.SourceInput("voice", "capture-1", {}, 0.9, logs.RANK_VOICE),
+            actor="owner",
+            occurred_at=T_APR,
+        )
+        session.commit()
+        farm_id, log_id = farm.id, pending.id
+
+    def confirm_in_own_session():
+        with committed_session_factory() as other:
+            logs.confirm(other, log_id, "owner", T_APR)
+            other.commit()
+
+    with committed_session_factory() as first, ThreadPoolExecutor(max_workers=1) as pool:
+        logs.confirm(first, log_id, "owner", T_APR)
+        second = pool.submit(confirm_in_own_session)
+        deadline = time.monotonic() + 8
+        while not _waiting_on_advisory_lock(committed_session_factory):
+            assert time.monotonic() < deadline, "second confirmation never reached the farm lock"
+            time.sleep(0.01)
+        first.commit()
+        with pytest.raises(ValueError, match="not pending"):
+            second.result(timeout=8)
+
+    with committed_session_factory() as session:
+        row = _row(session, session.get(Farm, farm_id), T_APR + timedelta(hours=1))
+        assert (row.used, row.on_hand, row.sprays) == (Decimal("4"), Decimal("16"), 1)
+
+
+def _waiting_on_advisory_lock(factory) -> bool:
+    with factory() as observer:
+        return bool(
+            observer.scalar(
+                text(
+                    "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() "
+                    "AND wait_event = 'advisory' AND query LIKE '%pg_advisory_xact_lock%'"
+                )
+            )
+        )

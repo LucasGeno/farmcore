@@ -198,3 +198,37 @@ def test_switching_the_app_off_removes_its_nav_entry(client, inv):
 
     assert 'href="/inventory/"' not in page
     assert 'hx-get="/inventory/' not in page
+
+
+def test_a_member_asking_for_another_farms_stock_sees_none_of_it(
+    settings, committed_session_factory
+):
+    from farmcore.apps.operations.seed import ensure_products
+    from tests.core.test_member_sessions import _account, _login
+
+    _, own_farm = _account(committed_session_factory)
+    with committed_session_factory.begin() as session:
+        foreign = Farm(name="Neighbour farm")
+        session.add(foreign)
+        session.flush()
+        foreign_farm = foreign.id
+        product = next(iter(ensure_products(session).values()))
+        for farm_id, lot in ((own_farm, "LOT-OWN"), (foreign_farm, "LOT-FOREIGN")):
+            session.add(
+                InventoryStock(
+                    farm_id=farm_id, product_id=product.id, season=2024, unit="kg",
+                    purchased=Decimal("20"), lot=lot,
+                )
+            )  # fmt: skip
+    with TestClient(
+        create_app(settings, session_factory=committed_session_factory),
+        base_url="https://testserver",
+    ) as browser:
+        assert _login(browser).status_code == 303
+
+        own = browser.get("/inventory/", params={"farm": own_farm})
+        foreign = browser.get("/inventory/", params={"farm": foreign_farm})
+
+    assert "LOT-OWN" in own.text  # control: the member's own stock renders
+    assert foreign.status_code == 403
+    assert "LOT-FOREIGN" not in foreign.text
