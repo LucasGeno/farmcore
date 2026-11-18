@@ -193,9 +193,9 @@ def _run_live(session_factory: sessionmaker[Session], spec: JobSpec, settings: S
 
 
 def start(app: FastAPI) -> None:
-    """Live mode (per `clock_state`): one APScheduler interval job per JobSpec, first run one
-    interval after start; each tick skips while clock_state is replay. Replay mode schedules
-    nothing; `step_to` drives the jobs."""
+    """Live mode (per `clock_state`): one APScheduler interval job per JobSpec without a durable
+    task (`farmcore worker` runs those), first run one interval after start; each tick skips
+    while clock_state is replay. Replay mode schedules nothing; `step_to` drives the jobs."""
     settings: Settings = app.state.settings
     session_factory: sessionmaker[Session] = app.state.session_factory
     app.state.scheduler = None
@@ -206,6 +206,8 @@ def start(app: FastAPI) -> None:
     scheduler = BackgroundScheduler(timezone=UTC)
     for manifest in app.state.manifests:
         for spec in manifest.jobs:
+            if spec.task is not None:
+                continue  # durable: `farmcore worker` plans and runs it (core/tasks.py)
             scheduler.add_job(
                 _run_live,
                 "interval",

@@ -25,6 +25,7 @@ dependencies = [
     "google-auth[requests]>=2.62.0",
     "pint>=0.26.2",
     "timezonefinder>=9.2.0",
+    "procrastinate==3.10.*",
 ]
 
 [project.urls]

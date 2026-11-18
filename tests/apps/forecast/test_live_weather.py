@@ -9,9 +9,8 @@ from sqlalchemy import select
 
 from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.apps.forecast.models import ForecastRun
-from farmcore.core import clock
-from farmcore.core.jobs import run_now
-from tests.apps.forecast.conftest import provider_client
+from farmcore.core import clock, tasks
+from tests.apps.forecast.conftest import fetch_live_now, provider_client
 
 JOB = "forecast.fetch_live"
 
@@ -29,7 +28,7 @@ def test_live_job_stores_bounded_receipt_with_units_location_and_rain(
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-    result = run_now(session_factory, [MANIFEST], JOB, settings)
+    result = fetch_live_now(session_factory, settings)
     assert result is not None, "manifest must schedule the live ingestion job"
     assert result.ok, result.error
     session.expire_all()
@@ -48,7 +47,7 @@ def test_live_job_stores_bounded_receipt_with_units_location_and_rain(
     assert query["forecast_days"] == ["6"] and query["timezone"] == ["UTC"]
     assert query["wind_speed_unit"] == ["kmh"]
     # Cached receipt is immutable, even if invoked again in the same scheduling interval.
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     assert len(calls) == 1
     from farmcore.apps.forecast.store import latest_run
     from farmcore.core.access import repo_for_job
@@ -123,7 +122,7 @@ def test_invalid_provider_response_preserves_last_good_receipt(
             lambda url, **kw: httpx.Response(200, request=httpx.Request("GET", url), json=payload)
         ),
     )
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     good = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
     good_id, good_props = good.id, deepcopy(good.props)
@@ -170,7 +169,7 @@ def test_invalid_provider_response_preserves_last_good_receipt(
                 payload["hourly"][variable] = [None] * 4
     elif invalid == "excess_response_bytes":
         payload["unused_provider_metadata"] = "x" * 256_001
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()
     assert [r.id for r in held] == [good_id]
@@ -219,7 +218,7 @@ def test_replay_rejects_future_issue_even_when_marked_available_and_never_fetche
         raise AssertionError("replay must never request current weather")
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(forbidden))
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     html = client.get("/forecast/home-weather", params={"farm": farm.id}).text
     assert "Safe saved forecast" in html
     assert "Future issued secret" not in html
@@ -240,7 +239,7 @@ def test_receipt_http_labels_fetch_time_unknown_issue_and_stale_partial_coverage
             )
         ),
     )
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     receipt = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
     clock.set_replay(session, receipt.available_at + timedelta(minutes=1), settings)
@@ -278,7 +277,7 @@ def test_identical_provider_retry_and_network_failure_preserve_receipt_and_repor
             )
         ),
     )
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     good = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
     original_id, original_props = good.id, deepcopy(good.props)
@@ -298,7 +297,7 @@ def test_identical_provider_retry_and_network_failure_preserve_receipt_and_repor
                 raise httpx.ConnectError("provider offline")
 
             monkeypatch.setattr(httpx, "AsyncClient", provider_client(unavailable))
-        assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+        assert fetch_live_now(session_factory, settings).ok
         session.expire_all()
         held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()
         assert [r.id for r in held] == [original_id]
@@ -332,7 +331,7 @@ def test_bounded_schedule_prioritizes_unattempted_farms_over_expired_cache(
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     assert len(calls) == 5
     session.expire_all()
     # At a later scheduled tick the first five caches are expired again.
@@ -345,7 +344,7 @@ def test_bounded_schedule_prioritizes_unattempted_farms_over_expired_cache(
             },
         }
     session.commit()
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     assert len(calls) <= 10
     session.expire_all()
     assert "last_success" in farms[-1].props.get("forecast_health", {})
@@ -377,7 +376,7 @@ def test_missing_required_forecast_inputs_are_unavailable_not_adverse_conditions
             )
         ),
     )
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     html = client.get("/forecast/plan", params={"farm": farm.id}).text
     assert "Forecast inputs unavailable" in html
     assert 'data-grade="best"' not in html and 'data-grade="good"' not in html
@@ -399,7 +398,7 @@ def test_data_sources_reports_receipt_freshness_and_partial_coverage(
             )
         ),
     )
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     row = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
     clock.set_replay(session, row.available_at + timedelta(hours=3), settings)
@@ -407,50 +406,6 @@ def test_data_sources_reports_receipt_freshness_and_partial_coverage(
     html = client.get("/data-sources/today", params={"farm": farm.id}).text
     assert "provider issue time unknown" in html
     assert "Stale forecast" in html and "rain 3/4" in html
-
-
-def test_concurrent_job_requests_serialize_and_fetch_once(
-    committed_session_factory, settings, monkeypatch, live_payload
-):
-    from concurrent.futures import ThreadPoolExecutor
-    from threading import Event
-
-    from farmcore.core.models.canonical import Farm
-
-    with committed_session_factory.begin() as session:
-        farm = Farm(
-            name="Concurrent weather",
-            props={"forecast_location": {"latitude": 44.9, "longitude": -0.2}},
-        )
-        session.add(farm)
-        clock.set_live(session, settings)
-    entered, release, second_started = Event(), Event(), Event()
-    calls = []
-
-    def provider(url, **kwargs):
-        calls.append(url)
-        entered.set()
-        assert release.wait(5), "test must release the external provider"
-        return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
-
-    monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-
-    def execute_second():
-        second_started.set()
-        return run_now(committed_session_factory, [MANIFEST], JOB, settings)
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        first = pool.submit(run_now, committed_session_factory, [MANIFEST], JOB, settings)
-        assert entered.wait(5)
-        second = pool.submit(execute_second)
-        assert second_started.wait(5)
-        assert not second.done(), "second process waits while first receipt is being fetched"
-        release.set()
-        assert first.result(timeout=10).ok
-        assert second.result(timeout=10).ok
-    with committed_session_factory() as session:
-        assert len(session.scalars(select(ForecastRun)).all()) == 1
-    assert len(calls) == 1
 
 
 def test_generated_missingness_survives_receipts_without_zero_imputation(
@@ -491,7 +446,7 @@ def test_generated_missingness_survives_receipts_without_zero_imputation(
             "forecast_health": {"last_attempt": "2020-01-01T00:00:00+00:00"},
         }
         session.commit()
-        assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+        assert fetch_live_now(session_factory, settings).ok
         session.expire_all()
         run = latest_run(repo_for_job(session, farm.id, JOB), datetime.now(UTC))
         assert [o.rr1_mm for o in run.series] == [None if absent else 1.5 for absent in missing]
@@ -520,7 +475,7 @@ def test_malformed_cached_health_cannot_disable_weather_ingestion(
             )
         ),
     )
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     assert session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id)) is not None
 
@@ -553,7 +508,7 @@ def test_malformed_second_farm_response_keeps_first_farms_committed_receipt(
         return httpx.Response(200, request=httpx.Request("GET", url), json=responses.pop(0))
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     rows = session.scalars(select(ForecastRun)).all()
     assert [r.farm_id for r in rows] == [farms[0].id]
@@ -584,7 +539,7 @@ def test_notification_and_assistant_provenance_never_call_receipt_a_provider_iss
             )
         ),
     )
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     bell = client.get("/notifications", params={"farm": farm.id}).text
     assert "provider issue time unknown" in bell
     assert " · issued " not in bell
@@ -654,7 +609,7 @@ def test_unavailable_requested_location_never_calls_provider_or_changes_prior_re
         raise AssertionError("missing/invalid requested location must not reach provider")
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(forbidden))
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()
     assert [row.id for row in held] == [prior_id]
@@ -706,7 +661,7 @@ def test_live_job_uses_first_own_station_coordinates_and_retains_provider_grid_c
         return httpx.Response(200, request=httpx.Request("GET", url), json=live_payload)
 
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     assert len(calls) == 1
     assert calls[0]["latitude"] == ["44.9"] and calls[0]["longitude"] == ["-0.2"]
@@ -718,7 +673,7 @@ def test_live_job_uses_first_own_station_coordinates_and_retains_provider_grid_c
 
 @pytest.mark.parametrize("select_farm", [True, False])
 def test_scoped_live_job_cannot_fetch_or_write_health_for_unselected_farm(
-    session, settings, farm, monkeypatch, live_payload, select_farm
+    session, session_factory, settings, farm, monkeypatch, live_payload, select_farm
 ):
     from farmcore.apps.forecast.jobs import fetch_live
     from farmcore.core.manifest import JobContext
@@ -742,6 +697,7 @@ def test_scoped_live_job_cannot_fetch_or_write_health_for_unselected_farm(
     targets = (farm.id,) if select_farm else ()
     fetch_live(JobContext(session, datetime.now(UTC), settings, farm_ids=targets))
     session.commit()
+    tasks.drain(session_factory, settings, [MANIFEST])
     session.expire_all()
     assert len(calls) == int(select_farm)
     if select_farm:
@@ -785,7 +741,7 @@ def test_oversized_provider_stream_stops_reading_and_closes_while_preserving_rec
 
     # Exercise the real async HTTP client over a controlled provider transport.
     monkeypatch.setattr(httpx, "AsyncClient", provider_client(provider))
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     receipt = session.scalar(select(ForecastRun).where(ForecastRun.farm_id == farm.id))
     receipt_id, receipt_props = receipt.id, deepcopy(receipt.props)
@@ -798,7 +754,7 @@ def test_oversized_provider_stream_stops_reading_and_closes_while_preserving_rec
     }
     session.commit()
     good = False
-    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     assert len(chunks) <= 4, "stop transfer before buffering the entire provider response"
     assert oversized.closed, "an oversized transfer must release the HTTP connection"
@@ -916,7 +872,7 @@ def test_live_job_total_deadline_cancels_socket_and_preserves_prior_receipt(
         clock.set_live(session, configured)
         session.commit()
         started = time.monotonic()
-        result = run_now(session_factory, [MANIFEST], JOB, configured)
+        result = fetch_live_now(session_factory, configured)
         elapsed = time.monotonic() - started
         assert result.ok, result.error
         assert elapsed < 0.75, "total deadline must cancel headers and sub-chunk body reads"

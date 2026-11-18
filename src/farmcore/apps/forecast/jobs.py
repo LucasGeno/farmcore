@@ -1,5 +1,9 @@
 """Bounded live receipts, never live requests during replay.
 
+`fetch_live` (the manifest job) only plans: in live mode it queues one durable task per due farm
+(`core/tasks.py`). `farmcore worker` runs `fetch_farm` for each: no transaction is open during
+the request, and the receipt and health are written only if the attempt is still current.
+
 The current API does not expose a model issue time. The legacy non-null issued_at
 column is a receipt identity for this source ONLY; props and presentation explicitly
 label it as such. available_at and fetched_at are wall time after receipt, never
@@ -28,9 +32,11 @@ from farmcore.apps.forecast.sources import (
     with_api_key,
 )
 from farmcore.apps.forecast.store import import_runs
+from farmcore.core import tasks
 from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Asset, Farm
+from farmcore.db import session_scope
 
 JOB_NAME = "forecast.fetch_live"
 SOURCE = "open-meteo-live-receipt"
@@ -110,12 +116,15 @@ async def _fetch(url: str, timeout: float):
 
 
 def fetch_live(ctx: JobContext) -> None:
+    """Queue a receipt fetch for each farm due (never attempted, cache expired or unreadable
+    health), at most MAX_FARMS, least recently attempted first, skipping farms whose fetch is in
+    flight. No network here: a request handler or tick that runs this job only enqueues."""
     if not isinstance(get_clock(ctx.session, ctx.settings), LiveClock):
         return
     now = datetime.now(UTC)
     last_attempt = Farm.props["forecast_health"]["last_attempt"].astext
     farms = (
-        select(Farm)
+        select(Farm.id)
         .where(
             or_(
                 last_attempt.is_(None),
@@ -126,129 +135,149 @@ def fetch_live(ctx: JobContext) -> None:
         )
         .order_by(last_attempt.asc().nulls_first(), Farm.id)
         .limit(MAX_FARMS)
-        .with_for_update()
     )
     if ctx.farm_ids is not None:
         farms = farms.where(Farm.id.in_(ctx.farm_ids))
-    for farm in ctx.session.scalars(farms):
+    busy = tasks.in_flight(ctx.session, JOB_NAME)
+    if busy:
+        farms = farms.where(Farm.id.not_in(busy))
+    for farm_id in ctx.session.scalars(farms).all():
+        tasks.enqueue(ctx.session, JOB_NAME, farm_id)
+
+
+def _location(session, farm: Farm):
+    location = farm.props.get("forecast_location")
+    if location is None:
+        point = session.execute(
+            select(func.ST_Y(Asset.geom), func.ST_X(Asset.geom))
+            .where(Asset.farm_id == farm.id, Asset.kind == "station", Asset.geom.is_not(None))
+            .order_by(Asset.id)
+            .limit(1)
+        ).first()
+        location = {"latitude": point[0], "longitude": point[1]} if point else None
+    return location
+
+
+def fetch_farm(ctx: tasks.TaskContext) -> None:
+    """One farm's live receipt: read its location, request within the attempt's deadline with no
+    transaction open, then write the receipt or the failure only if the attempt is current."""
+    with session_scope(ctx.session_factory) as session:
+        farm = session.get(Farm, ctx.farm_id)
+        if farm is None:
+            return
+        location = _location(session, farm)
+    attempted = datetime.now(UTC)
+    receipt = error = None
+    try:
+        if location is None:
+            raise ValueError("location unavailable")
+        if not isinstance(location, dict) or any(
+            key not in location
+            or isinstance(location[key], bool)
+            or not _finite(location[key])
+            or abs(float(location[key])) > bound
+            for key, bound in (("latitude", 90), ("longitude", 180))
+        ):
+            raise ValueError("invalid location")
+        location = {key: float(location[key]) for key in ("latitude", "longitude")}
+        base_url = ctx.settings.open_meteo_base_url
+        request_url = forecast_url(
+            base_url,
+            {
+                **location,
+                "hourly": ",".join(VARIABLES),
+                "forecast_days": 6,
+                "timezone": "UTC",
+                "wind_speed_unit": "kmh",
+                "temperature_unit": "celsius",
+                "precipitation_unit": "mm",
+            },
+        )
+        api_key = (
+            ctx.settings.open_meteo_api_key.get_secret_value()
+            if ctx.settings.open_meteo_api_key is not None
+            else None
+        )
+        url = with_api_key(request_url, base_url, api_key)
+        timeout = min(ctx.settings.forecast_fetch_timeout_seconds, ctx.attempt.remaining())
+        with asyncio.Runner(loop_factory=FetchLoop) as runner:
+            doc = runner.run(_fetch(url, timeout))
+        received = datetime.now(UTC)
+        values = _validated_values(doc, received)
+        coverage = {
+            variable: {
+                "known": sum(v == variable for _, v, _ in values),
+                "expected": len(doc["hourly"]["time"]),
+            }
+            for variable in VARIABLES.values()
+        }
+        fingerprint = sha256(
+            json.dumps(
+                {
+                    "location": location,
+                    "latitude": doc.get("latitude"),
+                    "longitude": doc.get("longitude"),
+                    "hourly": doc["hourly"],
+                    "units": doc["hourly_units"],
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+        receipt = Run(
+            source=SOURCE,
+            issued_at=received,
+            available_at=received,
+            label="Open-Meteo live forecast receipt",
+            as_issued=False,
+            latitude=doc.get("latitude"),
+            longitude=doc.get("longitude"),
+            values=values,
+            props={
+                "response_hash": fingerprint,
+                "provider_issued_at": None,
+                "issued_at_kind": "receipt",
+                "fetched_at": received.isoformat(),
+                "requested_location": location,
+                "units": doc.get("hourly_units", UNITS),
+                "request_url": request_url,
+                "endpoint_kind": endpoint_kind(base_url),
+                "coverage": coverage,
+                "coverage_start": min(t for t, _, _ in values).isoformat(),
+                "coverage_end": max(t for t, _, _ in values).isoformat(),
+                "attribution": "Weather data by Open-Meteo.com (CC BY 4.0)",
+            },
+        )
+    except (
+        httpx.HTTPError,
+        httpx.InvalidURL,
+        ValueError,
+        KeyError,
+        TypeError,
+        OverflowError,
+        TimeoutError,
+    ) as exc:
+        error = type(exc).__name__
+    with session_scope(ctx.session_factory) as session:
+        if not tasks.publish_if_current(session, ctx.attempt):
+            return
+        farm = session.get(Farm, ctx.farm_id, with_for_update=True, populate_existing=True)
         health = farm.props.get("forecast_health")
         health = health if isinstance(health, dict) else {}
-        location = farm.props.get("forecast_location")
-        if location is None:
-            point = ctx.session.execute(
-                select(func.ST_Y(Asset.geom), func.ST_X(Asset.geom))
-                .where(Asset.farm_id == farm.id, Asset.kind == "station", Asset.geom.is_not(None))
-                .order_by(Asset.id)
-                .limit(1)
-            ).first()
-            location = {"latitude": point[0], "longitude": point[1]} if point else None
-        attempted = datetime.now(UTC)
-        try:
-            if location is None:
-                raise ValueError("location unavailable")
-            if not isinstance(location, dict) or any(
-                key not in location
-                or isinstance(location[key], bool)
-                or not _finite(location[key])
-                or abs(float(location[key])) > bound
-                for key, bound in (("latitude", 90), ("longitude", 180))
-            ):
-                raise ValueError("invalid location")
-            location = {key: float(location[key]) for key in ("latitude", "longitude")}
-            base_url = ctx.settings.open_meteo_base_url
-            request_url = forecast_url(
-                base_url,
-                {
-                    **location,
-                    "hourly": ",".join(VARIABLES),
-                    "forecast_days": 6,
-                    "timezone": "UTC",
-                    "wind_speed_unit": "kmh",
-                    "temperature_unit": "celsius",
-                    "precipitation_unit": "mm",
-                },
-            )
-            api_key = (
-                ctx.settings.open_meteo_api_key.get_secret_value()
-                if ctx.settings.open_meteo_api_key is not None
-                else None
-            )
-            url = with_api_key(request_url, base_url, api_key)
-            with asyncio.Runner(loop_factory=FetchLoop) as runner:
-                doc = runner.run(_fetch(url, ctx.settings.forecast_fetch_timeout_seconds))
-            received = datetime.now(UTC)
-            values = _validated_values(doc, received)
-            coverage = {
-                variable: {
-                    "known": sum(v == variable for _, v, _ in values),
-                    "expected": len(doc["hourly"]["time"]),
-                }
-                for variable in VARIABLES.values()
-            }
-            fingerprint = sha256(
-                json.dumps(
-                    {
-                        "location": location,
-                        "latitude": doc.get("latitude"),
-                        "longitude": doc.get("longitude"),
-                        "hourly": doc["hourly"],
-                        "units": doc["hourly_units"],
-                    },
-                    sort_keys=True,
-                ).encode()
-            ).hexdigest()
-            duplicate = ctx.session.scalar(
+        if receipt is None:
+            health = {**health, "last_attempt": attempted.isoformat(), "error": error}
+        else:
+            duplicate = session.scalar(
                 select(ForecastRun.id)
                 .where(
                     ForecastRun.farm_id == farm.id,
                     ForecastRun.source == SOURCE,
-                    ForecastRun.props["response_hash"].astext == fingerprint,
+                    ForecastRun.props["response_hash"].astext == receipt.props["response_hash"],
                 )
                 .limit(1)
             )
-            with ctx.session.begin_nested():
-                import_runs(
-                    ctx.session,
-                    farm.id,
-                    []
-                    if duplicate
-                    else [
-                        Run(
-                            source=SOURCE,
-                            issued_at=received,
-                            available_at=received,
-                            label="Open-Meteo live forecast receipt",
-                            as_issued=False,
-                            latitude=doc.get("latitude"),
-                            longitude=doc.get("longitude"),
-                            values=values,
-                            props={
-                                "response_hash": fingerprint,
-                                "provider_issued_at": None,
-                                "issued_at_kind": "receipt",
-                                "fetched_at": received.isoformat(),
-                                "requested_location": location,
-                                "units": doc.get("hourly_units", UNITS),
-                                "request_url": request_url,
-                                "endpoint_kind": endpoint_kind(base_url),
-                                "coverage": coverage,
-                                "coverage_start": min(t for t, _, _ in values).isoformat(),
-                                "coverage_end": max(t for t, _, _ in values).isoformat(),
-                                "attribution": "Weather data by Open-Meteo.com (CC BY 4.0)",
-                            },
-                        )
-                    ],
-                )
-            health = {"last_attempt": attempted.isoformat(), "last_success": received.isoformat()}
-        except (
-            httpx.HTTPError,
-            httpx.InvalidURL,
-            ValueError,
-            KeyError,
-            TypeError,
-            OverflowError,
-            TimeoutError,
-        ) as exc:
-            health = {**health, "last_attempt": attempted.isoformat(), "error": type(exc).__name__}
+            import_runs(session, farm.id, [] if duplicate else [receipt])
+            health = {
+                "last_attempt": attempted.isoformat(),
+                "last_success": receipt.available_at.isoformat(),
+            }
         farm.props = {**farm.props, "forecast_health": health}
-    ctx.session.flush()

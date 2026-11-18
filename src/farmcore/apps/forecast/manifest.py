@@ -19,7 +19,10 @@ MANIFEST = Manifest(
     routes=("farmcore.apps.forecast.routes:router",),
     jobs=(
         JobSpec(
-            "forecast.fetch_live", "farmcore.apps.forecast.jobs:fetch_live", timedelta(hours=1)
+            "forecast.fetch_live",
+            "farmcore.apps.forecast.jobs:fetch_live",
+            timedelta(hours=1),
+            task="farmcore.apps.forecast.jobs:fetch_farm",
         ),
     ),
     seed="farmcore.apps.forecast.seed:seed",

@@ -796,7 +796,7 @@ def test_a_failed_upgrade_of_project_a_recovers_by_restore_while_b_keeps_serving
 
         # The documented recovery, step by step, with the previous image (set above): keep the
         # failed database aside, restore the bundle the new release wrote.
-        a.compose("stop", "app", "bot", "backup")
+        a.compose("stop", "app", "worker", "bot", "backup")
         listed = a.compose(
             "run", "--rm", "--no-deps", "--entrypoint", "ls", "backup", "-l", "/backups"
         )  # fmt: skip

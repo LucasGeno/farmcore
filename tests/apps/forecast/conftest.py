@@ -35,3 +35,15 @@ def provider_client(provider):
         return AsyncClient(transport=transport, **kwargs)
 
     return create
+
+
+def fetch_live_now(session_factory, settings):
+    """A live forecast tick end to end, in this process: the job (as a handler or the worker's
+    tick runs it) only enqueues; then every queued fetch runs as the worker would run it."""
+    from farmcore.apps.forecast.manifest import MANIFEST
+    from farmcore.core import tasks
+    from farmcore.core.jobs import run_now
+
+    run = run_now(session_factory, [MANIFEST], "forecast.fetch_live", settings)
+    tasks.drain(session_factory, settings, [MANIFEST])
+    return run
