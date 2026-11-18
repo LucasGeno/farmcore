@@ -48,6 +48,9 @@ x-farmcore: &farmcore
     TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
     TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-}
     TELEGRAM_ALLOWED_USER_IDS: ${TELEGRAM_ALLOWED_USER_IDS:-}
+    OPEN_METEO_BASE_URL: ${OPEN_METEO_BASE_URL:-}
+    OPEN_METEO_SINGLE_RUNS_BASE_URL: ${OPEN_METEO_SINGLE_RUNS_BASE_URL:-}
+    OPEN_METEO_API_KEY: ${OPEN_METEO_API_KEY:-}
   volumes:
     # This installation's Whisper model cache (voice notes): downloads once, about 460 MB.
     - whisper-cache:/home/farmcore/.cache/huggingface
@@ -119,6 +122,22 @@ services:
     profiles: ["telegram"]
     command: ["farmcore", "bot"]
 
+  # Optional self-hosted Open-Meteo server (upstream AGPL-3.0, its own image, never built into
+  # FarmCore). `docker compose --profile openmeteo up -d`, then set
+  # OPEN_METEO_BASE_URL=http://openmeteo:8080 and, if needed,
+  # OPEN_METEO_SINGLE_RUNS_BASE_URL=http://openmeteo:8080 in .env (docs/self-hosting.md).
+  # The upstream image caches model data from the Open-Meteo open-data distribution.
+  openmeteo:
+    image: ${OPEN_METEO_IMAGE:-ghcr.io/open-meteo/open-meteo:1.8.0}
+    profiles: ["openmeteo"]
+    restart: unless-stopped
+    environment:
+      REMOTE_DATA_DIRECTORY: ${OPEN_METEO_REMOTE_DATA_DIRECTORY:-https://openmeteo.s3.amazonaws.com/data/}
+      CACHE_SIZE: ${OPEN_METEO_CACHE_SIZE:-8GB}
+    volumes:
+      - openmeteo-data:/app/data
+    logging: *logging
+
   # Daily `farmcore backup` as the owner: one bundle (pg_dump + manifest, encrypted with age to
   # BACKUP_RECIPIENT, the owner's public key) into this project's `backups` volume (or the host
   # directory BACKUP_DIR, one per installation), seven-day retention. Without BACKUP_RECIPIENT
@@ -163,3 +182,4 @@ volumes:
   pgdata:
   whisper-cache:
   backups:
+  openmeteo-data:

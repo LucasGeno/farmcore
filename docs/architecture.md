@@ -123,9 +123,12 @@ and running lookups and remain occupied until the native work finishes (or cance
 work is skipped). Saturation fails immediately rather than holding the job lock or growing
 threads/queues. Late DNS completion never restarts a canceled HTTP request. Requests use the farm's `props.forecast_location`
 (`latitude`, `longitude` in degrees), or its first geolocated weather station; a farm
-without either reports an unavailable refresh. No provider credentials are needed.
-Operators should check [Open-Meteo's usage terms](https://open-meteo.com/en/terms) for their
-installation before enabling live mode. No request runs in replay mode.
+without either reports an unavailable refresh. Requests go to `OPEN_METEO_BASE_URL` (default
+the free public API) and carry `OPEN_METEO_API_KEY` as `apikey` when set; an installation can
+use the customer API or a self-hosted server instead ([self-hosting](self-hosting.md#6-open-meteo-weather-data-optional)).
+Each receipt records `endpoint_kind` (`public`, `customer` or `self-hosted`) and the keyless
+request URL, never the key. The free API is non-commercial only; commercial installations use
+the customer API or self-host. No request runs in replay mode.
 
 The [current forecast API](https://open-meteo.com/en/docs) returns a changing model blend,
 without a provider issue timestamp. These responses are immutable **receipts**, never
@@ -142,3 +145,9 @@ Rain remains millimetres over the preceding hour; wind is km/h and temperature C
 Replay reads only receipts/runs issued and available by its clock; it can replay saved
 receipts after their actual receipt time, while offline as-issued demo runs remain usable.
 Live receipts never become station observations or retrospective disease-model evidence.
+
+`farmcore forecast fetch` archives single runs from `OPEN_METEO_SINGLE_RUNS_BASE_URL` (default
+the public Single Runs API) with the same optional key; saved files record the keyless request
+URL and `endpoint_kind`. A self-hosted Open-Meteo server serves the per-run files its
+`data_run/` store holds, so archive the runs an installation needs; the hosted Single Runs
+service keeps the full archive.

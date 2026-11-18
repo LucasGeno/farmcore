@@ -34,10 +34,22 @@ def register(cli: typer.Typer) -> None:
     ) -> None:
         """Save Open-Meteo ECMWF IFS HRES single runs (00Z and 12Z) to files: the only network
         step. `forecast import --dir` (and the seed) then read them offline."""
-        folder = out or get_settings().data_dir / sources.RUNS_DIR
+        settings = get_settings()
+        folder = out or settings.data_dir / sources.RUNS_DIR
+        api_key = (
+            settings.open_meteo_api_key.get_secret_value()
+            if settings.open_meteo_api_key is not None
+            else None
+        )
         try:
             saved, skipped = sources.fetch_single_runs(
-                first.date(), last.date(), folder, stations_seed.LAT, stations_seed.LON
+                first.date(),
+                last.date(),
+                folder,
+                stations_seed.LAT,
+                stations_seed.LON,
+                base_url=settings.open_meteo_single_runs_base_url,
+                api_key=api_key,
             )
         except (OSError, ValueError) as exc:
             typer.echo(f"forecast fetch failed: {exc}")
