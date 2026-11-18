@@ -4,6 +4,7 @@ from farmcore.core.models import (  # noqa: F401
     canonical,
     catalog,
     corrections,
+    drafts,
     identity,
     kernel,
     weather,

@@ -1,0 +1,8 @@
+<section class="min-w-0 rounded-xl border border-line bg-surface p-4">
+<h2 class="text-lg font-semibold">{{ {'spray': 'Spray', 'irrigation': 'Irrigation', 'observation': 'Observation'}[kind] }}</h2>
+<p class="mt-2 break-words">{{ local_start.strftime('%Y-%m-%d %H:%M') }}</p>
+<p class="mt-1 break-words">Parcels: {% for p in parcels %}{{ p.alias }} {{ p.name }}{% if not loop.last %}, {% endif %}{% endfor %}</p>
+{% if doses %}<ul class="mt-2 space-y-1">{% for name, d in doses %}<li class="break-words">{{ name }} · {{ d.value }} {{ d.unit }}</li>{% endfor %}</ul>{% endif %}
+{% if kind == 'irrigation' %}<p class="mt-2 break-words">{{ fact.amount }} {{ fact.unit }}{% if fact.basis %} {{ fact.basis }}{% endif %}</p>{% endif %}
+{% if kind == 'observation' %}<p class="mt-2 break-words">{{ fact.text }}</p>{% endif %}
+</section>

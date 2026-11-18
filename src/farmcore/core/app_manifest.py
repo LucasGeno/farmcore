@@ -1,6 +1,8 @@
 """Manifest of the kernel itself (app `core`)."""
 
-from farmcore.core.manifest import Manifest, NavItem, Widget
+from datetime import timedelta
+
+from farmcore.core.manifest import JobSpec, Manifest, NavItem, Widget
 
 MANIFEST = Manifest(
     name="core",
@@ -19,9 +21,12 @@ MANIFEST = Manifest(
         "farmcore.core.routes_admin:router",
         "farmcore.core.routes_identity:router",
         "farmcore.core.routes_members:router",
+        "farmcore.core.routes_drafts:router",
         "farmcore.core.debug:router",
     ),
     seed="farmcore.core.seed:seed",
+    # Marks open drafts past their wall-clock expiry; confirming one is refused either way.
+    jobs=(JobSpec("drafts.expire", "farmcore.core.drafts:expire_job", timedelta(minutes=15)),),
     nav=("Home", "/"),
     nav_group="farmer",
     nav_order=10,
