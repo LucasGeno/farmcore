@@ -8,6 +8,7 @@ from pathlib import Path
 import httpx
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 
 from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.core import tasks
@@ -44,5 +45,26 @@ def fetch_live_now(session_factory, settings):
     """A live forecast tick end to end, in this process: the job (as a handler or the worker's
     tick runs it) only enqueues; then every queued fetch runs as the worker would run it."""
     run = run_now(session_factory, [MANIFEST], "forecast.fetch_live", settings)
-    tasks.drain(session_factory, settings, [MANIFEST])
+    drain(session_factory, settings)
     return run
+
+
+def drain(session_factory, settings, manifests=(MANIFEST,)) -> int:
+    """Claim every task queued now and run it in this process, as a worker would; how many ran.
+    Test-only: claims carry no worker, so a running worker would treat them as stalled."""
+    specs = {spec.name: spec for spec in tasks.durable_specs(manifests)}
+    fetch = text("SELECT id, task_name, args FROM procrastinate_fetch_job_v2(:q, NULL)")
+    with session_factory() as session:
+        claimed = []
+        while (job := session.execute(fetch, {"q": [tasks.QUEUE]}).first()).id is not None:
+            claimed.append(job)
+        session.commit()
+    for job in claimed:
+        tasks.run_task(session_factory, settings, specs[job.task_name], job.args["farm_id"])
+    with session_factory() as session:
+        for job in claimed:
+            session.execute(
+                text("SELECT procrastinate_finish_job_v1(:id, 'succeeded', false)"), {"id": job.id}
+            )
+        session.commit()
+    return len(claimed)

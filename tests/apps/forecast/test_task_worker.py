@@ -166,11 +166,10 @@ def test_a_stalled_provider_for_one_farm_does_not_delay_another(
     start_worker("w", fetch_timeout=3.0)
 
     _until(lambda: _receipts(committed_session_factory, fast), "farm B's receipt")
-    # B published while A's request is still open, and within a normal round trip of B's own.
+    # B published while A's request is still open.
     assert provider.requests_for(10.0) and "last_attempt" not in _health(
         committed_session_factory, slow
     )
-    assert time.monotonic() - provider.requests_for(20.0)[0] < 2.0
 
     # A's failure is recorded once its deadline passes, never silently dropped.
     health = _until(

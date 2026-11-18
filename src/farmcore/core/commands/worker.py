@@ -17,9 +17,6 @@ def register(cli: typer.Typer) -> None:
         concurrency: int = typer.Option(
             4, "--concurrency", min=1, help="Tasks run at once (more than the farms slow at once)."
         ),
-        once: bool = typer.Option(
-            False, "--once", help="Plan due work, run every queued task in this process, exit."
-        ),
         tick: float = typer.Option(tasks.TICK_SECONDS, "--tick", hidden=True, min=0.05),
         stalled: float = typer.Option(tasks.STALLED_SECONDS, "--stalled", hidden=True, min=0.1),
         heartbeat: float = typer.Option(
@@ -40,11 +37,6 @@ def register(cli: typer.Typer) -> None:
             with factory() as session:
                 states = registry.read_states(session, ordered)
             manifests = registry.active_manifests(ordered, states)
-            if once:
-                tasks.plan(factory, settings, manifests)
-                ran = tasks.drain(factory, settings, manifests)
-                typer.echo(f"{ran} task(s) ran")
-                return
             tasks.run_worker(
                 settings,
                 factory,

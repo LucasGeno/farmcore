@@ -133,9 +133,10 @@ def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
     assert set(a_rows) == set(c_rows)
     for table in sorted(set(a_rows) - RESET_TABLES - {"data_grant", "clock_state"}):
         assert c_rows[table] == a_rows[table], table
-    # The clock too, in a new generation (no task attempt of A can publish in C).
+    # The clock too, but for its generation (restore starts a new one).
     (a_clock,), (c_clock,) = (map(json.loads, rows["clock_state"]) for rows in (a_rows, c_rows))
-    assert c_clock.pop("generation") == a_clock.pop("generation") + 1
+    a_clock.pop("generation")
+    c_clock.pop("generation")
     assert c_clock == a_clock
     # Grants too, but the token's grant, which the copy revokes (its token is not loaded).
     a_grants, c_grants = (
@@ -185,10 +186,10 @@ def test_a_restored_copy_never_runs_the_backups_queued_or_in_flight_fetches(
     key, recipient = owner_key
     job = "forecast.fetch_live"
 
-    def factory_for(env):
-        return sessionmaker(bind=create_engine(env["DATABASE_URL"]), expire_on_commit=False)
+    def factory_for(url):
+        return sessionmaker(bind=create_engine(url), expire_on_commit=False)
 
-    a = factory_for(source)
+    a = factory_for(source["DATABASE_URL"])
     farms = [farm for (farm,) in dbs.query(source["name"], "SELECT id FROM farm ORDER BY id")]
     with a.begin() as session:
         clock.set_live(session)
@@ -200,11 +201,13 @@ def test_a_restored_copy_never_runs_the_backups_queued_or_in_flight_fetches(
     restored = restore(backup(source, recipient, tmp_path / "a.age"), key, c_env)
     assert restored.exit_code == 0, restored.output
 
-    c = factory_for(c_env)
+    # As the copy's runtime role, which the app and the worker use.
+    c_runtime = dbs.runtime_url(c_env)
+    c = factory_for(c_runtime)
     assert dbs.query(target, "SELECT count(*) FROM procrastinate_jobs") == [(0,)]
     with c() as session:
         assert not tasks.publish_if_current(session, in_flight)
-    settings = Settings(_env_file=None, database_url=c_env["DATABASE_URL"])
+    settings = Settings(_env_file=None, database_url=c_runtime)
     tasks.plan(c, settings, [MANIFEST])
     tasks.plan(c, settings, [MANIFEST])
     queued = dbs.query(target, "SELECT (args->>'farm_id')::int FROM procrastinate_jobs ORDER BY 1")

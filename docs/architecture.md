@@ -163,7 +163,7 @@ service keeps the full archive.
 A manifest job with a `task` (`JobSpec.task`) is durable live work; today only
 `forecast.fetch_live`. In live mode its job function only enqueues, in the caller's transaction
 (a rolled-back request queues nothing): request handlers and the worker's tick never fetch.
-`farmcore worker` (the Compose `worker` service) plans due work every 30 seconds, runs the
+`farmcore worker` (the Compose `worker` service) plans due work every 15 seconds, runs the
 queued tasks (four at once by default, so one farm's slow provider does not hold up another's)
 and retries the tasks of a worker whose heartbeat stopped, at most three runs in all. Replay
 never enqueues: `step_to` stays in-process and deterministic.

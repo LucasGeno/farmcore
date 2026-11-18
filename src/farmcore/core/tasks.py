@@ -50,10 +50,12 @@ QUEUE = "farmcore"
 # Runs of one task, the first included, before a crashed or stalled task is failed for good.
 MAX_ATTEMPTS = 3
 # Planning ticks and stalled-task checks, per worker.
-TICK_SECONDS = 30.0
-# A worker whose heartbeat is older than this is presumed dead and its tasks are retried.
-STALLED_SECONDS = 60.0
-HEARTBEAT_SECONDS = 10.0
+TICK_SECONDS = 15.0
+# A worker whose heartbeat is older than this is presumed dead and its tasks are retried. With
+# the tick, a dead worker's task is retried (20 + 15 s) before its attempt's deadline (one
+# minute by default) lets planning queue the farm again: one fetch per crash, not two.
+STALLED_SECONDS = 20.0
+HEARTBEAT_SECONDS = 5.0
 # Enqueue only: with `connection=` the manager never opens a pool of its own.
 _ENQUEUE = JobManager(procrastinate.SyncPsycopgConnector())
 
@@ -210,39 +212,6 @@ def plan(
                 import_string(spec.func)(JobContext(session, clock.now(), settings))
         except Exception as exc:  # one failing planner must not stop the others or the worker
             logger.error("planning %s failed (%s)", spec.name, type(exc).__name__)
-
-
-def drain(
-    session_factory: sessionmaker[Session], settings: Settings, manifests: Sequence[Manifest]
-) -> int:
-    """Claim every task queued now, run them in this process one after another, and record
-    their outcomes; how many ran. For a one-shot `farmcore worker --once` and for tests: the
-    worker is the normal way tasks run."""
-    specs = {spec.name: spec for spec in durable_specs(manifests)}
-    fetch = text("SELECT id, task_name, args FROM procrastinate_fetch_job_v2(:q, NULL)")
-    with session_scope(session_factory) as session:
-        claimed = []
-        while (job := session.execute(fetch, {"q": [QUEUE]}).first()).id is not None:
-            claimed.append(job)
-    outcomes = []
-    for job in claimed:
-        status = "succeeded"
-        try:
-            run_task(session_factory, settings, specs[job.task_name], job.args["farm_id"])
-        except Exception as exc:
-            logger.error("task %s failed (%s)", job.task_name, type(exc).__name__)
-            status = "failed"
-        outcomes.append({"id": job.id, "s": status})
-    if outcomes:
-        with session_scope(session_factory) as session:
-            session.execute(
-                text(
-                    "SELECT procrastinate_finish_job_v1("
-                    ":id, CAST(:s AS procrastinate_job_status), false)"
-                ),
-                outcomes,
-            )
-    return len(outcomes)
 
 
 async def retry_stalled(job_manager: JobManager, seconds_since_heartbeat: float) -> dict[int, str]:

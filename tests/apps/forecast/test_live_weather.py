@@ -7,10 +7,9 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.apps.forecast.models import ForecastRun
-from farmcore.core import clock, tasks
-from tests.apps.forecast.conftest import fetch_live_now, provider_client
+from farmcore.core import clock
+from tests.apps.forecast.conftest import drain, fetch_live_now, provider_client
 
 JOB = "forecast.fetch_live"
 
@@ -294,7 +293,8 @@ def test_identical_provider_retry_and_network_failure_preserve_receipt_and_repor
         if failure:
 
             def unavailable(*args, **kwargs):
-                raise httpx.ConnectError("provider offline")
+                # Not a provider error FarmCore anticipates: still recorded, never silent.
+                raise RuntimeError("provider client broke")
 
             monkeypatch.setattr(httpx, "AsyncClient", provider_client(unavailable))
         assert fetch_live_now(session_factory, settings).ok
@@ -302,6 +302,8 @@ def test_identical_provider_retry_and_network_failure_preserve_receipt_and_repor
         held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()
         assert [r.id for r in held] == [original_id]
         assert held[0].props == original_props
+    health = session.get(Farm, farm.id).props["forecast_health"]
+    assert health["error"] == "RuntimeError" and health["last_attempt"] > "2020"
     html = client.get("/forecast/home-weather", params={"farm": farm.id}).text
     assert "Live forecast refresh unavailable" in html
     assert "Last valid forecast retained" in html
@@ -697,7 +699,7 @@ def test_scoped_live_job_cannot_fetch_or_write_health_for_unselected_farm(
     targets = (farm.id,) if select_farm else ()
     fetch_live(JobContext(session, datetime.now(UTC), settings, farm_ids=targets))
     session.commit()
-    tasks.drain(session_factory, settings, [MANIFEST])
+    drain(session_factory, settings)
     session.expire_all()
     assert len(calls) == int(select_farm)
     if select_farm:

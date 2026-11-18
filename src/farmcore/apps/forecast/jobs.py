@@ -12,6 +12,7 @@ an inferred model issue time. Saved as-issued sources keep their existing semant
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from math import isfinite
@@ -37,6 +38,8 @@ from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Asset, Farm
 from farmcore.db import session_scope
+
+logger = logging.getLogger(__name__)
 
 JOB_NAME = "forecast.fetch_live"
 SOURCE = "open-meteo-live-receipt"
@@ -247,16 +250,21 @@ def fetch_farm(ctx: tasks.TaskContext) -> None:
                 "attribution": "Weather data by Open-Meteo.com (CC BY 4.0)",
             },
         )
-    except (
-        httpx.HTTPError,
-        httpx.InvalidURL,
-        ValueError,
-        KeyError,
-        TypeError,
-        OverflowError,
-        TimeoutError,
-    ) as exc:
+    except Exception as exc:  # any failure is recorded, never a silent re-plan every deadline
         error = type(exc).__name__
+    try:
+        _publish(ctx, attempted, receipt, error)
+    except Exception as exc:
+        # The receipt could not be written: record that instead, under the same fence, so the
+        # farm waits for the cache like any failed attempt.
+        logger.error(
+            "forecast receipt for farm %s not written (%s)", ctx.farm_id, type(exc).__name__
+        )
+        _publish(ctx, attempted, None, type(exc).__name__)
+
+
+def _publish(ctx: tasks.TaskContext, attempted: datetime, receipt: Run | None, error) -> None:
+    """Write the receipt and health, or the failure, only if the attempt is still current."""
     with session_scope(ctx.session_factory) as session:
         if not tasks.publish_if_current(session, ctx.attempt):
             return

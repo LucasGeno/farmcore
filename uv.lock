@@ -318,7 +318,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "jinja2" },
     { name = "pint", specifier = ">=0.26.2" },
-    { name = "procrastinate", specifier = "==3.10.*" },
+    { name = "procrastinate", specifier = "==3.10.0" },
     { name = "psycopg", extras = ["binary"] },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-settings" },
