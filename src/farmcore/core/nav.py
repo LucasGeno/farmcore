@@ -16,18 +16,24 @@ from __future__ import annotations
 from collections.abc import Iterable
 from urllib.parse import urlsplit
 
-from farmcore.core.manifest import NAV_GROUPS, Manifest, NavItem
+from farmcore.core.manifest import CORE_NAME, NAV_GROUPS, Manifest, NavItem
 
 APPS_ITEM = NavItem("All apps", "/apps", "apps", 99, "apps")
 
 
 def _items(manifests: Iterable[Manifest]) -> list[NavItem]:
     items: list[NavItem] = []
+    visible_paths = {m.nav[1] for m in manifests if m.name != CORE_NAME and m.nav is not None}
     for m in manifests:
         if m.nav is not None:
             label, path = m.nav
             items.append(NavItem(label, path, m.nav_group, m.nav_order, m.nav_icon))
-        items.extend(m.extra_nav)
+        for item in m.extra_nav:
+            # Core's phone bottom-nav shortcuts to an app's page only render while that app is
+            # visible (switching it off removes the shortcut, so no dead link).
+            if m.name == CORE_NAME and item.group == "farmer" and item.path not in visible_paths:
+                continue
+            items.append(item)
     return items
 
 

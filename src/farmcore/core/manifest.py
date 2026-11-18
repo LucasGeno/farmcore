@@ -222,6 +222,45 @@ def collect_record_types(manifests):
     return types
 
 
+class FrozenMapping(Mapping[str, tuple[str, ...]]):
+    """An immutable, hashable mapping, so the frozen `Manifest` stays hashable.
+
+    `MappingProxyType` stays unhashable (it delegates to its dict); this wraps the same data in a
+    tuple-of-pairs so both ``m.keywords[locale]`` and ``hash(m)`` work.
+    """
+
+    __slots__ = ("_items", "_hash")
+
+    def __init__(self, data: Mapping[str, tuple[str, ...]]):
+        self._items = tuple(sorted(data.items()))
+        self._hash = hash(self._items)
+
+    def __getitem__(self, key: str) -> tuple[str, ...]:
+        for k, v in self._items:
+            if k == key:
+                return v
+        raise KeyError(key)
+
+    def __iter__(self):
+        return (k for k, _ in self._items)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __hash__(self) -> int:
+        return self._hash
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FrozenMapping):
+            return self._items == other._items
+        if isinstance(other, Mapping):
+            return dict(self._items) == dict(other)
+        return NotImplemented
+
+    def __repr__(self) -> str:
+        return f"FrozenMapping({dict(self._items)!r})"
+
+
 _KEY = re.compile(r"[a-z][a-z0-9-]{0,31}")
 _DOTTED = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 _FRAGMENT = re.compile(r"[a-zA-Z][a-zA-Z0-9_-]{0,95}")
@@ -264,14 +303,33 @@ def _check_provider(value: str, field: str) -> None:
         raise ValueError(f"{field}: expected 'module:attr', got {value!r}")
 
 
-def _check_icon(value: str, field: str) -> None:
-    """An icon is a core icon name, an app-shipped SVG path, or empty."""
+def _check_app_prefix(value: str, app_name: str, field: str) -> None:
+    if not value.startswith(f"/{app_name}/"):
+        raise ValueError(f"{field}: path must be under '/{app_name}/'")
+
+
+def _check_icon(value: str, field: str, *, app_name: str | None = None) -> None:
+    """An icon is a core icon name, an app-shipped SVG path, or empty.
+
+    A path icon must be the app's own asset: ``/static/<app>/...svg`` with no query or fragment,
+    so one app cannot point a grid tile at another app's asset or an arbitrary GET route.
+    """
     if not value or value in ICON_NAMES:
         return
-    if value.startswith("/"):
-        _check_path(value, f"{field} icon", allow_fragment=False)
-        return
-    raise ValueError(f"{field}: unknown icon name or unsafe path {value!r}")
+    if not value.startswith("/"):
+        raise ValueError(f"{field}: unknown icon name or unsafe path {value!r}")
+    _check_path(value, f"{field} icon", allow_fragment=False)
+    if app_name is not None:
+        parts = urlsplit(value)
+        if (
+            not value.startswith(f"/static/{app_name}/")
+            or not value.endswith(".svg")
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError(
+                f"{field}: icon path must be '/static/{app_name}/...svg' with no query or fragment"
+            )
 
 
 @dataclass(frozen=True)
@@ -302,7 +360,6 @@ class RecordType:
         _check_key(self.key, "record type", reserved=RESERVED_RECORD_TYPE_KEYS)
         if not self.label.strip():
             raise ValueError("record type label must not be empty")
-        _check_icon(self.icon, "record type")
         if self.form:
             _check_path(self.form, "record type")
 
@@ -381,7 +438,7 @@ class Manifest:
                     f"app {self.name!r}: only core may add a phone bottom-nav slot"
                     " (extra_nav, group='farmer')"
                 )
-        _check_icon(self.icon, f"app {self.name!r}")
+        _check_icon(self.icon, f"app {self.name!r}", app_name=self.name)
         if self.color and self.color not in COLOR_TOKENS:
             raise ValueError(
                 f"app {self.name!r}: color {self.color!r} is not a palette token"
@@ -392,18 +449,31 @@ class Manifest:
         for locale, words in self.keywords.items():
             if not re.fullmatch(r"[a-z]{2}(-[A-Za-z]{2,4})?", locale):
                 raise ValueError(f"app {self.name!r}: invalid keyword locale {locale!r}")
+            if not isinstance(words, tuple) or any(not isinstance(w, str) for w in words):
+                raise ValueError(
+                    f"app {self.name!r}: keyword synonyms for {locale!r} must be a tuple of strings"
+                )
             if not words or any(not w.strip() or w != w.strip() for w in words):
                 raise ValueError(
                     f"app {self.name!r}: keyword synonyms for {locale!r} must be non-empty"
                 )
             if len(set(words)) != len(words):
                 raise ValueError(f"app {self.name!r}: duplicate keyword synonyms for {locale!r}")
+        object.__setattr__(self, "keywords", FrozenMapping(self.keywords))
         if len({tab.path for tab in self.tabs}) != len(self.tabs):
             raise ValueError(f"app {self.name!r}: duplicate tab path")
+        for tab in self.tabs:
+            _check_app_prefix(tab.path, self.name, f"app {self.name!r} tab")
         record_keys = [rt.key for rt in self.record_types]
         if len(record_keys) != len(set(record_keys)):
             raise ValueError(f"app {self.name!r}: duplicate record type key")
+        for rt in self.record_types:
+            _check_icon(rt.icon, f"app {self.name!r} record type", app_name=self.name)
+            if rt.form:
+                _check_app_prefix(rt.form, self.name, f"app {self.name!r} record type")
         draft_kind_keys = {dk.key for dk in self.draft_kinds}
+        for dk in self.draft_kinds:
+            _check_app_prefix(dk.review, self.name, f"app {self.name!r} draft kind")
         for rt in self.record_types:
             if rt.draft_kind and rt.draft_kind not in draft_kind_keys:
                 raise ValueError(

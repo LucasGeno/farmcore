@@ -102,6 +102,9 @@ def test_daily_navigation_keeps_records_in_collapsed_groups(settings, session_fa
     bottom = page.split('id="bottom-nav"', 1)[1].split("</nav>", 1)[0]
     assert re.findall(r"<span>([^<]+)</span>", bottom) == [
         "Home",
+        "Map",
+        "Plan",
+        "Activity",
         "More",
     ]
     assert 'href="/" aria-current="page"' in bottom

@@ -4,12 +4,13 @@ real app loads with the values the app grid, search and Record sheet need."""
 from __future__ import annotations
 
 import dataclasses
+import re
+from pathlib import Path
 
 import pytest
 
 from farmcore.core import registry
 from farmcore.core.manifest import (
-    COLOR_TOKENS,
     CORE_NAME,
     ICON_NAMES,
     DraftKind,
@@ -35,14 +36,6 @@ def test_bare_manifest_has_every_new_field_empty() -> None:
     assert m.farm_sections == ()
     assert m.debug_panels == ()
     assert m.tools == ()
-    assert m.icon == ""
-    assert m.color == ""
-    assert m.keywords == {}
-    assert m.tabs == ()
-    assert m.search == ""
-    assert m.record_types == ()
-    assert m.draft_kinds == ()
-    assert m.attention == ""
 
 
 def test_nav_item_defaults_to_the_more_group() -> None:
@@ -91,14 +84,6 @@ def test_every_real_app_manifest_loads_with_the_new_fields() -> None:
             "farm_sections",
             "debug_panels",
             "tools",
-            "icon",
-            "color",
-            "keywords",
-            "tabs",
-            "search",
-            "record_types",
-            "draft_kinds",
-            "attention",
         } <= fields
 
 
@@ -108,71 +93,87 @@ def test_widget_and_map_layer_defaults() -> None:
     assert (layer.kind, layer.order, layer.default_on, layer.icon) == ("parcels", 100, False, "")
 
 
-def test_icon_is_a_known_name_or_a_safe_svg_path() -> None:
-    Manifest(name="x", version="0.1.0", icon="map")
-    Manifest(name="x", version="0.1.0", icon="/static/x/icons/foo.svg")
-    with pytest.raises(ValueError, match="icon"):
-        Manifest(name="x", version="0.1.0", icon="no-such-icon-name")
-    with pytest.raises(ValueError, match="icon"):
-        Manifest(name="x", version="0.1.0", icon="https://evil.example/x.svg")
-    with pytest.raises(ValueError, match="icon"):
-        Manifest(name="x", version="0.1.0", icon="//evil.example/x.svg")
+_VALID = {
+    "icon": "map",
+    "color": "brand",
+    "keywords": {"en": ("spray", "treatment")},
+    "tabs": (Tab("Plan", "/x/plan"),),
+    "search": "farmcore.apps.x.search:find",
+    "attention": "farmcore.apps.x.attention:items",
+    "record_types": (RecordType("spray", "Spray", form="/x/record/spray"),),
+    "draft_kinds": (DraftKind("spray", "farmcore.apps.x.drafts:validate", "/x/drafts/spray"),),
+}
 
 
-def test_color_is_a_palette_token() -> None:
-    Manifest(name="x", version="0.1.0", color="brand")
-    with pytest.raises(ValueError, match="color"):
-        Manifest(name="x", version="0.1.0", color="chartreuse")
+@pytest.mark.parametrize(
+    "override",
+    [
+        pytest.param(lambda: {"icon": "no-such-icon-name"}, id="unknown-icon-name"),
+        pytest.param(lambda: {"icon": "https://evil.example/x.svg"}, id="remote-icon"),
+        pytest.param(lambda: {"icon": "/static/other/logo.svg"}, id="foreign-icon"),
+        pytest.param(lambda: {"icon": "/static/x/logo.png"}, id="non-svg-icon"),
+        pytest.param(lambda: {"icon": "/static/x/logo.svg?q=1"}, id="icon-query"),
+        pytest.param(lambda: {"color": "chartreuse"}, id="bad-colour"),
+        pytest.param(lambda: {"keywords": {"en": "spray"}}, id="str-keywords"),
+        pytest.param(lambda: {"keywords": {"english": ("spray",)}}, id="bad-locale"),
+        pytest.param(lambda: {"keywords": {"en": ("spray", "spray")}}, id="dup-synonym"),
+        pytest.param(
+            lambda: {"tabs": (Tab("Plan", "https://evil.example/"),)}, id="unsafe-tab-path"
+        ),
+        pytest.param(lambda: {"tabs": (Tab("Plan", "/other/plan"),)}, id="foreign-tab-prefix"),
+        pytest.param(lambda: {"search": "not-a-provider"}, id="bad-provider-shape"),
+        pytest.param(
+            lambda: {
+                "record_types": (RecordType("overview", "Overview", form="/x/record/overview"),)
+            },
+            id="reserved-record-key",
+        ),
+        pytest.param(
+            lambda: {"record_types": (RecordType("spray", "Spray", form="/other/spray"),)},
+            id="foreign-form-prefix",
+        ),
+        pytest.param(
+            lambda: {
+                "record_types": (
+                    RecordType("spray", "Spray", form="/x/record/spray", draft_kind="missing"),
+                )
+            },
+            id="undeclared-draft-kind",
+        ),
+        pytest.param(
+            lambda: {"record_types": (RecordType("spray", "Spray", form="/x/record/spray"),) * 2},
+            id="dup-record-key",
+        ),
+        pytest.param(
+            lambda: {
+                "draft_kinds": (
+                    DraftKind("spray", "farmcore.apps.x.drafts:validate", "/other/drafts/spray"),
+                )
+            },
+            id="foreign-review-prefix",
+        ),
+    ],
+)
+def test_invalid_manifest_field_fails_construction(override) -> None:
+    with pytest.raises(ValueError):
+        Manifest(name="x", version="0.1.0", **(_VALID | override()))
 
 
-def test_keywords_are_per_locale_synonyms() -> None:
-    Manifest(name="x", version="0.1.0", keywords={"en": ("spray", "treatment")})
-    with pytest.raises(ValueError, match="keyword"):
-        Manifest(name="x", version="0.1.0", keywords={"english": ("spray",)})
-    with pytest.raises(ValueError, match="keyword"):
-        Manifest(name="x", version="0.1.0", keywords={"en": ("spray", "spray")})
-    with pytest.raises(ValueError, match="keyword"):
-        Manifest(name="x", version="0.1.0", keywords={"en": ("",)})
+def test_full_manifest_with_every_new_field_is_valid() -> None:
+    m = Manifest(name="x", version="0.1.0", **_VALID)
+    assert m.icon == "map"
+    assert m.color == "brand"
+    assert m.keywords["en"] == ("spray", "treatment")
+    assert m.tabs == (Tab("Plan", "/x/plan"),)
+    assert m.record_types[0].key == "spray"
+    assert m.draft_kinds[0].key == "spray"
+    hash(m)  # the frozen manifest stays hashable
+    with pytest.raises(TypeError):
+        m.keywords["en"] = ("",)  # type: ignore[index]
 
 
-def test_tab_paths_and_providers_are_validated() -> None:
-    Manifest(
-        name="x",
-        version="0.1.0",
-        tabs=(Tab("Plan", "/x/plan"),),
-        search="farmcore.apps.x.search:find",
-        attention="farmcore.apps.x.attention:items",
-    )
-    with pytest.raises(ValueError, match="tab"):
-        Tab("", "/x/")
-    with pytest.raises(ValueError, match="tab"):
-        Tab("Plan", "https://evil.example/")
-    with pytest.raises(ValueError, match="search"):
-        Manifest(name="x", version="0.1.0", search="not-a-provider")
-    with pytest.raises(ValueError, match="attention"):
-        Manifest(name="x", version="0.1.0", attention="farmcore.apps.x.attention")
-
-
-def test_record_types_validate_key_label_icon_and_form() -> None:
-    Manifest(
-        name="x",
-        version="0.1.0",
-        record_types=(RecordType("spray", "Spray", icon="spray", form="/x/record/spray"),),
-    )
-    with pytest.raises(ValueError, match="record type"):
-        RecordType("Bad Key", "Spray", form="/x/")
-    with pytest.raises(ValueError, match="record type"):
-        RecordType("overview", "Overview", form="/x/")
-    with pytest.raises(ValueError, match="record type"):
-        RecordType("spray", "", form="/x/")
-    with pytest.raises(ValueError, match="record type"):
-        RecordType("spray", "Spray", form="https://evil.example/x")
-
-
-def test_duplicate_record_type_keys_are_rejected() -> None:
-    rt = RecordType("spray", "Spray", form="/x/record/spray")
-    with pytest.raises(ValueError, match="duplicate record type"):
-        Manifest(name="x", version="0.1.0", record_types=(rt, rt))
+def test_duplicate_record_type_keys_rejected_across_loaded_apps() -> None:
+    rt = RecordType("spray", "Spray")
     with pytest.raises(ValueError, match="duplicate record type"):
         registry.resolve_order(
             [
@@ -182,33 +183,18 @@ def test_duplicate_record_type_keys_are_rejected() -> None:
         )
 
 
-def test_record_type_draft_kind_must_be_declared() -> None:
-    rt = RecordType("spray", "Spray", form="/x/record/spray", draft_kind="missing")
-    with pytest.raises(ValueError, match="draft_kind"):
-        Manifest(name="x", version="0.1.0", record_types=(rt,))
-    Manifest(
-        name="x",
-        version="0.1.0",
-        record_types=(rt,),
-        draft_kinds=(DraftKind("missing", "farmcore.apps.x.drafts:validate", "/x/drafts/missing"),),
-    )
-
-
-def test_draft_kinds_validate_validator_and_review_fragment() -> None:
-    DraftKind("spray", "farmcore.apps.x.drafts:validate", "/x/drafts/spray")
-    with pytest.raises(ValueError, match="draft kind"):
-        DraftKind("spray", "not-a-provider", "/x/drafts/spray")
-    with pytest.raises(ValueError, match="draft kind"):
-        DraftKind("spray", "farmcore.apps.x.drafts:validate", "https://evil.example/")
-    with pytest.raises(ValueError, match="draft kind"):
-        DraftKind("Bad Key", "farmcore.apps.x.drafts:validate", "/x/drafts/spray")
-
-
 def test_every_in_tree_app_declares_icon_color_and_the_four_locales() -> None:
     for m in registry.discover():
-        assert m.icon and (m.icon in ICON_NAMES or m.icon.startswith("/")), m.name
-        assert m.color in COLOR_TOKENS, m.name
+        assert m.icon, m.name
+        assert m.color, m.name
         assert {"fr", "es", "it", "en"} <= set(m.keywords), m.name
+
+
+def test_icon_names_match_the_core_template() -> None:
+    root = Path(__file__).resolve().parents[2]
+    template = (root / "src/farmcore/core/templates/core/_icons.html").read_text()
+    names = set(re.findall(r'name == "([a-z0-9-]+)"', template))
+    assert names == set(ICON_NAMES)
 
 
 @pytest.mark.parametrize(

@@ -101,10 +101,16 @@ def _groups(request: Request, listing: list[dict[str, Any]]) -> list[dict[str, A
         groups.setdefault(m.category or OTHER, []).append(
             {
                 **app,
-                "icon": m.nav_icon,
+                "icon": m.icon,
                 "needs": join_names(needs) if needs else "",
                 "status": status,
-                "href": m.nav[1] if m.nav and status in ("on", "always") else None,
+                "href": (
+                    m.nav[1]
+                    if m.nav and status in ("on", "always")
+                    else "/"
+                    if m.name == "today" and status in ("on", "always")
+                    else None
+                ),
                 "links": [item for item in m.extra_nav if item.group != "admin"]
                 if status in ("on", "always")
                 else [],

@@ -1,5 +1,6 @@
 """The shell's navigation comes from the loaded manifests, grouped Farmer / Apps / Records /
-Admin. The phone bottom-nav group (`farmer`) is core-only."""
+Admin. The phone bottom-nav group (`farmer`) is core-only: core declares its shortcuts, and a
+shortcut to a switched-off app is dropped."""
 
 from __future__ import annotations
 
@@ -14,8 +15,23 @@ from farmcore.main import create_app
 TOKEN = "nav-test-token"
 
 FAKES = [
-    Manifest(name="core", version="0.1.0", nav=("Home", "/"), nav_group="farmer", nav_order=10),
+    Manifest(
+        name="core",
+        version="0.1.0",
+        nav=("Home", "/"),
+        nav_group="farmer",
+        nav_order=10,
+        extra_nav=(
+            NavItem("Map", "/map/", "farmer", 20, "map"),
+            NavItem("Plan", "/plan/", "farmer", 30, "calendar"),
+            NavItem("Activity", "/activity/", "farmer", 40, "history"),
+        ),
+    ),
     Manifest(name="map", version="0.1.0", nav=("Map", "/map/"), nav_group="apps", nav_order=20),
+    Manifest(name="plan", version="0.1.0", nav=("Plan", "/plan/"), nav_group="apps", nav_order=30),
+    Manifest(
+        name="act", version="0.1.0", nav=("Activity", "/activity/"), nav_group="apps", nav_order=40
+    ),
     Manifest(
         name="ops",
         version="0.1.0",
@@ -36,9 +52,16 @@ def _labels(items: list[NavItem]) -> list[str]:
 
 def test_core_owns_the_farmer_group_and_extra_nav_keeps_its_group() -> None:
     nav = build_nav(FAKES, is_admin=False)
-    assert _labels(nav["farmer"]) == ["Home"]
-    assert _labels(nav["apps"]) == ["Map", "All apps"]
+    assert _labels(nav["farmer"]) == ["Home", "Map", "Plan", "Activity"]
+    assert _labels(nav["apps"]) == ["Map", "Plan", "Activity", "All apps"]
     assert _labels(nav["more"]) == ["Stations", "Diary", "KPIs", "Register"]
+
+
+def test_core_farmer_shortcut_to_a_switched_off_app_is_dropped() -> None:
+    visible = [m for m in FAKES if m.name != "plan"]
+    nav = build_nav(visible, is_admin=False)
+    assert _labels(nav["farmer"]) == ["Home", "Map", "Activity"]
+    assert _labels(nav["apps"]) == ["Map", "Activity", "All apps"]
 
 
 def test_all_apps_ends_the_apps_group_for_everyone() -> None:
@@ -48,6 +71,8 @@ def test_all_apps_ends_the_apps_group_for_everyone() -> None:
         nav = build_nav(fakes, is_admin=admin)
         assert [(i.label, i.path) for i in nav["apps"]] == [
             ("Map", "/map/"),
+            ("Plan", "/plan/"),
+            ("Activity", "/activity/"),
             ("W", "/w/"),
             ("All apps", "/apps"),
         ]
@@ -101,10 +126,9 @@ def test_shell_renders_bottom_nav_more_and_hides_admin(settings, session_factory
     html = _page(app, "/fields/")
     assert '<nav id="navbar"' in html
     bottom = html.split('id="bottom-nav"', 1)[1].split("</nav>", 1)[0]
-    for label in ("Home", "More"):
+    for label in ("Home", "Map", "Plan", "Activity"):
         assert label in bottom
-    for label in ("Map", "Plan", "Activity", "Weather"):
-        assert label not in bottom
+    assert "Weather" not in bottom
     more = html.split('id="more-menu"', 1)[1].split("</dialog>", 1)[0]
     apps, expert = more.split("Records", 1)
     for label in ("Crop protection", "Weather", "Season &amp; impact", "Sharing"):

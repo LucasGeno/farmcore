@@ -34,7 +34,12 @@ MANIFEST = Manifest(
         "es": ("aplicaciones", "ajustes", "fuentes de datos"),
         "it": ("applicazioni", "impostazioni", "fonti di dati"),
     },
+    # The phone bottom nav is core-only chrome: Home, Map, Plan, Activity (Search and Record
+    # arrive with 13/05). Apps cannot add slots; these point at the app pages they used to own.
     extra_nav=(
+        NavItem("Map", "/fields/", "farmer", 20, "map"),
+        NavItem("Plan", "/forecast/plan", "farmer", 30, "calendar"),
+        NavItem("Activity", "/activity/", "farmer", 40, "history"),
         NavItem("Demo", "/demo/", "admin", 10, "clock"),
         NavItem("Data sources", "/data-sources/", "more", 15, "database"),
     ),
