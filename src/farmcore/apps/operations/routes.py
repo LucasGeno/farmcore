@@ -228,7 +228,6 @@ def import_isoxml(
     """Import an uploaded TaskData file (`.xml` or `.zip`) at the clock's now. HTMX gets the
     result partial plus updated recent records out of band on success; a plain form post
     gets the full page; a bad file is a 400."""
-    settings = request.app.state.settings
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     error, view = None, None
     if len(data) > MAX_UPLOAD_BYTES:
@@ -240,7 +239,7 @@ def import_isoxml(
                 data,
                 now=_now(request, repo),
                 actor=repo.actor,
-                tz=settings.display_tz,
+                tz=_farm_tz(request, repo),
                 weather_reader=getattr(request.app.state, "spray_weather_reader", None),
             )
             view = _isoxml_view(result)
@@ -526,12 +525,12 @@ def _correction_context(request, repo, log_id):
     return {
         "log_id": log_id,
         "record": corrections.visible(corrections.snapshot(log)) if log is not None else None,
-        "local_start": log.ts_start.astimezone(ZoneInfo(request.app.state.settings.display_tz))
+        "local_start": log.ts_start.astimezone(ZoneInfo(_farm_tz(request, repo)))
         .replace(tzinfo=None)
         .isoformat()
         if log
         else None,
-        "timezone": request.app.state.settings.display_tz,
+        "timezone": _farm_tz(request, repo),
         "history": [corrections.view(item) for item in history],
         "parcels": repo.list(Parcel, scope="fields:read", order_by=Parcel.id),
         "products": products,
@@ -597,10 +596,11 @@ def correction_form_preview(
             if product
         ]
         entered = datetime.fromisoformat(ts_start.strip())
-        start = parse_local(entered.isoformat(), request.app.state.settings.display_tz)
+        tz = _farm_tz(request, repo)
+        start = parse_local(entered.isoformat(), tz)
         current = repo.get(Log, log_id, scope="logs:write")
         if current is not None and entered.tzinfo is None:
-            shown = current.ts_start.astimezone(ZoneInfo(request.app.state.settings.display_tz))
+            shown = current.ts_start.astimezone(ZoneInfo(tz))
             if entered == shown.replace(tzinfo=None):
                 start = current.ts_start  # unchanged local input retains the original DST fold
         changes = {

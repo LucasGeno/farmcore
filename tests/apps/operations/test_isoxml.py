@@ -316,7 +316,7 @@ def test_unknown_imported_product_survives_register_and_http_exports(
             zone.remove(zone.findall("PDV")[0])
         data = ET.tostring(root)
     run_import(farm, data)
-    rows = register.register_rows(farm.repo, local(CLOCK), checks=True)
+    rows = register.register_rows(farm.repo, local(CLOCK), checks=True, tz="Europe/Paris")
     mystery = [r for r in rows if r["product_name"] == "Mystery tank mix"]
     assert [(r["parcel_alias"], Decimal(r["dose"]), r["dose_unit"]) for r in mystery] == [
         ("P5", Decimal("2.06"), "kg/ha"),

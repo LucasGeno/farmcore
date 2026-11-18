@@ -173,6 +173,7 @@ def test_grantee_export_reads_under_the_grant(
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
     last = session.scalar(select(AccessLog.id).order_by(AccessLog.id.desc()).limit(1)) or 0
@@ -221,7 +222,7 @@ def test_products_entries_follow_the_register_rule(session, owner_repo, demo) ->
 
     entities = ngsi.operations(owner_repo, NOW)
 
-    assert len(entities) == len(register.register_rows(owner_repo, NOW)) == 4
+    assert len(entities) == len(register.register_rows(owner_repo, NOW, tz="Europe/Paris")) == 4
     assert len({e["id"] for e in entities}) == 4
     for e in entities:
         check_entity(e)

@@ -27,13 +27,14 @@
 {% block content %}
 <div id="location-map" class="fc-location-map"
      data-latitude="{{ form.latitude }}" data-longitude="{{ form.longitude }}"
+     data-tile-url="{{ tile_url }}" data-tile-attribution="{{ tile_attribution }}"
      aria-label="Map: tap to place the farm's location"></div>
 
 <section class="fc-location-panel" aria-labelledby="location-heading">
   <div class="fc-location-body">
     <p class="text-xs font-semibold uppercase tracking-widest text-muted">First run</p>
     <h1 id="location-heading" class="mt-1 text-2xl font-semibold">Where is your farm?</h1>
-    <p class="mt-1 text-sm text-muted">Tap the map, use this device's location, or type coordinates. The time zone and country are worked out on this server, without sending the point anywhere.</p>
+    <p class="mt-1 text-sm text-muted">Tap the map, use this device's location, or type coordinates. The time zone and country are worked out on this server; only the map tiles leave your browser.</p>
 
     {% if error %}<p role="alert" class="mt-3 rounded-lg border border-spray/40 bg-surface px-3 py-2 text-sm font-semibold text-spray">{{ error }}</p>{% endif %}
     {% if search_error %}<p role="alert" class="mt-3 rounded-lg border border-wait/40 bg-wait-soft px-3 py-2 text-sm font-semibold text-wait">{{ search_error }}</p>{% endif %}
@@ -61,7 +62,7 @@
         <button type="submit" name="mode" value="derive" class="inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 font-semibold text-white">Save location</button>
       </div>
 
-      <details class="mt-3 rounded-lg border border-line px-3 py-2" {% if question %}open{% endif %}>
+      <details class="mt-4 border-t border-line pt-2" {% if question %}open{% endif %}>
         <summary class="min-h-[44px] cursor-pointer font-semibold">Time zone and country</summary>
         {% if question == "sea" %}
         <p class="mt-2 text-sm text-wait">This point is at sea. Confirm the time zone and country the farm uses.</p>
@@ -86,7 +87,7 @@
       </details>
     </form>
     {% else %}
-    <p class="mt-4 rounded-lg border border-line bg-ground px-3 py-2 text-sm">Only the farm owner can set the location.</p>
+    <p class="mt-4 text-sm text-muted">Only the farm owner can set the location.</p>
     {% endif %}
 
     {% if geocoder_on and is_farm_owner %}

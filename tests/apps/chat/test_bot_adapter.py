@@ -622,7 +622,7 @@ def test_voice_confirm_merge_keeps_second_product_in_reply_register_and_checks(
         ]
     farm = session.get(Farm, ids["farm"])
     repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "owner", "test")
-    rows = register.register_rows(repo, NOW_LOCAL, checks=True)
+    rows = register.register_rows(repo, NOW_LOCAL, checks=True, tz="Europe/Paris")
     assert {row["product_name"] for row in rows} == {COPPER, sulphur.name}
     if target_covers_p6:
         assert sorted((row["parcel_alias"], row["active_substance"]) for row in rows) == (

@@ -34,6 +34,7 @@ from farmcore.core.access import (
     ensure_owner_grant,
 )
 from farmcore.core.clock import Clock, get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.core.logs import EnteredQuantity, QuantityInput, SourceInput
 from farmcore.core.manifest import Manifest
 from farmcore.core.models.canonical import DataGrant, Event, Farm, Log, LogSource
@@ -342,7 +343,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
                         REPLY_ALREADY_LOGGED if seen.log.type == "spray" else REPLY_ALREADY_RECORDED
                     )
                 )
-            tz = ZoneInfo(deps.settings.display_tz)
+            tz = ZoneInfo(time_zone_of(repo.session, repo.farm_id, deps.settings))
             return _echo(
                 service.log_summary(seen.log, tz),
                 seen.log_id,
@@ -350,7 +351,9 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
                 details=_preview(repo, seen.log, deps.clock(session, deps.settings).now(), str(tz)),
             )
         now = deps.clock(session, deps.settings).now()
-        ctx = service.load_context(repo, now, deps.settings.display_tz)
+        ctx = service.load_context(
+            repo, now, time_zone_of(repo.session, repo.farm_id, deps.settings)
+        )
         state = conversation.load(session, repo.farm_id, _state_key(deps, incoming.chat_id), now)
         epoch = conversation.epoch(session)
         farm_id = repo.farm_id
@@ -434,7 +437,7 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
             log_id = log.id
             stored_notes = checked.notes
             summary = service.checked_summary(checked, ctx.tz)
-        details = _preview(repo, log, now, deps.settings.display_tz)
+        details = _preview(repo, log, now, time_zone_of(repo.session, repo.farm_id, deps.settings))
         conversation.clear(session, repo.farm_id, _state_key(deps, incoming.chat_id))
 
     return _echo(summary, log_id, stored_notes, details=details)
@@ -508,10 +511,10 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
     log_id = int(raw_id)
     if not 1 <= log_id < 2**63:
         return Outgoing(text=REPLY_GONE)
-    tz = ZoneInfo(deps.settings.display_tz)
     actor = _actor(callback.chat_id, deps)
     with session_scope(deps.session_factory) as session:
         repo = _repo(session, deps, callback.chat_id)
+        tz = ZoneInfo(time_zone_of(repo.session, repo.farm_id, deps.settings))
         now = deps.clock(session, deps.settings).now()
         log = repo.get(Log, log_id, scope="logs:write")  # farm-scoped: another farm's is None
         # Log ids are sequential: only the chat that sent the message may act on its draft.
@@ -593,7 +596,12 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
             repo = ScopedRepository(
                 session, farm_id, session.get(DataGrant, grant_id), actor, PURPOSE
             )
-            rows = register_rows(repo, now, tz=deps.settings.display_tz, checks=True)
+            rows = register_rows(
+                repo,
+                now,
+                tz=time_zone_of(repo.session, repo.farm_id, deps.settings),
+                checks=True,
+            )
             saved_row = next((row for row in rows if row["log_id"] == saved_id), None)
             check_line = checks_summary(saved_row["checks"]) if saved_row else ""
     except Exception as exc:

@@ -78,13 +78,14 @@ GRANTEE_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _tz(request: Request, repo: ScopedRepository | None = None) -> str:
-    """The farm's own time zone; the installation `display_tz` where there is no farm (the
-    grantee's cross-farm `/received` list)."""
-    settings = request.app.state.settings
-    if repo is None:
-        return settings.display_tz
-    return farm_time_zone(repo.session.get(Farm, repo.farm_id), settings)
+def _tz(request: Request, repo: ScopedRepository) -> str:
+    """The selected farm's own time zone, else the installation `display_tz`."""
+    return farm_time_zone(repo.session.get(Farm, repo.farm_id), request.app.state.settings)
+
+
+def _installation_tz(request: Request) -> str:
+    """The installation zone for `/received`, whose grants span farms."""
+    return request.app.state.settings.display_tz
 
 
 Season = Annotated[int | None, Query(ge=register.SEASON_MIN, le=register.SEASON_MAX)]
@@ -177,7 +178,7 @@ def received(request: Request, session: Session = Depends(get_session)):
         request,
         "share/received.html",
         grants=[
-            _grant_view(g, datetime.now(UTC), _tz(request))
+            _grant_view(g, datetime.now(UTC), _installation_tz(request))
             for g in grants
             if service.is_shareable_grant(g)
             and service.grant_status(g, datetime.now(UTC)) == "active"
@@ -348,7 +349,7 @@ def create_token(
     principal = principal_for(request)
     if principal is None:
         raise HTTPException(403, "Sign in as a farm owner to issue an agent token.")
-    tz = _tz(request)
+    tz = _tz(request, repo)
     try:
         grant, raw = service.create_token(
             repo,

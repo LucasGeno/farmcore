@@ -17,8 +17,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import TZPATH, ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.orm import Session
 
@@ -29,8 +30,9 @@ LOCATION_KEY = "forecast_location"
 TIME_ZONE_KEY = "time_zone"
 COUNTRY_KEY = "country"
 COUNTRY_NAME_KEY = "country_name"
-# A point this close to a country border is ambiguous at the 1:110m coastline resolution.
-BORDER_TOLERANCE_DEGREES = 0.002
+# A point this close to a country border is ambiguous at the 1:110m resolution: the
+# simplified polygons drift by kilometres near a real border.
+BORDER_TOLERANCE_DEGREES = 0.02
 
 GeoPoint = tuple[float, float]
 BBox = tuple[float, float, float, float]
@@ -126,6 +128,30 @@ def _by_iso() -> dict[str, _Country]:
     return {country.iso: country for country in _countries()}
 
 
+@lru_cache(maxsize=1)
+def _zone_countries() -> dict[str, frozenset[str]]:
+    """IANA zone key -> the countries tzdata names for it (`zone1970.tab`, then `zone.tab`).
+
+    The bundled vector polygons are simplified to about 110 m; near a border they can name
+    the neighbour. tzdata's own country list is the independent check, so a disagreement asks
+    the owner instead of silently storing the wrong country."""
+    found: dict[str, set[str]] = {}
+    for directory in TZPATH:
+        for filename in ("zone1970.tab", "zone.tab"):
+            path = Path(directory) / filename
+            if not path.is_file():
+                continue
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if not line or line.startswith("#"):
+                    continue
+                fields = line.split("\t")
+                if len(fields) < 3:
+                    continue
+                codes = {code for code in fields[0].split(",") if code}
+                found.setdefault(fields[2], set()).update(codes)
+    return {zone: frozenset(codes) for zone, codes in found.items()}
+
+
 def country_options() -> list[tuple[str, str]]:
     """`(ISO alpha-2, English name)` for every bundled country, sorted by name."""
     return sorted(((c.iso, c.name) for c in _countries()), key=lambda item: item[1])
@@ -202,15 +228,23 @@ def locate(latitude: Any, longitude: Any) -> Located:
                 hits[country.iso] = country
     time_zone = _finder().timezone_at(lat=lat, lng=lon)
     if not hits:
-        return Located(lat, lon, question="sea")
+        # Keep the zone: an island missing from the 1:110m polygons still has one (Malta).
+        return Located(lat, lon, time_zone=time_zone, question="sea")
     only = next(iter(hits.values())) if len(hits) == 1 else None
-    if len(hits) > 1 or border:
+    zone_countries = _zone_countries().get(time_zone, frozenset()) if time_zone else frozenset()
+    conflict = only is not None and bool(zone_countries) and only.iso not in zone_countries
+    if len(hits) > 1 or border or conflict:
+        proposed = None if conflict else only
+        if conflict and len(zone_countries) == 1:
+            code = next(iter(zone_countries))
+            if country_name(code):
+                proposed = _by_iso()[code]
         return Located(
             lat,
             lon,
             time_zone=time_zone,
-            country=only.iso if only else None,
-            country_name=only.name if only else None,
+            country=proposed.iso if proposed else None,
+            country_name=proposed.name if proposed else None,
             question="border",
         )
     if time_zone is None:

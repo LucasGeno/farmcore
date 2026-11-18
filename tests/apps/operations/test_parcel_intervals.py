@@ -40,6 +40,7 @@ def export_urls(session, farm, merged, request):
         preset="adviser_logs",
         purpose="parcel interval test",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
     return f"/share/as/{grant.id}/register.json", f"/share/as/{grant.id}/ngsi-ld.json"

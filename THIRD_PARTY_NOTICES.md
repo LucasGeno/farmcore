@@ -23,6 +23,8 @@ Exact versions are pinned in `uv.lock`; each package keeps its own licence.
 | faster-whisper (ctranslate2, onnxruntime, av) | MIT; av BSD-3-Clause, its wheels bundle FFmpeg libraries (LGPL) | Local speech-to-text |
 | timezonefinder | MIT | Offline coordinates → time-zone lookup (code) |
 | timezonefinder-data | **ODbL-1.0** | Boundary data that `timezonefinder` queries; installed unmodified, not copied into FarmCore |
+| cffi | MIT | timezonefinder's C bindings |
+| flatbuffers | Apache-2.0 | timezonefinder's binary data reader |
 | typer | MIT | Command line |
 | pint (flexcache, flexparser, platformdirs) | BSD-3-Clause; platformdirs MIT | Unit registry with Decimal arithmetic |
 

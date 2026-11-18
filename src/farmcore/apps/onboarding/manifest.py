@@ -8,6 +8,7 @@ MANIFEST = Manifest(
     summary="Set your farm's location so times and weather are right.",
     depends=("core",),
     routes=("farmcore.apps.onboarding.routes:router",),
+    seed="farmcore.apps.onboarding.seed:seed",
     title="Set up your farm",
     category="Getting started",
     nav=("Set up", "/onboarding/"),

@@ -7,7 +7,7 @@ boundary vertex), never from the implementation.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import httpx
@@ -17,14 +17,17 @@ from sqlalchemy import select
 
 from farmcore.apps.chat.assistant.context import tool_context
 from farmcore.apps.onboarding import geocode
+from farmcore.apps.operations import isoxml_demo
 from farmcore.core import clock, logs
 from farmcore.core.access import ensure_owner_grant
 from farmcore.core.farm_location import locate
-from farmcore.core.models.canonical import Advice, Asset, DataGrant, Farm, Parcel
+from farmcore.core.identity import DUMMY_HASH, token_hash
+from farmcore.core.models.canonical import Advice, Asset, DataGrant, Farm, Log, Parcel
+from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
+from tests.apps.operations.isoxml_farm import make_farm
 from tests.apps.share.conftest import make_parcel
-from tests.core.test_member_sessions import _account, _login
 
 T_SPRAY = datetime(2024, 4, 10, 23, 30, tzinfo=UTC)
 CLOCK = datetime(2024, 4, 12, 6, 0, tzinfo=UTC)
@@ -36,6 +39,8 @@ CLOCK = datetime(2024, 4, 12, 6, 0, tzinfo=UTC)
         (44.9, -0.2, "Europe/Paris", "FR", None),  # Saint-Émilion
         (48.8566, 2.3522, "Europe/Paris", "FR", None),  # Paris
         (46.43, 6.5, None, None, "border"),  # a Natural Earth FR/CH boundary vertex
+        (46.214, 6.035, None, None, "border"),  # Satigny, Geneva: polygons say FR, tz says CH
+        (35.9, 14.4, "Europe/Malta", None, "sea"),  # Malta is absent from 1:110m
         (0.0, -30.0, None, None, "sea"),  # Atlantic
     ],
 )
@@ -52,9 +57,11 @@ def test_locate_derives_facts_offline_and_asks_on_sea_or_border(
     if question is None:
         assert (found.time_zone, found.country) == (time_zone, country)
     elif question == "border":
-        assert found.country in {"FR", "CH"}  # the lookup proposes one side, never saves it
+        assert found.country in {None, "FR", "CH"}  # never saved without the owner
     else:
         assert found.country is None
+        if time_zone is not None:
+            assert found.time_zone == time_zone
 
 
 def test_first_run_saves_the_owner_point_as_the_forecast_input(client, session, settings) -> None:
@@ -132,37 +139,45 @@ def test_a_sea_point_asks_the_owner_and_their_choice_is_stored(client, session, 
     assert (props["time_zone"], props["country"]) == ("UTC", "PT")
 
 
-def test_only_an_owner_can_save_the_location(settings, committed_session_factory) -> None:
-    with committed_session_factory.begin() as session:
-        farm = Farm(name="Owner-only location farm")
-        session.add(farm)
-        session.flush()
-        ensure_owner_grant(session, farm)
-        farm_id = farm.id
-    _account(committed_session_factory, login="location-owner", farm_id=farm_id, role="owner")
-    _account(committed_session_factory, login="location-advisor", farm_id=farm_id, role="advisor")
+def test_only_an_owner_can_save_the_location(session, session_factory, settings) -> None:
+    farm = Farm(name="Owner-only location farm")
+    session.add(farm)
+    session.flush()
+    ensure_owner_grant(session, farm)
+    advisor = LocalIdentity(login="location-advisor", password_hash=DUMMY_HASH)
+    session.add(advisor)
+    session.flush()
+    session.add(FarmMembership(identity_id=advisor.id, farm_id=farm.id, role="advisor"))
+    token, nonce = "synthetic-advisor-session-token", "synthetic-advisor-csrf-nonce"
+    session.add(
+        LocalSession(
+            token_hash=token_hash(token),
+            identity_id=advisor.id,
+            csrf_hash=token_hash(nonce),
+            expires_at=datetime.now(UTC) + timedelta(hours=12),
+        )
+    )
+    session.flush()
 
-    app = create_app(settings, session_factory=committed_session_factory)
-    with TestClient(app, base_url="https://testserver") as advisor:
-        assert _login(advisor, login="location-advisor").status_code == 303
-        headers = {
-            "Origin": "https://testserver",
-            "X-CSRF-Token": advisor.cookies.get("farmcore_csrf"),
-        }
-        assert advisor.get(f"/onboarding/location?farm={farm_id}").status_code == 200
-        refused = advisor.post(
+    app = create_app(settings, session_factory=session_factory)
+    with TestClient(app, base_url="https://testserver") as advisor_client:
+        advisor_client.cookies.set("farmcore_session", token)
+        advisor_client.cookies.set("farmcore_csrf", nonce)
+        headers = {"Origin": "https://testserver", "X-CSRF-Token": nonce}
+        assert advisor_client.get(f"/onboarding/location?farm={farm.id}").status_code == 200
+        refused = advisor_client.post(
             "/onboarding/location",
-            params={"farm": farm_id},
+            params={"farm": farm.id},
             data={"latitude": "44.9", "longitude": "-0.2"},
             headers=headers,
         )
         assert refused.status_code == 403
 
-    with committed_session_factory() as session:
-        assert "forecast_location" not in (session.get(Farm, farm_id).props or {})
+    session.expire_all()
+    assert "forecast_location" not in (session.get(Farm, farm.id).props or {})
 
 
-def test_geocoder_is_off_by_default_and_sends_a_user_agent_when_configured(
+def test_geocoder_is_off_by_default_and_the_page_renders_results(
     client, settings, session, session_factory, monkeypatch
 ) -> None:
     farm = ensure_default_farm(session, settings)
@@ -171,6 +186,26 @@ def test_geocoder_is_off_by_default_and_sends_a_user_agent_when_configured(
     assert client.post("/onboarding/location/search", data={"q": "Paris"}).status_code == 404
 
     configured = settings.model_copy(update={"geocoder_base_url": "https://nominatim.example"})
+    monkeypatch.setattr(
+        geocode,
+        "search",
+        lambda *args, **kwargs: [geocode.Place("Village Hall, France", 44.9, -0.2)],
+    )
+    app = create_app(configured, session_factory=session_factory)
+    with TestClient(
+        app,
+        headers={"X-Admin-Token": configured.admin_token.get_secret_value()},
+    ) as browser:
+        page = browser.post(
+            f"/onboarding/location/search?farm={farm.id}", data={"q": "Village Hall"}
+        )
+
+    assert page.status_code == 200
+    assert "Village Hall, France" in page.text
+    assert "Save location" in page.text
+
+
+def test_search_sends_a_user_agent_and_parses_both_providers(settings) -> None:
     requests: list[httpx.Request] = []
 
     def answer(request: httpx.Request) -> httpx.Response:
@@ -198,36 +233,102 @@ def test_geocoder_is_off_by_default_and_sends_a_user_agent_when_configured(
             json=[{"lat": "44.9", "lon": "-0.2", "display_name": "Village Hall, France"}],
         )
 
-    original = httpx.Client
     transport = httpx.MockTransport(answer)
-    monkeypatch.setattr(geocode.httpx, "Client", lambda **kw: original(transport=transport, **kw))
-    monkeypatch.setattr(geocode, "_last_request_at", 0.0)
-    app = create_app(configured, session_factory=session_factory)
-    with TestClient(
-        app,
-        headers={"X-Admin-Token": configured.admin_token.get_secret_value()},
-    ) as browser:
-        page = browser.post(
-            f"/onboarding/location/search?farm={farm.id}", data={"q": "Village Hall"}
-        )
+    now = [0.0]
 
-    assert page.status_code == 200
-    assert "Village Hall, France" in page.text
-    request = requests[0]
-    agent = request.headers["User-Agent"]
-    assert agent.startswith("farmcore/")
-    assert settings.public_base_url in agent
-    assert request.url.params["format"] == "jsonv2"
+    def clock() -> float:
+        now[0] += 2.0
+        return now[0]
 
-    monkeypatch.setattr(geocode, "_last_request_at", 0.0)
+    [nominatim] = geocode.search(
+        "https://nominatim.example",
+        "Village Hall",
+        public_base_url=settings.public_base_url,
+        transport=transport,
+        clock=clock,
+        sleep=lambda _seconds: None,
+    )
     [photon] = geocode.search(
-        "https://photon.example/api", "Village", public_base_url=settings.public_base_url
+        "https://photon.example/api",
+        "Village",
+        public_base_url=settings.public_base_url,
+        transport=transport,
+        clock=clock,
+        sleep=lambda _seconds: None,
+    )
+
+    assert (nominatim.label, nominatim.latitude, nominatim.longitude) == (
+        "Village Hall, France",
+        44.9,
+        -0.2,
     )
     assert (photon.label, photon.latitude, photon.longitude) == (
         "Village Hall, Saint-Émilion, France",
         44.9,
         -0.2,
     )
+    for request in requests:
+        agent = request.headers["User-Agent"]
+        assert agent.startswith("farmcore/")
+        assert settings.public_base_url in agent
+    assert requests[0].url.params["format"] == "jsonv2"
+    assert requests[1].url.params["q"] == "Village"
+
+
+def test_a_geocoder_failure_keeps_the_location_page_usable(
+    client, settings, session, session_factory, monkeypatch
+) -> None:
+    farm = ensure_default_farm(session, settings)
+    session.commit()
+    configured = settings.model_copy(update={"geocoder_base_url": "https://nominatim.example"})
+
+    def fail(*args, **kwargs):
+        raise geocode.GeocoderError("The address search is unavailable right now.")
+
+    monkeypatch.setattr(geocode, "search", fail)
+    app = create_app(configured, session_factory=session_factory)
+    with TestClient(
+        app,
+        headers={"X-Admin-Token": configured.admin_token.get_secret_value()},
+    ) as browser:
+        page = browser.post(f"/onboarding/location/search?farm={farm.id}", data={"q": "Paris"})
+
+    assert page.status_code == 502
+    assert "The address search is unavailable right now." in page.text
+    assert "Save location" in page.text
+
+
+def test_isoxml_naive_time_uses_the_new_york_farms_zone(client, session, settings) -> None:
+    farm = make_farm(session, settings)
+    stored = session.get(Farm, farm.repo.farm_id)
+    stored.props = {**(stored.props or {}), "time_zone": "America/New_York"}
+    session.flush()
+    clock.set_replay(session, datetime(2024, 4, 10, 18, 0, tzinfo=UTC), settings)
+
+    data = isoxml_demo.demo_taskdata()
+    for utc, naive in (
+        (b"2024-04-10T05:12:05Z", b"2024-04-10T08:00:00"),
+        (b"2024-04-10T05:58:40Z", b"2024-04-10T08:30:00"),
+        (b"2024-04-10T06:03:10Z", b"2024-04-10T09:00:00"),
+        (b"2024-04-10T06:31:55Z", b"2024-04-10T09:30:00"),
+    ):
+        data = data.replace(utc, naive)
+
+    response = client.post(
+        "/operations/isoxml", files={"file": ("TASKDATA.XML", data, "application/xml")}
+    )
+
+    assert response.status_code == 200, response.text
+    session.expire_all()
+    rows = session.scalars(
+        select(Log)
+        .where(Log.farm_id == farm.repo.farm_id, Log.type == "spray")
+        .order_by(Log.ts_start)
+    ).all()
+    assert [row.ts_start for row in rows] == [
+        datetime(2024, 4, 10, 12, 0, tzinfo=UTC),
+        datetime(2024, 4, 10, 13, 0, tzinfo=UTC),
+    ]
 
 
 def _two_zone_farms(session, settings) -> tuple[Farm, Farm]:

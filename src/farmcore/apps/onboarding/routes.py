@@ -25,8 +25,10 @@ from farmcore.core.farm_location import (
     farm_location,
     location_needed,
 )
+from farmcore.core.identity import principal_for
 from farmcore.core.models.canonical import Farm
-from farmcore.web import context_url, render
+from farmcore.core.tour import is_tour
+from farmcore.web import context_url, is_admin, render
 
 router = APIRouter()
 
@@ -69,6 +71,8 @@ def _page(
         error=error,
         search_error=search_error,
         geocoder_on=bool(settings.geocoder_base_url),
+        tile_url=settings.location_map_tiles_url,
+        tile_attribution=settings.location_map_attribution,
         time_zones=_time_zones(),
         countries=country_options(),
         location_needed=location_needed(farm),
@@ -95,10 +99,14 @@ def location(request: Request, repo: Repo) -> HTMLResponse:
 def today(request: Request, repo: Repo) -> HTMLResponse:
     """Home's first-run prompt; hidden (`data-home-empty`) once the farm has a location."""
     farm = _farm(repo)
+    principal = principal_for(request)
+    owner = is_admin(request) or bool(
+        principal and principal.memberships.get(repo.farm_id) == "owner"
+    )
     return render(
         request,
         "onboarding/_today.html",
-        needed=location_needed(farm),
+        needed=owner and not is_tour(request) and location_needed(farm),
         location_url=context_url(request, "/onboarding/location"),
     )
 

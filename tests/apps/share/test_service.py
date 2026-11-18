@@ -38,6 +38,7 @@ def test_create_grant_writes_the_preset_scopes_on_the_repo_farm_and_one_event(
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=until,
+        tz="Europe/Paris",
     )
 
     assert grant.id is not None
@@ -78,7 +79,12 @@ def test_create_grant_rejects_invalid_input_and_writes_nothing(
 
     with pytest.raises(ValueError, match=words):
         service.create_grant(
-            owner_repo, grantee=grantee, preset=preset, purpose="p", valid_to=_future(days)
+            owner_repo,
+            grantee=grantee,
+            preset=preset,
+            purpose="p",
+            valid_to=_future(days),
+            tz="Europe/Paris",
         )
 
     assert session.scalar(select(DataGrant.id).order_by(DataGrant.id.desc()).limit(1)) == count

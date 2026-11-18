@@ -21,6 +21,7 @@ def _grant(owner_repo, session, **kw) -> DataGrant:
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     for k, v in kw.items():
         setattr(g, k, v)
@@ -36,9 +37,9 @@ def _revoked_events(session) -> list[Event]:
 def test_revoke_grant_sets_revoked_at_once_and_posts_one_event(session, owner_repo) -> None:
     g = _grant(owner_repo, session)
 
-    revoked = service.revoke_grant(owner_repo, g.id)
+    revoked = service.revoke_grant(owner_repo, g.id, tz="Europe/Paris")
     first = revoked.revoked_at
-    again = service.revoke_grant(owner_repo, g.id)
+    again = service.revoke_grant(owner_repo, g.id, tz="Europe/Paris")
 
     assert first is not None and abs(datetime.now(UTC) - first) < timedelta(seconds=5)
     assert again.revoked_at == first
@@ -64,7 +65,7 @@ def test_revoke_rejects_the_owner_grant_and_another_farms_grant(
 
     for grant_id in (owner.id, foreign.id, 999999):
         with pytest.raises(LookupError):
-            service.revoke_grant(owner_repo, grant_id)
+            service.revoke_grant(owner_repo, grant_id, tz="Europe/Paris")
     assert owner.revoked_at is None and foreign.revoked_at is None
 
 

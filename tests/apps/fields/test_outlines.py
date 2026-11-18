@@ -292,6 +292,7 @@ def test_grantee_and_tour_see_nothing_new(client, outline_parcel, session):
         preset="adviser_logs",
         purpose="outline check",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
     grantee_page = client.get(f"/share/as/{grant.id}/").text

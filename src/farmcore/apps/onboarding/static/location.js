@@ -36,21 +36,22 @@
     return;
   }
 
+  var tileUrl = el.dataset.tileUrl || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+  var attribution = el.dataset.tileAttribution || "&copy; OpenStreetMap contributors";
   var map = new maplibregl.Map({
     container: el,
     style: {
       version: 8,
       sources: {
-        osm: {
+        basemap: {
           type: "raster",
-          tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+          tiles: [tileUrl],
           tileSize: 256,
           maxzoom: 19,
-          attribution:
-            '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+          attribution: attribution,
         },
       },
-      layers: [{ id: "osm", type: "raster", source: "osm" }],
+      layers: [{ id: "basemap", type: "raster", source: "basemap" }],
     },
     center: hasStart ? [startLon, startLat] : [2.4, 46.5],
     zoom: hasStart ? 13 : 5,

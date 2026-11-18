@@ -23,6 +23,7 @@ from farmcore.apps.advisor.manifest import JOB_NAME
 from farmcore.apps.fields.seed import alias_number
 from farmcore.apps.stations import service as stations
 from farmcore.core.access import ScopedRepository, repo_for_job
+from farmcore.core.farm_location import time_zone_of
 from farmcore.core.logs import lock_farm
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Farm, Parcel
@@ -40,11 +41,14 @@ def evaluate(ctx: JobContext) -> None:
         if ctx.farm_ids is not None
         else select(Farm.id).order_by(Farm.id)
     ).all()
-    tz = ctx.settings.display_tz
     for farm_id in farm_ids:
         lock_farm(ctx.session, farm_id)
         ctx.session.execute(select(Farm.id).where(Farm.id == farm_id).with_for_update())
-        evaluate_farm(repo_for_job(ctx.session, farm_id, JOB_NAME), ctx.now, tz)
+        evaluate_farm(
+            repo_for_job(ctx.session, farm_id, JOB_NAME),
+            ctx.now,
+            time_zone_of(ctx.session, farm_id, ctx.settings),
+        )
 
 
 def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:

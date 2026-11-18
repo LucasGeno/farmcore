@@ -29,6 +29,7 @@ def grant(session, owner_repo, grantee_identity):
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
     return g

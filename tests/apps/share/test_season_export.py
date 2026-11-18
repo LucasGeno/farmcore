@@ -169,6 +169,7 @@ def _grant(owner_repo, session, preset, recipient_id):
         recipient_identity_id=recipient_id,
         purpose="season export",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
     return grant
