@@ -69,8 +69,41 @@ def bundles(shared_source, owner_key, tmp_path_factory) -> dict[str, Path]:
 
 # --- E: the copy, effects and identity ----------------------------------------------------------
 
-# Tables a restore changes on purpose: sessions are dropped; sign-in throttling starts afresh.
-RESET_TABLES = {"local_session", "login_bucket"}
+# Tables a restore changes on purpose: sessions and access tokens are dropped; sign-in
+# throttling starts afresh.
+RESET_TABLES = {"local_session", "login_bucket", "access_token"}
+
+
+def _agent_token(installation: dict[str, str], login: str) -> str:
+    """An access token issued on `installation` by its owner `login`."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from farmcore.apps.share import service
+    from farmcore.core.access import OWNER, ScopedRepository, ensure_owner_grant
+    from farmcore.core.models.canonical import Farm
+    from farmcore.core.models.identity import LocalIdentity
+
+    engine = create_engine(installation["DATABASE_URL"])
+    try:
+        with Session(engine) as session:
+            owner = session.scalar(select(LocalIdentity).where(LocalIdentity.login == login))
+            farm = session.get(Farm, 1)
+            repo = ScopedRepository(session, 1, ensure_owner_grant(session, farm), OWNER, "test")
+            _grant, raw = service.create_token(
+                repo,
+                creator_id=owner.id,
+                name="Synthetic agent",
+                scopes=["register:read"],
+                purpose="restore replay",
+                valid_to=datetime.now(UTC) + timedelta(days=30),
+            )
+            session.commit()
+    finally:
+        engine.dispose()
+    return raw
 
 
 def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
@@ -79,6 +112,7 @@ def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
     """A shares its module: the member and session this adds are in no other test's facts."""
     key, recipient = owner_key
     login, password, a_cookies = signed_in_member(shared_source)
+    _agent_token(shared_source, login)
     bundle = backup(shared_source, recipient, tmp_path / "a.age")
     target = module_dbs.create()
     c_env = module_dbs.installation(target)
@@ -103,8 +137,10 @@ def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
     assert len(module_dbs.query(target, SEMANTIC["records"])) == 10
     assert len(module_dbs.query(target, SEMANTIC["sources"])) == 4
     assert len(module_dbs.query(target, SEMANTIC["evidence"])) == 10
-    # No session of A is valid on C; the member signs in again with the same password.
+    # No session or access token of A is valid on C; the member signs in again with the same
+    # password and issues new tokens.
     assert c_rows["local_session"] == []
+    assert a_rows["access_token"] and c_rows["access_token"] == []
     c_runtime = module_dbs.runtime_url(c_env)
     from farmcore.core.cookie_scope import cookie_prefix
 

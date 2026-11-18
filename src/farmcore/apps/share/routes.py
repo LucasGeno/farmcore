@@ -3,9 +3,11 @@
 - `GET /share/`: the grants table (non-owner `data_grant` rows of the selected farm, newest first,
   `audit:read`), the access log and the export links. Admins also get the grant form and a Revoke
   button per active grant; anonymous visitors see the same page read-only.
-- `POST /share/grants`, `POST /share/grants/{id}/revoke`: admin only (`require_admin`), 303 to
-  `/share/`; invalid input is a plain-words 422: the page again for a browser, the typed values
-  kept and the message next to its field.
+- `POST /share/grants`, `POST /share/grants/{id}/revoke`: farm owner (`require_farm_owner`), 303
+  to `/share/`; invalid input is a plain-words 422: the page again for a browser, the typed values
+  kept and the message next to its field. Revoking a token's grant revokes the token.
+- `POST /share/tokens`: a signed-in farm owner issues an agent token (a grant plus a hashed
+  token); 201 with the token shown once and `Cache-Control: no-store`.
 
 Never renders a raw chat id, a `tg:` ref, a cookie or the admin token (actors are named or
 masked by `service.access_rows`).
@@ -27,12 +29,19 @@ from sqlalchemy.orm import Session
 
 from farmcore.apps.operations import register
 from farmcore.apps.share import config, ngsi, service
-from farmcore.core.access import OWNER, Repo, ScopeDenied, ScopedRepository, require_farm_owner
+from farmcore.core.access import (
+    OWNER,
+    TOKEN_SCOPES,
+    Repo,
+    ScopeDenied,
+    ScopedRepository,
+    require_farm_owner,
+)
 from farmcore.core.clock import get_clock
 from farmcore.core.errors import wants_html
 from farmcore.core.identity import canonical_login, principal_for
 from farmcore.core.models.canonical import Advice, DataGrant, LlmAudit, Observation, Parcel
-from farmcore.core.models.identity import LocalIdentity
+from farmcore.core.models.identity import AccessToken, LocalIdentity
 from farmcore.core.routes_clock import require_admin
 from farmcore.db import get_session
 from farmcore.web import context_url, is_admin, operator_authenticated, render
@@ -122,7 +131,9 @@ def scope_items(scopes: list[str]) -> list[dict[str, str]]:
     return [{"scope": s, "words": config.SCOPE_WORDS.get(s, s)} for s in scopes]
 
 
-def _grant_view(grant: DataGrant, now: datetime, tz: str) -> dict[str, Any]:
+def _grant_view(
+    grant: DataGrant, now: datetime, tz: str, token: AccessToken | None = None
+) -> dict[str, Any]:
     return {
         "id": grant.id,
         "grantee": grant.grantee,
@@ -132,6 +143,10 @@ def _grant_view(grant: DataGrant, now: datetime, tz: str) -> dict[str, Any]:
         "valid_to": service.local_date(grant.valid_to, tz) if grant.valid_to else "no end date",
         "revoked_at": grant.revoked_at,
         "status": service.grant_status(grant, now),
+        "token": token is not None,
+        "last_used": (
+            service.local_time(token.last_used_at, tz) if token and token.last_used_at else "never"
+        ),
     }
 
 
@@ -183,15 +198,24 @@ def _index_page(
     *,
     form: dict[str, str] | None = None,
     errors: dict[str, str] | None = None,
+    token_form: dict[str, Any] | None = None,
+    token_errors: dict[str, str] | None = None,
+    issued: dict[str, Any] | None = None,
 ) -> HTMLResponse:
-    """The Sharing page; `form` and `errors` refill the grant form after a refused grant."""
+    """The Sharing page; `form` and `errors` refill the grant form after a refused grant,
+    `token_form` and `token_errors` the token form; `issued` shows a new token, once."""
     now = datetime.now(UTC)
-    grants = repo.list(
-        DataGrant, DataGrant.grantee != OWNER, scope=AUDIT_SCOPE, order_by=DataGrant.id.desc()
-    )
+    grants = [
+        g
+        for g in repo.list(
+            DataGrant, DataGrant.grantee != OWNER, scope=AUDIT_SCOPE, order_by=DataGrant.id.desc()
+        )
+        if not service.is_owner_grant(g)
+    ]
+    tokens = service.grant_tokens(repo, [g.id for g in grants])
     tz = _tz(request)
     grantees_only = request.query_params.get("who") == WHO_GRANTEES
-    views = [_grant_view(g, now, tz) for g in grants if not service.is_owner_grant(g)]
+    views = [_grant_view(g, now, tz, tokens.get(g.id)) for g in grants]
     if scope != "all":
         wanted = {"stations:read"} if scope == "weather" else {"logs:read", "register:read"}
         views = [g for g in views if any(s["scope"] in wanted for s in g["scopes"])]
@@ -225,6 +249,11 @@ def _index_page(
         purpose_max_len=config.PURPOSE_MAX_LEN,
         grant_form=form or {},
         grant_errors=errors or {},
+        token_scopes=scope_items(sorted(TOKEN_SCOPES)),
+        token_form=token_form or {},
+        token_errors=token_errors or {},
+        token_max_days=config.TOKEN_MAX_DAYS,
+        issued=issued,
         **_exports(request, repo, season, int(parcel) if ASCII_INT.fullmatch(parcel) else None),
     )
 
@@ -289,6 +318,47 @@ def create(
         page.headers["Cache-Control"] = "no-store"
         return page
     return RedirectResponse(context_url(request, "/share/"), status_code=303)
+
+
+@router.post("/tokens", dependencies=[Depends(require_farm_owner)])
+def create_token(
+    request: Request,
+    repo: Repo,
+    name: str = Form(""),
+    scope: Annotated[list[str], Form()] = [],  # noqa: B006 (FastAPI copies the default)
+    purpose: str = Form(""),
+    valid_to: str = Form(""),
+) -> Response:
+    """Issue a personal access token for the signed-in owner's agent and show it once, in this
+    response only (never a redirect: the token must not travel in a URL or a cookie)."""
+    principal = principal_for(request)
+    if principal is None:
+        raise HTTPException(403, "Sign in as a farm owner to issue an agent token.")
+    tz = _tz(request)
+    try:
+        grant, raw = service.create_token(
+            repo,
+            creator_id=principal.identity_id,
+            name=name,
+            scopes=scope,
+            purpose=purpose,
+            valid_to=_valid_to(valid_to, tz),
+            tz=tz,
+        )
+    except service.InvalidGrant as exc:
+        if not wants_html(request):
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        typed = {"name": name, "scope": scope, "purpose": purpose, "valid_to": valid_to}
+        page = _index_page(request, repo, token_form=typed, token_errors={exc.field: str(exc)})
+        page.status_code = 422
+        page.headers["Cache-Control"] = "no-store"
+        return page
+    except PermissionError as exc:
+        raise HTTPException(403, "Farm owner required.") from exc
+    page = _index_page(request, repo, issued={"name": grant.grantee, "token": raw})
+    page.status_code = 201
+    page.headers["Cache-Control"] = "no-store"
+    return page
 
 
 def _ld_json(entities: list[dict[str, Any]]) -> JSONResponse:

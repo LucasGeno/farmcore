@@ -27,6 +27,7 @@ explicitly bound to the grant. This also applies to intentionally public demo fa
 | Explicit demo visitor | Read only explicitly designated demo farms; no model-call audit |
 | Tour visitor | Same farm read authority as the underlying identity; every mutation refused except leaving the tour (exit, sign-out) |
 | Grant recipient | Read only active explicitly bound grant resources; no farm membership, audit, raw transcripts or pending capture |
+| Agent token (personal access token) | Its grant's scopes on its grant's farm: ordinary grant reads and `drafts:propose`; never `*`, writes or audit |
 | Numeric grantee URL | No authority without a valid authenticated recipient session |
 
 One member may propose, approve and activate their own parameter version: small farms often
@@ -101,6 +102,18 @@ requests remain available for trusted scripts. Never put credentials or tokens i
   counts a signed-in member by identity (clearing the cookie does not reset it) and anonymous
   browsers by cookie.
 
+Farm owners issue agent tokens (personal access tokens) from **Sharing** for their own AI
+agents. Each token is a grant: its farm, scopes, purpose and end date (at most 366 days) are
+shown there with when it was last used and its reads in the access log, and **Revoke** ends it.
+A token holds only scopes an ordinary grant may read plus `drafts:propose`; never `*`, a write
+scope or `audit:read`. It is 32 random bytes behind a `fc_pat_` prefix, shown once on the page
+that creates it (`Cache-Control: no-store`) and stored only as its SHA-256: a slow KDF guards
+guessable secrets, and 256 random bits are not guessable. Every call checks the token afresh
+(never cached): a revoked or expired grant, another farm, or an issuer who is no longer an
+enabled owner of the farm refuses the next call with one message for every cause. Restore never
+loads tokens, so a token revoked after a backup does not come back; issue new ones on the copy.
+Send tokens in a header, never in a URL.
+
 ## Deployment checklist
 
 - Serve over HTTPS only (the admin cookie is `Secure`) behind a reverse proxy. Keep the app
@@ -133,8 +146,8 @@ bundle is data only, never code:
   only on FarmCore's tables and `UPDATE` only on their sequences, `CONNECT` only to the staging
   database. Whatever SQL an archive carries in its data entries runs with those rights only. The
   role is dropped (with anything it owns) before the copy goes live.
-- Member sessions are never loaded, database settings an archive records are never applied,
-  and the copy starts with a new `installation_id` and external effects paused.
+- Member sessions and access tokens are never loaded, database settings an archive records are
+  never applied, and the copy starts with a new `installation_id` and external effects paused.
 - The archive is read strictly: two plain files, no links, devices or sparse files, nothing
   larger than the archive itself. Strings from the bundle reach the terminal escaped.
 - Restore revokes `CONNECT` and `TEMP` from PUBLIC on every database of the server but
