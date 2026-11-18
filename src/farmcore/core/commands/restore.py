@@ -122,14 +122,23 @@ _FOREIGN_KEYS = text(
     "SELECT conrelid::regclass::text, conname, pg_get_constraintdef(oid) FROM pg_constraint "
     "WHERE contype = 'f' AND connamespace = 'public'::regnamespace ORDER BY 1, 2"
 )
-# Never loaded: the copy starts with no member session and fresh sign-in throttling, and its
-# schema revision and migration-seeded reference data are the ones restore's migration created
-# (so a bundle can never supply its own unit factors).
-NOT_LOADED = frozenset({"local_session", "login_bucket", *MIGRATION_OWNED_TABLES})
+# Never loaded: the copy starts with no member session, no access token (a token revoked after
+# the backup must not work again) and fresh sign-in throttling, and its schema revision and
+# migration-seeded reference data are the ones restore's migration created (so a bundle can
+# never supply its own unit factors).
+NOT_LOADED = frozenset({"local_session", "login_bucket", "access_token", *MIGRATION_OWNED_TABLES})
 PLAIN_FILES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 LOADER_PREFIX = "farmcore_restore_"
 # Emptied again after the load (an older revision may not have them yet).
-SESSION_TABLES = ("local_session", "login_bucket")
+SESSION_TABLES = ("local_session", "login_bucket", "access_token")
+# Grants that an access token held (the `share.granted` event marks them): their tokens are not
+# loaded, so revoke them rather than show the farmer an active grant nothing can use. A forged
+# bundle can only add revocations this way.
+_REVOKE_TOKEN_GRANTS = (
+    "UPDATE data_grant SET revoked_at = now() WHERE revoked_at IS NULL AND id IN ("
+    "SELECT res_id FROM event WHERE kind = 'share.granted' AND res_model = 'data_grant' "
+    "AND payload->>'token' IS NOT NULL)"
+)
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)  # as `migrate`: Ctrl-C too
 # What `farmcore backup` writes (`datetime.isoformat()` in UTC): nothing else is printed.
 _CREATED_AT = re.compile(
@@ -717,6 +726,8 @@ class Copy:
                             f"the bundle's rows break FarmCore's constraint {name}"
                         ) from None
                 with conn.begin():
+                    if {"data_grant", "event"} <= self.present:
+                        conn.exec_driver_sql(_REVOKE_TOKEN_GRANTS)
                     sessions = [t for t in SESSION_TABLES if t in self.present]
                     if sessions:
                         conn.exec_driver_sql(f"TRUNCATE {', '.join(sessions)}")

@@ -73,3 +73,24 @@ class LoginBucket(Base):
     slot: Mapped[int] = mapped_column(Integer, primary_key=True)
     window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     attempts: Mapped[int] = mapped_column(Integer)
+
+
+class AccessToken(Base):
+    """A bearer token bound to one `data_grant`: the grant carries the farm, scopes, validity and
+    revocation (so Sharing shows and revokes it like any grant); this row carries only the
+    SHA-256 of the token, who issued it and when it was last used. `kind` says what holds it:
+    `personal` (an owner's agent); later kinds reuse the table."""
+
+    __tablename__ = "access_token"
+    __table_args__ = (
+        CheckConstraint("token_hash ~ '^[0-9a-f]{64}$'", name="token_hash"),
+        CheckConstraint("kind IN ('personal')", name="kind"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    grant_id: Mapped[int] = mapped_column(ForeignKey("data_grant.id"), unique=True)
+    created_by_identity_id: Mapped[int] = mapped_column(ForeignKey("local_identity.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -22,6 +22,8 @@ access_log rows commit before the response is sent; a plain `Depends(get_repo)` 
 
 from __future__ import annotations
 
+import hmac
+import secrets
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Annotated, Any
@@ -32,6 +34,7 @@ from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
 
 from farmcore.core import ext_ids
+from farmcore.core.identity import token_hash
 from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
@@ -47,6 +50,7 @@ from farmcore.core.models.canonical import (
     Quantity,
     Source,
 )
+from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIdentity
 from farmcore.db import get_session
 from farmcore.settings import Settings
 
@@ -63,11 +67,17 @@ SCOPES = frozenset(
         "planning:write",
         "register:read",
         "audit:read",
+        "drafts:propose",
     }
 )
 GRANT_READ_SCOPES = frozenset(
     {"fields:read", "stations:read", "logs:read", "register:read", "advice:read", "planning:read"}
 )
+DRAFTS_PROPOSE = "drafts:propose"
+# What an access token may hold: what an ordinary grant may read, plus proposing drafts the
+# farmer confirms in FarmCore. Never `*`, a write scope or `audit:read` (it also covers the
+# installation-wide model-call audit, which a farm owner cannot read either).
+TOKEN_SCOPES = GRANT_READ_SCOPES | {DRAFTS_PROPOSE}
 ALL_SCOPES = "*"
 OWNER = "owner"
 DEMO_SOURCE = "farmcore-demo"
@@ -117,6 +127,7 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "llm_audit": frozenset({"audit:read"}),
     "access_log": frozenset({"audit:read"}),
     "data_grant": frozenset({"audit:read"}),
+    "access_token": frozenset({"audit:read"}),
 }
 
 
@@ -153,7 +164,7 @@ class ScopedRepository:
         covers `resource`."""
         if self.grant_view and (
             not self.grant.scopes
-            or not set(self.grant.scopes) <= GRANT_READ_SCOPES
+            or not set(self.grant.scopes) <= TOKEN_SCOPES
             or scope not in GRANT_READ_SCOPES
             or (
                 resource is not None
@@ -460,6 +471,100 @@ def repo_for_job(session: Session, farm_id: int, job_name: str) -> ScopedReposit
 
 
 Repo = Annotated[ScopedRepository, Depends(get_repo, scope="function")]
+
+
+# --- Access tokens ------------------------------------------------------------------------------
+# A token is `<prefix><43 url-safe chars>` from 32 random bytes. Only its SHA-256 is stored: a
+# slow KDF protects guessable secrets such as passwords, and 256 random bits are not guessable.
+TOKEN_PREFIXES = {"personal": "fc_pat_"}
+TOKEN_BYTES = 32
+TOKEN_MAX_LEN = 128  # longer input is refused before hashing
+
+
+class TokenRejected(PermissionError):
+    """Unknown, malformed, revoked or expired token, wrong farm, or an issuer who lost
+    authority. One message for every cause, and never the token."""
+
+    def __init__(self) -> None:
+        super().__init__("Invalid, expired or revoked token.")
+
+
+def issue_token(
+    session: Session, grant: DataGrant, *, kind: str, created_by: int
+) -> tuple[AccessToken, str]:
+    """A new token for `grant`: (its row, the token). The token exists only in the return value;
+    show it once and never store, log or put it in a URL."""
+    raw = TOKEN_PREFIXES[kind] + secrets.token_urlsafe(TOKEN_BYTES)
+    token = AccessToken(
+        token_hash=token_hash(raw), kind=kind, grant_id=grant.id, created_by_identity_id=created_by
+    )
+    session.add(token)
+    session.flush()
+    return token, raw
+
+
+def is_farm_owner(session: Session, identity_id: int, farm_id: int) -> bool:
+    """Whether `identity_id` is an enabled identity with a current owner membership of `farm_id`."""
+    return (
+        session.scalar(
+            select(FarmMembership.id)
+            .join(LocalIdentity)
+            .where(
+                FarmMembership.farm_id == farm_id,
+                FarmMembership.identity_id == identity_id,
+                FarmMembership.role == "owner",
+                FarmMembership.revoked_at.is_(None),
+                LocalIdentity.disabled_at.is_(None),
+            )
+        )
+        is not None
+    )
+
+
+def authenticate_token(
+    session: Session, raw: str, *, farm_id: int | None = None
+) -> ScopedRepository:
+    """The repository a token reads through: its grant's farm and scopes, actor `token:<id>`.
+
+    Checked afresh on every call (never cached), so revoking or expiring the grant, or the issuer
+    losing ownership of the farm or being disabled, refuses the next call. `farm_id`, when the
+    caller names a farm, must be the token's. Records `last_used_at`. `TokenRejected` otherwise.
+    """
+    if (
+        not isinstance(raw, str)
+        or len(raw) > TOKEN_MAX_LEN
+        or not raw.startswith(tuple(TOKEN_PREFIXES.values()))
+    ):
+        raise TokenRejected
+    digest = token_hash(raw)
+    token = session.scalar(select(AccessToken).where(AccessToken.token_hash == digest))
+    if token is None or not hmac.compare_digest(token.token_hash, digest):
+        raise TokenRejected
+    # populate_existing: a long-lived session (a stdio agent process) must see a revocation
+    # committed elsewhere, not the grant it loaded on an earlier call.
+    grant = session.get(DataGrant, token.grant_id, populate_existing=True)
+    now = datetime.now(UTC)
+    if (
+        grant is None
+        or (farm_id is not None and grant.farm_id != farm_id)
+        or grant.revoked_at is not None
+        or (grant.valid_from is not None and grant.valid_from > now)
+        or (grant.valid_to is not None and grant.valid_to <= now)
+        or not set(grant.scopes or ()) <= TOKEN_SCOPES
+        or not is_farm_owner(session, token.created_by_identity_id, grant.farm_id)
+    ):
+        raise TokenRejected
+    token.last_used_at = now
+    session.flush()
+    return ScopedRepository(
+        session,
+        grant.farm_id,
+        grant,
+        actor=f"token:{token.id}",
+        purpose=grant.purpose,
+        grant_view=True,
+        private_member=True,
+    )
 
 
 def has_farm_membership(request: Request, repo: Repo) -> bool:

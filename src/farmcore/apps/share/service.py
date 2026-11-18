@@ -7,7 +7,7 @@ now, status compares wall now, never the replay clock. The `share.*` events carr
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -15,10 +15,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.share import config
-from farmcore.core.access import ALL_SCOPES, GRANT_READ_SCOPES, OWNER, ScopedRepository
+from farmcore.core.access import (
+    ALL_SCOPES,
+    GRANT_READ_SCOPES,
+    OWNER,
+    TOKEN_SCOPES,
+    ScopedRepository,
+    is_farm_owner,
+    issue_token,
+)
 from farmcore.core.actors import mask_actor
 from farmcore.core.models.canonical import AccessLog, DataGrant
-from farmcore.core.models.identity import LocalIdentity
+from farmcore.core.models.identity import AccessToken, LocalIdentity
 from farmcore.core.timeline import post_event
 
 DEFAULT_TZ = "Europe/Paris"
@@ -155,6 +163,92 @@ def create_grant(
     return grant
 
 
+def create_token(
+    repo: ScopedRepository,
+    *,
+    creator_id: int,
+    name: str,
+    scopes: list[str],
+    purpose: str,
+    valid_to: datetime,
+    tz: str = DEFAULT_TZ,
+) -> tuple[DataGrant, str]:
+    """A personal access token for an agent of `creator_id`, a current owner of `repo.farm_id`:
+    a grant of `scopes` from wall now to `valid_to` (at most `config.TOKEN_MAX_DAYS` away), its
+    token and a `share.granted` event. Returns (grant, token); the token is never stored, so show
+    it once. `PermissionError` when the creator is not an owner; `InvalidGrant` on invalid input
+    (a scope outside `access.TOKEN_SCOPES` included); nothing is written then."""
+    if not is_farm_owner(repo.session, creator_id, repo.farm_id):
+        raise PermissionError("Only a farm owner issues access tokens.")
+    label = name.strip()
+    if not label:
+        raise InvalidGrant("name", "Name the agent that will use the token.")
+    if len(label) > config.GRANTEE_MAX_LEN:
+        raise InvalidGrant("name", f"The name is longer than {config.GRANTEE_MAX_LEN} characters.")
+    if label.casefold() == OWNER:
+        raise InvalidGrant("name", "The name 'owner' is reserved for the farmer's own access.")
+    if not scopes:
+        raise InvalidGrant("scope", "Choose what the agent may do.")
+    if not set(scopes) <= TOKEN_SCOPES:
+        raise InvalidGrant("scope", "An agent token can only read or propose drafts.")
+    purpose = purpose.strip()
+    if not purpose:
+        raise InvalidGrant("purpose", "Say what the access is for (the purpose).")
+    if len(purpose) > config.PURPOSE_MAX_LEN:
+        raise InvalidGrant(
+            "purpose", f"The purpose is longer than {config.PURPOSE_MAX_LEN} characters."
+        )
+    now = datetime.now(UTC)
+    if valid_to.tzinfo is None:
+        raise InvalidGrant("valid_to", "The end date needs a timezone.")
+    if valid_to <= now:
+        raise InvalidGrant("valid_to", "The end date must be in the future.")
+    if valid_to > now + timedelta(days=config.TOKEN_MAX_DAYS):
+        raise InvalidGrant(
+            "valid_to", f"A token lasts at most {config.TOKEN_MAX_DAYS} days; renew it then."
+        )
+    chosen = sorted(set(scopes))
+    grant = DataGrant(
+        farm_id=repo.farm_id,
+        grantee=label,
+        scopes=chosen,
+        purpose=purpose,
+        valid_from=now,
+        valid_to=valid_to,
+    )
+    repo.session.add(grant)
+    repo.session.flush()
+    _token, raw = issue_token(repo.session, grant, kind="personal", created_by=creator_id)
+    post_event(
+        repo.session,
+        farm_id=repo.farm_id,
+        res_model="data_grant",
+        res_id=grant.id,
+        kind="share.granted",
+        body=(
+            f"Issued an agent token to {label}: {scope_words(chosen)}, "
+            f"until {local_date(valid_to, tz)}"
+        ),
+        payload={"grantee": label, "scopes": chosen, "purpose": purpose, "token": "personal"},
+        actor=repo.actor,
+        source_app=SOURCE_APP,
+        occurred_at=now,
+    )
+    return grant, raw
+
+
+def grant_tokens(repo: ScopedRepository, grant_ids: list[int]) -> dict[int, AccessToken]:
+    """The access token behind each of `grant_ids` that has one (`audit:read`)."""
+    if not grant_ids:
+        return {}
+    rows = repo.execute(
+        select(AccessToken).where(AccessToken.grant_id.in_(grant_ids)),
+        scope=AUDIT_SCOPE,
+        resource="access_token",
+    ).scalars()
+    return {t.grant_id: t for t in rows}
+
+
 def _actor_label(actor: str, logins: dict[int, str], grants: dict[int, DataGrant]) -> str:
     """Who, in words: a user's login (`deleted user` once gone), `operator` for the `owner`
     actor, a grant's recipient for the legacy `grant:<id>` token, else the masked actor."""
@@ -211,7 +305,11 @@ def access_rows(
             {
                 "id": r.id,
                 "ts": r.ts.astimezone(zone).strftime("%d %b %Y %H:%M:%S"),
-                "actor": _actor_label(r.actor, logins, grants),
+                "actor": (
+                    f"{g.grantee} (agent token)"
+                    if g is not None and r.actor.startswith("token:")
+                    else _actor_label(r.actor, logins, grants)
+                ),
                 "purpose": r.purpose,
                 "resource": r.resource,
                 "scope": r.scope,

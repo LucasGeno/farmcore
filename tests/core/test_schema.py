@@ -57,7 +57,13 @@ CANONICAL_TABLES = {
 }
 
 
-IDENTITY_TABLES = {"local_identity", "farm_membership", "local_session", "login_bucket"}
+IDENTITY_TABLES = {
+    "local_identity",
+    "farm_membership",
+    "local_session",
+    "login_bucket",
+    "access_token",
+}
 
 
 def _tables(session) -> set[str]:
@@ -115,7 +121,7 @@ def test_models_match_migrated_head_with_no_autogenerate_diff(scratch_db_url: st
 
 
 def test_single_migration_head_creates_every_core_table(session) -> None:
-    head = "core_0006"  # core_0005 -> core_0006
+    head = "core_0007"  # core_0006 -> core_0007
     assert ScriptDirectory.from_config(alembic_config()).get_heads() == [head]
     assert session.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     assert _tables(session) >= CANONICAL_TABLES | IDENTITY_TABLES

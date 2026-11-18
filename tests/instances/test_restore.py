@@ -69,8 +69,42 @@ def bundles(shared_source, owner_key, tmp_path_factory) -> dict[str, Path]:
 
 # --- E: the copy, effects and identity ----------------------------------------------------------
 
-# Tables a restore changes on purpose: sessions are dropped; sign-in throttling starts afresh.
-RESET_TABLES = {"local_session", "login_bucket"}
+# Tables a restore changes on purpose: sessions and access tokens are dropped; sign-in
+# throttling starts afresh.
+RESET_TABLES = {"local_session", "login_bucket", "access_token"}
+
+
+def _agent_token(installation: dict[str, str], login: str) -> int:
+    """The grant of an access token issued on `installation` by its owner `login`."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import create_engine, select
+    from sqlalchemy.orm import Session
+
+    from farmcore.apps.share import service
+    from farmcore.core.access import OWNER, ScopedRepository, ensure_owner_grant
+    from farmcore.core.models.canonical import Farm
+    from farmcore.core.models.identity import LocalIdentity
+
+    engine = create_engine(installation["DATABASE_URL"])
+    try:
+        with Session(engine) as session:
+            owner = session.scalar(select(LocalIdentity).where(LocalIdentity.login == login))
+            farm = session.get(Farm, 1)
+            repo = ScopedRepository(session, 1, ensure_owner_grant(session, farm), OWNER, "test")
+            grant, _raw = service.create_token(
+                repo,
+                creator_id=owner.id,
+                name="Synthetic agent",
+                scopes=["register:read"],
+                purpose="restore replay",
+                valid_to=datetime.now(UTC) + timedelta(days=30),
+            )
+            session.commit()
+            grant_id = grant.id
+    finally:
+        engine.dispose()
+    return grant_id
 
 
 def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
@@ -79,6 +113,7 @@ def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
     """A shares its module: the member and session this adds are in no other test's facts."""
     key, recipient = owner_key
     login, password, a_cookies = signed_in_member(shared_source)
+    token_grant = _agent_token(shared_source, login)
     bundle = backup(shared_source, recipient, tmp_path / "a.age")
     target = module_dbs.create()
     c_env = module_dbs.installation(target)
@@ -95,16 +130,27 @@ def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
     # Every row of every FarmCore table is the same, except the reset tables.
     a_rows, c_rows = table_rows(module_dbs, shared_source["name"]), table_rows(module_dbs, target)
     assert set(a_rows) == set(c_rows)
-    for table in sorted(set(a_rows) - RESET_TABLES):
+    for table in sorted(set(a_rows) - RESET_TABLES - {"data_grant"}):
         assert c_rows[table] == a_rows[table], table
+    # Grants too, but the token's grant, which the copy revokes (its token is not loaded).
+    a_grants, c_grants = (
+        [r for r in rows["data_grant"] if json.loads(r)["id"] != token_grant]
+        for rows in (a_rows, c_rows)
+    )
+    assert c_grants == a_grants
+    assert module_dbs.query(
+        target, f"SELECT revoked_at IS NOT NULL FROM data_grant WHERE id = {token_grant}"
+    ) == [(True,)]
     # ...and by meaning: records, sources, provenance and module evidence.
     for label, sql in SEMANTIC.items():
         assert module_dbs.query(target, sql) == module_dbs.query(shared_source["name"], sql), label
     assert len(module_dbs.query(target, SEMANTIC["records"])) == 10
     assert len(module_dbs.query(target, SEMANTIC["sources"])) == 4
     assert len(module_dbs.query(target, SEMANTIC["evidence"])) == 10
-    # No session of A is valid on C; the member signs in again with the same password.
+    # No session or access token of A is valid on C; the member signs in again with the same
+    # password and issues new tokens.
     assert c_rows["local_session"] == []
+    assert a_rows["access_token"] and c_rows["access_token"] == []
     c_runtime = module_dbs.runtime_url(c_env)
     from farmcore.core.cookie_scope import cookie_prefix
 
