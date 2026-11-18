@@ -11,14 +11,22 @@ import json
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from math import isfinite
-from urllib.parse import urlencode
 
 import httpx
 from sqlalchemy import func, or_, select
 
 from farmcore.apps.forecast._fetch_loop import FetchLoop
 from farmcore.apps.forecast.models import ForecastRun
-from farmcore.apps.forecast.sources import UNITS, VARIABLES, Run, _utc, parse_hourly
+from farmcore.apps.forecast.sources import (
+    UNITS,
+    VARIABLES,
+    Run,
+    _utc,
+    endpoint_kind,
+    forecast_url,
+    parse_hourly,
+    with_api_key,
+)
 from farmcore.apps.forecast.store import import_runs
 from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.manifest import JobContext
@@ -147,7 +155,9 @@ def fetch_live(ctx: JobContext) -> None:
             ):
                 raise ValueError("invalid location")
             location = {key: float(location[key]) for key in ("latitude", "longitude")}
-            url = "https://api.open-meteo.com/v1/forecast?" + urlencode(
+            base_url = ctx.settings.open_meteo_base_url
+            request_url = forecast_url(
+                base_url,
                 {
                     **location,
                     "hourly": ",".join(VARIABLES),
@@ -156,8 +166,14 @@ def fetch_live(ctx: JobContext) -> None:
                     "wind_speed_unit": "kmh",
                     "temperature_unit": "celsius",
                     "precipitation_unit": "mm",
-                }
+                },
             )
+            api_key = (
+                ctx.settings.open_meteo_api_key.get_secret_value()
+                if ctx.settings.open_meteo_api_key is not None
+                else None
+            )
+            url = with_api_key(request_url, api_key)
             with asyncio.Runner(loop_factory=FetchLoop) as runner:
                 doc = runner.run(_fetch(url, ctx.settings.forecast_fetch_timeout_seconds))
             received = datetime.now(UTC)
@@ -213,7 +229,8 @@ def fetch_live(ctx: JobContext) -> None:
                                 "fetched_at": received.isoformat(),
                                 "requested_location": location,
                                 "units": doc.get("hourly_units", UNITS),
-                                "request_url": url,
+                                "request_url": request_url,
+                                "endpoint_kind": endpoint_kind(base_url),
                                 "coverage": coverage,
                                 "coverage_start": min(t for t, _, _ in values).isoformat(),
                                 "coverage_end": max(t for t, _, _ in values).isoformat(),

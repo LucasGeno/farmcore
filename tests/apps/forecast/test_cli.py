@@ -83,6 +83,40 @@ def test_fetch_saves_one_file_per_run_and_skips_runs_already_saved(env, tmp_path
     assert "2 runs saved" in first.output and "0 runs saved, 2 already saved" in second.output
 
 
+def test_fetch_uses_configured_single_runs_endpoint_and_key_without_storing_the_key(
+    env, tmp_path, monkeypatch
+):
+    from farmcore.apps.forecast import sources
+
+    monkeypatch.setenv(
+        "OPEN_METEO_SINGLE_RUNS_BASE_URL", "https://customer-single-runs-api.open-meteo.com"
+    )
+    monkeypatch.setenv("OPEN_METEO_API_KEY", "single-runs-secret")
+    get_settings.cache_clear()
+    calls: list[str] = []
+    sample = json.loads((RUNS / "run-2024-04-09T12.json").read_text(encoding="utf-8"))
+
+    def fake_get(url: str) -> dict:
+        calls.append(url)
+        return sample["response"]
+
+    monkeypatch.setattr(sources, "get_json", fake_get)
+    out = tmp_path / "keyed"
+    result = CliRunner().invoke(
+        cli, ["forecast", "fetch", "--from", "2024-04-09", "--to", "2024-04-09", "--out", str(out)]
+    )
+    saved = json.loads((out / "run-2024-04-09T00.json").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0, result.output
+    assert "single-runs-secret" not in result.output
+    assert all("apikey=single-runs-secret" in url for url in calls)
+    assert saved["endpoint_kind"] == "customer"
+    assert saved["request_url"].startswith(
+        "https://customer-single-runs-api.open-meteo.com/v1/forecast?"
+    )
+    assert "single-runs-secret" not in saved["request_url"]
+
+
 def test_import_reads_a_folder_of_saved_runs(env, committed_session_factory):
     out = CliRunner().invoke(cli, ["forecast", "import", "--dir", str(RUNS)])
 

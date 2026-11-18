@@ -11,12 +11,15 @@ from datetime import datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
 DEFAULT_DATABASE_URL = "postgresql+psycopg://farmcore:farmcore@localhost:55442/farmcore"
+DEFAULT_OPEN_METEO_BASE_URL = "https://api.open-meteo.com"
+DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL = "https://single-runs-api.open-meteo.com"
 
 
 def _default_vertex_auth() -> str:
@@ -34,6 +37,12 @@ class Settings(BaseSettings):
     display_tz: str = "Europe/Paris"
     # Total live forecast HTTP budget per farm, including headers and streamed body.
     forecast_fetch_timeout_seconds: float = Field(10.0, ge=0.05, le=30.0)
+    # Open-Meteo hosts (scheme + authority, no /v1/forecast path): the free public API by
+    # default. Point at customer-api.open-meteo.com (with a key) or a self-hosted server.
+    open_meteo_base_url: str = DEFAULT_OPEN_METEO_BASE_URL
+    open_meteo_single_runs_base_url: str = DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL
+    # Customer API key, sent as `apikey`; never logged, stored or rendered.
+    open_meteo_api_key: SecretStr | None = None
     clock_mode: Literal["replay", "live"] = "replay"
     # Local time (display_tz), naive.
     replay_start: datetime = datetime(2024, 4, 1, 6, 0)
@@ -77,6 +86,16 @@ class Settings(BaseSettings):
     @classmethod
     def _default_when_empty(cls, v: object) -> object:
         return v or DEFAULT_DATABASE_URL
+
+    @field_validator("open_meteo_base_url", "open_meteo_single_runs_base_url")
+    @classmethod
+    def _http_url_without_credentials(cls, v: str) -> str:
+        url = urlsplit(v)
+        if url.scheme not in ("http", "https") or not url.hostname:
+            raise ValueError("must be an http(s) URL")
+        if url.username is not None or url.password is not None:
+            raise ValueError("must not contain credentials")
+        return v
 
     @model_validator(mode="after")
     def _derive_test_database_url(self) -> Settings:

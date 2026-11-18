@@ -18,10 +18,14 @@ a run that is not. Null values (the first step's rain and gusts) are missing, ne
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import quote, urlencode, urlsplit
+
+from farmcore.settings import DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL
 
 # Open-Meteo hourly name -> station variable (stations app, `HourlyObs` fields).
 VARIABLES = {
@@ -31,6 +35,28 @@ VARIABLES = {
     "relative_humidity_2m": "rh_pct",
     "wind_gusts_10m": "fx_kmh",  # information only: the app has no gust rule
 }
+FORECAST_PATH = "/v1/forecast"
+PUBLIC_HOSTS = frozenset({"api.open-meteo.com", "single-runs-api.open-meteo.com"})
+
+
+def endpoint_kind(base_url: str) -> str:
+    """`public`, `customer` or `self-hosted`, from the endpoint's host (never the key)."""
+    host = (urlsplit(base_url).hostname or "").lower()
+    if host.startswith("customer-") and host.endswith(".open-meteo.com"):
+        return "customer"
+    return "public" if host in PUBLIC_HOSTS else "self-hosted"
+
+
+def forecast_url(base_url: str, params: Mapping[str, object]) -> str:
+    """The `/v1/forecast` URL for a base URL (scheme and authority, optional path prefix)."""
+    return f"{base_url.rstrip('/')}{FORECAST_PATH}?{urlencode(params, safe=':,')}"
+
+
+def with_api_key(url: str, api_key: str | None) -> str:
+    """Append the customer API key; the caller keeps the keyless URL for provenance."""
+    return f"{url}&apikey={quote(api_key, safe='')}" if api_key else url
+
+
 SINGLE_RUNS = "open-meteo-single-runs"
 SINGLE_RUNS_MODEL = "ecmwf_ifs"
 SINGLE_RUNS_LABEL = "ECMWF IFS HRES via Open-Meteo"
@@ -127,6 +153,8 @@ class SingleRunsDir:
                 raise ValueError(f"{path.name}: {name} is in {units[name]}, expected {unit}")
         issued = _utc(doc["run"])
         model = doc.get("model", SINGLE_RUNS_MODEL)
+        request_url = doc.get("request_url")
+        kind = doc.get("endpoint_kind") or (endpoint_kind(request_url) if request_url else None)
         return Run(
             source=f"{SINGLE_RUNS}/{model}",
             issued_at=issued,
@@ -139,7 +167,8 @@ class SingleRunsDir:
             props={
                 "model": model,
                 "units": units,
-                "request_url": doc.get("request_url"),
+                "request_url": request_url,
+                "endpoint_kind": kind,
                 "attribution": ATTRIBUTION,
             },
         )
@@ -147,13 +176,15 @@ class SingleRunsDir:
 
 # --- fetch (CLI only: the one network step) -------------------------------------------------
 
-SINGLE_RUNS_URL = "https://single-runs-api.open-meteo.com/v1/forecast"
+SINGLE_RUNS_BASE_URL = DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL
 RUNS_DIR = Path("open-meteo") / SINGLE_RUNS_MODEL  # under DATA_DIR, like meteofrance/
 RUN_HOURS = (0, 12)
 FORECAST_DAYS = 6
 
 
-def single_run_url(run: datetime, latitude: float, longitude: float) -> str:
+def single_run_url(
+    run: datetime, latitude: float, longitude: float, base_url: str = SINGLE_RUNS_BASE_URL
+) -> str:
     hourly = ",".join(
         (
             "precipitation",
@@ -163,23 +194,42 @@ def single_run_url(run: datetime, latitude: float, longitude: float) -> str:
             "wind_gusts_10m",
         )
     )
-    return (
-        f"{SINGLE_RUNS_URL}?latitude={latitude}&longitude={longitude}&hourly={hourly}"
-        f"&models={SINGLE_RUNS_MODEL}&run={run:%Y-%m-%dT%H:%M}&forecast_days={FORECAST_DAYS}"
-        "&timezone=UTC"
+    return forecast_url(
+        base_url,
+        {
+            "latitude": latitude,
+            "longitude": longitude,
+            "hourly": hourly,
+            "models": SINGLE_RUNS_MODEL,
+            "run": f"{run:%Y-%m-%dT%H:%M}",
+            "forecast_days": FORECAST_DAYS,
+            "timezone": "UTC",
+        },
     )
 
 
 def get_json(url: str) -> dict[str, Any]:
     import httpx
 
-    resp = httpx.get(url, timeout=30.0)
-    resp.raise_for_status()
+    try:
+        resp = httpx.get(url, timeout=30.0)
+    except httpx.HTTPError as exc:
+        # The request URL carries the customer key: report the failure class only.
+        raise ValueError(f"weather provider request failed ({type(exc).__name__})") from None
+    if resp.is_error:
+        raise ValueError(f"weather provider request failed (HTTP {resp.status_code})") from None
     return resp.json()
 
 
 def fetch_single_runs(
-    first: date, last: date, out: Path, latitude: float, longitude: float
+    first: date,
+    last: date,
+    out: Path,
+    latitude: float,
+    longitude: float,
+    *,
+    base_url: str = SINGLE_RUNS_BASE_URL,
+    api_key: str | None = None,
 ) -> tuple[int, int]:
     """Save the 00Z and 12Z runs of every day in [first, last] to `out` (one file per run);
     a run already saved is skipped. Returns (saved, skipped)."""
@@ -193,13 +243,14 @@ def fetch_single_runs(
             if path.exists():
                 skipped += 1
                 continue
-            url = single_run_url(run, latitude, longitude)
+            request_url = single_run_url(run, latitude, longitude, base_url)
             doc = {
                 "source": "open-meteo single-runs",
                 "model": SINGLE_RUNS_MODEL,
                 "run": f"{run:%Y-%m-%dT%H:%M}",
-                "request_url": url,
-                "response": get_json(url),
+                "request_url": request_url,
+                "endpoint_kind": endpoint_kind(base_url),
+                "response": get_json(with_api_key(request_url, api_key)),
             }
             path.write_text(json.dumps(doc, ensure_ascii=False) + "\n", encoding="utf-8")
             saved += 1
