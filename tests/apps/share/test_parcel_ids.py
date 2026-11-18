@@ -108,6 +108,7 @@ def test_a_grantee_reads_the_same_ids(
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
 
@@ -132,6 +133,7 @@ def test_no_parcel_shape_is_exported_to_a_grantee_or_the_owner(
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
 
@@ -202,6 +204,7 @@ def test_synthetic_dg_agri_aliases_are_omitted_from_owner_and_grantee_json(
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
 
@@ -239,6 +242,7 @@ def test_foreign_farm_parcel_ids_never_reach_owner_or_grantee_exports(
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
 

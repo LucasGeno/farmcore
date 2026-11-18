@@ -303,13 +303,15 @@ def test_default_projection_and_csv_are_unchanged_with_evidence_present(session,
     _merged(session, demo)
     repo = _repo(session, demo.farm)
 
-    plain = register.register_rows(repo, NOW)
-    checked = register.register_rows(repo, NOW, checks=True)
+    plain = register.register_rows(repo, NOW, tz="Europe/Paris")
+    checked = register.register_rows(repo, NOW, checks=True, tz="Europe/Paris")
 
     assert all(list(r) == list(register.FIELDS) for r in plain)
     assert all(list(r) == list(register.CSV_FIELDS) for r in checked)
-    assert next(csv.reader(io.StringIO(register.to_csv(checked)))) == list(register.CSV_FIELDS)
-    assert register.to_csv([]).splitlines() == [",".join(register.CSV_FIELDS)]
+    assert next(csv.reader(io.StringIO(register.to_csv(checked, tz="Europe/Paris")))) == list(
+        register.CSV_FIELDS
+    )
+    assert register.to_csv([], tz="Europe/Paris").splitlines() == [",".join(register.CSV_FIELDS)]
     assert (*register.FIELDS, "checks") == register.CSV_FIELDS
 
 

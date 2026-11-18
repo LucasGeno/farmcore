@@ -39,7 +39,7 @@ def test_import_does_not_hide_past_task_in_future_log(session, settings):
     result = isoxml.import_taskdata(farm.repo, single_task(), now=now, actor="test")
     assert result.tasks[0].log_id != future.id
     assert not result.tasks[0].merged
-    rows = register.register_rows(farm.repo, now)
+    rows = register.register_rows(farm.repo, now, tz="Europe/Paris")
     assert rows and {row["start_time"] for row in rows} == {"05:00"}
 
 

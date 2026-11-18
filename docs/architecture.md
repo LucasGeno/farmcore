@@ -48,6 +48,10 @@ database, a small core and installable apps, in the style of Odoo.
   routing, even with administrator credentials, for sharing a demo safely. Every page shows a
   tour banner; the only requests let through are the ones that leave the tour (`POST /tour/exit`
   and the two sign-outs), each with its usual Origin/CSRF checks.
+- **Farm location.** A farm's coordinates, time zone and country live in its `props`. The time
+  zone comes from the offline `timezonefinder` data and the country from bundled Natural Earth
+  boundaries; sea and border points ask the owner. Farm-scoped times use the farm's zone, with
+  the installation `display_tz` as the fallback.
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
 
@@ -55,6 +59,7 @@ database, a small core and installable apps, in the style of Odoo.
 
 | App | Does |
 |---|---|
+| Set up | First-run location step: time zone and country derived offline, optional address search |
 | Today | Home page assembled from app widgets |
 | Map & parcels | Aerial map (MapLibre) with layers and panel sections contributed by apps |
 | Records | Spray logs, ISOXML import, Reg. (EU) 2023/564 register with record checks |

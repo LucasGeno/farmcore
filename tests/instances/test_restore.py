@@ -99,6 +99,7 @@ def _agent_token(installation: dict[str, str], login: str) -> int:
                 scopes=["register:read"],
                 purpose="restore replay",
                 valid_to=datetime.now(UTC) + timedelta(days=30),
+                tz="Europe/Paris",
             )
             session.commit()
             grant_id = grant.id

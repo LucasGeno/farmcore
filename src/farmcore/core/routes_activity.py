@@ -14,6 +14,7 @@ from farmcore.core import registry
 from farmcore.core.access import Repo
 from farmcore.core.activity import ACTIVITY, DIARY, recent_activity
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.web import render
 
 router = APIRouter()
@@ -28,10 +29,12 @@ def live_apps(request: Request) -> set[str]:
 def activity_today(request: Request, repo: Repo) -> HTMLResponse:
     settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
+    tz = time_zone_of(repo.session, repo.farm_id, settings)
     apps = live_apps(request)
     return render(
         request,
         "core/_activity.html",
-        rows=recent_activity(repo, now, settings.display_tz, apps),
+        farm_tz=tz,
+        rows=recent_activity(repo, now, tz, apps),
         see_all=ACTIVITY if "activity" in apps else DIARY if "operations" in apps else None,
     )

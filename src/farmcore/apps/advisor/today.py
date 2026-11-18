@@ -25,7 +25,8 @@ from farmcore.apps.advisor.routes import (
 )
 from farmcore.apps.fields.seed import alias_number
 from farmcore.core.access import Repo
-from farmcore.core.models.canonical import Parcel
+from farmcore.core.farm_location import farm_zone
+from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.tour import is_tour
 from farmcore.web import render
 
@@ -36,16 +37,17 @@ router = APIRouter()
 def today_fragment(
     request: Request, repo: Repo, view: Literal["full", "attention", "calm"] = "full"
 ) -> HTMLResponse:
-    tz = request.app.state.settings.display_tz
+    settings = request.app.state.settings
+    tz = farm_zone(repo.session.get(Farm, repo.farm_id), settings).key
     now = _now(request, repo)
     availability = service.current_availability(repo, now, tz)
     unavailable = availability[1]
     if unavailable and view == "full":
         return unavailable_view(request, repo)
     if unavailable:
-        return render(request, "advisor/_today_home.html", view=view, unavailable=unavailable)
-    tz = request.app.state.settings.display_tz
-    now = _now(request, repo)
+        return render(
+            request, "advisor/_today_home.html", view=view, unavailable=unavailable, farm_tz=tz
+        )
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
@@ -55,6 +57,7 @@ def today_fragment(
         request,
         "advisor/_today.html" if view == "full" else "advisor/_today_home.html",
         view=view,
+        farm_tz=tz,
         workspace_links={
             p.id: parcel_link(request, p.id, f"/#home-parcel-{p.id}") for p in parcels
         },

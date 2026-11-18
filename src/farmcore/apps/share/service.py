@@ -29,7 +29,6 @@ from farmcore.core.models.canonical import AccessLog, DataGrant
 from farmcore.core.models.identity import AccessToken, LocalIdentity
 from farmcore.core.timeline import post_event
 
-DEFAULT_TZ = "Europe/Paris"
 OPERATOR_WORD = "operator"  # the `owner` actor: the installation operator, not a signed-in user
 DELETED_USER = "deleted user"
 DATE_FORMAT = "%d %b %Y"
@@ -42,11 +41,11 @@ def scope_words(scopes: list[str] | tuple[str, ...]) -> str:
     return ", ".join(config.SCOPE_WORDS.get(s, s) for s in scopes)
 
 
-def local_date(value: datetime, tz: str = DEFAULT_TZ) -> str:
+def local_date(value: datetime, tz: str) -> str:
     return value.astimezone(ZoneInfo(tz)).strftime(DATE_FORMAT)
 
 
-def local_time(value: datetime, tz: str = DEFAULT_TZ) -> str:
+def local_time(value: datetime, tz: str) -> str:
     """`16 Oct 2026 at 14:02` in `tz`."""
     return value.astimezone(ZoneInfo(tz)).strftime(f"{DATE_FORMAT} at %H:%M")
 
@@ -106,7 +105,7 @@ def create_grant(
     preset: str,
     purpose: str,
     valid_to: datetime,
-    tz: str = DEFAULT_TZ,
+    tz: str,
 ) -> DataGrant:
     """A grant of `preset`'s scopes on `repo.farm_id` from wall now to `valid_to`, and its
     `share.granted` event. `InvalidGrant` (a `ValueError`) on invalid input; nothing is written
@@ -171,7 +170,7 @@ def create_token(
     scopes: list[str],
     purpose: str,
     valid_to: datetime,
-    tz: str = DEFAULT_TZ,
+    tz: str,
 ) -> tuple[DataGrant, str]:
     """A personal access token for an agent of `creator_id`, a current owner of `repo.farm_id`:
     a grant of `scopes` from wall now to `valid_to` (at most `config.TOKEN_MAX_DAYS` away), its
@@ -267,7 +266,7 @@ def access_rows(
     *,
     grantees_only: bool = False,
     limit: int = config.ACCESS_LOG_LIMIT,
-    tz: str = DEFAULT_TZ,
+    tz: str,
 ) -> list[dict[str, Any]]:
     """The farm's last `limit` access_log rows, newest first (`audit:read`), each with its time
     (display tz), who in words (`_actor_label`), purpose, resource, scope and grant (`#id grantee`
@@ -319,7 +318,7 @@ def access_rows(
     return out
 
 
-def revoke_grant(repo: ScopedRepository, grant_id: int, *, tz: str = DEFAULT_TZ) -> DataGrant:
+def revoke_grant(repo: ScopedRepository, grant_id: int, *, tz: str) -> DataGrant:
     """Revoke a third-party grant of `repo.farm_id` at wall now and post `share.revoked`.
     Already revoked → unchanged, no second event. Owner grant, another farm's grant or an unknown
     id → `LookupError`."""

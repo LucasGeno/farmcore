@@ -56,7 +56,7 @@ def test_done_log_on_two_parcels_with_two_products_gives_four_full_rows(session,
     products = ops_seed.ensure_products(session)
     log = _spray(session, demo, products)
 
-    rows = register.register_rows(_repo(session, demo.farm), NOW)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
 
     assert len(rows) == 4
     assert list(rows[0]) == list(register.FIELDS)
@@ -98,17 +98,19 @@ def test_pending_log_is_not_in_the_register_and_a_done_one_is(session, demo):
     pending = _spray(session, demo, products, status="pending", parcels=demo.parcels[:1])
     repo = _repo(session, demo.farm)
 
-    assert register.register_rows(repo, NOW) == []
+    assert register.register_rows(repo, NOW, tz="Europe/Paris") == []
 
     logs.confirm(session, pending.id, "owner", T_SPRAY)
-    assert {r["log_id"] for r in register.register_rows(repo, NOW)} == {pending.id}
+    assert {r["log_id"] for r in register.register_rows(repo, NOW, tz="Europe/Paris")} == {
+        pending.id
+    }
 
 
 def test_register_is_bounded_by_the_clock_and_only_lists_sprays(session, demo):
     products = ops_seed.ensure_products(session)
     _spray(session, demo, products, ts=datetime(2024, 4, 20, 6, 0, tzinfo=UTC))
 
-    assert register.register_rows(_repo(session, demo.farm), NOW) == []
+    assert register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris") == []
 
 
 def test_bbch_from_the_log_wins_and_log_props_override_the_treated_area(session, demo):
@@ -123,7 +125,7 @@ def test_bbch_from_the_log_wins_and_log_props_override_the_treated_area(session,
         props={"area_treated_ha": {str(demo.parcels[0].id): "0.5"}},
     )
 
-    (row,) = register.register_rows(_repo(session, demo.farm), NOW)
+    (row,) = register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
 
     assert (row["bbch"], row["bbch_source"], row["area_treated_ha"]) == (15, "log", "0.5")
 
@@ -135,7 +137,7 @@ def test_bbch_outside_the_configured_years_is_blank(session, demo):
         session, demo, products, parcels=demo.parcels[:1], doses=[("copper-contact", "2")], ts=ts
     )
 
-    (row,) = register.register_rows(_repo(session, demo.farm), NOW)
+    (row,) = register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
 
     assert (row["bbch"], row["bbch_source"]) == (None, "none")
 
@@ -144,7 +146,7 @@ def test_register_reads_go_through_the_repo_under_register_read(session, demo):
     products = ops_seed.ensure_products(session)
     _spray(session, demo, products)
 
-    register.register_rows(_repo(session, demo.farm), NOW)
+    register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
 
     scopes = {(a.resource, a.scope) for a in session.scalars(select(AccessLog))}
     assert ("log", "register:read") in scopes
@@ -156,7 +158,10 @@ def test_csv_has_the_stable_header_and_the_e_phy_number(session, demo):
     products = ops_seed.ensure_products(session)
     _spray(session, demo, products, parcels=demo.parcels[:1], doses=[("copper-contact", "2")])
 
-    text = register.to_csv(register.register_rows(_repo(session, demo.farm), NOW))
+    text = register.to_csv(
+        register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris"),
+        tz="Europe/Paris",
+    )
 
     header, row, *rest = text.splitlines()
     assert rest == []
@@ -175,7 +180,7 @@ def test_rows_with_checks_carry_the_spray_checks_and_the_csv_says_them_in_words(
     products = ops_seed.ensure_products(session)
     log = _spray(session, demo, products)
 
-    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
 
     assert all(list(r) == list(register.CSV_FIELDS) for r in rows)
     assert all(r["checks"] == rows[0]["checks"] for r in rows)  # one list per spray
@@ -189,7 +194,7 @@ def test_rows_with_checks_carry_the_spray_checks_and_the_csv_says_them_in_words(
         f"dose:{sulphur}": ("ok", "Sulphur dose 3 kg/ha, label max 12.5"),
         "phi": ("info", "Harvest not before 13 Apr"),
     }
-    first = next(csv.DictReader(io.StringIO(register.to_csv(rows))))
+    first = next(csv.DictReader(io.StringIO(register.to_csv(rows, tz="Europe/Paris"))))
     assert first["log_id"] == str(log.id)
     assert first["checks"] == (
         "OK: Copper 0.4 of 4 kg Cu/ha this year; "
@@ -250,7 +255,7 @@ def test_checks_count_earlier_confirmed_sprays_only(session, demo):
         source=replace(VOICE, external_key="tg:5"),
     )
 
-    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
 
     row = next(r for r in rows if r["log_id"] == third.id)
     got = {c["key"]: c for c in row["checks"]}
@@ -273,7 +278,7 @@ def test_parcels_sort_by_alias_number_so_p10_follows_p9(session, demo, add_parce
     products = ops_seed.ensure_products(session)
     _spray(session, demo, products, parcels=[p10, *demo.parcels], doses=[("copper-contact", "2")])
 
-    rows = register.register_rows(_repo(session, demo.farm), NOW)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
 
     assert [r["parcel_alias"] for r in rows] == ["P1", "P2", "P10"]
 
@@ -304,12 +309,12 @@ def test_unconvertible_copper_rate_warns_and_keeps_later_known_sum(session, demo
         source=replace(VOICE, external_key="tg:2"),
     )
     session.flush()
-    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
     cu = {r["log_id"]: next(c for c in r["checks"] if c["key"] == "copper") for r in rows}
     assert cu[earlier.id]["status"] == "warn"
     assert cu[later.id]["status"] == "warn"
     assert cu[later.id]["label"] == "Copper at least 0.4 kg Cu/ha this year (incomplete)"
-    assert "Warning: Copper at least 0.4" in register.to_csv(rows)
+    assert "Warning: Copper at least 0.4" in register.to_csv(rows, tz="Europe/Paris")
 
 
 @pytest.mark.parametrize("second_unit", ["kg/ha", "g/ha", "l/ha"])
@@ -338,7 +343,7 @@ def test_register_checks_combine_same_product_rates_only(session, demo, second_u
         )
     )
     session.flush()
-    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
     found = {c["key"]: c for c in rows[0]["checks"]}
     dose = found[f"dose:{products['copper-contact'].id}"]
     assert dose["status"] == "warn"
@@ -364,7 +369,7 @@ def test_only_labelled_rates_are_products_without_catalogue_or_props(session, de
             Quantity(log_id=log.id, measure=measure, label=label, value=Decimal("2"), unit="kg/ha")
         )
     session.flush()
-    rows = register.register_rows(_repo(session, demo.farm), NOW)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
     assert [(r["product_name"], r["dose"], r["dose_unit"]) for r in rows] == [
         ("Mystery", "2", "kg/ha")
     ]
@@ -386,7 +391,7 @@ def test_register_interval_reaches_december_without_counting_it_in_january(sessi
             actor="test",
             occurred_at=at,
         )
-    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
     january = next(r for r in rows if r["date"] == "2024-01-02")
     found = {c["key"]: c for c in january["checks"]}
     assert (
@@ -402,7 +407,7 @@ def test_register_warns_for_known_copper_identity_without_composition(session, d
     copper = products["copper-contact"]
     copper.props = {k: v for k, v in copper.props.items() if k != "cu_fraction"}
     _spray(session, demo, products, parcels=demo.parcels[:1], doses=[("copper-contact", "2")])
-    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True)
+    rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
     check = next(c for c in rows[0]["checks"] if c["key"] == "copper")
     assert check["status"] == "warn"
     assert check["label"] == "Copper at least 0 kg Cu/ha this year (incomplete)"

@@ -102,6 +102,7 @@ def _issue(session, farm, creator, *, scopes=("register:read",), days=30):
         scopes=list(scopes),
         purpose="my own agent",
         valid_to=datetime.now(UTC) + timedelta(days=days),
+        tz="Europe/Paris",
     )
     session.commit()
     return grant, raw

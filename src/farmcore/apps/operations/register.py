@@ -73,7 +73,6 @@ from farmcore.core.models.canonical import (
 
 SCOPE = "register:read"
 DEFAULT_EPPO = "VITVI"  # grapevine, Vitis vinifera (EPPO code)
-DEFAULT_TZ = "Europe/Paris"
 _NUMBERED_ALIAS = re.compile(r"^P(\d+)$")
 
 FIELDS: tuple[str, ...] = (
@@ -239,7 +238,7 @@ def _applications(
     return out
 
 
-def preview_checks(repo: ScopedRepository, pending: Log, now: datetime, *, tz=DEFAULT_TZ):
+def preview_checks(repo: ScopedRepository, pending: Log, now: datetime, *, tz: str):
     """Read-only estimate including this pending spray; confirmation rechecks saved facts.
 
     Other drafts and future sprays never affect the preview. This does not confirm, run jobs,
@@ -407,7 +406,7 @@ def register_rows(
     repo: ScopedRepository,
     now: datetime,
     *,
-    tz: str = DEFAULT_TZ,
+    tz: str,
     checks: bool = False,
     weather: bool = False,
     aliases: bool = False,
@@ -516,7 +515,7 @@ def _csv_cell(value: Any) -> Any:
     return value
 
 
-def to_csv(rows: list[dict[str, Any]], *, weather: bool = False, tz: str = DEFAULT_TZ) -> str:
+def to_csv(rows: list[dict[str, Any]], *, weather: bool = False, tz: str) -> str:
     """CSV text with the `CSV_FIELDS` header; booleans as `yes` / blank, None as blank, the
     checks as one line of words (`checks.summary`); with `weather`, one more `saved_weather`
     column, every snapshot in words (`spray_weather.summary`), blank when none."""
@@ -532,7 +531,7 @@ def to_csv(rows: list[dict[str, Any]], *, weather: bool = False, tz: str = DEFAU
     return buf.getvalue()
 
 
-def weather_lines(rows: list[dict[str, Any]], tz: str = DEFAULT_TZ) -> list[str]:
+def weather_lines(rows: list[dict[str, Any]], tz: str) -> list[str]:
     """One spray's saved snapshots in words for its card: each source's snapshot once across
     the spray's rows (they share each source's entry object), in row order (by parcel, then
     source id), labelled with the parcels whose rows carry it (the source's own parcels, never

@@ -50,11 +50,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from farmcore.apps.operations import bbch, checks, corrections, facts, isoxml, register
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel, Product
 from farmcore.core.navigation import return_destination
 from farmcore.web import context_url, render
 
 router = APIRouter()
+
+
+def _farm_tz(request: Request, repo: Repo) -> str:
+    """The selected farm's own time zone, else the installation `display_tz`."""
+    return time_zone_of(repo.session, repo.farm_id, request.app.state.settings)
+
 
 MAX_UPLOAD_BYTES = 20_000_000  # a TaskData zip with TLG logs; far above a demo file
 RECENT_LOGS = 20
@@ -221,7 +228,6 @@ def import_isoxml(
     """Import an uploaded TaskData file (`.xml` or `.zip`) at the clock's now. HTMX gets the
     result partial plus updated recent records out of band on success; a plain form post
     gets the full page; a bad file is a 400."""
-    settings = request.app.state.settings
     data = file.file.read(MAX_UPLOAD_BYTES + 1)
     error, view = None, None
     if len(data) > MAX_UPLOAD_BYTES:
@@ -233,7 +239,7 @@ def import_isoxml(
                 data,
                 now=_now(request, repo),
                 actor=repo.actor,
-                tz=settings.display_tz,
+                tz=_farm_tz(request, repo),
                 weather_reader=getattr(request.app.state, "spray_weather_reader", None),
             )
             view = _isoxml_view(result)
@@ -309,8 +315,7 @@ def _by_spray(rows: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
 def register_page(request: Request, repo: Repo) -> HTMLResponse:
     """The register CSV as a table: the cells are read back from `register.to_csv`, so the page
     and the download never disagree. Each spray card lists its saved weather."""
-    settings = request.app.state.settings
-    tz = settings.display_tz
+    tz = _farm_tz(request, repo)
     now = _now(request, repo)
     rows = register.register_rows(repo, now, tz=tz, checks=True, weather=True)
     header, *cells = list(csv.reader(io.StringIO(register.to_csv(rows, weather=True, tz=tz))))
@@ -321,6 +326,7 @@ def register_page(request: Request, repo: Repo) -> HTMLResponse:
         request,
         "operations/register.html",
         now=now,
+        farm_tz=tz,
         header=header,
         rows=table,
         sprays=sprays,
@@ -340,7 +346,7 @@ ParcelId = Annotated[int | None, Query(ge=1, le=register.PARCEL_ID_MAX)]
 def _export_filter(
     request: Request, repo: Repo, season: int | None, parcel: int | None
 ) -> tuple[register.Window, Parcel | None]:
-    tz = request.app.state.settings.display_tz
+    tz = _farm_tz(request, repo)
     try:
         return register.export_filter(
             repo, _now(request, repo), tz, season=season, parcel_id=parcel
@@ -354,7 +360,7 @@ def register_csv(
     request: Request, repo: Repo, season: Season = None, parcel: ParcelId = None
 ) -> Response:
     """The register; `season` / `parcel` narrow it to one season and parcel (D4)."""
-    tz = request.app.state.settings.display_tz
+    tz = _farm_tz(request, repo)
     (since, until, before), chosen = _export_filter(request, repo, season, parcel)
     rows = register.register_rows(
         repo,
@@ -378,12 +384,11 @@ def register_csv(
 def register_json(
     request: Request, repo: Repo, season: Season = None, parcel: ParcelId = None
 ) -> JSONResponse:
-    settings = request.app.state.settings
     (since, until, before), chosen = _export_filter(request, repo, season, parcel)
     rows: list[dict[str, Any]] = register.register_rows(
         repo,
         until,
-        tz=settings.display_tz,
+        tz=_farm_tz(request, repo),
         checks=True,
         weather=True,
         aliases=True,
@@ -520,12 +525,12 @@ def _correction_context(request, repo, log_id):
     return {
         "log_id": log_id,
         "record": corrections.visible(corrections.snapshot(log)) if log is not None else None,
-        "local_start": log.ts_start.astimezone(ZoneInfo(request.app.state.settings.display_tz))
+        "local_start": log.ts_start.astimezone(ZoneInfo(_farm_tz(request, repo)))
         .replace(tzinfo=None)
         .isoformat()
         if log
         else None,
-        "timezone": request.app.state.settings.display_tz,
+        "timezone": _farm_tz(request, repo),
         "history": [corrections.view(item) for item in history],
         "parcels": repo.list(Parcel, scope="fields:read", order_by=Parcel.id),
         "products": products,
@@ -591,10 +596,11 @@ def correction_form_preview(
             if product
         ]
         entered = datetime.fromisoformat(ts_start.strip())
-        start = parse_local(entered.isoformat(), request.app.state.settings.display_tz)
+        tz = _farm_tz(request, repo)
+        start = parse_local(entered.isoformat(), tz)
         current = repo.get(Log, log_id, scope="logs:write")
         if current is not None and entered.tzinfo is None:
-            shown = current.ts_start.astimezone(ZoneInfo(request.app.state.settings.display_tz))
+            shown = current.ts_start.astimezone(ZoneInfo(tz))
             if entered == shown.replace(tzinfo=None):
                 start = current.ts_start  # unchanged local input retains the original DST fold
         changes = {

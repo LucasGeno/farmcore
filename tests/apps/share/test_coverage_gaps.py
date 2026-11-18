@@ -24,8 +24,10 @@ def test_grant_requires_a_purpose_and_a_timezone(session, farm):
         "valid_to": valid_to,
     }
     with pytest.raises(service.InvalidGrant, match="purpose"):
-        service.create_grant(repo, **{**base, "purpose": "   "})
+        service.create_grant(repo, **{**base, "purpose": "   "}, tz="Europe/Paris")
     with pytest.raises(service.InvalidGrant, match="longer than"):
-        service.create_grant(repo, **{**base, "purpose": "x" * (config.PURPOSE_MAX_LEN + 1)})
+        service.create_grant(
+            repo, **{**base, "purpose": "x" * (config.PURPOSE_MAX_LEN + 1)}, tz="Europe/Paris"
+        )
     with pytest.raises(service.InvalidGrant, match="timezone"):
-        service.create_grant(repo, **{**base, "valid_to": datetime(2030, 1, 1)})
+        service.create_grant(repo, **{**base, "valid_to": datetime(2030, 1, 1)}, tz="Europe/Paris")

@@ -36,6 +36,10 @@ def template_dirs() -> list[Path]:
 
 
 def _display_tz(context: Context) -> str:
+    # A page rendering one farm's data passes that farm's zone as `farm_tz`.
+    farm_tz = context.get("farm_tz")
+    if isinstance(farm_tz, str) and farm_tz:
+        return farm_tz
     request = context.get("request")
     settings = getattr(getattr(request, "app", None), "state", None)
     settings = getattr(settings, "settings", None)

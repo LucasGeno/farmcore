@@ -58,6 +58,7 @@ def adviser(session, owner_repo, grantee_identity):
         preset="adviser_logs",
         purpose="spray advice",
         valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
     )
     session.commit()
     return g
@@ -79,7 +80,7 @@ def test_access_rows_newest_first_capped_and_this_farm_only(
         purpose="spray advice",
     )
 
-    rows = service.access_rows(owner_repo)
+    rows = service.access_rows(owner_repo, tz="Europe/Paris")
 
     assert len(rows) == config.ACCESS_LOG_LIMIT
     ids = [r["id"] for r in rows]
@@ -96,7 +97,7 @@ def test_access_rows_newest_first_capped_and_this_farm_only(
 def test_grantees_only_keeps_third_party_rows(session, owner_repo, demo, adviser) -> None:
     _log(session, demo.farm.id, adviser.id, f"grant:{adviser.id}", scope="register:read")
 
-    rows = service.access_rows(owner_repo, grantees_only=True)
+    rows = service.access_rows(owner_repo, grantees_only=True, tz="Europe/Paris")
 
     assert rows and {r["grant"] for r in rows} == {f"#{adviser.id} Co-op adviser"}
 
