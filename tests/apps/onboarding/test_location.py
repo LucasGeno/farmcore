@@ -122,13 +122,26 @@ def test_a_sea_point_asks_the_owner_and_their_choice_is_stored(client, session, 
     session.expire_all()
     assert "forecast_location" not in (session.get(Farm, farm.id).props or {})
 
+    unknown = client.post(
+        "/onboarding/location",
+        data={
+            "latitude": "0",
+            "longitude": "-30",
+            "time_zone": "UTC",
+            "country": "XX",
+            "mode": "manual",
+        },
+        follow_redirects=False,
+    )
+    assert unknown.status_code == 422
+
     chosen = client.post(
         "/onboarding/location",
         data={
             "latitude": "0",
             "longitude": "-30",
             "time_zone": "UTC",
-            "country": "PT",
+            "country": "MT",
             "mode": "manual",
         },
         follow_redirects=False,
@@ -136,7 +149,11 @@ def test_a_sea_point_asks_the_owner_and_their_choice_is_stored(client, session, 
     assert chosen.status_code == 303
     session.expire_all()
     props = session.get(Farm, farm.id).props
-    assert (props["time_zone"], props["country"]) == ("UTC", "PT")
+    assert (props["time_zone"], props["country"], props["country_name"]) == (
+        "UTC",
+        "MT",
+        "Malta",
+    )
 
 
 def test_only_an_owner_can_save_the_location(session, session_factory, settings) -> None:
@@ -177,8 +194,9 @@ def test_only_an_owner_can_save_the_location(session, session_factory, settings)
     assert "forecast_location" not in (session.get(Farm, farm.id).props or {})
 
 
-def test_geocoder_is_off_by_default_and_the_page_renders_results(
-    client, settings, session, session_factory, monkeypatch
+@pytest.mark.parametrize(("outcome", "status"), [("results", 200), ("failure", 502)])
+def test_geocoder_route_renders_results_or_keeps_the_page_usable(
+    client, settings, session, session_factory, monkeypatch, outcome, status
 ) -> None:
     farm = ensure_default_farm(session, settings)
     session.commit()
@@ -186,11 +204,18 @@ def test_geocoder_is_off_by_default_and_the_page_renders_results(
     assert client.post("/onboarding/location/search", data={"q": "Paris"}).status_code == 404
 
     configured = settings.model_copy(update={"geocoder_base_url": "https://nominatim.example"})
-    monkeypatch.setattr(
-        geocode,
-        "search",
-        lambda *args, **kwargs: [geocode.Place("Village Hall, France", 44.9, -0.2)],
-    )
+    if outcome == "results":
+        monkeypatch.setattr(
+            geocode,
+            "search",
+            lambda *args, **kwargs: [geocode.Place("Village Hall, France", 44.9, -0.2)],
+        )
+    else:
+
+        def fail(*args, **kwargs):
+            raise geocode.GeocoderError("The address search is unavailable right now.")
+
+        monkeypatch.setattr(geocode, "search", fail)
     app = create_app(configured, session_factory=session_factory)
     with TestClient(
         app,
@@ -200,9 +225,10 @@ def test_geocoder_is_off_by_default_and_the_page_renders_results(
             f"/onboarding/location/search?farm={farm.id}", data={"q": "Village Hall"}
         )
 
-    assert page.status_code == 200
-    assert "Village Hall, France" in page.text
+    assert page.status_code == status
     assert "Save location" in page.text
+    if outcome == "results":
+        assert "Village Hall, France" in page.text
 
 
 def test_search_sends_a_user_agent_and_parses_both_providers(settings) -> None:
@@ -273,29 +299,6 @@ def test_search_sends_a_user_agent_and_parses_both_providers(settings) -> None:
         assert settings.public_base_url in agent
     assert requests[0].url.params["format"] == "jsonv2"
     assert requests[1].url.params["q"] == "Village"
-
-
-def test_a_geocoder_failure_keeps_the_location_page_usable(
-    client, settings, session, session_factory, monkeypatch
-) -> None:
-    farm = ensure_default_farm(session, settings)
-    session.commit()
-    configured = settings.model_copy(update={"geocoder_base_url": "https://nominatim.example"})
-
-    def fail(*args, **kwargs):
-        raise geocode.GeocoderError("The address search is unavailable right now.")
-
-    monkeypatch.setattr(geocode, "search", fail)
-    app = create_app(configured, session_factory=session_factory)
-    with TestClient(
-        app,
-        headers={"X-Admin-Token": configured.admin_token.get_secret_value()},
-    ) as browser:
-        page = browser.post(f"/onboarding/location/search?farm={farm.id}", data={"q": "Paris"})
-
-    assert page.status_code == 502
-    assert "The address search is unavailable right now." in page.text
-    assert "Save location" in page.text
 
 
 def test_isoxml_naive_time_uses_the_new_york_farms_zone(client, session, settings) -> None:

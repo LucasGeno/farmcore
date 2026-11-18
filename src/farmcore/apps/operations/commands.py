@@ -16,6 +16,7 @@ from farmcore.composition import compose_spray_weather_reader
 from farmcore.core import registry
 from farmcore.core.access import FarmNotSeeded, ScopedRepository, default_farm, ensure_owner_grant
 from farmcore.core.clock import get_clock
+from farmcore.core.farm_location import time_zone_of
 from farmcore.db import make_engine, make_session_factory, session_scope
 from farmcore.settings import get_settings
 
@@ -71,7 +72,7 @@ def register(cli: typer.Typer) -> None:
                     data,
                     now=get_clock(session, settings).now(),
                     actor=ACTOR,
-                    tz=settings.display_tz,
+                    tz=time_zone_of(session, farm.id, settings),
                     # The discovered apps: Weather's live state is read at capture.
                     weather_reader=compose_spray_weather_reader(registry.discover()),
                 )

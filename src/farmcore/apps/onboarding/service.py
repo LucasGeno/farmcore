@@ -7,7 +7,6 @@ supplies the time zone and country explicitly. The farm's `props` keep the coord
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -67,9 +66,7 @@ def manual_facts(time_zone: str, country: str) -> tuple[str, str, str] | None:
         raise LocationError("Choose a time zone the installation knows, for example Europe/Paris.")
     name = country_name(code)
     if name is None:
-        if not re.fullmatch(r"[A-Z]{2}", code):
-            raise LocationError("Choose a country code, for example FR.")
-        name = code  # a country the simplified boundaries do not carry: keep the owner's code
+        raise LocationError("Choose a known country code, for example FR.")
     return zone, code, name
 
 

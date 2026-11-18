@@ -37,21 +37,48 @@
   }
 
   var tileUrl = el.dataset.tileUrl || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
-  var attribution = el.dataset.tileAttribution || "&copy; OpenStreetMap contributors";
+  var attribution = el.dataset.tileAttribution || "© OpenStreetMap contributors";
+  // The world base; IGN's orthophoto is only layered where the Géoplateforme has coverage
+  // (metropolitan France and the DOM), so an owner elsewhere still sees a usable map.
+  var sources = {
+    basemap: {
+      type: "raster",
+      tiles: [tileUrl],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: attribution,
+    },
+  };
+  var layers = [{ id: "basemap", type: "raster", source: "basemap" }];
+  var ignTiles =
+    "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0" +
+    "&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM" +
+    "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg";
+  [
+    [-5.5, 41.0, 9.9, 51.5], // metropolitan France
+    [-61.9, 15.7, -60.9, 16.6], // Guadeloupe
+    [-61.4, 14.3, -60.7, 14.95], // Martinique
+    [-55.0, 1.8, -51.0, 6.2], // Guyane
+    [55.1, -21.5, 55.9, -20.8], // Réunion
+    [44.9, -13.1, 45.4, -12.6], // Mayotte
+  ].forEach(function (bounds, index) {
+    var key = "ign" + index;
+    sources[key] = {
+      type: "raster",
+      tiles: [ignTiles],
+      tileSize: 256,
+      maxzoom: 19,
+      bounds: bounds,
+      attribution: "© IGN",
+    };
+    layers.push({ id: key, type: "raster", source: key });
+  });
   var map = new maplibregl.Map({
     container: el,
     style: {
       version: 8,
-      sources: {
-        basemap: {
-          type: "raster",
-          tiles: [tileUrl],
-          tileSize: 256,
-          maxzoom: 19,
-          attribution: attribution,
-        },
-      },
-      layers: [{ id: "basemap", type: "raster", source: "basemap" }],
+      sources: sources,
+      layers: layers,
     },
     center: hasStart ? [startLon, startLat] : [2.4, 46.5],
     zoom: hasStart ? 13 : 5,

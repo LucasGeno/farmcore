@@ -74,14 +74,11 @@ class Settings(BaseSettings):
     # Optional address search on the location step: a Nominatim or Photon base URL. Empty (the
     # default) keeps the geocoder off; map, browser location and coordinates still work.
     geocoder_base_url: str = ""
-    # The location step's raster map. Defaults to the fields map's IGN orthophoto; set a
-    # self-hosted or licensed {z}/{x}/{y} template to keep tile requests off a public host.
-    location_map_tiles_url: str = (
-        "https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0"
-        "&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&STYLE=normal&TILEMATRIXSET=PM"
-        "&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}&FORMAT=image/jpeg"
-    )
-    location_map_attribution: str = "© IGN"
+    # The location step's world base map: empty uses OpenStreetMap. Set a self-hosted or
+    # licensed {z}/{x}/{y} template to keep the base requests off a public host. The IGN
+    # orthophoto is layered over France and the DOM by the page itself.
+    location_map_tiles_url: str = ""
+    location_map_attribution: str = "© OpenStreetMap contributors"
     clock_mode: Literal["replay", "live"] = "replay"
     # Local time (display_tz), naive.
     replay_start: datetime = datetime(2024, 4, 1, 6, 0)

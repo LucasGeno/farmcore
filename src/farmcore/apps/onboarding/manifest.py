@@ -15,6 +15,14 @@ MANIFEST = Manifest(
     nav_group="more",
     nav_order=10,
     nav_icon="map",
+    icon="map",
+    color="brand",
+    keywords={
+        "en": ("location", "farm", "place", "set up"),
+        "fr": ("emplacement", "ferme", "lieu", "installation"),
+        "es": ("ubicación", "granja", "lugar", "configuración"),
+        "it": ("posizione", "azienda", "luogo", "configurazione"),
+    },
     widgets=(Widget("/onboarding/today", 5, "full", label="Farm setup"),),
     maturity="alpha",
 )

@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import lru_cache
@@ -132,9 +131,10 @@ def _by_iso() -> dict[str, _Country]:
 def _zone_countries() -> dict[str, frozenset[str]]:
     """IANA zone key -> the countries tzdata names for it (`zone1970.tab`, then `zone.tab`).
 
-    The bundled vector polygons are simplified to about 110 m; near a border they can name
-    the neighbour. tzdata's own country list is the independent check, so a disagreement asks
-    the owner instead of silently storing the wrong country."""
+    The vector polygons are generalised to 1:110m (a kilometre-scale error, before the
+    three-decimal coordinate rounding); near a border they can name the neighbour. tzdata's
+    own country list is the independent check, so a disagreement asks the owner instead of
+    silently storing the wrong country."""
     found: dict[str, set[str]] = {}
     for directory in TZPATH:
         for filename in ("zone1970.tab", "zone.tab"):
@@ -149,18 +149,46 @@ def _zone_countries() -> dict[str, frozenset[str]]:
                     continue
                 codes = {code for code in fields[0].split(",") if code}
                 found.setdefault(fields[2], set()).update(codes)
+    if not found:
+        raise RuntimeError(
+            "tzdata zone1970.tab/zone.tab not found; install the tzdata system package "
+            "so country and time zone can be cross-checked"
+        )
     return {zone: frozenset(codes) for zone, codes in found.items()}
 
 
+@lru_cache(maxsize=1)
+def _iso3166() -> dict[str, str]:
+    """ISO alpha-2 code -> English name from tzdata's `iso3166.tab` (small states included)."""
+    found: dict[str, str] = {}
+    for directory in TZPATH:
+        path = Path(directory) / "iso3166.tab"
+        if not path.is_file():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line or line.startswith("#"):
+                continue
+            fields = line.split("\t")
+            if len(fields) >= 2 and fields[0]:
+                found.setdefault(fields[0], fields[1])
+    return found
+
+
 def country_options() -> list[tuple[str, str]]:
-    """`(ISO alpha-2, English name)` for every bundled country, sorted by name."""
-    return sorted(((c.iso, c.name) for c in _countries()), key=lambda item: item[1])
+    """`(ISO alpha-2, English name)` for every known country, sorted by name. The bundled
+    polygons name the large countries; tzdata's `iso3166.tab` adds the small states."""
+    names = {c.iso: c.name for c in _countries()}
+    for iso, name in _iso3166().items():
+        names.setdefault(iso, name)
+    return sorted(names.items(), key=lambda item: item[1])
 
 
 def country_name(iso: Any) -> str | None:
-    """The English name of `iso` (a bundled country), else None."""
-    country = _by_iso().get(iso) if isinstance(iso, str) else None
-    return country.name if country else None
+    """The English name of a known ISO alpha-2 code, else None."""
+    if not isinstance(iso, str):
+        return None
+    country = _by_iso().get(iso)
+    return country.name if country else _iso3166().get(iso)
 
 
 def _contains(bbox: BBox, x: float, y: float) -> bool:
@@ -234,17 +262,17 @@ def locate(latitude: Any, longitude: Any) -> Located:
     zone_countries = _zone_countries().get(time_zone, frozenset()) if time_zone else frozenset()
     conflict = only is not None and bool(zone_countries) and only.iso not in zone_countries
     if len(hits) > 1 or border or conflict:
-        proposed = None if conflict else only
+        proposed_iso = only.iso if only and not conflict else None
+        proposed_name = only.name if only and not conflict else None
         if conflict and len(zone_countries) == 1:
             code = next(iter(zone_countries))
-            if country_name(code):
-                proposed = _by_iso()[code]
+            proposed_iso, proposed_name = code, country_name(code)
         return Located(
             lat,
             lon,
             time_zone=time_zone,
-            country=proposed.iso if proposed else None,
-            country_name=proposed.name if proposed else None,
+            country=proposed_iso,
+            country_name=proposed_name,
             question="border",
         )
     if time_zone is None:
@@ -273,7 +301,7 @@ def farm_zone(farm: Farm | None, settings: Settings) -> ZoneInfo:
 
 def farm_country(farm: Farm | None) -> str | None:
     value = _props(farm).get(COUNTRY_KEY)
-    return value if isinstance(value, str) and re.fullmatch(r"[A-Z]{2}", value) else None
+    return value if country_name(value) else None
 
 
 def farm_location(farm: Farm | None) -> dict[str, float] | None:

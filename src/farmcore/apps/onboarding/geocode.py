@@ -30,6 +30,7 @@ CACHE_TTL_SECONDS = 3600
 CACHE_MAX_ENTRIES = 64
 
 _rate_lock = threading.Lock()
+_cache_lock = threading.Lock()
 _last_request_at = 0.0
 _cache: dict[tuple[str, str], tuple[float, tuple[Place, ...]]] = {}
 
@@ -98,7 +99,7 @@ def _photon(document: Any) -> list[Place]:
 
 
 def _cached(key: tuple[str, str], clock: Callable[[], float]) -> list[Place] | None:
-    with _rate_lock:
+    with _cache_lock:
         saved = _cache.get(key)
         if saved is None or clock() - saved[0] > CACHE_TTL_SECONDS:
             return None
@@ -106,7 +107,7 @@ def _cached(key: tuple[str, str], clock: Callable[[], float]) -> list[Place] | N
 
 
 def _remember(key: tuple[str, str], places: list[Place], clock: Callable[[], float]) -> None:
-    with _rate_lock:
+    with _cache_lock:
         if len(_cache) >= CACHE_MAX_ENTRIES:
             _cache.pop(next(iter(_cache)))
         _cache[key] = (clock(), tuple(places))
