@@ -11,7 +11,7 @@ from farmcore.core.manifest import JobSpec, Manifest
 MANIFEST = Manifest(
     name="catalog_fr_ephy",
     version="0.1.0",
-    summary="France's official register of plant-protection products and their registered uses.",
+    summary="France's official register of plant-protection products and their uses.",
     models=("farmcore.apps.catalog_fr_ephy.models",),
     jobs=(
         JobSpec(
