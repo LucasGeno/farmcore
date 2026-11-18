@@ -29,7 +29,7 @@ from sqlalchemy import select
 from farmcore.apps.stations import service
 from farmcore.apps.stations.connector import REPLAY_HORIZON
 from farmcore.core.models.canonical import Asset, Observation
-from farmcore.core.tools import ToolContext, ToolResult, ToolSpec
+from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = service.SCOPE
 STATION = "station"
@@ -71,7 +71,8 @@ TOOLS = (
             "One local day's weather at the farm's Météo-France station (replayed observations, "
             "up to now + 72 h): rain mm, min and max temperature, max wind, mean humidity."
         ),
-        params={"day": "STRING"},
+        params=object_schema({"day": {"type": "string"}}),
+        effect="read",
         func="farmcore.apps.stations.tools:weather",
         scope=SCOPE,
         keywords=(

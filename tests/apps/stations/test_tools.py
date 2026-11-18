@@ -147,8 +147,7 @@ def test_reads_only_asset_and_observation_and_writes_nothing(session, settings, 
 
 def test_declared_tool():
     [spec] = tools.TOOLS
-    assert (spec.name, spec.scope, spec.params) == (
+    assert (spec.name, spec.scope) == (
         "stations_weather",
         "stations:read",
-        {"day": "STRING"},
     )

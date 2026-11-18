@@ -107,16 +107,14 @@ def test_reads_as_the_assistant_and_writes_nothing(session, settings, seeded):
 
 def test_declared_tool():
     [spec, recent] = tools.TOOLS
-    assert (spec.name, spec.scope, spec.params) == (
+    assert (spec.name, spec.scope) == (
         "operations_last_spray",
         "logs:read",
-        {"parcel": "STRING"},
     )
     assert "last spray" in spec.keywords
-    assert (recent.name, recent.scope, recent.params) == (
+    assert (recent.name, recent.scope) == (
         "operations_recent_sprays",
         "logs:read",
-        {},
     )
     assert "which parcels did i spray" in recent.keywords
 

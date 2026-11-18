@@ -35,6 +35,7 @@ farmcore = "farmcore.cli:main"
 [dependency-groups]
 dev = [
     "hypothesis>=6.170.1",
+    "jsonschema>=4.26.0",
     "pytest",
     "pytest-xdist>=3.8.0",
     "ruff",

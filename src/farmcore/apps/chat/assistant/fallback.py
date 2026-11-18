@@ -77,7 +77,7 @@ def choose(tools: Sequence[ToolSpec], text: str, names_parcel: bool) -> ToolSpec
         matched = [len(k) for k in tool.keywords if _has(padded, k)]
         if not matched:
             continue
-        fits = (PARCEL in tool.params) == names_parcel
+        fits = (PARCEL in tool.param_names) == names_parcel
         score = (fits, max(matched), -order)
         if best is None or score > best[0]:
             best = (score, tool)
@@ -112,9 +112,9 @@ def answer(text: str, tools: Sequence[ToolSpec], ctx: ToolContext, base_url: str
     if tool is None:
         return no_answer
     args: dict[str, str] = {}
-    if PARCEL in tool.params:
+    if PARCEL in tool.param_names:
         args[PARCEL] = parcel.alias if parcel is not None else ""
-    if DAY in tool.params:
+    if DAY in tool.param_names:
         args[DAY] = _day(text)
     try:
         # A savepoint: a failing tool leaves the chat's transaction (and its access_log) usable.

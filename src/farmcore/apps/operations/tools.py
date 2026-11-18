@@ -18,7 +18,7 @@ from sqlalchemy import select
 
 from farmcore.apps.fields import tools as fields_tools
 from farmcore.core.models.canonical import Log, LogParcel, LogSource, Product, Quantity
-from farmcore.core.tools import ToolContext, ToolResult, ToolSpec
+from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = "logs:read"
 REGISTER_PATH = "/operations/register"
@@ -34,7 +34,8 @@ TOOLS = (
             "The latest spray logged on one parcel up to now: local date and time, products "
             "(name, active substance), dose and unit, and where the record came from."
         ),
-        params={"parcel": "STRING"},
+        params=object_schema({"parcel": {"type": "string"}}),
+        effect="read",
         func="farmcore.apps.operations.tools:last_spray",
         scope=SCOPE,
         keywords=(
@@ -57,7 +58,8 @@ TOOLS = (
             "Which parcels were sprayed this season up to now, with the latest sprays: local "
             "date and time, parcels, products and doses."
         ),
-        params={},
+        params=object_schema(),
+        effect="read",
         func="farmcore.apps.operations.tools:recent_sprays",
         scope=SCOPE,
         keywords=(

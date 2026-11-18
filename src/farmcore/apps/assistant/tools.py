@@ -3,12 +3,13 @@
 from datetime import date
 
 from farmcore.apps.forecast.planning import plan_days
-from farmcore.core.tools import ToolContext, ToolResult, ToolSpec
+from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 PLAN = ToolSpec(
     name="assistant_plan",
     description="The next seven days of stored forecast weather, with this browser's availability.",
-    params={},
+    params=object_schema(),
+    effect="read",
     func="farmcore.apps.assistant.tools:plan",
     scope="stations:read",
     keywords=(

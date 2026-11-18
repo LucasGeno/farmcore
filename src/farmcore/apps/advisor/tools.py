@@ -14,7 +14,7 @@ from typing import Any
 from farmcore.apps.advisor import service
 from farmcore.apps.fields import tools as fields_tools
 from farmcore.core.models.canonical import Advice
-from farmcore.core.tools import ToolContext, ToolResult, ToolSpec
+from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = service.SCOPE
 MAP_PATH = "/fields/"
@@ -44,7 +44,8 @@ TOOLS = (
             "Today's spray advice for every parcel: the advisor's decision (spray, wait, "
             "protected, none) and its one-line headline."
         ),
-        params={},
+        params=object_schema(),
+        effect="read",
         func="farmcore.apps.advisor.tools:today",
         scope=SCOPE,
         keywords=(
@@ -87,7 +88,8 @@ TOOLS = (
             "One parcel's latest advice: decision, headline, protected until, rain since the "
             "last spray, next spray window, recommended products and flags."
         ),
-        params={"parcel": "STRING"},
+        params=object_schema({"parcel": {"type": "string"}}),
+        effect="read",
         func="farmcore.apps.advisor.tools:parcel_status",
         scope=SCOPE,
         keywords=(

@@ -18,7 +18,7 @@ from farmcore.apps.stations import tools as station_tools
 from farmcore.core import logs, registry
 from farmcore.core.manifest import Manifest
 from farmcore.core.models.canonical import AccessLog, Advice, Parcel
-from farmcore.core.tools import ToolSpec
+from farmcore.core.tools import ToolSpec, object_schema
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.chat.assistant.toolkit import CHAT, ctx_at, write_counts
 from tests.apps.chat.test_handlers import NOW_LOCAL, seed_farm
@@ -58,10 +58,11 @@ def test_extension_failure_rolls_back_its_savepoint_and_the_next_question_works(
             ToolSpec(
                 name="synthetic_failure",
                 description="Test extension failure",
-                params={},
+                params=object_schema(),
                 func=f"{__name__}:failing_extension",
                 scope="fields:read",
                 keywords=("extension failure",),
+                effect="read",
             ),
         ),
     )

@@ -84,7 +84,7 @@ def action_tool(ctx):
 @pytest.mark.parametrize("base", ["https://agri.example.test", "http://localhost:8000"])
 def test_answer_actions_pin_context_farm_without_mutating_tool_paths(session, settings, base):
     from farmcore.apps.chat.assistant.context import tool_context
-    from farmcore.core.tools import ToolSpec
+    from farmcore.core.tools import ToolSpec, object_schema
     from tests.apps.chat.test_handlers import CHAT, NOW_LOCAL, seed_farm
 
     seed_farm(session, settings)
@@ -92,10 +92,11 @@ def test_answer_actions_pin_context_farm_without_mutating_tool_paths(session, se
     spec = ToolSpec(
         "qa_actions",
         "Synthetic read action",
-        {},
+        object_schema(),
         f"{__name__}:action_tool",
         "logs:read",
         ("register",),
+        effect="read",
     )
 
     out = fallback.answer("Show the register", [spec], ctx, base)
