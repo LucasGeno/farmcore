@@ -67,9 +67,10 @@ def ensure_installation_id(conn: Connection) -> str:
 
 
 # Written only by migrations: the schema revision and seeded reference data (core_0006's frozen
-# unit table). The runtime role only reads them, restore never loads them from a bundle (the
-# copy's own migration wrote them), and test fixtures that empty the database keep them.
-MIGRATION_OWNED_TABLES = ("alembic_version", "unit_definition")
+# unit table, core_0008's weather variables). The runtime role only reads them, restore never
+# loads them from a bundle (the copy's own migration wrote them), and test fixtures that empty
+# the database keep them.
+MIGRATION_OWNED_TABLES = ("alembic_version", "unit_definition", "weather_variable")
 # Views over legacy tables that the runtime role only reads (a simple view is auto-updatable).
 READ_ONLY_VIEWS = ("legacy_catalog_item", "legacy_typed_quantity")
 
