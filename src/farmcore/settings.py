@@ -6,6 +6,7 @@ Secrets are `SecretStr` and URLs carrying passwords are hidden from `repr`, so l
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from datetime import datetime
 from functools import lru_cache
@@ -20,6 +21,33 @@ from sqlalchemy.engine import make_url
 DEFAULT_DATABASE_URL = "postgresql+psycopg://farmcore:farmcore@localhost:55442/farmcore"
 DEFAULT_OPEN_METEO_BASE_URL = "https://api.open-meteo.com"
 DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL = "https://single-runs-api.open-meteo.com"
+
+
+def _check_http_url(v: str) -> str:
+    """An http(s) URL with a host, a numeric valid port, no credentials, query or fragment."""
+    url = urlsplit(v)
+    try:
+        port = url.port
+    except ValueError:
+        raise ValueError("must use a numeric port") from None
+    if url.scheme not in ("http", "https") or not url.hostname:
+        raise ValueError("must be an http(s) URL")
+    if url.username is not None or url.password is not None:
+        raise ValueError("must not contain credentials")
+    if url.query or url.fragment:
+        raise ValueError("must not contain a query or fragment")
+    if port is not None and not 0 < port < 65536:
+        raise ValueError("must use a valid port")
+    return v
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _default_vertex_auth() -> str:
@@ -80,6 +108,14 @@ class Settings(BaseSettings):
     vertex_auth: Literal["adc", "gcloud", "token"] = Field(default_factory=_default_vertex_auth)
     vertex_access_token: SecretStr | None = None
     extractor: Literal["vertex", "regex", "fake"] = "vertex"
+    # Which model the web assistant's tool chooser calls: Vertex (above), any OpenAI-compatible
+    # server (OpenAI, OpenRouter, Mistral, Ollama, vLLM), or none (the keyword router answers).
+    assistant_provider: Literal["vertex", "openai-compatible", "none"] = "vertex"
+    # Base URL including the version path (`https://api.openai.com/v1`, `http://localhost:11434/v1`);
+    # `/chat/completions` is appended. The key is sent as a bearer token, never logged or audited.
+    openai_compatible_base_url: str = ""
+    openai_compatible_api_key: SecretStr | None = None
+    openai_compatible_model: str = ""
     whisper_model: str = "small"
 
     @field_validator("database_url", mode="before")
@@ -90,20 +126,12 @@ class Settings(BaseSettings):
     @field_validator("open_meteo_base_url", "open_meteo_single_runs_base_url")
     @classmethod
     def _http_url_without_credentials(cls, v: str) -> str:
-        url = urlsplit(v)
-        try:
-            port = url.port
-        except ValueError:
-            raise ValueError("must use a numeric port") from None
-        if url.scheme not in ("http", "https") or not url.hostname:
-            raise ValueError("must be an http(s) URL")
-        if url.username is not None or url.password is not None:
-            raise ValueError("must not contain credentials")
-        if url.query or url.fragment:
-            raise ValueError("must not contain a query or fragment")
-        if port is not None and not 0 < port < 65536:
-            raise ValueError("must use a valid port")
-        return v
+        return _check_http_url(v)
+
+    @field_validator("openai_compatible_base_url")
+    @classmethod
+    def _openai_base_url(cls, v: str) -> str:
+        return _check_http_url(v) if v else v
 
     @model_validator(mode="after")
     def _key_requires_https(self) -> Settings:
@@ -111,6 +139,23 @@ class Settings(BaseSettings):
             for url in (self.open_meteo_base_url, self.open_meteo_single_runs_base_url):
                 if urlsplit(url).scheme != "https":
                     raise ValueError("OPEN_METEO_API_KEY requires https Open-Meteo base URLs")
+        return self
+
+    @model_validator(mode="after")
+    def _openai_compatible_complete(self) -> Settings:
+        incomplete = not (self.openai_compatible_base_url and self.openai_compatible_model)
+        if self.assistant_provider == "openai-compatible" and incomplete:
+            raise ValueError(
+                "ASSISTANT_PROVIDER=openai-compatible needs OPENAI_COMPATIBLE_BASE_URL "
+                "and OPENAI_COMPATIBLE_MODEL"
+            )
+        key = self.openai_compatible_api_key
+        if key is not None and key.get_secret_value() and self.openai_compatible_base_url:
+            url = urlsplit(self.openai_compatible_base_url)
+            if url.scheme != "https" and not _is_loopback(url.hostname or ""):
+                raise ValueError(
+                    "OPENAI_COMPATIBLE_API_KEY requires an https base URL (http only to loopback)"
+                )
         return self
 
     @model_validator(mode="after")

@@ -13,15 +13,24 @@ number the model makes up is never shown. Every call, failed or not, emits one `
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import json
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+import httpx
+from pydantic import SecretStr
 
 from farmcore.apps.chat.extractor.base import AuditRecord, ExtractorError
 from farmcore.apps.chat.extractor.vertex import VertexExtractor, _json_or_text
 from farmcore.core.tools import ToolSpec, vertex_schema
 
 ADAPTER = "vertex_assistant"
+OPENAI_ADAPTER = "openai_compatible_assistant"
+# 20 s per phase, 5 s to connect: a local Ollama may load a model on the first question, so the
+# read budget is deliberately generous; the keyword router answers when it is exceeded.
+OPENAI_TIMEOUT = httpx.Timeout(20.0, connect=5.0)
 TIMEOUT_S = 6.0  # a web question; the keyword router answers when the model is slow
 SYSTEM_INSTRUCTION = (
     "You route a vineyard farmer's question to one read-only function. Call exactly one "
@@ -129,3 +138,121 @@ def _parse(response_body: Any) -> Choice | None:
     except (KeyError, IndexError, TypeError) as exc:
         raise ChooserError("invalid reply") from exc
     return Choice(call["name"], dict(args), text)
+
+
+class OpenAICompatibleToolChooser:
+    """The same routing job over any OpenAI-compatible `/chat/completions` server (OpenAI,
+    OpenRouter, Mistral, Ollama, vLLM). Only `read` tools are offered, as function declarations
+    carrying their JSON Schema. The key goes in the `Authorization` header only: never in the
+    audited body, never in an error. Every call emits one `AuditRecord`."""
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: SecretStr | None,
+        model: str,
+        audit: Callable[[AuditRecord], None],
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.endpoint = base_url.rstrip("/") + "/chat/completions"
+        self.model = model
+        self._key = api_key
+        self._audit = audit
+        self._client = client or httpx.Client(timeout=OPENAI_TIMEOUT)
+
+    def request_body(self, question: str, tools: Sequence[ToolSpec]) -> dict[str, Any]:
+        return {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": SYSTEM_INSTRUCTION},
+                {"role": "user", "content": question},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        "parameters": t.params,
+                    },
+                }
+                for t in tools
+                if t.effect == "read"
+            ],
+            "tool_choice": "auto",
+            "temperature": 0,
+        }
+
+    def choose(self, question: str, tools: Sequence[ToolSpec]) -> Choice | None:
+        body = self.request_body(question, tools)
+        headers = {}
+        if self._key is not None and self._key.get_secret_value():
+            headers["Authorization"] = f"Bearer {self._key.get_secret_value()}"
+        started = time.monotonic()
+        status: int | None = None
+        response_body: Any = None
+        try:
+            response = self._client.post(
+                self.endpoint, json=body, headers=headers, timeout=OPENAI_TIMEOUT
+            )
+            status = response.status_code
+            response_body = _scrub(_json_or_text(response), self._key)
+            if status != 200:
+                raise ChooserError(f"HTTP {status}")
+            choice = _parse_openai(response_body)
+        except Exception as exc:  # httpx.InvalidURL included: never raised past the route
+            reason = str(exc) if isinstance(exc, ChooserError) else type(exc).__name__
+            self._emit(body, response_body, status, reason, started)
+            if isinstance(exc, ChooserError):
+                raise
+            raise ChooserError(reason) from exc
+        self._emit(body, response_body, status, None, started)
+        return choice
+
+    def _emit(
+        self, body: dict, response_body: Any, status: int | None, error: str | None, started: float
+    ) -> None:
+        self._audit(
+            AuditRecord(
+                adapter=OPENAI_ADAPTER,
+                model=self.model,
+                endpoint=self.endpoint,
+                request_body=body,
+                response_body=response_body,
+                status=status,
+                error=error,
+                latency_ms=round((time.monotonic() - started) * 1000),
+            )
+        )
+
+
+def _scrub(value: Any, key: SecretStr | None) -> Any:
+    """The response body for the audit row with the API key removed: a gateway may echo it."""
+    secret = key.get_secret_value() if key is not None else ""
+    if not secret:
+        return value
+    if isinstance(value, str):
+        return value.replace(secret, "[redacted]")
+    if isinstance(value, list):
+        return [_scrub(v, key) for v in value]
+    if isinstance(value, dict):
+        return {k: _scrub(v, key) for k, v in value.items()}
+    return value
+
+
+def _parse_openai(response_body: Any) -> Choice | None:
+    try:
+        message = response_body["choices"][0]["message"]
+        text = (message.get("content") or "").strip()
+        calls = message.get("tool_calls") or []
+        if not calls:
+            return None
+        function = calls[0]["function"]
+        name = function["name"]
+        raw = function.get("arguments") or "{}"
+        args = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(name, str) or not isinstance(args, dict):
+            raise TypeError("bad tool call")
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
+        raise ChooserError("invalid reply") from exc
+    return Choice(name, dict(args), text)
