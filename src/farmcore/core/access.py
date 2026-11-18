@@ -91,6 +91,7 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "product": _ANY,
     "source": _ANY,
     "parcel": frozenset({"fields:read", "register:read"}),
+    "crop_season": frozenset({"fields:read"}),
     "asset": frozenset({"stations:read"}),
     "observation": frozenset({"stations:read"}),
     "log": _LOG_READS,

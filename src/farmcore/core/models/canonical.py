@@ -10,7 +10,7 @@ Conventions:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -19,10 +19,12 @@ from sqlalchemy import (
     ARRAY,
     BigInteger,
     CheckConstraint,
+    Date,
     DateTime,
     Double,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -31,7 +33,7 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from farmcore.core.models.base import Base
@@ -99,6 +101,47 @@ class Parcel(Base):
         Geometry("MULTIPOLYGON", srid=4326, spatial_index=False), nullable=False
     )
     props: Mapped[dict[str, Any]] = _props()
+
+
+class CropSeason(Base):
+    """A dated crop context on a stable parcel (migration core_0005). Null crop, end or BBCH
+    stage means unknown, never a default. Seasons of one parcel never overlap: the inclusive
+    date ranges are excluded atomically (SQLSTATE 23P01, needs btree_gist). `revision` guards
+    edits from a stale device. External parcel references stay on `ext_id` / `iacs_id`."""
+
+    __tablename__ = "crop_season"
+    __table_args__ = (
+        ForeignKeyConstraint(("parcel_id", "farm_id"), ("parcel.id", "parcel.farm_id")),
+        CheckConstraint("ends_on IS NULL OR ends_on >= starts_on", name="dates"),
+        CheckConstraint("crop_eppo IS NULL OR crop_eppo ~ '^[0-9A-Z]{5,6}$'", name="crop_eppo"),
+        CheckConstraint(
+            "crop_name IS NULL OR length(btrim(crop_name)) BETWEEN 1 AND 200", name="crop_name"
+        ),
+        CheckConstraint("bbch IS NULL OR bbch BETWEEN 0 AND 99", name="bbch"),
+        CheckConstraint("revision >= 1", name="revision"),
+        ExcludeConstraint(
+            ("parcel_id", "="),
+            (text("daterange(starts_on, ends_on, '[]')"), "&&"),
+            name="ex_crop_season_parcel_dates",
+            using="gist",
+        ),
+        Index("ix_crop_season_parcel_id_starts_on", "parcel_id", "starts_on"),
+    )
+
+    id: Mapped[int] = _pk()
+    farm_id: Mapped[int] = mapped_column(BigInteger)
+    parcel_id: Mapped[int] = mapped_column(BigInteger)
+    starts_on: Mapped[date] = mapped_column(Date)
+    ends_on: Mapped[date | None] = mapped_column(Date)
+    crop_eppo: Mapped[str | None] = mapped_column(Text)
+    crop_name: Mapped[str | None] = mapped_column(Text)
+    bbch: Mapped[int | None] = mapped_column(Integer)
+    revision: Mapped[int] = mapped_column(Integer, server_default="1", default=1)
+    created_by: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = _now()
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Asset(Base):
