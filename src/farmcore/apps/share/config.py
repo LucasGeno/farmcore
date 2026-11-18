@@ -25,7 +25,7 @@ DEFAULT_PURPOSE = "spray advice"
 DEFAULT_VALID_DAYS = 30  # a season-sized consent; the farmer can revoke earlier
 GRANTEE_MAX_LEN = 80  # a person's or an organisation's name, not free text
 PURPOSE_MAX_LEN = 200  # one line of purpose, shown in the access log
-TOKEN_MAX_DAYS = 366  # assumed: one year, as GitHub's fine-grained personal access tokens
+TOKEN_MAX_DAYS = 366  # assumed: a product policy of at most one year; the form defaults to 30
 ACCESS_LOG_LIMIT = 50  # rows shown on /share/ (one screen of reads)
 
 # Plain words per scope (`access.SCOPES`), for the grants table and the grantee banner.

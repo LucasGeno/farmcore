@@ -74,8 +74,8 @@ def bundles(shared_source, owner_key, tmp_path_factory) -> dict[str, Path]:
 RESET_TABLES = {"local_session", "login_bucket", "access_token"}
 
 
-def _agent_token(installation: dict[str, str], login: str) -> str:
-    """An access token issued on `installation` by its owner `login`."""
+def _agent_token(installation: dict[str, str], login: str) -> int:
+    """The grant of an access token issued on `installation` by its owner `login`."""
     from datetime import UTC, datetime, timedelta
 
     from sqlalchemy import create_engine, select
@@ -92,7 +92,7 @@ def _agent_token(installation: dict[str, str], login: str) -> str:
             owner = session.scalar(select(LocalIdentity).where(LocalIdentity.login == login))
             farm = session.get(Farm, 1)
             repo = ScopedRepository(session, 1, ensure_owner_grant(session, farm), OWNER, "test")
-            _grant, raw = service.create_token(
+            grant, _raw = service.create_token(
                 repo,
                 creator_id=owner.id,
                 name="Synthetic agent",
@@ -101,9 +101,10 @@ def _agent_token(installation: dict[str, str], login: str) -> str:
                 valid_to=datetime.now(UTC) + timedelta(days=30),
             )
             session.commit()
+            grant_id = grant.id
     finally:
         engine.dispose()
-    return raw
+    return grant_id
 
 
 def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
@@ -112,7 +113,7 @@ def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
     """A shares its module: the member and session this adds are in no other test's facts."""
     key, recipient = owner_key
     login, password, a_cookies = signed_in_member(shared_source)
-    _agent_token(shared_source, login)
+    token_grant = _agent_token(shared_source, login)
     bundle = backup(shared_source, recipient, tmp_path / "a.age")
     target = module_dbs.create()
     c_env = module_dbs.installation(target)
@@ -129,8 +130,17 @@ def test_restore_makes_an_independent_copy_with_every_record_and_its_provenance(
     # Every row of every FarmCore table is the same, except the reset tables.
     a_rows, c_rows = table_rows(module_dbs, shared_source["name"]), table_rows(module_dbs, target)
     assert set(a_rows) == set(c_rows)
-    for table in sorted(set(a_rows) - RESET_TABLES):
+    for table in sorted(set(a_rows) - RESET_TABLES - {"data_grant"}):
         assert c_rows[table] == a_rows[table], table
+    # Grants too, but the token's grant, which the copy revokes (its token is not loaded).
+    a_grants, c_grants = (
+        [r for r in rows["data_grant"] if json.loads(r)["id"] != token_grant]
+        for rows in (a_rows, c_rows)
+    )
+    assert c_grants == a_grants
+    assert module_dbs.query(
+        target, f"SELECT revoked_at IS NOT NULL FROM data_grant WHERE id = {token_grant}"
+    ) == [(True,)]
     # ...and by meaning: records, sources, provenance and module evidence.
     for label, sql in SEMANTIC.items():
         assert module_dbs.query(target, sql) == module_dbs.query(shared_source["name"], sql), label

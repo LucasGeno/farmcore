@@ -111,7 +111,8 @@ that creates it (`Cache-Control: no-store`) and stored only as its SHA-256: a sl
 guessable secrets, and 256 random bits are not guessable. Every call checks the token afresh
 (never cached): a revoked or expired grant, another farm, or an issuer who is no longer an
 enabled owner of the farm refuses the next call with one message for every cause. Restore never
-loads tokens, so a token revoked after a backup does not come back; issue new ones on the copy.
+loads tokens and revokes their grants, so a token revoked after a backup does not come back and
+the copy starts with no agent access; issue new tokens on the copy.
 Send tokens in a header, never in a URL.
 
 ## Deployment checklist
