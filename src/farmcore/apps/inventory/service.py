@@ -3,15 +3,20 @@
 `stock_rows(repo, now, tz)` reads this season's `inventory_stock` rows (season = local calendar
 year of `now`) for products on the farm's shortlist (`operations.catalogue.products_for_farm`; an
 explicit empty shortlist, as on the Spanish demo farm, shows no stock), then sums, per product,
-the quantities of the farm's *done* spray logs started between 1 Jan local and `now`:
+the doses of the farm's *done* spray logs started between 1 Jan local and `now`.
 
-- only `rate` quantities count (every writer logs the dose as a `rate`), so a total logged next
-  to the rate is never added twice: a rate per hectare (`kg/ha`, `g/ha`, `L/ha`, `ml/ha`) times
-  the summed area of the log's parcels, converted into the stock unit when the dimension matches
-  (mass → kg, volume → l);
-- anything else (a litre dose against a kilogram stock, a rate not per hectare, an unknown unit,
-  a log with no rate of the product) is counted in `not_computable`, and then neither `used` nor
-  `on_hand` is given: a partial sum is never shown as the stock.
+Doses are read in the neutral shape: `legacy_typed_quantity` (spray product rates with their
+standard measure, value and unit), keyed on the spray's product, never on a measure, so an
+irrigation's entered volume (`typed_quantity`, no product) never consumes a liquid stock.
+`core.units` converts them in `Decimal` with the log's area as the only factor:
+
+- only rates count (`mass_rate`, `volume_rate`; every writer logs the dose as a per-hectare
+  rate), so a total logged next to the rate is never added twice: the rate times the summed
+  area of the log's parcels, in the stock unit;
+- anything else (a litre dose against a kilogram stock, which needs a density nobody gave; a
+  unit outside the registry; a NaN or infinite value; a log with no rate of the product) is
+  counted in `not_computable`, and then neither `used` nor `on_hand` is given: a partial sum is
+  never shown as the stock.
 
 `on_hand = purchased − used`; `low` when `on_hand <= low_stock` (the farmer's own number).
 """
@@ -24,22 +29,18 @@ from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from sqlalchemy import Row, select
+
 from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.core import units
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Log, LogParcel, Parcel, Product, Quantity
+from farmcore.core.models.canonical import Log, LogParcel, Parcel, Product
+from farmcore.core.models.catalog import legacy_typed_quantity
 
 LOGS_SCOPE = "logs:read"
 FIELDS_SCOPE = "fields:read"
-PER_HA = "/ha"
-RATE = "rate"
-# unit -> (stock unit, factor into it)
-UNITS: dict[str, tuple[str, Decimal]] = {
-    "kg": ("kg", Decimal(1)),
-    "g": ("kg", Decimal("0.001")),
-    "l": ("l", Decimal(1)),
-    "ml": ("l", Decimal("0.001")),
-}
+RATES = frozenset(m for m in units.STANDARD_UNITS if m.endswith("_rate"))
 
 
 @dataclass(frozen=True)
@@ -63,16 +64,20 @@ def season_start(now: datetime, tz: str) -> tuple[int, datetime]:
     return local.year, local.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def convert(value: Decimal, unit: str, area_ha: Decimal, stock_unit: str) -> Decimal | None:
-    """The amount of a per-hectare dose over `area_ha` in `stock_unit`, or None when it does not
-    convert."""
-    u = unit.strip().lower()
-    if not u.endswith(PER_HA):
+def amount_used(dose: Row, area_ha: Decimal, stock_unit: str) -> Decimal | None:
+    """The amount of a per-hectare dose over `area_ha` in `stock_unit`, or None when no known
+    factor converts it exactly."""
+    try:
+        rate = units.Measured(
+            dose.measure,
+            units.decimal_value(dose.value),
+            dose.unit,
+            dose.entered_value,
+            dose.entered_unit,
+        )
+        return units.convert(rate, stock_unit, area_ha=area_ha)
+    except units.UnitError:
         return None
-    base = UNITS.get(u.removesuffix(PER_HA))
-    if base is None or base[0] != stock_unit:
-        return None
-    return value * base[1] * area_ha
 
 
 def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockRow]:
@@ -98,46 +103,52 @@ def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockR
         scope=LOGS_SCOPE,
     )
     log_ids = [log.id for log in logs]
-    quantities = (
-        repo.list(
-            Quantity,
-            Quantity.log_id.in_(log_ids),
-            Quantity.product_id.in_([s.product_id for s in stocks]),
-            scope=LOGS_SCOPE,
-        )
+    view = legacy_typed_quantity.c
+    doses = (
+        repo.session.execute(
+            select(
+                view.log_id,
+                view.product_id,
+                view.measure,
+                view.value,
+                view.unit,
+                view.entered_value,
+                view.entered_unit,
+            ).where(view.log_id.in_(log_ids), view.product_id.in_([s.product_id for s in stocks]))
+        ).all()
         if log_ids
         else []
     )
-    area = _log_areas(repo, {q.log_id for q in quantities})
-    by_product: dict[int, list[Quantity]] = defaultdict(list)
-    for q in quantities:
-        by_product[q.product_id].append(q)
+    area = _log_areas(repo, {d.log_id for d in doses})
+    by_product: dict[int, list[Row]] = defaultdict(list)
+    for d in doses:
+        by_product[d.product_id].append(d)
 
     rows = []
     for s in stocks:
-        used, bad = Decimal(0), set()
-        per_log: dict[int, list[Quantity]] = defaultdict(list)
-        for q in by_product[s.product_id]:
-            per_log[q.log_id].append(q)
+        total, bad = Decimal(0), set()
+        per_log: dict[int, list[Row]] = defaultdict(list)
+        for d in by_product[s.product_id]:
+            per_log[d.log_id].append(d)
         sprays = set(per_log)
-        for log_id, qs in per_log.items():
-            rates = [q for q in qs if q.measure == RATE]
-            if not rates:
+        for log_id, ds in per_log.items():
+            rates = [d for d in ds if d.measure in RATES]
+            if not rates or any(d.measure is None for d in ds):
                 bad.add(log_id)
-            for q in rates:
-                amount = convert(q.value, q.unit, area.get(log_id, Decimal(0)), s.unit)
+            for d in rates:
+                amount = amount_used(d, area.get(log_id, Decimal(0)), s.unit)
                 if amount is None:
                     bad.add(log_id)
                 else:
-                    used += amount
-        total = None if bad else used
-        on_hand = None if total is None else s.purchased - total
+                    total += amount
+        season_used = None if bad else total
+        on_hand = None if season_used is None else s.purchased - season_used
         rows.append(
             StockRow(
                 stock=s,
                 product=products[s.product_id],
                 purchased=s.purchased,
-                used=total,
+                used=season_used,
                 on_hand=on_hand,
                 sprays=len(sprays),
                 not_computable=len(bad),
