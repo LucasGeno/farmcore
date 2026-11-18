@@ -3,10 +3,10 @@
 1. Editing the current season rewrites an earlier season or the season context an assessment
    saved as evidence.
 2. Overlapping seasons are both kept or silently merged instead of rejected.
-3. A stale edit, an edit of an earlier season, a non-owner or a selector from another farm or
-   parcel changes a season.
+3. A stale edit, an edit of (or a reorder exposing) an earlier season, a non-owner member, or
+   a selector from another farm or parcel changes a season.
 4. Unknown crop, end or phenology is invented: from legacy parcel props, or by the upgrade of a
-   populated legacy database.
+   populated legacy database; a downgrade silently drops owner-entered seasons.
 """
 
 from __future__ import annotations
@@ -24,7 +24,9 @@ from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.commands.migrate import alembic_config
 from farmcore.core.models.canonical import Asset, CropSeason, Farm
 from farmcore.core.seed import ensure_default_farm
+from farmcore.main import create_app
 from tests.apps.share.conftest import make_parcel
+from tests.core.test_member_sessions import _account, _login
 from tests.core.test_schema import MULTIPOLYGON_GEOJSON, scratch_db_url  # noqa: F401
 
 SEASON_2023 = {"starts_on": "2023-03-01", "ends_on": "2023-10-31", "crop_eppo": "VITVI"}
@@ -114,7 +116,7 @@ def _repo(session, farm):
 @pytest.mark.parametrize(
     "overlap",
     [
-        {"starts_on": "2023-10-31", "crop_eppo": "VITVI"},  # shares the prior season's last day
+        {"starts_on": "2023-10-31", "ends_on": "2023-11-30"},  # only the prior's last day
         {"starts_on": "2023-01-01", "ends_on": "2023-04-01"},  # straddles the prior start
         {"starts_on": "2024-06-01"},  # inside the open current season
     ],
@@ -149,6 +151,9 @@ def test_stale_prior_foreign_and_non_owner_edits_change_nothing(
 
     assert patch(parcel.id, current["id"], {**edit, "expected_revision": 2}).status_code == 409
     assert patch(parcel.id, prior["id"]).status_code == 409  # only the current season is edited
+    # Moving the current season behind the earlier one would make that one editable.
+    behind = {"expected_revision": 1, "starts_on": "2022-03-01", "ends_on": "2022-10-31"}
+    assert patch(parcel.id, current["id"], behind).status_code == 409
     assert patch(other_parcel.id, current["id"]).status_code == 404
     assert patch(foreign_parcel.id, current["id"]).status_code == 404
     assert patch(parcel.id, current["id"], farm_id=other_farm.id).status_code == 404
@@ -156,10 +161,22 @@ def test_stale_prior_foreign_and_non_owner_edits_change_nothing(
         client.post(_url(foreign_parcel.id), params={"farm": farm.id}, json=SEASON_2023).status_code
         == 404
     )
-    from farmcore.main import create_app
-
-    with TestClient(create_app(settings, session_factory=session_factory)) as anonymous:
-        assert patch(parcel.id, current["id"], http=anonymous).status_code == 403
+    # A signed-in advisor member of this farm never writes seasons.
+    _account(session_factory, login="season-advisor", farm_id=farm.id, role="advisor")
+    app = create_app(settings, session_factory=session_factory)
+    with TestClient(app, base_url="https://testserver") as advisor:
+        assert _login(advisor, login="season-advisor").status_code == 303
+        headers = {
+            "Origin": "https://testserver",
+            "X-CSRF-Token": advisor.cookies.get("farmcore_csrf"),
+        }
+        query = {"farm": farm.id}
+        assert (
+            advisor.post(_url(parcel.id), params=query, json=SEASON_2023, headers=headers)
+        ).status_code == 403
+        assert (
+            advisor.patch(_url(parcel.id, current["id"]), params=query, json=edit, headers=headers)
+        ).status_code == 403
 
     assert _seasons(client, farm, parcel.id) == before
     assert session.scalar(select(func.count()).select_from(CropSeason)) == 2
@@ -179,6 +196,9 @@ def test_legacy_parcel_shows_unknown_season_not_its_crop_props(client, farm, par
     unknown = _create(client, farm, parcel.id, {"starts_on": "2024-03-01"})
     assert (unknown["crop_eppo"], unknown["crop_name"], unknown["bbch"]) == (None, None, None)
     assert unknown["unknown"] == ["crop", "end", "phenology"]
+    # The open season covers today (live clock), so the panel names it, crop still unknown.
+    panel = client.get(f"/fields/panel/parcels/{parcel.id}", params={"farm": farm.id})
+    assert "Unknown crop since 2024-03-01" in panel.text
 
 
 def test_populated_legacy_database_upgrades_without_invented_seasons(scratch_db_url):  # noqa: F811
@@ -206,6 +226,18 @@ def test_populated_legacy_database_upgrades_without_invented_seasons(scratch_db_
                 "P1",
                 "Merlot",
             )
+        with engine.begin() as db:
+            db.execute(
+                text(
+                    "INSERT INTO crop_season(farm_id,parcel_id,starts_on,created_by) "
+                    "SELECT farm_id, id, DATE '2024-03-01', 'owner' FROM parcel"
+                )
+            )
+        with pytest.raises(RuntimeError, match="downgrade refused"):
+            command.downgrade(cfg, "planning_0003")
+        with engine.begin() as db:
+            assert db.execute(text("SELECT count(*) FROM crop_season")).scalar_one() == 1
+            db.execute(text("DELETE FROM crop_season"))
         command.downgrade(cfg, "planning_0003")
         command.upgrade(cfg, "head")
     finally:

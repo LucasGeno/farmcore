@@ -13,6 +13,7 @@ import secrets
 from datetime import date
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -156,6 +157,18 @@ def panel_sections(request: Request, kind: PanelKind, parcel_id: int | None = No
     return sections
 
 
+def _season_today(request: Request, repo: Repo, parcel: Parcel) -> dict:
+    """The season covering the clock's local today (None in a gap or with no seasons), and
+    whether the parcel has any season, so a gap never reads as an unknown crop history."""
+    settings: Settings = request.app.state.settings
+    today = get_clock(repo.session, settings).now().astimezone(ZoneInfo(settings.display_tz))
+    row = seasons.season_on(repo, parcel.id, today.date())
+    return {
+        "season": seasons.season_json(row) if row else None,
+        "has_seasons": bool(row) or bool(seasons.seasons(repo, parcel.id)),
+    }
+
+
 def _panel(request: Request, repo: Repo, parcel: Parcel | None, note: str | None = None) -> dict:
     if parcel is None:
         farm = repo.get(Farm, repo.farm_id, scope="fields:read")
@@ -174,7 +187,7 @@ def _panel(request: Request, repo: Repo, parcel: Parcel | None, note: str | None
             "name": parcel.name,
             "area_ha": float(parcel.area_ha),
             "variety": (parcel.props or {}).get("variety"),
-            "season": seasons.seasons_json(repo, parcel)["current"],
+            **_season_today(request, repo, parcel),
         },
         "sections": panel_sections(request, "parcel", parcel.id),
         "close_url": resolved_url(request, "/fields/"),

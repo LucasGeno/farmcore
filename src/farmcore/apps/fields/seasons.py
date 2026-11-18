@@ -70,6 +70,8 @@ def seasons(repo: ScopedRepository, parcel_id: int) -> list[CropSeason]:
 
 
 def seasons_json(repo: ScopedRepository, parcel: Parcel) -> dict[str, Any]:
+    """`current` is the latest-starting season, the one the owner edits; the season covering a
+    given day is `season_on`."""
     rows = seasons(repo, parcel.id)
     return {
         "parcel_id": parcel.id,
@@ -113,8 +115,14 @@ def _flush(repo: ScopedRepository) -> None:
         raise
 
 
+def _lock_parcel(repo: ScopedRepository, parcel: Parcel) -> None:
+    """Serialize season writes of one parcel, so "latest season" cannot change under an edit."""
+    repo.session.execute(select(Parcel.id).where(Parcel.id == parcel.id).with_for_update())
+
+
 def create(repo: ScopedRepository, parcel: Parcel, values: dict[str, Any]) -> CropSeason:
     _check(values)
+    _lock_parcel(repo, parcel)
     row = CropSeason(
         farm_id=repo.farm_id, parcel_id=parcel.id, created_by=repo.actor, revision=1, **values
     )
@@ -131,7 +139,8 @@ def edit(
     expected_revision: int,
     changes: dict[str, Any],
 ) -> CropSeason:
-    """Edit the parcel's current season. The row lock serializes two devices' edits."""
+    """Edit the parcel's current season. The parcel lock serializes two devices' writes."""
+    _lock_parcel(repo, parcel)
     row = repo.session.scalar(
         select(CropSeason)
         .where(
@@ -154,6 +163,17 @@ def edit(
         raise SeasonConflict(f"Revision conflict: the season is at revision {row.revision}.")
     values = {name: getattr(row, name) for name in FIELDS} | changes
     _check(values)
+    # The edited season must stay the latest: moving it behind an earlier season would make
+    # that one current, and so editable.
+    behind = repo.session.scalar(
+        select(CropSeason.id).where(
+            CropSeason.parcel_id == parcel.id,
+            CropSeason.id != row.id,
+            CropSeason.starts_on >= values["starts_on"],
+        )
+    )
+    if behind is not None:
+        raise SeasonConflict("The current season cannot start before an earlier season.")
     for name, value in changes.items():
         setattr(row, name, value)
     row.revision += 1
