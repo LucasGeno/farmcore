@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -27,6 +27,10 @@ from farmcore.core.models.catalog import CatalogAuthorisation, CatalogItem
 
 COUNTRY = "FR"
 REASON_CAP = 100
+# Rows per use-upsert statement: 4000 rows x ~16 columns stays under PostgreSQL's 65,535 bind
+# limit. A full first import (about 80k uses) runs in under a minute; an unchanged re-run is a
+# no-op.
+USE_BATCH = 4000
 
 
 @dataclass(frozen=True)
@@ -51,6 +55,9 @@ def _use_payload(use: sources.UseRow) -> dict[str, object]:
         "phi_days": use.phi_days,
         "distribution_end": use.distribution_end.isoformat() if use.distribution_end else None,
         "use_end": use.use_end.isoformat() if use.use_end else None,
+        "znt_aquatic": str(use.znt_aquatic) if use.znt_aquatic is not None else None,
+        "znt_arthropods": str(use.znt_arthropods) if use.znt_arthropods is not None else None,
+        "znt_plants": str(use.znt_plants) if use.znt_plants is not None else None,
         "state": use.state,
     }
 
@@ -102,12 +109,11 @@ def _props(row: sources.ProductRow, fingerprint: str) -> dict[str, object]:
     return props
 
 
-def _upsert_uses(session: Session, rows: list[tuple[int, sources.UseRow]]) -> None:
-    """Upsert every use of the changed products in one statement, so a weekly import is a few
-    round trips, not one per use. Exact source duplicates (the same content hash per item) are
-    collapsed, since a single `ON CONFLICT` statement may not touch one row twice."""
-    if not rows:
-        return
+def _upsert_uses(session: Session, rows: list[tuple[int, sources.UseRow]]) -> int:
+    """Insert the changed products' uses, chunked under the bind limit. Exact source duplicates
+    (the same content hash per item) are collapsed — a single `ON CONFLICT` statement may not
+    touch one row twice — and an existing identical use is left alone (`ON CONFLICT DO NOTHING`:
+    every column is part of the hash). Returns the distinct use count written."""
     seen: set[tuple[int, str]] = set()
     deduped: list[tuple[int, sources.UseRow]] = []
     for item_id, use in rows:
@@ -116,43 +122,51 @@ def _upsert_uses(session: Session, rows: list[tuple[int, sources.UseRow]]) -> No
             continue
         seen.add(key)
         deduped.append((item_id, use))
-    statement = pg_insert(CatalogUse).values(
-        [
-            {
-                "catalog_item_id": item_id,
-                "use_key": _use_key(use),
-                "identifiant": use.identifiant,
-                "crop": use.crop,
-                "target": use.target,
-                "max_dose": use.max_dose,
-                "max_dose_unit": use.max_dose_unit,
-                "interval_days": use.interval_days,
-                "max_applications": use.max_applications,
-                "phi_days": use.phi_days,
-                "distribution_end": use.distribution_end,
-                "use_end": use.use_end,
-                "state": use.state,
-            }
-            for item_id, use in deduped
-        ]
-    )
-    statement = statement.on_conflict_do_update(
-        index_elements=["catalog_item_id", "use_key"],
-        set_={
-            "identifiant": statement.excluded.identifiant,
-            "crop": statement.excluded.crop,
-            "target": statement.excluded.target,
-            "max_dose": statement.excluded.max_dose,
-            "max_dose_unit": statement.excluded.max_dose_unit,
-            "interval_days": statement.excluded.interval_days,
-            "max_applications": statement.excluded.max_applications,
-            "phi_days": statement.excluded.phi_days,
-            "distribution_end": statement.excluded.distribution_end,
-            "use_end": statement.excluded.use_end,
-            "state": statement.excluded.state,
-        },
-    )
-    session.execute(statement)
+    for start in range(0, len(deduped), USE_BATCH):
+        batch = deduped[start : start + USE_BATCH]
+        statement = (
+            pg_insert(CatalogUse)
+            .values(
+                [
+                    {
+                        "catalog_item_id": item_id,
+                        "use_key": _use_key(use),
+                        "identifiant": use.identifiant,
+                        "crop": use.crop,
+                        "target": use.target,
+                        "max_dose": use.max_dose,
+                        "max_dose_unit": use.max_dose_unit,
+                        "interval_days": use.interval_days,
+                        "max_applications": use.max_applications,
+                        "phi_days": use.phi_days,
+                        "distribution_end": use.distribution_end,
+                        "use_end": use.use_end,
+                        "znt_aquatic": use.znt_aquatic,
+                        "znt_arthropods": use.znt_arthropods,
+                        "znt_plants": use.znt_plants,
+                        "state": use.state,
+                    }
+                    for item_id, use in batch
+                ]
+            )
+            .on_conflict_do_nothing(index_elements=["catalog_item_id", "use_key"])
+        )
+        session.execute(statement)
+    return len(deduped)
+
+
+def _delete_stale_uses(session: Session, item_id: int, keep_keys: set[str]) -> None:
+    """Remove the uses of a changed product whose key no longer exists upstream, so a changed
+    label never leaves a ghost row behind."""
+    if keep_keys:
+        session.execute(
+            delete(CatalogUse).where(
+                CatalogUse.catalog_item_id == item_id,
+                CatalogUse.use_key.not_in(keep_keys),
+            )
+        )
+    else:
+        session.execute(delete(CatalogUse).where(CatalogUse.catalog_item_id == item_id))
 
 
 def _existing_items(session: Session, amms: list[str]) -> dict[str, CatalogItem]:
@@ -213,7 +227,6 @@ def import_ephy(
     new_items: list[tuple[str, CatalogItem]] = []
     changed: list[tuple[CatalogItem, list[sources.UseRow]]] = []
     products_written = 0
-    uses_written = 0
     for row in products.rows:
         uses_for = uses_by_amm.get(row.amm, [])
         product_hash = _product_fingerprint(row, uses_for)
@@ -229,14 +242,23 @@ def import_ephy(
         item.props = _props(row, product_hash)
         changed.append((item, uses_for))
         products_written += 1
-        uses_written += len(uses_for)
     session.flush()  # new items get their ids
 
     for amm, item in new_items:
         session.add(CatalogAuthorisation(catalog_item_id=item.id, country=COUNTRY, number=amm))
     session.flush()
 
-    _upsert_uses(session, [(item.id, use) for item, uses in changed for use in uses])
+    new_item_ids = {item.id for _, item in new_items}
+    use_rows: list[tuple[int, sources.UseRow]] = []
+    for item, uses_for in changed:
+        if item.id not in new_item_ids:
+            _delete_stale_uses(session, item.id, {_use_key(use) for use in uses_for})
+        use_rows.extend((item.id, use) for use in uses_for)
+    uses_written = _upsert_uses(session, use_rows)
+
+    source_use_count = sum(
+        len({_use_key(use) for use in uses_for}) for uses_for in uses_by_amm.values()
+    )
 
     session.add(
         CatalogImport(
@@ -250,7 +272,7 @@ def import_ephy(
             archive_name=meta.archive_name,
             archive_date=meta.archive_date,
             product_count=len(products.rows),
-            use_count=sum(len(uses_for) for uses_for in uses_by_amm.values()),
+            use_count=source_use_count,
             skipped=skipped,
             reasons=list(reasons[:REASON_CAP]),
         )

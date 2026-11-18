@@ -1,10 +1,11 @@
 """catalog_fr_ephy: France's E-Phy registered uses and the import fingerprint
 
 Adds `catalog_use` (one row per E-Phy usage line, keyed on `(catalog_item_id, use_key)`: crop,
-target, max dose, interval, max applications, harvest interval, distribution/use end dates and a
-normalised state) and `catalog_import` (the source, licence, attribution, resource URL and
-archive date, plus the content hash that makes an unchanged re-import write nothing). Additive:
-the neutral `catalog_item` and `catalog_authorisation` tables come from core_0006.
+target, max dose, interval, max applications, harvest interval, distribution/use end dates,
+buffer zones and a normalised state) and `catalog_import` (the source, licence, attribution,
+resource URL and archive date, plus the content hash that makes an unchanged re-import write
+nothing). Additive: the neutral `catalog_item` and `catalog_authorisation` tables come from
+core_0006.
 
 Revision ID: catalog_fr_0001
 Revises: core_0008
@@ -38,6 +39,9 @@ def upgrade() -> None:
         sa.Column("phi_days", sa.Integer(), nullable=True),
         sa.Column("distribution_end", sa.Date(), nullable=True),
         sa.Column("use_end", sa.Date(), nullable=True),
+        sa.Column("znt_aquatic", sa.Numeric(), nullable=True),
+        sa.Column("znt_arthropods", sa.Numeric(), nullable=True),
+        sa.Column("znt_plants", sa.Numeric(), nullable=True),
         sa.Column("state", sa.Text(), nullable=False),
         sa.CheckConstraint(
             "length(btrim(crop)) BETWEEN 1 AND 200", name=op.f("ck_catalog_use_crop")

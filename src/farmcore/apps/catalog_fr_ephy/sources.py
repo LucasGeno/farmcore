@@ -12,7 +12,6 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
-import re
 import zipfile
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -58,6 +57,9 @@ _USE_COLUMNS = {
     "distribution_end": "date fin distribution",
     "use_end": "date fin utilisation",
     "interval": "intervalle minimum entre applications (jour)",
+    "znt_aquatic": "ZNT aquatique (en m)",
+    "znt_arthropods": "ZNT arthropodes non cibles (en m)",
+    "znt_plants": "ZNT plantes non cibles (en m)",
 }
 
 _PRODUCT_ETAT = {"AUTORISE": False, "RETIRE": True}
@@ -115,6 +117,9 @@ class UseRow:
     phi_days: int | None
     distribution_end: date | None
     use_end: date | None
+    znt_aquatic: Decimal | None
+    znt_arthropods: Decimal | None
+    znt_plants: Decimal | None
     state: str
 
 
@@ -194,8 +199,9 @@ def _split(text: str) -> tuple[str, ...]:
 
 def _substances(text: str) -> tuple[dict[str, str], ...]:
     """`diméthoate (Dimethoate) 400.0 g/L | ...` -> one dict per substance. The reference is the
-    last parenthesised group; concentration and unit are the two trailing tokens. Best effort: a
-    token with no concentration/unit keeps name and reference only."""
+    last top-level parenthesised group (nested parens, as in
+    `… (Cydia pomonella Granulovirus (CpGV))`, count as one); concentration and unit are the two
+    trailing tokens. Best effort: a token with no concentration/unit keeps name and reference."""
     result: list[dict[str, str]] = []
     for token in text.split("|"):
         token = token.strip()
@@ -203,11 +209,11 @@ def _substances(text: str) -> tuple[dict[str, str], ...]:
             continue
         ref = ""
         body = token
-        parens = list(re.finditer(r"\([^()]*\)", token))
-        if parens:
-            last = parens[-1]
-            ref = last.group(0)[1:-1].strip()
-            body = (token[: last.start()] + token[last.end() :]).strip()
+        groups = _top_level_parens(token)
+        if groups:
+            start, end = groups[-1]
+            ref = token[start + 1 : end].strip()
+            body = (token[:start] + token[end + 1 :]).strip()
         parts = body.split()
         if len(parts) >= 3 and _looks_decimal(parts[-2]):
             name = " ".join(parts[:-2]).strip()
@@ -217,6 +223,24 @@ def _substances(text: str) -> tuple[dict[str, str], ...]:
         else:
             result.append({"name": body or token})
     return tuple(result)
+
+
+def _top_level_parens(token: str) -> list[tuple[int, int]]:
+    """The `(start, end)` spans of each parenthesised group that is not nested inside another."""
+    groups: list[tuple[int, int]] = []
+    depth = 0
+    start: int | None = None
+    for index, char in enumerate(token):
+        if char == "(":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0 and start is not None:
+                groups.append((start, index))
+                start = None
+    return groups
 
 
 def _looks_decimal(value: str) -> bool:
@@ -297,6 +321,9 @@ def parse_uses(raw: bytes) -> Parsed:
             phi = _integer(cells[cols["phi"]])
             distribution_end = _date(cells[cols["distribution_end"]])
             use_end = _date(cells[cols["use_end"]])
+            znt_aquatic = _decimal(cells[cols["znt_aquatic"]])
+            znt_arthropods = _decimal(cells[cols["znt_arthropods"]])
+            znt_plants = _decimal(cells[cols["znt_plants"]])
         except InvalidRow as exc:
             reasons.append(f"line {line}: {exc}")
             continue
@@ -313,6 +340,9 @@ def parse_uses(raw: bytes) -> Parsed:
                 phi_days=phi,
                 distribution_end=distribution_end,
                 use_end=use_end,
+                znt_aquatic=znt_aquatic,
+                znt_arthropods=znt_arthropods,
+                znt_plants=znt_plants,
                 state=state,
             )
         )

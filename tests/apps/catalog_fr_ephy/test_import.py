@@ -47,14 +47,33 @@ def _blank_first_amm(src: Path, dst: Path) -> None:
         writer.writerows(rows)
 
 
+def _mutate_use(src: Path, dst: Path, amm: str, identifiant: str, **changes: str) -> None:
+    with src.open(encoding="utf-8", newline="") as f:
+        reader = csv.reader(f, delimiter=";")
+        header = next(reader)
+        rows = list(reader)
+    amm_at = header.index("numero AMM")
+    ident_at = header.index("identifiant usage")
+    for row in rows:
+        if row[amm_at].strip() == amm and row[ident_at].strip() == identifiant:
+            for column, value in changes.items():
+                row[header.index(column)] = value
+            break
+    with dst.open("w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f, delimiter=";", lineterminator="\n")
+        writer.writerow(header)
+        writer.writerows(rows)
+
+
 def test_import_maps_products_authorisations_and_uses(session, ephy):
     report = service.import_ephy(session, products_path=ephy["products"], uses_path=ephy["uses"])
 
     assert report.changed
     assert report.skipped == 0
     assert report.products == 202
-    assert report.uses == 1509
+    assert report.uses == 1460  # distinct uses (exact source duplicates collapse)
     assert session.scalar(select(func.count()).select_from(CatalogItem)) == 202
+    assert session.scalar(select(func.count()).select_from(CatalogUse)) == 1460
     assert (
         session.scalar(
             select(func.count())
@@ -139,5 +158,42 @@ def test_skipped_product_uses_are_not_imported(session, ephy, tmp_path):
     assert report.changed
     assert report.skipped == 4  # the blanked product + its 3 uses
     assert report.products == 201
-    assert report.uses == 1506  # the blanked product's 3 uses were not written
+    assert report.uses == 1457  # the blanked product's 3 uses were not written
     assert _item(session, AUTHORISED_AMM) is None
+
+
+def test_changed_use_replaces_old_row(session, ephy, tmp_path):
+    service.import_ephy(session, products_path=ephy["products"], uses_path=ephy["uses"])
+    item = _item(session, AUTHORISED_AMM)
+    assert _use_count(session, item) == 3
+
+    uses = tmp_path / "uses.csv"
+    _mutate_use(
+        ephy["uses"],
+        uses,
+        AUTHORISED_AMM,
+        "Arbres et arbustes*Trt Part.Aer.*Aleurodes",
+        **{"dose retenue": "2.0", "etat usage": "Retrait"},
+    )
+    report = service.import_ephy(session, products_path=ephy["products"], uses_path=uses)
+
+    assert report.changed
+    assert report.products == 1  # only APPLAUD STAR moved
+    item = _item(session, AUTHORISED_AMM)
+    rows = session.scalars(select(CatalogUse).where(CatalogUse.catalog_item_id == item.id)).all()
+    assert len(rows) == 3  # replaced, not duplicated
+    matching = [r for r in rows if r.identifiant == "Arbres et arbustes*Trt Part.Aer.*Aleurodes"]
+    assert len(matching) == 1
+    assert matching[0].max_dose == Decimal("2.0")
+    assert matching[0].state == "withdrawn"
+
+
+def test_use_upsert_chunks_across_batch_boundary(session, ephy, monkeypatch):
+    monkeypatch.setattr(service, "USE_BATCH", 100)
+
+    report = service.import_ephy(session, products_path=ephy["products"], uses_path=ephy["uses"])
+
+    assert report.changed
+    assert report.products == 202
+    assert report.uses == 1460
+    assert session.scalar(select(func.count()).select_from(CatalogUse)) == 1460

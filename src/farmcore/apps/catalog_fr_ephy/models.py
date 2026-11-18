@@ -8,11 +8,15 @@ number=AMM)`) live in `core/models/catalog.py`. This app adds:
 - `catalog_use`: one row per E-Phy usage line, keyed on `(catalog_item_id, use_key)` so a
   weekly re-import updates a use in place instead of churning its id. `use_key` is a content hash
   of the mapped fields: the source repeats an `identifiant` per product (differing in the harvest
-  interval or dose), so the identifiant alone is not unique. `crop` and `target` come from the
-  usage identifier (`Vigne*Trt Part.Aer.*Oïdium(s)`); a two-part identifier (herbicides) has no
-  target. The dose is kept exactly as E-Phy publishes it (value and unit), never converted: most
-  E-Phy dose units are not FarmCore measures. `state` is normalised (`authorised` / `withdrawn` /
-  `provisional`); a withdrawn product is flagged, never deleted.
+  interval, dose or buffer zones), so the identifiant alone is not unique, and any change to a
+  mapped field is a new use. **`catalog_use.id` is therefore not a stable reference**: a record
+  must snapshot the use fields it needs (identifiant, dose and unit, state, harvest interval,
+  buffer zones) and FK `catalog_item` (AMM-keyed, never deleted), never `catalog_use.id`. `crop`
+  and `target` come from the usage identifier (`Vigne*Trt Part.Aer.*Oïdium(s)`); a two-part
+  identifier (herbicides) has no target. The dose is kept exactly as E-Phy publishes it (value
+  and unit), never converted: most E-Phy dose units are not FarmCore measures. `state` is
+  normalised (`authorised` / `withdrawn` / `provisional`); a withdrawn product is flagged, never
+  deleted.
 - `catalog_import`: one row per import run — the source, its licence, attribution, the resource
   URL and archive date, and a content hash. An unchanged source has the same hash, so the next
   run writes nothing.
@@ -75,6 +79,9 @@ class CatalogUse(Base):
     phi_days: Mapped[int | None] = mapped_column(Integer)
     distribution_end: Mapped[date | None] = mapped_column(Date)
     use_end: Mapped[date | None] = mapped_column(Date)
+    znt_aquatic: Mapped[Decimal | None] = mapped_column(Numeric)
+    znt_arthropods: Mapped[Decimal | None] = mapped_column(Numeric)
+    znt_plants: Mapped[Decimal | None] = mapped_column(Numeric)
     state: Mapped[str] = mapped_column(Text)
 
 
