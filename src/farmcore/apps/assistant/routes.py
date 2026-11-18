@@ -465,15 +465,28 @@ def chooser_for(app) -> llm.ToolChooser | None:
     settings = app.state.settings
     if not model_configured(settings):
         return None
-    app.state.assistant_chooser = llm.VertexToolChooser(
-        settings, DbAuditSink(app.state.session_factory)
-    )
+    audit = DbAuditSink(app.state.session_factory)
+    if settings.assistant_provider == "openai-compatible":
+        app.state.assistant_chooser = llm.OpenAICompatibleToolChooser(
+            settings.openai_compatible_base_url,
+            settings.openai_compatible_api_key,
+            settings.openai_compatible_model,
+            audit,
+        )
+    else:
+        app.state.assistant_chooser = llm.VertexToolChooser(settings, audit)
     return app.state.assistant_chooser
 
 
 def model_configured(settings) -> bool:
-    """Vertex is the extractor and its auth has what it needs on this host: a token, an ADC key
-    file, or the gcloud CLI. Nothing is called; a rejected credential still falls back per ask."""
+    """A provider is chosen and has what it needs on this host. OpenAI-compatible: base URL and
+    model (validated at startup). Vertex: the extractor is Vertex and its auth has a token, an
+    ADC key file, or the gcloud CLI. Nothing is called; a rejected credential still falls back
+    per ask."""
+    if settings.assistant_provider == "none":
+        return False
+    if settings.assistant_provider == "openai-compatible":
+        return bool(settings.openai_compatible_base_url and settings.openai_compatible_model)
     if settings.extractor != "vertex" or not settings.vertex_project:
         return False
     if settings.vertex_auth == "token":
