@@ -1,5 +1,11 @@
 """Operation logs with provenance: write, merge, pending → confirm / cancel.
 
+Record types keep their own policy (`POLICIES`). A spray carries product rates (`quantity`,
+read by stock, the register and the label checks) and merges by the spray rule below. Every
+other record type never merges and takes only entered quantities (`EnteredQuantity`), stored as
+neutral `typed_quantity` rows with no product or catalog item: an irrigation can never carry
+plant-protection fields. A quantity of the other kind is refused before anything is written.
+
 Merge rule: an incoming *done spray* matches a done spray log on
 the same farm whose parcel set overlaps and whose `ts_start` is within `MERGE_WINDOW`. A match
 attaches a `log_source` (and the incoming parcels); if the incoming `precision_rank` beats the
@@ -26,11 +32,11 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from farmcore.core.models.canonical import Log, LogParcel, LogSource, Parcel, Quantity
+from farmcore.core.models.catalog import enter_quantity
 from farmcore.core.timeline import post_event
 
 # Source: the canonical data model merge rule.
 MERGE_WINDOW = timedelta(hours=12)
-MERGE_TYPES = frozenset({"spray"})
 # Precision ranks, higher wins for time and dose:
 # machine (ISOXML) > farmer-confirmed planned work > file > voice > seed.
 RANK_MACHINE = 30
@@ -59,7 +65,50 @@ class QuantityInput:
     label: str | None = None
 
 
+@dataclass(frozen=True)
+class EnteredQuantity:
+    """An amount on a record that is not a spray, kept exactly as entered (`20 mm`, `12.5 m3`);
+    `core.units` adds the standard value when it knows the unit, else it stays null."""
+
+    value: Decimal
+    unit: str
+    label: str | None = None
+
+
+@dataclass(frozen=True)
+class RecordPolicy:
+    merge_window: timedelta | None  # None: never merged with another record
+    product_rates: bool  # quantities are product rates (stock, register, label checks)
+
+
+POLICIES: dict[str, RecordPolicy] = {"spray": RecordPolicy(MERGE_WINDOW, product_rates=True)}
+UNMERGED = RecordPolicy(None, product_rates=False)
+
+
+def policy(type: str) -> RecordPolicy:
+    return POLICIES.get(type, UNMERGED)
+
+
 QuantityLike = QuantityInput | Mapping[str, Any]
+RecordQuantity = QuantityLike | EnteredQuantity
+
+
+def _split(
+    type: str, items: Sequence[RecordQuantity]
+) -> tuple[list[QuantityLike], list[EnteredQuantity]]:
+    """The record's product rates and entered quantities; the kind its type does not take raises."""
+    entered = [q for q in items if isinstance(q, EnteredQuantity)]
+    rates = [q for q in items if not isinstance(q, EnteredQuantity)]
+    if policy(type).product_rates and entered:
+        raise ValueError(f"a {type} takes product-rate quantities, not entered quantities")
+    if not policy(type).product_rates and rates:
+        raise ValueError(f"a {type} takes entered quantities only, never product rates")
+    return rates, entered
+
+
+def _enter(session: Session, log: Log, entered: Sequence[EnteredQuantity]) -> None:
+    for q in entered:
+        enter_quantity(session, log_id=log.id, value=q.value, unit=q.unit, label=q.label)
 
 
 def _quantities(items: Sequence[QuantityLike]) -> list[Quantity]:
@@ -174,14 +223,15 @@ def _merge_target(
     not_after: datetime | None = None,
 ) -> Log | None:
     """The closest done log of a mergeable type matching the rule, or None."""
-    if type not in MERGE_TYPES:
+    window = policy(type).merge_window
+    if window is None:
         return None
     stmt = select(Log).where(
         Log.farm_id == farm_id,
         Log.type == type,
         Log.status == "done",
-        Log.ts_start >= ts_start - MERGE_WINDOW,
-        Log.ts_start <= ts_start + MERGE_WINDOW,
+        Log.ts_start >= ts_start - window,
+        Log.ts_start <= ts_start + window,
         Log.id.in_(select(LogParcel.log_id).where(LogParcel.parcel_id.in_(list(parcel_ids)))),
     )
     if not_after is not None:
@@ -203,10 +253,11 @@ def _new_log(
     parcels: list[Parcel],
     ts_start: datetime,
     ts_end: datetime | None,
-    quantities: Sequence[QuantityLike],
+    quantities: Sequence[RecordQuantity],
     source: SourceInput,
     name: str | None,
 ) -> Log:
+    rates, entered = _split(type, quantities)
     log = Log(
         farm_id=farm_id,
         type=type,
@@ -216,10 +267,11 @@ def _new_log(
         ts_end=ts_end,
     )
     log.parcels.extend(parcels)
-    log.quantities.extend(_quantities(quantities))
+    log.quantities.extend(_quantities(rates))
     log.sources.append(_log_source(source))
     session.add(log)
     session.flush()
+    _enter(session, log, entered)
     return log
 
 
@@ -236,7 +288,7 @@ def record_operation(
     parcel_ids: Sequence[int],
     ts_start: datetime,
     ts_end: datetime | None,
-    quantities: Sequence[QuantityLike],
+    quantities: Sequence[RecordQuantity],
     source: SourceInput,
     actor: str,
     occurred_at: datetime,
@@ -250,6 +302,7 @@ def record_operation(
     `not_after` optionally bounds merge targets. Source retries never change the held log,
     even outside the merge window. The farm lock lasts until caller commit or rollback.
     """
+    _split(type, quantities)
     lock_farm(session, farm_id)
     parcels = _parcels(session, farm_id, parcel_ids)
     held = session.scalar(
@@ -334,7 +387,7 @@ def create_pending_once(
     parcel_ids: Sequence[int],
     ts_start: datetime,
     ts_end: datetime | None,
-    quantities: Sequence[QuantityLike],
+    quantities: Sequence[RecordQuantity],
     source: SourceInput,
     actor: str,
     occurred_at: datetime,
@@ -370,7 +423,7 @@ def create_pending(
     parcel_ids: Sequence[int],
     ts_start: datetime,
     ts_end: datetime | None,
-    quantities: Sequence[QuantityLike],
+    quantities: Sequence[RecordQuantity],
     source: SourceInput,
     actor: str,
     occurred_at: datetime,

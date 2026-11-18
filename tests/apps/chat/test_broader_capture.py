@@ -23,7 +23,8 @@ from farmcore.apps.chat.extractor import (
 )
 from farmcore.apps.chat.handlers import on_callback, on_message
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Farm, Log, Parcel
+from farmcore.core.models.canonical import Farm, Log, Parcel, Quantity
+from farmcore.core.models.catalog import TypedQuantity
 from tests.apps.chat.test_handlers import (
     CHAT,
     COPPER,
@@ -125,6 +126,35 @@ def test_irrigation_preview_and_confirm_keep_the_entered_amount_unit_and_basis(
     assert "Advice updated" not in out.text and "Checks" not in out.text
 
 
+@pytest.mark.parametrize(
+    ("said", "entered", "standard"),
+    [
+        # A depth is no FarmCore measure: kept as said, never turned into a volume or a rate.
+        ("20 mm", (Decimal("20"), "mm"), (None, None, None)),
+        ("12.50 m3", (Decimal("12.50"), "m3"), ("volume", Decimal("12500"), "l")),
+        ("300 L", (Decimal("300"), "L"), ("volume", Decimal("300"), "l")),
+    ],
+)
+def test_a_confirmed_irrigation_keeps_its_amount_as_an_entered_quantity(
+    session_factory, session, settings, said, entered, standard
+):
+    seed_farm(session, settings)
+    d = deps(session_factory, settings, RegexExtractor())
+    echo = on_message(d, voice(f"Irrigated P5 {said} gross at 6", 11))
+
+    on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
+
+    [log] = logs_of(session)
+    farm = session.get(Farm, log.farm_id)
+    repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "test", "test")
+    [typed] = repo.list(TypedQuantity, scope="logs:read")
+    assert (log.status, typed.log_id) == ("done", log.id)
+    assert (typed.entered_value, typed.entered_unit) == entered
+    assert (typed.measure, typed.value, typed.unit) == standard
+    # No plant-protection fields: no product rate, no catalog item.
+    assert (count(session, Quantity), typed.catalog_item_id) == (0, None)
+
+
 def test_irrigation_without_a_stated_basis_says_so_and_never_assumes_one(
     session_factory, session, settings
 ):
@@ -154,7 +184,7 @@ def test_observation_preview_and_confirm_keep_what_was_seen(session_factory, ses
 
     [log] = logs_of(session)
     assert (log.type, log.status) == ("observation", "pending")
-    assert log.quantities == []
+    assert log.quantities == [] and count(session, TypedQuantity) == 0
     assert log.props == {"observation": {"text": transcript}}
     assert echo.text.splitlines()[0] == (
         f"P5 Les Granges · observation: {transcript} · 10 Apr 06:00 — confirm?"
@@ -256,6 +286,7 @@ def test_a_redelivered_irrigation_and_a_second_confirm_change_nothing(
 
     assert second.text == redelivered.text == "This record is already logged."
     assert [log.status for log in logs_of(session)] == ["done"]
+    assert count(session, TypedQuantity) == 1
     assert len(events(session, "log.confirmed")) == 1
 
 
@@ -270,6 +301,7 @@ def test_cancelling_an_irrigation_leaves_no_record(session_factory, session, set
 
     assert out.text == "❌ Cancelled. Nothing was logged."
     assert count(session, Log) == count(session, LogSource) == count(session, Quantity) == 0
+    assert count(session, TypedQuantity) == 0
 
 
 def test_an_irrigation_belongs_to_the_farm_bound_to_the_capture(session_factory, session, settings):

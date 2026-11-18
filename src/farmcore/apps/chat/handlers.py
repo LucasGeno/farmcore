@@ -34,7 +34,7 @@ from farmcore.core.access import (
     ensure_owner_grant,
 )
 from farmcore.core.clock import Clock, get_clock
-from farmcore.core.logs import QuantityInput, SourceInput
+from farmcore.core.logs import EnteredQuantity, QuantityInput, SourceInput
 from farmcore.core.manifest import Manifest
 from farmcore.core.models.canonical import DataGrant, Event, Farm, Log, LogSource
 from farmcore.core.urls import with_farm
@@ -441,7 +441,8 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
 
 
 def _record_fields(checked: service.Checked):
-    """(log type, canonical quantities, validated app props) for a checked operation."""
+    """(log type, quantities, validated app props) for a checked operation: a spray's product
+    rates, or an irrigation's amount as one entered quantity beside its props fact."""
     if isinstance(checked, service.CheckedSpray):
         return (
             "spray",
@@ -463,7 +464,8 @@ def _record_fields(checked: service.Checked):
             unit=checked.amount_unit,
             basis=checked.basis,
         )
-        return "irrigate", [], {facts.IRRIGATION: fact.model_dump(exclude_none=True)}
+        amount = EnteredQuantity(checked.amount_value, checked.amount_unit)
+        return "irrigate", [amount], {facts.IRRIGATION: fact.model_dump(exclude_none=True)}
     fact = facts.ObservationFact(text=checked.text)
     return "observation", [], {facts.OBSERVATION: fact.model_dump()}
 

@@ -10,8 +10,9 @@ import pytest
 from sqlalchemy import func, select
 
 from farmcore.core import logs
-from farmcore.core.logs import QuantityInput, SourceInput
+from farmcore.core.logs import EnteredQuantity, QuantityInput, SourceInput
 from farmcore.core.models.canonical import Event, Farm, Log, LogSource, Parcel, Product, Quantity
+from farmcore.core.models.catalog import TypedQuantity
 
 # Synthetic times and values.
 T0 = datetime(2024, 4, 10, 6, 0, tzinfo=UTC)
@@ -40,14 +41,15 @@ def _dose(value: str, unit: str = "kg/ha") -> list[QuantityInput]:
 
 
 def _spray(session, farm, parcels, source, ts, dose="2", **kw):
+    type = kw.pop("type", "spray")
     return logs.record_operation(
         session,
         farm_id=farm.id,
-        type=kw.pop("type", "spray"),
+        type=type,
         parcel_ids=[p.id for p in parcels],
         ts_start=ts,
         ts_end=kw.pop("ts_end", None),
-        quantities=_dose(dose),
+        quantities=_dose(dose) if type == "spray" else [EnteredQuantity(Decimal(dose), "kg/ha")],
         source=source,
         actor="owner",
         occurred_at=ts,
@@ -189,6 +191,73 @@ def test_no_merge_without_same_farm_overlapping_parcels_and_spray(session, case)
 
     assert merged is False
     assert _count(session, Log) == 2
+
+
+def test_confirming_an_irrigation_never_merges_it_into_a_nearby_one(session):
+    """The 12 h merge rule is the spray's: two irrigations 2 h apart stay two records."""
+    farm, parcels = _farm(session)
+    first, _ = logs.record_operation(
+        session,
+        farm_id=farm.id,
+        type="irrigate",
+        parcel_ids=[parcels[0].id],
+        ts_start=T0,
+        ts_end=None,
+        quantities=[EnteredQuantity(Decimal("20"), "mm")],
+        source=SEED,
+        actor="owner",
+        occurred_at=T0,
+    )
+    pending, _ = logs.create_pending_once(
+        session,
+        farm_id=farm.id,
+        type="irrigate",
+        parcel_ids=[parcels[0].id],
+        ts_start=T0 + timedelta(hours=2),
+        ts_end=None,
+        quantities=[EnteredQuantity(Decimal("15"), "mm")],
+        source=VOICE,
+        actor="owner",
+        occurred_at=T0,
+    )
+
+    log, merged = logs.confirm(session, pending.id, "owner", T0 + timedelta(hours=2))
+
+    assert (merged, log.id, log.status) == (False, pending.id, "done")
+    assert [(q.log_id, q.entered_value) for q in session.scalars(select(TypedQuantity))] == [
+        (first.id, Decimal("20")),
+        (pending.id, Decimal("15")),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("type", "quantity"),
+    [
+        ("irrigate", QuantityInput("rate", Decimal("2"), "kg/ha", label="copper")),
+        ("observation", QuantityInput("rate", Decimal("2"), "kg/ha", label="copper")),
+        ("spray", EnteredQuantity(Decimal("2"), "kg/ha")),
+    ],
+)
+def test_a_record_type_refuses_the_other_kind_of_quantity(session, type, quantity):
+    """Product rates (stock, register, label checks) are the spray's; other records take only
+    entered quantities, so an irrigation can never carry plant-protection fields."""
+    farm, parcels = _farm(session)
+
+    with pytest.raises(ValueError, match="quantit"):
+        logs.record_operation(
+            session,
+            farm_id=farm.id,
+            type=type,
+            parcel_ids=[parcels[0].id],
+            ts_start=T0,
+            ts_end=None,
+            quantities=[quantity],
+            source=VOICE,
+            actor="owner",
+            occurred_at=T0,
+        )
+
+    assert _count(session, Log) == _count(session, Quantity) == _count(session, TypedQuantity) == 0
 
 
 def test_parcels_of_another_farm_are_rejected(session):

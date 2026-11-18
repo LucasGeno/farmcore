@@ -50,6 +50,7 @@ from farmcore.core.models.canonical import (
     Quantity,
     Source,
 )
+from farmcore.core.models.catalog import TypedQuantity
 from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIdentity
 from farmcore.db import get_session
 from farmcore.settings import Settings
@@ -85,6 +86,7 @@ DEMO_SOURCE = "farmcore-demo"
 # Rows owned by a farm through a parent: model -> (fk column, parent model).
 _VIA_PARENT: dict[type[Base], tuple[Any, type[Base]]] = {
     Quantity: (Quantity.log_id, Log),
+    TypedQuantity: (TypedQuantity.log_id, Log),
     LogSource: (LogSource.log_id, Log),
     LogParcel: (LogParcel.log_id, Log),
     Observation: (Observation.asset_id, Asset),
@@ -107,6 +109,7 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "log": _LOG_READS,
     "log_parcel": _LOG_READS,
     "quantity": _LOG_READS,
+    "typed_quantity": _LOG_READS,
     "log_source": _LOG_READS,
     "event": frozenset({"logs:read", "advice:read"}),
     "advice": frozenset({"advice:read"}),
