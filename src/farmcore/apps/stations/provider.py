@@ -161,10 +161,10 @@ def store_hours(
 ) -> None:
     """Store `hours` read at clock time `at` for the station `asset`: legacy rows, then the
     normalised receipt and observations, owned by the asset's farm."""
-    connector.upsert(session, asset.id, connector.observations(hours))
     if not hours:
         return
-    station = station_of(session, asset)
+    station = station_of(session, asset)  # refuses before anything is written
+    connector.upsert(session, asset.id, connector.observations(hours))
     file = (asset.props or {}).get("file", connector.FILE)
     receive(
         session,

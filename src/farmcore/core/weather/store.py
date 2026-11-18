@@ -43,8 +43,6 @@ from farmcore.core.weather.contract import (
 )
 from farmcore.core.weather.variables import VARIABLES
 
-_CHUNK = 5000  # rows per INSERT, well under PostgreSQL's 65535 bind parameters
-
 
 class WeatherValueError(ValueError):
     """A value the normalised schema cannot hold as given."""
@@ -152,9 +150,10 @@ def _checked(value: ObservationValue | ForecastValue) -> dict:
 
 
 def _insert(session: Session, table: type, rows: list[dict]) -> None:
-    """Insert `rows`, keeping any row already held under the same unique key."""
-    for i in range(0, len(rows), _CHUNK):
-        session.execute(insert(table).values(rows[i : i + _CHUNK]).on_conflict_do_nothing())
+    """Insert `rows`, keeping any row already held under the same unique key. One compiled
+    statement, executed for all rows (batched by the driver)."""
+    if rows:
+        session.execute(insert(table).on_conflict_do_nothing(), rows)
 
 
 def store_observations(

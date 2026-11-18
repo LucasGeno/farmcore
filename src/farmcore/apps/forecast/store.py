@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.advisor.engine import HourlyObs
@@ -74,11 +74,14 @@ def import_runs(session: Session, farm_id: int, runs: Iterable[Run]) -> dict[str
         )
         session.add(row)
         session.flush()
-        session.add_all(
-            ForecastValue(farm_id=farm_id, run_id=row.id, ts=ts, variable=variable, value=value)
-            for ts, variable, value in run.values
-        )
-        session.flush()
+        if run.values:
+            session.execute(
+                insert(ForecastValue),
+                [
+                    {"farm_id": farm_id, "run_id": row.id, "ts": ts, "variable": v, "value": x}
+                    for ts, v, x in run.values
+                ],
+            )
         if RECEIPT not in row.props:
             row.props = {**row.props, RECEIPT: normalised.mirror_run(session, row).id}
             session.flush()

@@ -52,6 +52,7 @@ class Provider:
 
     def __init__(self) -> None:
         self.seen: list[tuple[float, float]] = []
+        self.started: dict[float, float] = {}  # latitude -> wall time of its first request
         self.held: set[float] = set()
         self.released = threading.Event()
         stub = self
@@ -60,6 +61,7 @@ class Provider:
             def do_GET(self) -> None:
                 latitude = float(parse_qs(urlsplit(self.path).query)["latitude"][0])
                 stub.seen.append((latitude, time.monotonic()))
+                stub.started.setdefault(latitude, time.time())
                 if latitude in stub.held:
                     stub.held.discard(latitude)
                     stub.released.wait(WAIT * 2)
@@ -166,10 +168,13 @@ def test_a_stalled_provider_for_one_farm_does_not_delay_another(
     start_worker("w", fetch_timeout=3.0)
 
     _until(lambda: _receipts(committed_session_factory, fast), "farm B's receipt")
-    # B published while A's request is still open.
-    assert provider.requests_for(10.0) and "last_attempt" not in _health(
-        committed_session_factory, slow
-    )
+    # B published while A's request was still open: before A's 3 s deadline could pass (the
+    # recorded times, not when this thread happened to look).
+    with committed_session_factory() as session:
+        published = session.scalar(
+            select(ForecastRun.available_at).where(ForecastRun.farm_id == fast)
+        )
+    assert published.timestamp() < provider.started[10.0] + 3.0
 
     # A's failure is recorded once its deadline passes, never silently dropped.
     health = _until(

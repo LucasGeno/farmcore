@@ -477,6 +477,12 @@ class Manifest:
             )
         _check_provider(self.search, f"app {self.name!r} search")
         _check_provider(self.attention, f"app {self.name!r} attention")
+        if not isinstance(self.weather_providers, tuple) or not all(
+            isinstance(path, str) and path for path in self.weather_providers
+        ):
+            raise ValueError(f"app {self.name!r}: weather_providers must be a tuple of paths")
+        for path in self.weather_providers:
+            _check_provider(path, f"app {self.name!r} weather provider")
         for locale, words in self.keywords.items():
             if not re.fullmatch(r"[a-z]{2}(-[A-Za-z]{2,4})?", locale):
                 raise ValueError(f"app {self.name!r}: invalid keyword locale {locale!r}")

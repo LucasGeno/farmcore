@@ -122,6 +122,7 @@ _VALID = {
         ),
         pytest.param(lambda: {"tabs": (Tab("Plan", "/other/plan"),)}, id="foreign-tab-prefix"),
         pytest.param(lambda: {"search": "not-a-provider"}, id="bad-provider-shape"),
+        pytest.param(lambda: {"weather_providers": "pkg.mod:f"}, id="weather-providers-str"),
         pytest.param(
             lambda: {
                 "record_types": (RecordType("overview", "Overview", form="/x/record/overview"),)
