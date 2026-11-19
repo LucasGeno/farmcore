@@ -20,6 +20,7 @@ const [base, login, password] = process.argv.slice(2);
     await page.click('[data-snippet="Codex"] [data-copy-snippet]');
     await page.waitForFunction(() => document.querySelector('[data-snippet="Codex"] [data-copied]').textContent === "Copied");
     const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    if (process.env.CONNECT_SHOT) await page.screenshot({ path: process.env.CONNECT_SHOT, fullPage: true });
     console.log(JSON.stringify({ token, clipboard }));
   } finally {
     await browser.close();
