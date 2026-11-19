@@ -85,8 +85,8 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
     assert item["source_ref"] == reference and item["crop_code"] == code
     assert item["licence"] == licence and item["attribution"]
     assert item["year"] == (2024 if country == "FR" else None)
-    assert item["crop_key"] == ("grassland" if country == "FR" else "")
-    assert item["crop_name"] == ("Grassland" if country == "FR" else "")
+    assert item["crop_key"] == ("grassland" if country == "FR" else "soft-wheat")
+    assert item["crop_name"] == ("Grassland" if country == "FR" else "Soft wheat")
     review = client.get(f"/onboarding/import/review?draft={draft.id}")
     assert licence in review.text
     if country == "ES":
@@ -121,8 +121,9 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
         season = session.scalar(select(CropSeason).where(CropSeason.parcel_id == parcel.id))
         assert (season.crop_name, season.crop_eppo) == ("Grassland", None)
     else:
-        assert 'data-crop=""' in crop_row.group()
-        assert 'data-unknown-code="1"' in crop_row.group()
+        assert 'data-crop="soft-wheat"' in crop_row.group()
+        assert 'data-unknown-code=""' in crop_row.group()
+        assert '<code class="font-mono text-[14px]">1</code>' in crop_row.group()
         assert not session.scalars(
             select(CropSeason).where(CropSeason.parcel_id == parcel.id)
         ).all()

@@ -12,6 +12,10 @@ Sources
   (https://www.fega.gob.es/es/content/%C2%BFqu%C3%A9-usos-se-distinguen-en-sigpac) and the
   SIGPAC code service (https://sigpac-hubcloud.es/codigossigpac/cod_uso_sigpac.json,
   CC BY 4.0).
+- ES declared products: the numeric `parc_producto` codes of the SIGPAC `cultivo_declarado`
+  layer, listed in the FEGA SIGPAC code service's `cod_producto` list
+  (https://sigpac-hubcloud.es/codigossigpac/cod_producto.json, CC BY 4.0), retrieved
+  2026-11-19.
 - EPPO codes: EPPO Global Database (https://gd.eppo.int). `None` means the code does not
   name a species, so the season keeps an unknown EPPO code rather than inventing one.
 
@@ -79,7 +83,7 @@ CROPS: dict[str, Crop] = {
 # Which parcel prop carries the registry code, and what the owner calls that code list.
 CODE_PROP: dict[str, tuple[str, str]] = {
     "FR": ("code_cultu", "RPG code"),
-    "ES": ("uso_sigpac", "SIGPAC use code"),
+    "ES": ("uso_sigpac", "SIGPAC code"),
 }
 
 # Registry code -> FarmCore crop key. A code maps when it names a crop or a group crop FarmCore
@@ -125,6 +129,52 @@ CROSSWALK: dict[str, dict[str, str]] = {
         "PS": "grassland",  # pastizal
         "TH": "vegetables",  # huerta
     },
+}
+
+# ES declared-product code (`parc_producto`) -> FarmCore crop key. A separate list from the
+# alphabetic use codes above: the numbers never collide with them. Source and retrieval date are
+# in the module docstring; each code is mapped only where its published description names the
+# crop or crop group ("MAÍZ DULCE" 326, mixtures and other species stay unknown). Descriptions
+# are quoted from that list.
+SIGPAC_PRODUCTS: dict[str, str] = {
+    "1": "soft-wheat",  # TRIGO BLANDO
+    "3": "durum-wheat",  # TRIGO DURO
+    "4": "maize",  # MAÍZ
+    "5": "barley",  # CEBADA
+    "33": "sunflower",  # GIRASOL
+    "34": "soybean",  # SOJA
+    "35": "rapeseed",  # COLZA
+    "60": "alfalfa",  # ALFALFA
+    "62": "grassland",  # PASTOS PERMANENTES DE 5 O MÁS AÑOS
+    "63": "grassland",  # PASTOS DE MENOS DE 5 AÑOS
+    "64": "grassland",  # PASTIZAL DE 5 O MÁS AÑOS
+    "65": "grassland",  # PASTO ARBUSTIVO DE 5 O MÁS AÑOS
+    "66": "grassland",  # PASTO ARBOLADO DE 5 O MÁS AÑOS
+    "80": "rice",  # ARROZ
+    "99": "potato",  # PATATA
+    "101": "olive",  # OLIVO
+    "102": "vine",  # VIÑA
+    "103": "vine",  # UVA DE MESA
+    "104": "nuts",  # ALMENDRO
+    "105": "peach",  # MELOCOTONERO
+    "106": "fruit-trees",  # NECTARINO
+    "107": "fruit-trees",  # ALBARICOQUERO
+    "108": "pear",  # PERAL
+    "109": "fruit-trees",  # MANZANO
+    "110": "cherry",  # CEREZO
+    "111": "plum",  # CIRUELO
+    "112": "walnut",  # NOGAL
+    "113": "fruit-trees",  # OTROS FRUTALES
+    "123": "hazelnut",  # AVELLANO
+    "124": "nuts",  # PISTACHO
+    "125": "nuts",  # FRUTOS DE CÁSCARA
+    "193": "vegetables",  # HUERTA
+    "204": "citrus",  # CLEMENTINA
+    "205": "citrus",  # SATSUMA
+    "206": "citrus",  # NARANJO
+    "207": "citrus",  # LIMONERO
+    "208": "citrus",  # POMELO
+    "209": "citrus",  # MANDARINO
 }
 
 # The crops each region's farmers grow most often, used as the "common crops" shortlist.
@@ -209,7 +259,10 @@ def code_for(country: str | None, props: Mapping[str, object] | None) -> str:
 
 def crosswalk(country: str | None, code: str) -> Crop | None:
     """The FarmCore crop a published registry code names, or None when it stays unknown."""
-    key = CROSSWALK.get(country or "", {}).get((code or "").strip().upper())
+    code = (code or "").strip().upper()
+    key = CROSSWALK.get(country or "", {}).get(code)
+    if key is None and country == "ES":
+        key = SIGPAC_PRODUCTS.get(code)
     return CROPS.get(key) if key else None
 
 

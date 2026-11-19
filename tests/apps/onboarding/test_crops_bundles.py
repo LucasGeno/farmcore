@@ -66,6 +66,10 @@ def _row(html: str, parcel_id: int) -> str:
         ("ES", "FY", "fruit-trees", None),  # frutales: a group
         ("FR", "VRG", "fruit-trees", None),  # verger: the same generic group as ES FY
         ("ES", "VO", None, None),  # viñedo-olivar: an association, not one crop
+        ("ES", "1", "soft-wheat", "TRZAX"),  # TRIGO BLANDO, a declared-product code
+        ("ES", "102", "vine", "VITVI"),  # VIÑA
+        ("ES", "326", None, None),  # MAÍZ DULCE: listed, but not the maize crop
+        ("ES", "9999", None, None),  # absent from the published product list
         ("FR", "ZZZ", None, None),  # absent from the published list
     ],
 )
