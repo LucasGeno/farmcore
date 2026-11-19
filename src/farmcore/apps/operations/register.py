@@ -63,6 +63,7 @@ from farmcore.apps.operations import spray_items, spray_weather
 from farmcore.apps.operations.spray_items import SprayDose, SprayItem
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.canonical import ExtId, Log, LogParcel, LogSource, Parcel
+from farmcore.core.models.catalog import LegacyQuantityMap, TypedQuantity
 
 SCOPE = "register:read"
 DEFAULT_EPPO = "VITVI"  # grapevine, Vitis vinifera (EPPO code)
@@ -170,12 +171,38 @@ def product_summaries(
     """Each log's products as the register cards read them (`product_name`, `dose`,
     `dose_unit`, the register's own cells), one per product name; a log with no named product
     gets an empty list. For the recent records and timelines, read under the caller's scope."""
+    # Only corrected legacy records override the existing summary. Entered-only records
+    # keep their pre-correction display; moved rows remain evidence, never current amounts.
+    moved_logs = select(TypedQuantity.log_id).where(
+        TypedQuantity.entered_measure.is_not(None),
+        TypedQuantity.id.in_(select(LegacyQuantityMap.typed_quantity_id)),
+    )
+    entered: dict[int, list[TypedQuantity]] = defaultdict(list)
+    for q in repo.list(
+        TypedQuantity,
+        TypedQuantity.log_id.in_([log.id for log in logs if log.type == "fertilise"]),
+        TypedQuantity.log_id.in_(moved_logs),
+        TypedQuantity.entered_measure.is_(None),
+        scope=scope,
+        order_by=TypedQuantity.id,
+    ):
+        entered[q.log_id].append(q)
     quantities_of = spray_items.doses_for_logs(repo, [log.id for log in logs], scope=scope)
     products = spray_items.items_by_id(
         repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=scope
     )
     out: dict[int, list[dict[str, Any]]] = {}
     for log in logs:
+        if log.id in entered:
+            out[log.id] = [
+                {
+                    "product_name": q.label or log.name,
+                    "dose": str(q.entered_value),
+                    "dose_unit": q.entered_unit,
+                }
+                for q in entered[log.id]
+            ]
+            continue
         named: dict[str, dict[str, Any]] = {}
         for q, entry in _product_items(log, quantities_of[log.id]):
             product = products.get(q.item_id) if q and q.item_id else None

@@ -12,7 +12,7 @@
 <section class="mt-2 rounded-xl border border-line bg-surface p-4">
 <h2 class="text-lg font-semibold">Corrections</h2>
 {% if not corrections %}<p class="mt-1 text-[13px] text-muted">None yet.</p>{% endif %}
-<ul class="mt-2 space-y-1">{% for c in corrections %}<li data-correction="{{ c.id }}" class="break-words text-[13px]">{{ c.finalized_at.strftime('%Y-%m-%d %H:%M') }} UTC · {{ c.actor_label }}: {{ c.reason }} (was {{ c.before_snapshot.amount.value }} {{ c.before_snapshot.amount.unit }}, now {{ c.after_snapshot.amount.value }} {{ c.after_snapshot.amount.unit }})</li>{% endfor %}</ul>
+<ul class="mt-2 space-y-1">{% for c in corrections %}<li data-correction="{{ c.id }}" class="break-words text-[13px]">{{ c.finalized_at.strftime('%Y-%m-%d %H:%M') }} UTC · {{ c.actor_label }}: {{ c.reason }} (was {% if c.before_snapshot.get('amount') %}{{ c.before_snapshot.amount.value }} {{ c.before_snapshot.amount.unit }}{% else %}entered amount unavailable{% endif %}, now {{ c.after_snapshot.amount.value }} {{ c.after_snapshot.amount.unit }})</li>{% endfor %}</ul>
 </section>
 {% elif revision %}
 {% call page_header("Answer the draft", "Nothing is recorded until you confirm it.") %}{% endcall %}

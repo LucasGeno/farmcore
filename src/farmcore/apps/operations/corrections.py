@@ -296,6 +296,20 @@ VISIBLE_FACTS = ("ts_start", "ts_end", "bbch", "notes", "parcel_ids", "quantitie
 
 
 def visible(facts):
+    if facts.get("type") == "fertilise":
+        # Fertilization receipts carry entered facts and source ids, not spray doses/receipts.
+        amount = facts.get("amount")
+        fertiliser = facts.get("fertiliser") or {}
+        return {
+            "ts_start": facts["ts_start"],
+            "parcel_ids": facts["parcel_ids"],
+            "notes": facts.get("notes", ""),
+            "quantities": [{**amount, "label": fertiliser.get("name", "Fertiliser")}]
+            if amount
+            else [],
+            "source_count": len(facts.get("sources", [])),
+            "type": "fertilise",
+        }
     return {
         **{key: facts[key] for key in VISIBLE_FACTS},
         "sources": [

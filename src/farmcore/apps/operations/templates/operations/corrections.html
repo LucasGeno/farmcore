@@ -1,8 +1,8 @@
 {% extends "core/base.html" %}
 {% from "core/_ui.html" import page_header, card %}
-{% block title %}Spray correction · farmcore{% endblock %}
+{% block title %}Record correction · farmcore{% endblock %}
 {% block content %}
-{% call page_header("Spray correction", "Preview the corrected facts before saving. Original source evidence stays in the history.") %}{% endcall %}
+{% call page_header("Record correction", "Preview the corrected facts before saving. Original source evidence stays in the history.") %}{% endcall %}
 <a href="{{ resolved_farm_url('/operations/') }}" class="inline-flex min-h-[44px] items-center underline">Back to operations</a>
 {% if correction_error %}<p role="alert" class="my-3 rounded-xl border border-line bg-spray-soft p-4 text-spray">{{ correction_error }}</p>{% endif %}
 {% if record and is_farm_owner %}
@@ -30,7 +30,7 @@
   <button class="min-h-[44px] rounded-lg bg-brand-900 px-4 font-semibold text-white hover:bg-brand-700" type="submit">Preview correction</button>
 </form>
 {% endcall %}
-{% elif not record %}<p class="my-3 text-muted">The original record was removed by a demo reset. Its correction history remains available.</p>{% endif %}
+{% elif not record_exists %}<p class="my-3 text-muted">The original record was removed by a demo reset. Its correction history remains available.</p>{% endif %}
 <section class="mt-6"><h2 class="text-lg font-semibold">Correction history</h2>
 {% for item in history %}<article class="mt-3 rounded-xl border border-line bg-surface p-4"><h3 class="font-semibold">{{ item.status|capitalize }}</h3><p>{{ item.reason }}</p><p class="mt-1 text-sm text-muted">{{ item.actor }} · {{ item.created_at }}</p><a class="inline-flex min-h-[44px] items-center underline" href="{{ resolved_farm_url('/operations/corrections/' ~ item.id) }}">View before and after</a></article>
 {% else %}<p class="mt-2 text-muted">No corrections recorded.</p>{% endfor %}
