@@ -190,6 +190,11 @@ def test_web_tools_and_a_running_worker_agree_on_switching_an_app_off_and_on(
         assert web.get("/beacon/ping").status_code == 404
         assert tool_names() == []
 
+        with factory() as session:
+            attempt_before_reinstall = session.execute(
+                text("SELECT attempt FROM task_attempt WHERE task_name = 'beacon.ping'")
+            ).scalar_one()
+
         assert web.post("/apps/beacon/install").json()["applies"] == "now"
         assert web.get("/beacon/ping").status_code == 200
         _until(lambda: (lifecycle_dir / f"sent-{held}").exists(), "the held note, once on")
@@ -202,9 +207,9 @@ def test_web_tools_and_a_running_worker_agree_on_switching_an_app_off_and_on(
         assert session.execute(text("SELECT state, count(*) FROM outbox GROUP BY state")).all() == [
             ("sent", 2)
         ]
-        assert (
-            session.execute(
-                text("SELECT attempt FROM task_attempt WHERE task_name = 'beacon.ping'")
-            ).scalar_one()
-            == 2
-        )
+        attempt_after_reinstall = session.execute(
+            text("SELECT attempt FROM task_attempt WHERE task_name = 'beacon.ping'")
+        ).scalar_one()
+        # The zero-interval planner may run again alongside our manual enqueue.
+        assert attempt_after_reinstall >= 2
+        assert attempt_after_reinstall > attempt_before_reinstall
