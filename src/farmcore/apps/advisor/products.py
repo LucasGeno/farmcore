@@ -3,7 +3,7 @@
 Contact or penetrant, and the diseases it targets (downy, powdery), belong to crop protection,
 not to the record: operations' seam (`farmcore.apps.operations.spray_items`) carries the legal
 record facts only, and every reader of these attributes asks here, by item id. Today they are
-read from `product`; ticket 14's contract step moves them to crop protection's own table.
+read from `product`; the contract step moves them to crop protection's own table.
 """
 
 from __future__ import annotations

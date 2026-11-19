@@ -1,8 +1,8 @@
 # API compatibility
 
 Some FarmCore responses are read by other systems: a co-op's adviser, a FIWARE broker, an agent.
-Their shape is a contract. When the data under one moves (ticket 14 moves spray products and
-doses from `product`/`quantity` to the neutral catalog and crop protection's extension), the
+Their shape is a contract. When the data under one moves (spray products and doses move from
+`product`/`quantity` to the neutral catalog and crop protection's extension), the
 published keys and ids keep their meaning. A change that would alter them ships as a new version
 beside the old one, and the old one is deprecated with a date before it is removed.
 
@@ -37,7 +37,7 @@ registers it.
 
 `/share/as/{grant}/advice.json` (grantee).
 
-- **v1** (default, current): the shape of 2026-11-19 (#121): one current row per parcel, the
+- **v1** (default, current): the shape of 2026-11-19: one current row per parcel, the
   whitelisted keys only, `attribution`, `assessment_status`, `config_version` and
   `current_inputs_status`. `products` lists crop protection's generic recommendations
   (`name`, `product_type`, `targets`), never a farm's product rows or ids, so the catalog move

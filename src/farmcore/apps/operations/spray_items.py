@@ -3,7 +3,7 @@
 Every reader of a spray's products and doses (register, label checks, stock, tools, map, NGSI,
 chat, planning, ISOXML matching) reads through here, never `product` or `quantity` directly, so
 moving the spray catalogue onto `catalog_item` and its crop-protection extension changes this
-module and the writers only (ticket 14, contract step). Today it reads `product` and `quantity`.
+module and the writers only (the contract step). Today it reads `product` and `quantity`.
 
 - `SprayItem`: a product's legal record facts (Reg. (EU) 2023/564): name, authorisation number
   as printed (no country), active substance, and its props (placeholder flag, label limits,
@@ -186,7 +186,12 @@ def doses_of_log(log: Any) -> list[SprayDose]:
     return [_dose(q) for q in log.quantities]
 
 
-def named_doses_of_log(log: Any) -> list[tuple[SprayDose, SprayItem | None]]:
-    """A loaded log's doses, each with the item it names (read through the log's session, for
-    readers that hold a log read under their scope but no repository)."""
-    return [(_dose(q), _item(q.product) if q.product else None) for q in log.quantities]
+def named_rates_of_log(log: Any) -> list[tuple[SprayDose, SprayItem | None]]:
+    """A loaded log's rate doses, each with the item it names (read through the log's session,
+    for readers that hold a log read under their scope but no repository). Only rates resolve
+    their item, as the readers only name rates."""
+    return [
+        (_dose(q), _item(q.product) if q.product else None)
+        for q in log.quantities
+        if q.measure == "rate"
+    ]

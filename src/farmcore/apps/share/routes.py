@@ -483,6 +483,7 @@ def export_ngsi(
 ) -> JSONResponse:
     """The selected farm's done sprays as `AgriParcelOperation` entities (`register:read`);
     `season` / `parcel` narrow them (D4)."""
+    repo.check(ngsi.SCOPE, "log")  # authorisation before the version: a 403 is never a 400
     version = negotiate(request, ngsi.REPRESENTATION.name)
     since, until, before, parcel_id = _window(request, repo, season, parcel)
     return _ld_json(
@@ -603,7 +604,7 @@ def _audit(request: Request, repo: ScopedRepository, limit: int) -> list[dict[st
 
 
 ADVICE_UNAVAILABLE = "Unavailable: crop protection is not installed, so advice cannot be read."
-# The grantee's advice.json: v1 is the shape of #121 (one current row per parcel, redacted).
+# The grantee's advice.json: v1 is one current row per parcel, redacted (api-compatibility.md).
 ADVICE = representations.register(Representation("advice", (Version(1),), default=1))
 
 # What a denied grantee read says, per resource (plain words, no data).
@@ -726,8 +727,9 @@ def grantee_register(
 def grantee_ngsi(
     request: Request, repo: GrantRepo, season: Season = None, parcel: ParcelId = None
 ) -> JSONResponse:
-    version = negotiate(request, ngsi.REPRESENTATION.name)
     try:
+        repo.check(ngsi.SCOPE, "log")  # authorisation before the version: a 403 is never a 400
+        version = negotiate(request, ngsi.REPRESENTATION.name)
         since, until, before, parcel_id = _window(request, repo, season, parcel)
         return _ld_json(
             ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id), version
@@ -755,12 +757,12 @@ def grantee_audit(request: Request, repo: GrantRepo) -> JSONResponse:
 
 @router.get("/as/{grant_id}/advice.json")
 def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
-    version = negotiate(request, ADVICE.name)
     try:
         repo.check("advice:read", "advice")
         if not app_is_on(request, "advisor"):
             # Guard before the service imports the optional crop-protection package.
             raise HTTPException(409, ADVICE_UNAVAILABLE)
+        version = negotiate(request, ADVICE.name)  # after authorisation: a 403 is never a 400
         rows, _ = service.current_advice(repo, _clock_now(request, repo), _tz(request, repo))
     except ScopeDenied as exc:
         raise HTTPException(403, "Not shared: this grant does not include advice.") from exc

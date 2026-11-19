@@ -356,7 +356,7 @@ def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_p
     session.commit()
     response = recipient_browser.get(f"/share/as/{bound_grant.id}/advice.json")
     assert response.status_code == 200
-    assert response.headers["FarmCore-Representation"] == "advice; v=1"  # #121's shape is v1
+    assert response.headers["FarmCore-Representation"] == "advice; v=1"
     [data] = response.json()
     assert data["headline"] == "Wait"
     assert data["flags"] == ["limited"]

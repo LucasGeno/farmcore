@@ -22,7 +22,7 @@ from fastapi import HTTPException, Request, Response
 
 HEADER = "FarmCore-Representation"
 QUERY = "v"
-NOTES = "/docs/api-compatibility.md"  # repository path of the deprecation notes
+NOTES = "https://github.com/LucasGeno/farmcore/blob/main/docs/api-compatibility.md"
 
 
 @dataclass(frozen=True)
@@ -67,8 +67,11 @@ def negotiate(request: Request, name: str) -> Version:
     raw = request.query_params.get(QUERY)
     if raw is None:
         return rep.by_number[rep.default]
-    if raw.isdecimal() and int(raw) in rep.by_number:
-        return rep.by_number[int(raw)]
+    # Matched as text against the served numbers: no int() of a client string (a 5000-digit
+    # value would raise), and no non-ASCII digit read as a version.
+    served_text = {str(n): v for n, v in rep.by_number.items()}
+    if raw in served_text:
+        return served_text[raw]
     served = ", ".join(str(n) for n in sorted(rep.by_number))
     raise HTTPException(400, f"Unknown {name} version {raw!r}; served versions: {served}.")
 

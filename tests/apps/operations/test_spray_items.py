@@ -1,6 +1,12 @@
 """Spray products and doses have one read seam (`operations.spray_items`, crop protection's
 `advisor.products`), so moving them off `product`/`quantity` changes the seam and the writers,
-never a reader."""
+never a reader.
+
+Blind spots: the guard sees `from farmcore.core.models.canonical import Product|Quantity` only.
+It misses a module import (`from farmcore.core.models import canonical`, then
+`canonical.Product`), a star import, relationship access (`log.quantities`, `q.product`) and the
+`legacy_typed_quantity` view. A pass is not proof that every reader moved: a listed module may
+also read through those paths (corrections reads `log.quantities` directly)."""
 
 from __future__ import annotations
 
@@ -11,7 +17,7 @@ import farmcore
 
 SRC = Path(farmcore.__file__).parent
 LEGACY = {"Product", "Quantity"}
-# Modules that still name the legacy models, each for a reason the contract step (14c-2) ends.
+# Modules that still name the legacy models, each for a reason the contract step ends.
 ALLOWED = {
     "apps/operations/spray_items.py": "the seam itself",
     "apps/advisor/products.py": "crop protection's half of the seam",
@@ -22,8 +28,8 @@ ALLOWED = {
     "apps/operations/demo.py": "stages a demo spray from the seeded product",
     "apps/advisor/demo.py": "stages demo sprays from the seeded products",
     "apps/inventory/demo_purchases.py": "tops up demo stock of a seeded product",
-    "apps/advisor/service.py": "load_sprays and input_snapshot; shared with #125, moves in 14c-2",
-    "core/activity.py": "core cannot import an app; becomes an app contribution in 14c-2",
+    "apps/advisor/service.py": "load_sprays and input_snapshot read them until the contract step",
+    "core/activity.py": "core cannot import an app; becomes an app contribution",
 }
 
 

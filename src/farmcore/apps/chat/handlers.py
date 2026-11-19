@@ -677,11 +677,16 @@ def _duplicate_note(repo: ScopedRepository, log: Log, tz: ZoneInfo) -> str:
     if target is None:
         return ""
     dropped = events[0].payload["dropped_products"]
+    duplicates = [
+        q
+        for q in spray_items.doses_of_log(target)
+        if (q.item_id if q.item_id is not None else q.label) in dropped
+    ]
+    items = spray_items.items_by_id(repo, [q.item_id for q in duplicates], scope="logs:read")
     names = list(
         dict.fromkeys(
-            item.active_substance if item else (q.label or "product")
-            for q, item in spray_items.named_doses_of_log(target)
-            if (q.item_id if q.item_id is not None else q.label) in dropped
+            items[q.item_id].active_substance if q.item_id in items else (q.label or "product")
+            for q in duplicates
         )
     )
     if not names:

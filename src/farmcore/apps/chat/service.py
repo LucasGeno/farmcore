@@ -427,7 +427,7 @@ def log_summary(log: Log, tz: ZoneInfo) -> str:
             detail = observation_detail(fact.text) if fact is not None else "observation"
         parcels = [ParcelInfo(p.id, p.alias, p.name) for p in log.parcels]
         return _fact_line(parcels, detail, log.ts_start, tz)
-    rates = [(q, item) for q, item in spray_items.named_doses_of_log(log) if q.rate]
+    rates = spray_items.named_rates_of_log(log)
     doses = list(dict.fromkeys(f"{q.value.normalize():f} {q.unit}" for q, _ in rates))
     return _summary(
         sorted(((p.alias, p.name) for p in log.parcels), key=lambda a: _alias_key(a[0])),
