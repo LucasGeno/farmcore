@@ -533,7 +533,10 @@ def _correction_context(request, repo, log_id):
     historical_products = spray_items.items_by_id(repo, historical_ids, scope="logs:read")
     return {
         "log_id": log_id,
-        "record": corrections.visible(corrections.snapshot(log)) if log is not None else None,
+        "record": corrections.visible(corrections.snapshot(log))
+        if log is not None and log.type == "spray"
+        else None,
+        "record_exists": log is not None,
         "local_start": log.ts_start.astimezone(ZoneInfo(_farm_tz(request, repo)))
         .replace(tzinfo=None)
         .isoformat()

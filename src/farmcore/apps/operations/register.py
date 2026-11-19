@@ -170,12 +170,34 @@ def product_summaries(
     """Each log's products as the register cards read them (`product_name`, `dose`,
     `dose_unit`, the register's own cells), one per product name; a log with no named product
     gets an empty list. For the recent records and timelines, read under the caller's scope."""
+    from farmcore.core.models.catalog import TypedQuantity
+
+    # A corrected fertilization keeps its moved dose as evidence, not a second application.
+    entered = {
+        q.log_id: q
+        for q in repo.list(
+            TypedQuantity,
+            TypedQuantity.log_id.in_([log.id for log in logs if log.type == "fertilise"]),
+            TypedQuantity.entered_measure.is_(None),
+            scope=scope,
+        )
+    }
     quantities_of = spray_items.doses_for_logs(repo, [log.id for log in logs], scope=scope)
     products = spray_items.items_by_id(
         repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=scope
     )
     out: dict[int, list[dict[str, Any]]] = {}
     for log in logs:
+        if log.id in entered:
+            q = entered[log.id]
+            out[log.id] = [
+                {
+                    "product_name": q.label or log.name,
+                    "dose": format(q.entered_value, "f"),
+                    "dose_unit": q.entered_unit,
+                }
+            ]
+            continue
         named: dict[str, dict[str, Any]] = {}
         for q, entry in _product_items(log, quantities_of[log.id]):
             product = products.get(q.item_id) if q and q.item_id else None
