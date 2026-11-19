@@ -201,7 +201,9 @@ def code_for(country: str | None, props: Mapping[str, object] | None) -> str:
     if country not in CODE_PROP:
         return ""
     name, _ = CODE_PROP[country]
-    value = (props or {}).get(name)
+    # File imports retain the reviewed crop column under a common key. Interpret it
+    # only through the farm country’s code list; never infer a crop from its label.
+    value = (props or {}).get(name) or (props or {}).get("crop_code")
     return str(value).strip().upper() if value is not None else ""
 
 
