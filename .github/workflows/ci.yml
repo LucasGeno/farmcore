@@ -48,7 +48,7 @@ jobs:
         shell: bash
         run: bash scripts/check.sh 2>&1 | tee pytest.log
         env:
-          PYTEST_ADDOPTS: "-m 'not data and not slow' -rs --durations=25 -n 2"
+          PYTEST_ADDOPTS: "-m 'not data and not slow' -rs --durations=25 -n 2 --dist loadfile"
       - name: Fail if a test skipped for a missing tool
         shell: bash
         run: &no-tool-skips |
