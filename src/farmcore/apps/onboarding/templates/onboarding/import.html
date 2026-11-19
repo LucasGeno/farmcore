@@ -11,11 +11,12 @@
 <label data-parcel-drop class="block rounded-lg border border-line bg-surface p-4">Drop a file here or choose a file
 <input class="block mt-2 w-full" type="file" name="file" required accept=".zip,.kml,.kmz,.geojson,.json,.gpkg,.xml,.csv"></label>
 <p data-import-status role="status" class="text-sm text-muted">No file selected.</p>
-<p class="text-sm text-muted">Telepac shapefile ZIP, KML/KMZ, GeoJSON, GeoPackage, ISOXML or CSV. Maximum 5 MB and 200 parcels.</p>
+<p class="text-sm text-muted">Telepac shapefile ZIP, KML/KMZ, GeoJSON, GeoPackage, ISOXML or CSV. Maximum 5 MB and 200 parcels; the normalised review is limited to 2 MB.</p>
 <p class="text-sm text-muted">CSV uses a wkt column, or ordered lat/lon vertices grouped by name. A single point cannot define a parcel.</p>
 <details><summary class="min-h-[44px] cursor-pointer font-semibold">Attribute mapping</summary>
 <label class="block">Name column <input name="name_field" class="rounded-lg border border-line bg-ground px-3 min-h-[44px]"></label>
 <label class="block mt-2">Crop code column <input name="crop_field" class="rounded-lg border border-line bg-ground px-3 min-h-[44px]"></label>
+<label class="block mt-2">Archive layer (optional, e.g. parcelles.shp) <input name="layer" class="rounded-lg border border-line bg-ground px-3 min-h-[44px]"></label>
 </details>
 <button class="min-h-[44px] rounded-lg border border-line bg-surface px-4 font-semibold hover:bg-ground" type="submit">Review parcels</button>
 </form>

@@ -83,6 +83,29 @@ def matching(rows, item):
     return None
 
 
+def review_items(existing, items):
+    """Drop duplicates and expose redrawn overlaps before any confirmation."""
+    result, geometries = [], []
+    for original in items:
+        if matching(existing, original) is not None:
+            continue
+        item = {**original, "messages": list(original["messages"])}
+        geom = shape(item["geometry"])
+        if any(geom.intersection(g).area / geom.union(g).area >= 0.99 for g in geometries):
+            continue
+        for row in existing:
+            other = to_shape(row.geom)
+            overlap = geom.intersection(other).area
+            if overlap > 0:
+                item["messages"].append(
+                    f"Overlaps existing parcel {row.name} "
+                    f"({overlap / geom.area:.1%} of this boundary)."
+                )
+        result.append(item)
+        geometries.append(geom)
+    return result
+
+
 def confirm(session, draft, *, actor, now, services):
     payload = validate(session, draft.farm_id, draft.payload)
     rows = list(session.scalars(select(Parcel).where(Parcel.farm_id == draft.farm_id)))

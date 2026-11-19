@@ -23,3 +23,9 @@ These describe ESRI shapefiles and Lambert-93 for metropolitan France, not a sta
 XML schema. Telepac XML is explicitly refused with a shapefile-export instruction;
 real farmer telepac compatibility remains to be qualified. Attribute names vary:
 use the expert name/crop column override rather than guessing an annual schema.
+
+Round 2: runtime readers use pyogrio.raw plus Shapely/pyproj. The fixture binaries
+remain unchanged from their original generation. ZIP imports ignore `.shp.xml`
+metadata, prefer a uniquely named `parcell*` layer, and expose an archive-layer
+field for other multi-layer archives. CSV accepts UTF-8 or cp1252 and comma,
+semicolon or tab delimiters. Uploaded attributes cannot supply review notices.

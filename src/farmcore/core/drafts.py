@@ -52,7 +52,6 @@ from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIden
 # Product choice, `assumed` (open decision): an import or agent draft stays reviewable a week.
 DEFAULT_TTL = timedelta(days=7)
 MAX_TTL = timedelta(days=30)
-MAX_PAYLOAD_BYTES = 64_000
 # Provenance is copied onto the confirmed record's `log_source`; keep it a receipt, not a file.
 MAX_PROVENANCE_BYTES = 8_000
 TOKEN = "token"
@@ -126,12 +125,13 @@ def _kind(session: Session, manifests: Sequence[Manifest], key: str):
 
 
 def _validated(session: Session, manifests, farm_id: int, kind: str, payload: dict) -> dict:
-    validator = import_string(_kind(session, manifests, kind).validator)
+    definition = _kind(session, manifests, kind)
+    validator = import_string(definition.validator)
     try:
         clean = validator(session, farm_id, dict(payload))
     except (ValueError, ValidationError) as exc:
         raise DraftInvalid(str(exc)) from exc
-    if len(json.dumps(clean, default=str)) > MAX_PAYLOAD_BYTES:
+    if len(json.dumps(clean, default=str).encode("utf-8")) > definition.max_payload_bytes:
         raise DraftInvalid("This draft is too large.")
     return clean
 

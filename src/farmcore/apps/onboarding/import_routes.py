@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from fastapi.routing import APIRoute
 from sqlalchemy import select
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
@@ -18,7 +19,44 @@ from farmcore.core.registry import visible_manifests
 from farmcore.core.routes_drafts import load, request_actor
 from farmcore.web import context_url, render
 
-router = APIRouter(dependencies=[Depends(require_farm_owner)])
+
+class BoundedImportRoute(APIRoute):
+    """Run before dependencies, including form-field CSRF, can parse/spool a body."""
+
+    def get_route_handler(self):
+        handler = super().get_route_handler()
+
+        async def bounded(request):
+            if request.method != "POST":
+                return await handler(request)
+            limit = parsers.MAX_BYTES + 64_000
+            length = request.headers.get("content-length")
+            if length is not None:
+                if not length.isdigit():
+                    raise HTTPException(400, "Invalid Content-Length.")
+                if int(length) > limit:
+                    raise HTTPException(413, "Parcel upload exceeds the size limit.")
+            body = bytearray()
+            async for chunk in request.stream():
+                if len(body) + len(chunk) > limit:
+                    raise HTTPException(413, "Parcel upload exceeds the size limit.")
+                body.extend(chunk)
+
+            async def replay():
+                return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+            buffered = Request(request.scope, replay)
+            # Public body() caches the bounded bytes; form parsing and route reads can coexist.
+            await buffered.body()
+            try:
+                return await handler(buffered)
+            finally:
+                await buffered.close()
+
+        return bounded
+
+
+router = APIRouter(dependencies=[Depends(require_farm_owner)], route_class=BoundedImportRoute)
 
 
 @router.get("/import")
@@ -28,39 +66,25 @@ def page(request: Request, repo: Repo):
 
 @router.post("/import")
 async def upload(request: Request, repo: Repo):
-    # Bound chunked uploads too, before the multipart parser can spool to disk.
-    limit = parsers.MAX_BYTES + 64_000  # multipart headers and two mapping fields
-    length = request.headers.get("content-length")
-    if length is not None:
-        if not length.isdigit():
-            raise HTTPException(400, "Invalid Content-Length.")
-        if int(length) > limit:
-            raise HTTPException(413, "Parcel upload exceeds the size limit.")
-    body = bytearray()
-    async for chunk in request.stream():
-        if len(body) + len(chunk) > limit:
-            raise HTTPException(413, "Parcel upload exceeds the size limit.")
-        body.extend(chunk)
-
-    async def replay():
-        return {"type": "http.request", "body": bytes(body), "more_body": False}
-
-    async with Request(request.scope, replay).form(max_files=1, max_fields=3) as form:
+    async with request.form(max_files=1, max_fields=4) as form:
         file = form.get("file")
         if not isinstance(file, UploadFile):
             raise HTTPException(422, "Choose a parcel file.")
         name_field, crop_field = form.get("name_field", ""), form.get("crop_field", "")
-        if not isinstance(name_field, str) or not isinstance(crop_field, str):
+        layer = form.get("layer", "")
+        if not all(isinstance(v, str) for v in (name_field, crop_field, layer)):
             raise HTTPException(422, "Attribute columns must be text.")
-        return await run_in_threadpool(_propose, request, repo, file, name_field, crop_field)
+        return await run_in_threadpool(_propose, request, repo, file, name_field, crop_field, layer)
 
 
-def _propose(request, repo, file, name_field, crop_field):
+def _propose(request, repo, file, name_field, crop_field, layer):
     try:
         data = file.file.read(parsers.MAX_BYTES + 1)
         if len(data) > parsers.MAX_BYTES:
             raise ValueError("File exceeds the 5 MB limit.")
-        items = parsers.parse(data, file.filename, name_field=name_field, crop_field=crop_field)
+        items = parsers.parse(
+            data, file.filename, name_field=name_field, crop_field=crop_field, layer=layer
+        )
         existing = list(
             repo.execute(
                 select(Parcel).where(Parcel.farm_id == repo.farm_id),
@@ -68,7 +92,7 @@ def _propose(request, repo, file, name_field, crop_field):
                 resource="parcel",
             ).scalars()
         )
-        items = [item for item in items if service.matching(existing, item) is None]
+        items = service.review_items(existing, items)
         if not items:
             return render(
                 request, "onboarding/import.html", message="All parcels are already imported."

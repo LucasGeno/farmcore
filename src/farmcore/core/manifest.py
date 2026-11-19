@@ -409,15 +409,19 @@ class DraftKind:
       int]``, the record's model and id; raises ``ValueError`` when the draft can no longer be
       recorded. ``services`` holds the caller's composed readers (``spray_weather_reader``).
     - review: a fragment URL, loaded with ``?draft=<id>``.
+    - max_payload_bytes: JSON byte cap after validation, default 64 KB, at most 5 MB.
     """
 
     key: str
     validator: str
     review: str
     confirm: str = ""
+    max_payload_bytes: int = 64_000
 
     def __post_init__(self) -> None:
         _check_key(self.key, "draft kind", reserved=RESERVED_RECORD_TYPE_KEYS)
+        if not 1 <= self.max_payload_bytes <= 5_000_000:
+            raise ValueError("Draft payload limit must be between 1 and 5000000 bytes.")
         _check_provider(self.validator, "draft kind")
         _check_provider(self.confirm, "draft kind")
         _check_path(self.review, "draft kind")

@@ -17,6 +17,7 @@ MANIFEST = Manifest(
             "farmcore.apps.onboarding.importers.service:validate",
             "/onboarding/import/review",
             "farmcore.apps.onboarding.importers.service:confirm",
+            max_payload_bytes=2_000_000,
         ),
     ),
     seed="farmcore.apps.onboarding.seed:seed",

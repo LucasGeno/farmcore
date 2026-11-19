@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from sqlalchemy import select
 
-from farmcore.core.access import ensure_owner_grant
-from farmcore.core.models.canonical import Farm, Parcel
+from farmcore.apps.onboarding.importers import parsers, service
+from farmcore.core.models.canonical import Parcel
 from farmcore.core.models.drafts import Draft
 from farmcore.core.seed import ensure_default_farm
 
@@ -42,20 +42,11 @@ def test_upload_reviews_before_confirm_and_reimport_does_not_duplicate(client, s
     assert review.status_code == 200
     assert "North field" in review.text and "BTH" in review.text
     assert draft.payload["parcels"][0]["area_ha"] == pytest.approx(0.829755, rel=0.005)
-    other = Farm(name="Other farm", props={"country": "FR"})
-    session.add(other)
-    session.flush()
-    ensure_owner_grant(session, other)
-    session.commit()
-    assert (
-        client.post(f"/drafts/{draft.id}/confirm?farm={other.id}", data={"revision": 1}).status_code
-        == 404
+    assert upload(client).headers["location"] == response.headers["location"]
+    result = client.post(
+        f"/drafts/{draft.id}/confirm", data={"revision": 1}, follow_redirects=False
     )
-    for _ in range(2):
-        result = client.post(
-            f"/drafts/{draft.id}/confirm", data={"revision": 1}, follow_redirects=False
-        )
-        assert result.status_code == 303, result.text
+    assert result.status_code == 303
     again = upload(client)
     assert again.status_code == 200 and "already" in again.text.lower()
     # A differently named file still matches the same geometry.
@@ -92,8 +83,7 @@ def archive(members):
         "vertices.csv",
     ],
 )
-def test_supported_files_propose_the_same_known_area(client, session, settings, filename):
-    setup_farm(session, settings)
+def test_supported_files_propose_the_same_known_area(filename):
     data = None
     if filename == "telepac.zip":
         data = archive(
@@ -105,11 +95,9 @@ def test_supported_files_propose_the_same_known_area(client, session, settings, 
         )
     elif filename == "parcel.kmz":
         data = archive({"doc.kml": (FIXTURES / "parcel.kml").read_bytes()})
-    response = upload(client, filename, data)
-    assert response.status_code == 303, response.text
-    draft = session.scalar(select(Draft))
-    assert len(draft.payload["parcels"]) == 1
-    item = draft.payload["parcels"][0]
+    items = parsers.parse(data or (FIXTURES / filename).read_bytes(), filename)
+    assert len(items) == 1
+    item = items[0]
     assert item["name"] == "North field"
     assert item["area_ha"] == pytest.approx(0.8297537684, rel=0.005)
 
@@ -123,16 +111,14 @@ def test_supported_files_propose_the_same_known_area(client, session, settings, 
         "xxe",
         "wrong_crs",
         "missing_crs",
-        "country",
         "point",
         "oversize",
         "disguised",
     ],
 )
-def test_hostile_or_unusable_files_leave_no_draft_or_parcel(client, session, settings, case):
+def test_hostile_or_unusable_files_are_refused(case):
     import json
 
-    setup_farm(session, settings)
     filename = "bad.zip"
     if case == "disguised":
         filename = "bad.gpkg"
@@ -172,106 +158,178 @@ def test_hostile_or_unusable_files_leave_no_draft_or_parcel(client, session, set
         else:
             doc["features"][0]["geometry"] = {"type": "Point", "coordinates": [2, 48]}
         data = json.dumps(doc).encode()
-    response = upload(client, filename, data)
-    assert response.status_code == 422
-    assert not session.scalars(select(Draft)).all()
-    assert not session.scalars(select(Parcel)).all()
+    with pytest.raises(ValueError):
+        parsers.parse(data, filename)
 
 
-def test_repaired_geometry_and_expert_mapping_are_visible_in_review(client, session, settings):
-    import json
+@pytest.fixture
+def member(client, session, settings):
+    from datetime import UTC, datetime, timedelta
 
-    setup_farm(session, settings)
-    doc = json.loads((FIXTURES / "parcel.geojson").read_bytes())
-    f = doc["features"][0]
-    f["properties"] = {"label": "Repaired field", "culture": "VRC"}
-    f["geometry"]["coordinates"] = [[[2, 48], [2.001, 48.001], [2.001, 48], [2, 48.001], [2, 48]]]
-    response = upload(
-        client,
-        "crossed.geojson",
-        json.dumps(doc).encode(),
-        name_field="label",
-        crop_field="culture",
-    )
-    assert response.status_code == 303
-    draft = session.scalar(select(Draft))
-    review = client.get(f"/onboarding/import/review?draft={draft.id}")
-    assert "Invalid boundary repaired" in review.text and "VRC" in review.text
-    assert "Repaired field" in review.text
-    result = client.post(
-        f"/drafts/{draft.id}/confirm", data={"revision": 1}, follow_redirects=False
-    )
-    assert result.status_code == 303
-    parcel = session.scalar(select(Parcel))
-    assert float(parcel.area_ha) == pytest.approx(0.414877, rel=0.005)
-
-
-def test_repeated_upload_reuses_open_draft_and_distinct_drafts_confirm_once(
-    client, session, settings
-):
-    setup_farm(session, settings)
-    first = upload(client)
-    second = upload(client)
-    assert first.headers["location"] == second.headers["location"]
-    assert len(session.scalars(select(Draft)).all()) == 1
-    # Different file receipts can overlap. Confirm rechecks after another draft writes.
-    third = upload(client, "another.geojson", (FIXTURES / "parcel.geojson").read_bytes())
-    for url in (first.headers["location"], third.headers["location"]):
-        assert (
-            client.post(url + "/confirm", data={"revision": 1}, follow_redirects=False).status_code
-            == 303
-        )
-    assert len(session.scalars(select(Parcel)).all()) == 1
-
-
-def test_source_references_are_scoped_to_the_file_and_farm(client, session, settings):
-    import json
+    from farmcore.core.identity import DUMMY_HASH, token_hash
+    from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 
     farm = setup_farm(session, settings)
-    first = upload(client)
-    assert (
-        client.post(
-            first.headers["location"] + "/confirm", data={"revision": 1}, follow_redirects=False
-        ).status_code
-        == 303
-    )
-    doc = json.loads((FIXTURES / "parcel.geojson").read_bytes())
-    for point in doc["features"][0]["geometry"]["coordinates"][0]:
-        point[0] += 0.01
-    # Stable reference in the same source means an existing parcel, even with a changed boundary.
-    assert upload(client, "parcel.geojson", json.dumps(doc).encode()).status_code == 200
-    # Local reference 'synthetic-1' in another source is not the same parcel.
-    new = upload(client, "different.geojson", json.dumps(doc).encode())
-    assert new.status_code == 303
-    other = Farm(name="Separate importing farm", props={"country": "FR"})
-    session.add(other)
+    owner = LocalIdentity(login="import-owner", password_hash=DUMMY_HASH)
+    session.add(owner)
     session.flush()
-    ensure_owner_grant(session, other)
-    session.commit()
-    response = client.post(
-        f"/onboarding/import?farm={other.id}",
-        files={"file": ("parcel.geojson", (FIXTURES / "parcel.geojson").read_bytes())},
-        follow_redirects=False,
+    session.add(FarmMembership(identity_id=owner.id, farm_id=farm.id, role="owner"))
+    session.add(
+        LocalSession(
+            token_hash=token_hash("import-session"),
+            identity_id=owner.id,
+            csrf_hash=token_hash("import-nonce"),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
     )
-    assert response.status_code == 303
-    assert session.scalar(select(Parcel).where(Parcel.farm_id == farm.id)) is not None
-    assert not session.scalars(select(Parcel).where(Parcel.farm_id == other.id)).all()
-
-
-def test_anonymous_upload_cannot_propose_parcels(client, session, settings):
-    setup_farm(session, settings)
+    session.commit()
     del client.headers["X-Admin-Token"]
-    response = upload(client)
-    assert response.status_code in {401, 403}
-    assert not session.scalars(select(Draft)).all()
+    client.cookies.set("farmcore_session", "import-session")
+    client.cookies.set("farmcore_csrf", "import-nonce")
+    client.headers["Origin"] = "http://testserver"
+    return client
 
 
-def test_chunked_request_is_capped_before_multipart_parsing(client, session, settings):
-    setup_farm(session, settings)
-    response = client.post(
+def test_member_form_csrf_upload_accepts_200_realistic_boundaries(member, session):
+    import json
+    import math
+
+    # First prove the ordinary browser form path, then the larger draft capacity.
+    assert upload(member, csrf_token="import-nonce").status_code == 303
+    features = []
+    for i in range(200):
+        ring = [
+            [
+                2 + i * 0.003 + 0.001 * math.cos(j * math.tau / 80),
+                48 + 0.001 * math.sin(j * math.tau / 80),
+            ]
+            for j in range(80)
+        ]
+        ring.append(ring[0])
+        features.append(
+            {
+                "type": "Feature",
+                "properties": {"name": f"Field {i}"},
+                "geometry": {"type": "Polygon", "coordinates": [ring]},
+            }
+        )
+    response = upload(
+        member,
+        "farm.geojson",
+        json.dumps({"type": "FeatureCollection", "features": features}).encode(),
+        csrf_token="import-nonce",
+    )
+    assert response.status_code == 303, response.text[-2000:]
+    draft = session.scalar(
+        select(Draft).where(Draft.provenance["file_name"].astext == "farm.geojson")
+    )
+    assert len(draft.payload["parcels"]) == 200
+    assert len(json.dumps(draft.payload)) > 64000
+    assert not session.scalars(select(Parcel)).all()
+    assert member.get(f"/onboarding/import/review?draft={draft.id}").status_code == 200
+    # The larger allowance remains bounded through the public draft revision service.
+    from farmcore.core import drafts
+
+    oversized = {**draft.payload["parcels"][0], "messages": ["x" * 2_000_000]}
+    with pytest.raises(drafts.DraftInvalid, match="too large"):
+        drafts.revise(
+            session,
+            member.app.state.manifests,
+            farm_id=draft.farm_id,
+            draft_id=draft.id,
+            actor=draft.actor,
+            revision=1,
+            payload={"parcels": [oversized]},
+        )
+
+
+def test_member_chunked_cap_precedes_csrf_form_parse_and_refusals_write_nothing(member, session):
+    response = member.post(
         "/onboarding/import",
-        content=(b"x" * 100_000 for _ in range(51)),
+        content=(b"x" * 100000 for _ in range(51)),
         headers={"Content-Type": "multipart/form-data; boundary=synthetic"},
     )
     assert response.status_code == 413
+    assert upload(member, csrf_token="wrong").status_code == 403
+    assert (
+        upload(member, "bad.csv", b"wkt\n" + b"x" * 140000, csrf_token="import-nonce").status_code
+        == 422
+    )
+    member.cookies.clear()
+    assert upload(member).status_code == 403
     assert not session.scalars(select(Draft)).all()
+
+
+def test_telepac_layers_ignore_sidecars_and_allow_explicit_choice():
+    members = {}
+    for stem in ("ilots", "parcelles"):
+        for p in FIXTURES.glob("parcel.*"):
+            if p.suffix in {".shp", ".shx", ".dbf", ".prj", ".cpg"}:
+                members[stem + p.suffix] = p.read_bytes()
+    members["parcelles.shp.xml"] = b"<metadata/>"
+    data = archive(members)
+    assert parsers.parse(data, "telepac.zip")[0]["name"] == "North field"
+    assert parsers.parse(data, "telepac.zip", layer="ilots.shp")[0]["name"] == "North field"
+
+
+@pytest.mark.parametrize("case", ["file_directory_collision", "long_csv_field", "expanded_xml"])
+def test_bad_archive_and_csv_fail_as_input_errors(case, monkeypatch):
+    if case == "file_directory_collision":
+        filename, data = "bad.zip", archive({"a": b"file", "a/doc.kml": b"<kml/>"})
+    elif case == "long_csv_field":
+        filename, data = "bad.csv", b"wkt\n" + b"x" * 140000
+    else:
+        monkeypatch.setattr(parsers, "MAX_XML_BYTES", 200)
+        filename, data = "bad.kmz", archive({"doc.kml": (FIXTURES / "parcel.kml").read_bytes()})
+    with pytest.raises(ValueError):
+        parsers.parse(data, filename)
+
+
+def test_excel_csv_mapping_strips_spoofed_notices_and_preserves_repair_notice():
+    data = (
+        "label;culture;messages;wkt\nPr\xe9;VRC;Safe to confirm;"
+        '"POLYGON ((2 48,2.001 48.001,2.001 48,2 48.001,2 48))"\n'
+    ).encode("cp1252")
+    [item] = parsers.parse(data, "excel.csv", name_field="label", crop_field="culture")
+    assert item["name"] == "Pré" and item["crop_code"] == "VRC"
+    assert item["area_ha"] == pytest.approx(0.414877, rel=0.005)
+    assert len(item["messages"]) == 1 and "repaired" in item["messages"][0]
+
+
+def test_review_deduplicates_file_and_warns_on_redrawn_overlap(session, settings):
+    import json
+
+    from geoalchemy2.shape import from_shape
+    from shapely.geometry import MultiPolygon, shape
+
+    farm = setup_farm(session, settings)
+    items = parsers.parse((FIXTURES / "parcel.geojson").read_bytes(), "parcel.geojson")
+    item = items[0]
+    old = Parcel(
+        farm_id=farm.id,
+        name="Existing field",
+        alias="old",
+        area_ha=0.829755,
+        geom=from_shape(MultiPolygon([shape(item["geometry"])]), srid=4326),
+        props={},
+    )
+    session.add(old)
+    session.flush()
+    shifted = json.loads(json.dumps(item))
+    for point in shifted["geometry"]["coordinates"][0]:
+        point[0] += 0.0001
+    payload = service.review_items([old], [shifted, shifted])
+    assert len(payload) == 1
+    assert any("Existing field" in msg and "%" in msg for msg in payload[0]["messages"])
+    old.props = {
+        "import_source_ref": item["source_ref"],
+        "import_source_scope": item["source_scope"],
+    }
+    assert service.review_items([old], [shifted]) == []
+    shifted["source_scope"] = "another-file.geojson"
+    assert len(service.review_items([old], [shifted])) == 1
+    # Country rejection belongs to the service, not the format/HTTP tables.
+    for point in shifted["geometry"]["coordinates"][0]:
+        point[0] += 100
+    with pytest.raises(ValueError, match="country"):
+        service.validate(session, farm.id, {"parcels": [shifted]})

@@ -102,11 +102,16 @@ database server, not linked into FarmCore).
 ## Parcel file import libraries
 
 Pinned direct dependencies: [pyogrio 0.13.0](https://github.com/geopandas/pyogrio)
-(MIT), [GeoPandas 1.1.3](https://github.com/geopandas/geopandas/blob/main/LICENSE.txt)
-(BSD-3-Clause), and [defusedxml 0.7.1](https://github.com/tiran/defusedxml/blob/main/LICENSE)
-(PSF-2.0, copyright Christian Heimes). Installed distributions retain their licence files.
-Pyogrio bundles GDAL, whose [licence](https://gdal.org/en/stable/license.html) is
-MIT/X with separately attributed permissive components. No external parser code is copied.
-Shapely (BSD-3-Clause) uses GEOS (LGPL-2.1); pyproj uses PROJ (MIT). These are
-installed library dependencies, not copied source. Binary distributors must preserve
-the bundled third-party licences, including those shipped in the pyogrio wheel.
+(MIT), [defusedxml 0.7.1](https://github.com/tiran/defusedxml/blob/main/LICENSE)
+(PSF-2.0, copyright Christian Heimes), Shapely 2.2.0 (BSD-3-Clause), and pyproj 3.8.0
+(MIT, including PROJ). Installed distributions retain their licence files.
+GeoPandas and pandas are not runtime dependencies; pyogrio's raw WKB reader is used.
+
+Pyogrio's bundled **libgdal shared object statically links GEOS 3.14.1
+(LGPL-2.1)**, as well as libkml, libxml2, curl and SQLite. Shapely also bundles
+GEOS. These libraries are distributed unmodified, not copied into FarmCore source.
+GDAL itself is [MIT/X](https://gdal.org/en/stable/license.html); that licence does
+not replace the licences of linked components. Binary distributors must preserve
+the [GEOS LGPL-2.1 licence and notices](https://github.com/libgeos/geos/blob/main/COPYING)
+and comply with its corresponding-source and relinking requirements, alongside
+all other third-party notices shipped in the wheels. No external parser code is copied.

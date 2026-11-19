@@ -10,18 +10,19 @@ from tempfile import TemporaryDirectory
 from xml.etree.ElementTree import ParseError
 from zipfile import BadZipFile, ZipFile
 
-import geopandas as gpd
 import pyogrio
 from defusedxml.common import DefusedXmlException
 from defusedxml.ElementTree import fromstring
+from pyogrio.raw import read
 from pyproj import Transformer
-from shapely import from_wkt, make_valid, transform
+from shapely import from_wkb, from_wkt, make_valid, transform
 from shapely.errors import GEOSException
 from shapely.geometry import MultiPolygon, Polygon, mapping, shape
 
 # Assumed product limits, not agronomic thresholds. Reject whole uploads, never truncate.
 MAX_BYTES = 5_000_000
 MAX_EXPANDED = 20_000_000
+MAX_XML_BYTES = 5_000_000
 MAX_MEMBERS = 100
 MAX_PARCELS = 200
 MAX_VERTICES = 10000
@@ -59,7 +60,7 @@ def normalise(geometry, properties, index):
     }
 
 
-def unpack(data, root):
+def unpack(data, root, layer=""):
     with ZipFile(io.BytesIO(data)) as archive:
         members = archive.infolist()
         if len(members) > MAX_MEMBERS or sum(m.file_size for m in members) > MAX_EXPANDED:
@@ -81,6 +82,8 @@ def unpack(data, root):
                 continue
             if member.compress_size and member.file_size / member.compress_size > 200:
                 raise ValueError("Archive compression ratio exceeds the safety limit.")
+            if path.suffix.lower() in {".xml", ".kml"} and member.file_size > MAX_XML_BYTES:
+                raise ValueError("XML exceeds the 5 MB expanded size limit.")
             destination = root.joinpath(*path.parts)
             destination.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source:
@@ -88,13 +91,30 @@ def unpack(data, root):
             if len(content) != member.file_size or len(content) > MAX_EXPANDED:
                 raise ValueError("Archive expanded size is invalid.")
             destination.write_bytes(content)
-    candidates = [p for p in root.rglob("*") if p.suffix.lower() in {".shp", ".kml", ".xml"}]
+    shapefiles = sorted(p for p in root.rglob("*") if p.suffix.lower() == ".shp")
+    candidates = shapefiles or sorted(
+        p
+        for p in root.rglob("*")
+        if p.suffix.lower() == ".kml" or p.name.casefold() == "taskdata.xml"
+    )
+    if layer:
+        candidates = [p for p in candidates if p.relative_to(root).as_posix() == layer]
+    elif len(shapefiles) > 1:
+        parcels = [p for p in shapefiles if "parcell" in p.stem.casefold()]
+        if len(parcels) == 1:
+            candidates = parcels
     if len(candidates) != 1:
-        raise ValueError("Choose an archive containing one parcel layer or TASKDATA.XML.")
+        choices = ", ".join(p.relative_to(root).as_posix() for p in shapefiles)
+        raise ValueError(
+            "Choose an archive layer in Attribute mapping: "
+            + (choices or "TASKDATA.XML or one KML required.")
+        )
     return candidates[0]
 
 
 def xml_features(data):
+    if len(data) > MAX_XML_BYTES:
+        raise ValueError("XML exceeds the 5 MB expanded size limit.")
     root = fromstring(data, forbid_dtd=True)
     # Namespace removal is local to the parsed, hardened tree.
     for element in root.iter():
@@ -150,7 +170,21 @@ def xml_features(data):
 
 
 def csv_features(data, name_field):
-    rows = list(csv.DictReader(io.StringIO(data.decode("utf-8-sig"))))
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        try:
+            text = data.decode("cp1252")
+        except UnicodeDecodeError as exc:
+            raise ValueError("Cannot decode CSV; save as UTF-8.") from exc
+    # Header sniffing avoids commas inside a quoted WKT changing the delimiter.
+    header = text.splitlines()[0] if text else ""
+    delimiter = (
+        csv.Sniffer().sniff(header, delimiters=",;\t").delimiter
+        if any(c in header for c in ",;\t")
+        else ","
+    )
+    rows = list(csv.DictReader(io.StringIO(text), delimiter=delimiter))
     if not rows:
         raise ValueError("CSV is empty.")
     if "wkt" in rows[0]:
@@ -192,23 +226,31 @@ def read_features(path, name_field):
     layers = pyogrio.list_layers(path)
     if len(layers) != 1:
         raise ValueError("Choose a file containing one parcel layer.")
-    frame = gpd.read_file(path, engine="pyogrio", max_features=MAX_PARCELS + 1)
-    if frame.crs is None:
+    metadata, _, geometries, columns = read(path, max_features=MAX_PARCELS + 1)
+    if metadata["crs"] is None:
         raise ValueError("The file has no CRS.")
-    frame = frame.to_crs(4326)
-    return [
-        (row.geometry, {k: v for k, v in row.items() if k != "geometry" and v is not None})
-        for _, row in frame.iterrows()
-    ]
+    reproject = Transformer.from_crs(metadata["crs"], 4326, always_xy=True)
+    features = []
+    for i, wkb in enumerate(geometries):
+        attrs = {
+            name: column[i]
+            for name, column in zip(metadata["fields"], columns, strict=True)
+            if column[i] is not None
+        }
+        geometry = transform(from_wkb(wkb), reproject.transform, interleaved=False)
+        features.append((geometry, attrs))
+    return features
 
 
-def parse(data, filename, *, name_field="", crop_field=""):
+def parse(data, filename, *, name_field="", crop_field="", layer=""):
     try:
+        if len(data) > MAX_BYTES:
+            raise ValueError("File exceeds the 5 MB limit.")
         with TemporaryDirectory(prefix="farmcore-parcels-") as directory:
             root = Path(directory)
             suffix = Path(filename or "").suffix.lower()
             if suffix in {".zip", ".kmz"}:
-                path = unpack(data, root)
+                path = unpack(data, root, layer)
             else:
                 path = root / ("upload" + suffix)
                 path.write_bytes(data)
@@ -226,11 +268,14 @@ def parse(data, filename, *, name_field="", crop_field=""):
                     if override not in attrs:
                         raise ValueError(f"Column {override!r} is missing.")
                     attrs[target] = attrs[override]
+            attrs.pop("messages", None)  # Only the server can author review notices.
             attrs["source_scope"] = Path(filename or "").name
             out.append(normalise(geometry, attrs, index))
         return out
     except (
         BadZipFile,
+        csv.Error,
+        OSError,
         RuntimeError,
         NotImplementedError,
         DefusedXmlException,
