@@ -51,7 +51,7 @@ from farmcore.core.farm_location import farm_zone
 from farmcore.core.models.canonical import Farm
 from farmcore.core.registry import visible_manifests
 from farmcore.core.routes_clock import require_admin
-from farmcore.core.tools import ToolContext, ToolResult, call_tool, collect_tools
+from farmcore.core.tools import ToolContext, call_tool, collect_tools
 from farmcore.core.tour import is_tour
 from farmcore.core.urls import with_farm
 from farmcore.web import is_admin, templates
@@ -230,17 +230,7 @@ def ask(
                 )
             )
         with repo.session.begin_nested():
-            if tool.name.startswith("advisor_"):
-                from farmcore.apps.advisor.service import unavailable_reason
-
-                reason = unavailable_reason(scoped)
-            else:
-                reason = None
-            result = (
-                ToolResult({"unavailable": reason}, reason)
-                if reason
-                else call_tool(tool, ctx, args)
-            )
+            result = call_tool(tool, ctx, args)
         text, links, name, facts = result.text, result.links, tool.name, result.facts
     conversations.save(
         request.app,
