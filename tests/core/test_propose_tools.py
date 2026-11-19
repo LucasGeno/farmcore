@@ -348,8 +348,9 @@ def test_registry_budget_survives_new_service_instances(
     assert session.scalars(select(Draft)).all() == []
 
 
+@pytest.mark.parametrize("future_conflict", [False, True])
 def test_crop_proposal_review_shows_proposed_choices(
-    client, session, session_factory, settings, manifests
+    client, session, session_factory, settings, manifests, future_conflict
 ):
     farm, _, raw, parcel_id = _farm(session, ["drafts:propose"])
     result = _tools(session_factory, settings, manifests).call(
@@ -371,7 +372,27 @@ def test_crop_proposal_review_shows_proposed_choices(
     client.headers.update(
         {"Origin": "https://testserver", "X-CSRF-Token": client.cookies["farmcore_csrf"]}
     )
+    if future_conflict:
+        from datetime import date
+
+        session.add(
+            CropSeason(
+                farm_id=farm.id,
+                parcel_id=parcel_id,
+                starts_on=date(2024, 6, 1),
+                crop_name="Vine",
+                created_by="operator",
+            )
+        )
+        session.flush()
     confirmed = client.post(f"/drafts/{draft_id}/confirm?farm={farm.id}", data={"revision": 1})
+    if future_conflict:
+        assert confirmed.status_code == 422
+        session.expire_all()
+        assert session.get(Draft, draft_id).status == "open"
+        [season] = session.scalars(select(CropSeason)).all()
+        assert season.crop_name == "Vine"
+        return
     assert confirmed.status_code == 200
     [season] = session.scalars(select(CropSeason)).all()
     assert season.parcel_id == parcel_id and season.crop_name == "Olive"
@@ -397,3 +418,19 @@ def test_propose_tool_respects_kind_payload_budget(session, session_factory, set
         )
     assert session.scalars(select(Draft)).all() == []
     assert session.scalar(select(AccessLog.resource)) == "mcp:propose_parcels"
+
+
+def test_crop_proposal_rejects_duplicate_numeric_parcel_ids(
+    session, session_factory, settings, manifests
+):
+    _, _, raw, parcel_id = _farm(session, ["drafts:propose"])
+    with pytest.raises(farm_mcp.Refused, match="once"):
+        _tools(session_factory, settings, manifests).call(
+            raw,
+            "propose_crop_assignments",
+            {
+                "starts_on": "2024-05-01",
+                "assignments": {str(parcel_id): "vine", f"0{parcel_id}": "olive"},
+            },
+        )
+    assert session.scalars(select(Draft)).all() == []

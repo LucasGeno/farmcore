@@ -39,6 +39,8 @@ def validate(session, farm_id, payload):
         if not raw_id.isdigit() or not int(raw_id) < 2**63:
             raise ValueError("Parcel ids must be positive numbers.")
         ids.append(int(raw_id))
+    if len(set(ids)) != len(ids):
+        raise ValueError("Choose each parcel only once.")
     found = set(
         session.scalars(select(Parcel.id).where(Parcel.id.in_(ids), Parcel.farm_id == farm_id))
     )
@@ -47,7 +49,10 @@ def validate(session, farm_id, payload):
     for key in data.assignments.values():
         if key not in crops.CROPS:
             raise ValueError(f"Unknown crop: {key}.")
-    return {"starts_on": data.starts_on.isoformat(), "assignments": data.assignments}
+    return {
+        "starts_on": data.starts_on.isoformat(),
+        "assignments": {str(int(key)): value for key, value in data.assignments.items()},
+    }
 
 
 def confirm(session, draft, *, actor, now, services):
@@ -58,6 +63,16 @@ def confirm(session, draft, *, actor, now, services):
         session, draft.farm_id, ensure_owner_grant(session, farm), actor, "drafts"
     )
     choices = {int(raw_id): key for raw_id, key in payload["assignments"].items()}
+    # The core holds the farm lock. Check every parcel before assigning any: a new
+    # open-ended season cannot precede an existing future season. Covered dates
+    # keep their season, exactly as the owner's crop setup flow does.
+    for parcel_id in choices:
+        if seasons.season_on(repo, parcel_id, day) is None and any(
+            season.starts_on > day for season in seasons.seasons(repo, parcel_id)
+        ):
+            raise ValueError("The proposed start overlaps a future crop season. Review its dates.")
     crops.assign(repo, starts_on=day, choices=choices)
     season = seasons.season_on(repo, min(choices), day)
-    return "crop_season", season.id if season is not None else min(choices)
+    if season is None:
+        raise ValueError("No crop season was recorded. Review the proposed dates.")
+    return "crop_season", season.id
