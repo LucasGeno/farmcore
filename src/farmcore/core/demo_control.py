@@ -50,7 +50,7 @@ def metadata(row):
     return dict((row.job_runs or {}).get("demo") or {}) if row else {}
 
 
-def snapshot(session, settings, apps=frozenset()):
+def snapshot(session, settings, apps):
     """Read-only: never use Repo (read auditing) or clock_row (lazy initialization). `apps`:
     names of the loaded, switched-on apps; only they contribute counts."""
     farm = demo_farm(session, settings)
