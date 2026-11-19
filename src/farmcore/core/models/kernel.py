@@ -33,6 +33,9 @@ class AppModule(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    # +1 on every state change, by a trigger (core_0014): the fence of in-flight work.
+    generation: Mapped[int] = mapped_column(BigInteger, server_default="0")
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
 
 
 class ClockState(Base):

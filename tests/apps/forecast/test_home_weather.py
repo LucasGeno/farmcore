@@ -54,7 +54,7 @@ def test_home_weather_never_borrows_another_farms_run_and_disappears_when_off(
     )
     session.get(AppModule, "forecast").state = "uninstalled"
     session.commit()
-    assert client.get("/forecast/home-weather").text == ""
+    assert client.get("/forecast/home-weather").status_code == 404
 
 
 def test_home_weather_retains_partial_days_missing_gusts_and_local_rain_buckets(

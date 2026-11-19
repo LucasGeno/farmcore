@@ -231,7 +231,7 @@ def test_plan_tour_reads_and_busy_remain_farm_local_and_app_off_hides_the_page(
     session.get(AppModule, "forecast").state = "uninstalled"
     session.commit()
     assert client.get("/forecast/plan").status_code == 404
-    assert client.get("/forecast/plan/days").text == ""
+    assert client.get("/forecast/plan/days").status_code == 404
 
 
 def test_unverified_spanish_archive_does_not_claim_spray_hours_have_passed(

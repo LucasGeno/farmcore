@@ -73,8 +73,9 @@ class Attempt:
     task_name: str
     farm_id: int
     number: int
-    generation: int
+    generation: int  # the clock's
     deadline_at: datetime
+    module_generation: int = 0  # its module's `app_module.generation` when it began
 
     def remaining(self) -> float:
         """Seconds left before the deadline (0 when past): the budget for any I/O."""
@@ -95,6 +96,25 @@ class TaskContext:
 
 def durable_specs(manifests: Sequence[Manifest]) -> list[JobSpec]:
     return [spec for m in manifests for spec in m.jobs if spec.task is not None]
+
+
+def module_of(task_name: str) -> str:
+    """The app a durable task belongs to: its name is `<app>.<job>` (checked by `Manifest`)."""
+    return task_name.partition(".")[0]
+
+
+# The task's module row, locked against a state change until the transaction ends. No row reads
+# as installed at generation 0, as everywhere (`registry.read_states`); every process that runs
+# tasks creates the rows at start (`registry.sync_modules`).
+_MODULE = text("SELECT state, generation FROM app_module WHERE name = :m FOR SHARE")
+
+
+def _module_generation(session: Session, task_name: str) -> int | None:
+    """The generation of the task's module while it is installed, else None."""
+    row = session.execute(_MODULE, {"m": module_of(task_name)}).first()
+    if row is None:
+        return 0
+    return row.generation if row.state == "installed" else None
 
 
 def queueing_lock(task_name: str, farm_id: int) -> str:
@@ -197,8 +217,12 @@ def begin_attempt(
     session_factory: sessionmaker[Session], task_name: str, farm_id: int, deadline: timedelta
 ) -> Attempt | None:
     """Take the next attempt of `task_name` for `farm_id`, in its own transaction; any older
-    attempt can no longer publish. None while the clock is not live or the farm is gone."""
+    attempt can no longer publish. None while the clock is not live, the farm is gone or the
+    task's module is switched off."""
     with session_scope(session_factory) as session:
+        module_generation = _module_generation(session, task_name)
+        if module_generation is None:
+            return None
         row = session.execute(
             text(
                 "INSERT INTO task_attempt AS a (task_name, farm_id, attempt, clock_generation, "
@@ -214,15 +238,19 @@ def begin_attempt(
         ).first()
     if row is None:
         return None
-    return Attempt(task_name, farm_id, row.attempt, row.clock_generation, row.deadline_at)
+    return Attempt(
+        task_name, farm_id, row.attempt, row.clock_generation, row.deadline_at, module_generation
+    )
 
 
 def publish_if_current(session: Session, attempt: Attempt) -> bool:
     """Run before anything the transaction writes for `attempt` (a task may take its own locks
     first). True when the attempt may publish: it is still current and before its deadline
     (judged now, not when the transaction began, which may have waited on a lock), its farm
-    exists, and the clock is live in the attempt's generation. The rows stay locked until that
-    transaction ends, so a newer attempt or a clock switch waits for it rather than interleaving.
+    exists, the clock is live in the attempt's generation, and its module is installed in the
+    generation the attempt began in (a disable, or a disable and re-enable, fences it). The rows
+    stay locked until that transaction ends, so a newer attempt, a clock switch or a module switch
+    waits for it rather than interleaving.
     True also marks the attempt finished (in the same transaction). On False the caller writes
     nothing."""
     current = session.execute(
@@ -237,6 +265,10 @@ def publish_if_current(session: Session, attempt: Attempt) -> bool:
         ),
         {"n": attempt.task_name, "f": attempt.farm_id, "a": attempt.number},
     ).first()
+    if current is not None and (
+        _module_generation(session, attempt.task_name) != attempt.module_generation
+    ):
+        current = None
     if current is None:
         logger.warning(
             "stale attempt %s of %s for farm %s: not published",
@@ -285,8 +317,13 @@ def run_task(
 def plan(
     session_factory: sessionmaker[Session], settings: Settings, manifests: Sequence[Manifest]
 ) -> None:
-    """Run each durable job function once, in live mode only: each enqueues its due work."""
-    for spec in durable_specs(manifests):
+    """Run the durable job function of each app that is on now (`registry.live_active`) once, in
+    live mode only: each enqueues its due work. An app switched off is planned no more."""
+    from farmcore.core import registry  # registry imports the scoped repository and models
+
+    with session_scope(session_factory) as session:
+        active = registry.live_active(session, manifests)
+    for spec in durable_specs(active):
         try:
             with session_scope(session_factory) as session:
                 clock = get_clock(session, settings)
