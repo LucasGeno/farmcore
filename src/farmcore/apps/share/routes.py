@@ -6,6 +6,8 @@
 - `POST /share/grants`, `POST /share/grants/{id}/revoke`: farm owner (`require_farm_owner`), 303
   to `/share/`; invalid input is a plain-words 422: the page again for a browser, the typed values
   kept and the message next to its field. Revoking a token's grant revokes the token.
+- `GET /share/connect`: "Connect your agent": the MCP URL, reachability (probed only in the Expert
+  view, never with a token), and copy-paste setup for token clients; owner only.
 - `POST /share/tokens`: a signed-in farm owner issues an agent token (a grant plus a hashed
   token); 201 with the token shown once and `Cache-Control: no-store`.
 
@@ -28,7 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.operations import register
-from farmcore.apps.share import config, ngsi, service
+from farmcore.apps.share import config, connect, ngsi, service
 from farmcore.core.access import (
     OWNER,
     TOKEN_SCOPES,
@@ -53,7 +55,7 @@ from farmcore.core.models.weather import WeatherObservation
 from farmcore.core.routes_clock import require_admin
 from farmcore.core.weather import attribution
 from farmcore.db import get_session
-from farmcore.web import context_url, is_admin, operator_authenticated, render
+from farmcore.web import context_url, is_admin, is_expert, operator_authenticated, render
 
 router = APIRouter()
 
@@ -274,6 +276,60 @@ def _index_page(
     )
 
 
+def get_probe_transport() -> None:
+    """The reachability probe's HTTP transport: the real network, replaced in tests."""
+    return None
+
+
+@router.get("/connect", response_class=HTMLResponse)
+def connect_page(
+    request: Request,
+    repo: Repo,
+    transport: Annotated[Any, Depends(get_probe_transport)],
+) -> HTMLResponse:
+    if not operator_authenticated(request):
+        require_farm_owner(request, repo)
+    return _connect_page(request, repo, transport)
+
+
+def _connect_page(
+    request: Request,
+    repo: ScopedRepository,
+    transport: Any = None,
+    *,
+    token_form: dict[str, Any] | None = None,
+    token_errors: dict[str, str] | None = None,
+    issued: dict[str, Any] | None = None,
+) -> HTMLResponse:
+    settings = request.app.state.settings
+    url = connect.mcp_url(settings)
+    # The probe is a network call: only the Expert view, which asks to see it, pays for it.
+    status = connect.reachability(settings, transport) if is_expert(request) else None
+    return render(
+        request,
+        "share/connect.html",
+        mcp_url=url,
+        mcp_enabled=settings.mcp_http_enabled,
+        local_only=connect.is_loopback(url),
+        probe=status,
+        snippets=connect.snippets(url),
+        operator=operator_authenticated(request),
+        token_placeholder=connect.TOKEN_PLACEHOLDER,
+        farm_id=repo.farm_id,
+        token_scopes=scope_items(sorted(TOKEN_SCOPES)),
+        token_form=token_form or {},
+        token_errors=token_errors or {},
+        token_max_days=config.TOKEN_MAX_DAYS,
+        grantee_max_len=config.GRANTEE_MAX_LEN,
+        purpose_max_len=config.PURPOSE_MAX_LEN,
+        default_valid_to=(
+            datetime.now(UTC).astimezone(ZoneInfo(_tz(request, repo))).date()
+            + timedelta(days=config.DEFAULT_VALID_DAYS)
+        ).isoformat(),
+        issued=issued,
+    )
+
+
 def _valid_to(value: str, tz: str) -> datetime:
     try:
         day = date.fromisoformat(value.strip())
@@ -344,6 +400,7 @@ def create_token(
     scope: Annotated[list[str], Form()] = [],  # noqa: B006 (FastAPI copies the default)
     purpose: str = Form(""),
     valid_to: str = Form(""),
+    origin: str = Form(""),
 ) -> Response:
     """Issue a personal access token for the signed-in owner's agent and show it once, in this
     response only (never a redirect: the token must not travel in a URL or a cookie)."""
@@ -365,13 +422,21 @@ def create_token(
         if not wants_html(request):
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         typed = {"name": name, "scope": scope, "purpose": purpose, "valid_to": valid_to}
-        page = _index_page(request, repo, token_form=typed, token_errors={exc.field: str(exc)})
+        errors = {exc.field: str(exc)}
+        if origin == "connect":
+            page = _connect_page(request, repo, token_form=typed, token_errors=errors)
+        else:
+            page = _index_page(request, repo, token_form=typed, token_errors=errors)
         page.status_code = 422
         page.headers["Cache-Control"] = "no-store"
         return page
     except PermissionError as exc:
         raise HTTPException(403, "Farm owner required.") from exc
-    page = _index_page(request, repo, issued={"name": grant.grantee, "token": raw})
+    shown = {"name": grant.grantee, "token": raw}
+    if origin == "connect":
+        page = _connect_page(request, repo, issued=shown)
+    else:
+        page = _index_page(request, repo, issued=shown)
     page.status_code = 201
     page.headers["Cache-Control"] = "no-store"
     return page

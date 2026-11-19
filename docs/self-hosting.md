@@ -199,6 +199,21 @@ farm.example.org {
 }
 ```
 
+To let a farmer's own agent connect (Sharing, "Connect your agent"), route `/mcp` to the MCP
+process (`farmcore mcp --http`, `MCP_HTTP_ENABLED=true`, port 8001) before the catch-all, and
+list the public host name in `MCP_HTTP_ALLOWED_HOSTS`:
+
+```caddyfile
+farm.example.org {
+    handle /mcp {
+        reverse_proxy 127.0.0.1:8001
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8000
+    }
+}
+```
+
 If the proxy runs in another container or host, set `FORWARDED_ALLOW_IPS` to its address so
 uvicorn trusts its `X-Forwarded-*` headers. Limit request body size and rate at the proxy.
 
