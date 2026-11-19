@@ -487,7 +487,10 @@ def export_ngsi(
     version = negotiate(request, ngsi.REPRESENTATION.name)
     since, until, before, parcel_id = _window(request, repo, season, parcel)
     return _ld_json(
-        ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id), version
+        ngsi.export(
+            repo, until, since=since, before=before, parcel_id=parcel_id, version=version.number
+        ),
+        version,
     )
 
 
@@ -732,7 +735,10 @@ def grantee_ngsi(
         version = negotiate(request, ngsi.REPRESENTATION.name)
         since, until, before, parcel_id = _window(request, repo, season, parcel)
         return _ld_json(
-            ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id), version
+            ngsi.export(
+                repo, until, since=since, before=before, parcel_id=parcel_id, version=version.number
+            ),
+            version,
         )
     except ScopeDenied as exc:
         raise _denied("register") from exc

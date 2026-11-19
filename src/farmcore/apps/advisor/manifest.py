@@ -8,6 +8,7 @@ from datetime import timedelta
 
 from farmcore.apps.advisor.assessment import KIND
 from farmcore.apps.advisor.tools import TOOLS
+from farmcore.core.access import SCOPES
 from farmcore.core.manifest import JobSpec, Manifest, MapLayer, ParcelView, Widget
 
 JOB_NAME = "advisor.evaluate"
@@ -20,6 +21,9 @@ MANIFEST = Manifest(
     depends=("fields", "stations", "operations"),
     # advice:read is the app's own; the others are the reads its job and card make.
     scopes=("advice:read", "parameters:read", "fields:read", "stations:read", "logs:read"),
+    models=("farmcore.apps.advisor.catalog",),
+    # Shared reference data, like `crop_protection_item` (planning and chat read it too).
+    resource_scopes=(("advisor_product", tuple(sorted(SCOPES))),),
     jobs=(
         JobSpec(
             name=JOB_NAME,

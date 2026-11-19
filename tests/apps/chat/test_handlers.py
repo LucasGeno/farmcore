@@ -23,11 +23,14 @@ from farmcore.apps.chat.handlers import (
     on_callback,
     on_message,
 )
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core.clock import set_replay
 from farmcore.core.manifest import JobContext, JobSpec, Manifest
-from farmcore.core.models.canonical import Event, Log, LogSource, Parcel, Product, Quantity
+from farmcore.core.models.canonical import Event, Log, LogSource, Parcel
+from farmcore.core.models.catalog import TypedQuantity
 from farmcore.core.models.drafts import Draft
 from farmcore.core.seed import ensure_default_farm
+from tests.spray_products import add_product
 
 PARIS = ZoneInfo("Europe/Paris")
 # Replay "now" of the hero scene: 2024-04-10 06:00 local.
@@ -47,14 +50,16 @@ def seed_farm(session, settings, now_local: datetime = NOW_LOCAL) -> dict[str, i
         for alias, name in (("P1", "Le Plateau"), ("P5", "Les Granges"), ("P6", "Peyrot"))
     }
     products = {
-        COPPER: Product(
+        COPPER: add_product(
+            session,
             name=COPPER,
             authorisation_no="TEST-1",
             active_substance="copper",
             product_type="contact",
             targets=["downy"],
         ),
-        SULPHUR: Product(
+        SULPHUR: add_product(
+            session,
             name=SULPHUR,
             authorisation_no="TEST-2",
             active_substance="sulphur",
@@ -152,7 +157,10 @@ def test_confirm_records_a_done_log_with_quantities_voice_source_and_event(
 
     [log] = logs_of(session)
     assert log.status == "done"
-    assert sorted((q.product_id, q.value, q.unit, q.measure) for q in log.quantities) == sorted(
+    assert sorted(
+        (q.catalog_item_id, q.entered_value, q.entered_unit, q.entered_measure)
+        for q in log.typed_quantities
+    ) == sorted(
         [
             (ids[COPPER], Decimal("2"), "kg/ha", "rate"),
             (ids[SULPHUR], Decimal("2"), "kg/ha", "rate"),
@@ -218,7 +226,7 @@ def test_cancel_closes_the_draft_and_writes_no_record(session_factory, session, 
     out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[1][1]))
 
     assert count(session, Log) == 0
-    assert count(session, Quantity) == 0
+    assert count(session, TypedQuantity) == 0
     assert [d.status for d in drafts_of(session)] == ["cancelled"]
     assert out.text == "❌ Cancelled. Nothing was logged."
     assert out.buttons == []
@@ -322,7 +330,7 @@ def test_spec_sentence_logs_one_spray_on_p5_and_p6_and_confirms_on_both(
     [draft] = drafts_of(session)
     assert sorted(draft.payload["parcel_ids"]) == sorted([ids["P5"], ids["P6"]])
     doses = draft.payload["doses"]
-    assert sorted(d["product_id"] for d in doses) == sorted([ids[COPPER], ids[SULPHUR]])
+    assert sorted(d["catalog_item_id"] for d in doses) == sorted([ids[COPPER], ids[SULPHUR]])
     assert echo.text.startswith("P5 Les Granges, P6 Peyrot · copper + sulphur · 2 kg/ha")
 
     on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
@@ -555,7 +563,7 @@ def test_confirm_reports_the_saved_register_checks_once_across_parcels(
     session_factory, session, settings
 ):
     ids = seed_farm(session, settings)
-    product = session.get(Product, ids[SULPHUR])
+    product = session.get(CropProtectionItem, ids[SULPHUR])
     product.props = {"label_max_dose_kg_ha": "1", "phi_days": 7}
     session.commit()
     d = deps(session_factory, settings, fake(parcels=["P5", "P6"], products=[SULPHUR]))
@@ -579,7 +587,7 @@ def test_invalid_label_checks_do_not_undo_saved_spray_or_skip_advisor(
 ):
     with committed_session_factory() as session:
         ids = seed_farm(session, settings)
-        session.get(Product, ids[SULPHUR]).props = {"phi_days": "unavailable"}
+        session.get(CropProtectionItem, ids[SULPHUR]).props = {"phi_days": "unavailable"}
         session.commit()
     SEEN_BY_JOB.clear()
     d = deps(committed_session_factory, settings, fake(products=[SULPHUR]), [FAKE_ADVISOR])
@@ -631,7 +639,7 @@ def test_confirm_merged_spray_uses_canonical_checks_and_excludes_future_history(
 
     ids = seed_farm(session, settings)
     farm_id = session.get(Parcel, ids["P1"]).farm_id
-    session.get(Product, ids[SULPHUR]).props = {"label_max_applications": 1}
+    session.get(CropProtectionItem, ids[SULPHUR]).props = {"label_max_applications": 1}
     for key, when in (
         ("earlier", NOW_LOCAL.replace(hour=4)),
         ("future", NOW_LOCAL + timedelta(days=2)),

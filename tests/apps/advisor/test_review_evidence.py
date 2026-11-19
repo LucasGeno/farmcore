@@ -9,7 +9,7 @@ from sqlalchemy import select
 from farmcore.apps.advisor.job import evaluate
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Advice, Asset, Farm, Parcel
-from tests.apps.chat.test_handlers import seed_farm
+from tests.apps.chat.test_handlers import COPPER, seed_farm
 
 NOW = datetime(2024, 4, 10, 4, tzinfo=UTC)
 
@@ -233,7 +233,8 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(client, sessi
 
     from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, Spray
     from farmcore.apps.advisor.engine import evaluate as engine_evaluate
-    from farmcore.core.models.canonical import Log, Product, Quantity
+    from farmcore.core.models.canonical import Log
+    from farmcore.core.models.catalog import CatalogItem, enter_quantity
     from tests.apps.advisor.review_fixtures import complete_station
     from tests.apps.stations.synth import correct
 
@@ -243,7 +244,7 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(client, sessi
 
     rainy_at = datetime(2024, 4, 8, 4, tzinfo=UTC)
     correct(session, station, rainy_at, "rr1_mm", 11.0)
-    copper = session.scalar(select(Product).where(Product.active_substance == "copper"))
+    copper = session.get(CatalogItem, ids[COPPER])
     log = Log(
         farm_id=parcel.farm_id,
         type="spray",
@@ -254,12 +255,14 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(client, sessi
     )
     session.add(log)
     session.flush()
-    session.add(
-        Quantity(
-            log_id=log.id, product_id=copper.id, measure="rate", value=Decimal("2"), unit="kg/ha"
-        )
+    enter_quantity(
+        session,
+        log_id=log.id,
+        catalog_item_id=copper.id,
+        entered_measure="rate",
+        value=Decimal("2"),
+        unit="kg/ha",
     )
-    session.flush()
     row = _evaluated(session, settings, parcel, station)
     # a later station correction must not change the saved evidence
     correct(session, station, rainy_at, "rr1_mm", 0.0)
@@ -285,12 +288,12 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(client, sessi
             datetime.fromisoformat(s["ts_start"]),
             tuple(
                 ProductRef(
-                    q["product"]["name"],
-                    q["product"]["product_type"],
-                    tuple(q["product"]["targets"]),
+                    q["catalog_item"]["name"],
+                    q["advisor_product"]["product_type"],
+                    tuple(q["advisor_product"]["targets"]),
                 )
                 for q in snapshot["quantities"]
-                if q["quantity"]["log_id"] == s["id"] and q["product"]
+                if q["typed_quantity"]["log_id"] == s["id"] and q["advisor_product"]
             ),
         )
         for s in snapshot["spray_logs"]

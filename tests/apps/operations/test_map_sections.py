@@ -49,7 +49,7 @@ def spray(session, farm, parcels, products, ts, key, doses=None):
         ts_start=ts,
         ts_end=None,
         quantities=[
-            logs.QuantityInput("rate", Decimal(dose), "kg/ha", product_id=products[k].id)
+            logs.QuantityInput("rate", Decimal(dose), "kg/ha", catalog_item_id=products[k].id)
             for k, dose in (doses or {"copper-contact": "2"}).items()
         ],
         source=logs.SourceInput("voice", f"tg:map:{key}", {}, 0.9, logs.RANK_VOICE),

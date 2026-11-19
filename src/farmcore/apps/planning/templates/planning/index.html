@@ -99,7 +99,7 @@
 {% for p in parcels %}<option value="{{ p.id }}"{% if p.id in form.get('parcel_ids', []) %} selected{% endif %}>{{ p.alias }} · {{ p.name }} · {{ '%.2f'|format(p.area_ha) }} ha</option>{% endfor %}
 </select></label>
 <label class="grid gap-2">Product
-<select name="product_id" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+<select name="catalog_item_id" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
 {% for p in products %}<option value="{{ p.id }}">{{ p.name }} · {{ p.active_substance }}</option>{% endfor %}
 </select></label>
 <label class="grid gap-2">Start ({{ timezone }})<input type="datetime-local" step="any" name="scheduled_start" required value="{{ form.get('scheduled_start', '') }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>
@@ -175,7 +175,7 @@
         {% for row in range(2) %}
         <div class="grid gap-2 sm:grid-cols-3">
           <label class="text-sm">Product
-            <select name="product_id" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3"><option value="">No product</option>{% for p in products %}<option value="{{ p.id }}"{% if row == 0 and p.id == job.product.id %} selected{% endif %}>{{ p.name }}</option>{% endfor %}</select></label>
+            <select name="catalog_item_id" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3"><option value="">No product</option>{% for p in products %}<option value="{{ p.id }}"{% if row == 0 and p.id == job.product.id %} selected{% endif %}>{{ p.name }}</option>{% endfor %}</select></label>
           <label class="text-sm">Dose<input name="dose_value" inputmode="decimal" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3"></label>
           <label class="text-sm">Unit<select name="dose_unit" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">{% for unit in ['kg/ha', 'L/ha', 'l/ha', 'g/ha', 'ml/ha'] %}<option>{{ unit }}</option>{% endfor %}</select></label>
         </div>
@@ -215,7 +215,7 @@
           {% for p in parcels %}<option value="{{ p.id }}"{% if p.id in job.parcels|map(attribute='id')|list %} selected{% endif %}>{{ p.alias }} · {{ p.name }}</option>{% endfor %}
         </select></label>
       <label class="grid gap-2">Product
-        <select name="product_id" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
+        <select name="catalog_item_id" required class="min-h-[44px] w-full rounded-lg border border-line bg-surface px-3">
           {% for p in products %}<option value="{{ p.id }}"{% if p.id == job.product.id %} selected{% endif %}>{{ p.name }}</option>{% endfor %}
         </select></label>
       <label class="grid gap-2">Start ({{ timezone }})<input type="datetime-local" step="any" name="scheduled_start" required value="{{ job.scheduled_start_local }}" class="min-h-[44px] rounded-lg border border-line bg-surface px-3"></label>

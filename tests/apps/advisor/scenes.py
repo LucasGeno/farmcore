@@ -19,7 +19,8 @@ from farmcore.core import jobs, logs, registry
 from farmcore.core import seed as core_seed
 from farmcore.core.clock import parse_local
 from farmcore.core.commands.seed import run_seeds
-from farmcore.core.models.canonical import Parcel, Product
+from farmcore.core.models.canonical import Parcel
+from farmcore.core.models.catalog import CatalogItem
 
 TZ = "Europe/Paris"
 
@@ -60,15 +61,15 @@ def step(session_factory, manifests, settings) -> Callable[[str], None]:
 
 def confirm_spray(session, settings, alias: str, ts: datetime, product_key: str | None) -> None:
     """A voice spray log on parcel `alias`, pending then confirmed (the chat confirm path).
-    `product_key=None`: the quantity names no known product (product_id None)."""
+    `product_key=None`: the quantity names no known product (catalog_item_id None)."""
     farm = core_seed.ensure_default_farm(session, settings)
     parcel = session.scalar(select(Parcel).where(Parcel.alias == alias))
     if product_key is None:
-        product_id, label = None, "something"
+        catalog_item_id, label = None, "something"
     else:
         name = next(p.name for p in ops_seed.SHORTLIST if p.key == product_key)
-        product = session.scalar(select(Product).where(Product.name == name))
-        product_id, label = product.id, product.name
+        product = session.scalar(select(CatalogItem).where(CatalogItem.name == name))
+        catalog_item_id, label = product.id, product.name
     pending = logs.create_pending(
         session,
         farm_id=farm.id,
@@ -76,7 +77,7 @@ def confirm_spray(session, settings, alias: str, ts: datetime, product_key: str 
         parcel_ids=[parcel.id],
         ts_start=ts,
         ts_end=None,
-        quantities=[logs.QuantityInput("rate", Decimal("2"), "kg/ha", product_id, label)],
+        quantities=[logs.QuantityInput("rate", Decimal("2"), "kg/ha", catalog_item_id, label)],
         source=logs.SourceInput("voice", f"test:{alias}:{ts:%Y%m%d%H%M}", {}, 0.9, logs.RANK_VOICE),
         actor="test",
         occurred_at=ts,

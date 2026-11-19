@@ -9,9 +9,11 @@ from sqlalchemy import select
 from farmcore.apps.chat.dto import Callback
 from farmcore.apps.chat.extractor import RegexExtractor
 from farmcore.apps.chat.handlers import on_callback, on_message
-from farmcore.core.models.canonical import Farm, Log, Product
+from farmcore.apps.operations.models import CropProtectionItem
+from farmcore.core.models.canonical import Farm, Log
 from farmcore.core.models.drafts import Draft
 from tests.apps.chat.test_handlers import CHAT, COPPER, deps, seed_farm, voice
+from tests.spray_products import add_product
 
 
 def open_draft(session) -> Draft:
@@ -83,7 +85,7 @@ def test_product_rate_and_label_warning_are_visible_before_confirmation(
     session_factory, session, settings
 ):
     ids = seed_farm(session, settings)
-    session.get(Product, ids[COPPER]).props = {"label_max_dose_kg_ha": "1"}
+    session.get(CropProtectionItem, ids[COPPER]).props = {"label_max_dose_kg_ha": "1"}
     session.commit()
     d = deps(session_factory, settings, RegexExtractor())
 
@@ -103,7 +105,8 @@ def test_two_product_rates_are_kept_separate_in_preview_and_confirmed_record(
 ):
     seed_farm(session, settings)
     session.add(
-        Product(
+        add_product(
+            session,
             name="PAJO",
             authorisation_no="TEST-3",
             active_substance="cymoxanil",
@@ -122,7 +125,9 @@ def test_two_product_rates_are_kept_separate_in_preview_and_confirmed_record(
     assert "Warning: Cymoxanil dose 2" not in reply.text
     on_callback(d, Callback(chat_id=CHAT, data=reply.buttons[0][1]))
     [log] = list(session.scalars(select(Log)))
-    assert sorted((q.label, float(q.value), q.unit) for q in log.quantities) == [
+    assert sorted(
+        (q.label, float(q.entered_value), q.entered_unit) for q in log.typed_quantities
+    ) == [
         (COPPER, 2, "kg/ha"),
         ("PAJO", 0.3, "kg/ha"),
     ]

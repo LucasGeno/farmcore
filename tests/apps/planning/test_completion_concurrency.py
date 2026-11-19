@@ -15,7 +15,8 @@ from farmcore.apps.operations.seed import ensure_products
 from farmcore.apps.planning.models import PlanningJob, PlanningJobRevision
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice, Farm, Log, Quantity
+from farmcore.core.models.canonical import Advice, Farm, Log
+from farmcore.core.models.catalog import TypedQuantity
 from farmcore.main import create_app
 from tests.apps.planning.conftest import NOW, job_payload
 from tests.apps.share.conftest import make_parcel
@@ -32,7 +33,7 @@ def _setup(settings, factory):
         session.add(
             InventoryStock(
                 farm_id=farm.id,
-                product_id=products["copper-contact"].id,
+                catalog_item_id=products["copper-contact"].id,
                 season=NOW.year,
                 unit="kg",
                 purchased=Decimal("10"),
@@ -69,7 +70,7 @@ def _body(job, key):
         "actual_start": (NOW - timedelta(minutes=75)).isoformat(),
         "duration_minutes": 60,
         "parcel_ids": [p["id"] for p in job["parcels"]],
-        "quantities": [{"product_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
+        "quantities": [{"catalog_item_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
         "notes": "Concurrent completion",
     }
 
@@ -88,7 +89,7 @@ def _assert_one_completion(factory, farm_id, products, job_id):
         assert job.revision == 2
         assert job.operation_log_id is not None
         assert session.scalar(select(func.count()).select_from(Log)) == 1
-        assert session.scalar(select(func.count()).select_from(Quantity)) == 1
+        assert session.scalar(select(func.count()).select_from(TypedQuantity)) == 1
         revisions = session.scalars(
             select(PlanningJobRevision)
             .where(PlanningJobRevision.job_id == job_id)

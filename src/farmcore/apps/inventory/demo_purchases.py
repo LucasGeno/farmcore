@@ -22,7 +22,8 @@ from farmcore.apps.inventory.seed import SEASON
 from farmcore.apps.operations.seed import PRODUCT_SOURCE
 from farmcore.core import ext_ids
 from farmcore.core.access import DEMO_SOURCE
-from farmcore.core.models.canonical import ExtId, Farm, Product
+from farmcore.core.models.canonical import ExtId, Farm
+from farmcore.core.models.catalog import CatalogItem
 
 LABEL = "Demo data: season purchases"
 
@@ -37,12 +38,12 @@ def apply(session: Session, farm: Farm, usage: Mapping[str, Decimal]) -> int:
     count = 0
     for product_key, used in usage.items():
         product = ext_ids.lookup(session, PRODUCT_SOURCE, product_key)
-        if not isinstance(product, Product):
+        if not isinstance(product, CatalogItem):
             continue
         row = session.scalar(
             select(InventoryStock).where(
                 InventoryStock.farm_id == farm.id,
-                InventoryStock.product_id == product.id,
+                InventoryStock.catalog_item_id == product.id,
                 InventoryStock.season == SEASON,
             )
         )

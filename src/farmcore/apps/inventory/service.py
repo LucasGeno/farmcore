@@ -20,6 +20,10 @@ irrigation's entered volume (`typed_quantity`, no product) never consumes a liqu
 
 `on_hand = purchased − used`; `low` when `on_hand <= low_stock` (the farmer's own number).
 
+One dispatcher per stock row: a row whose item is a plant-protection product (operations'
+`crop_protection_item`) is counted by `stock_rows` only, every other row by `item_stock_rows`
+only, so a dose is never counted twice (and a fertiliser's amount never consumes a pesticide).
+
 `item_stock_rows(repo, now, tz)` does the same for rows of a neutral catalog item (a fertiliser):
 used is the sum of the `typed_quantity` rows that name the item (`catalog_item_id`, never a
 measure) on the farm's *done* records of any type this season, as entered, converted with the
@@ -40,6 +44,7 @@ from sqlalchemy import select
 
 from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.operations import spray_items
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.apps.operations.spray_items import SprayItem, StandardDose
 from farmcore.core import units
 from farmcore.core.access import ScopedRepository
@@ -97,7 +102,7 @@ def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockR
     stocks = repo.list(
         InventoryStock,
         InventoryStock.season == season,
-        InventoryStock.product_id.in_(products),
+        InventoryStock.catalog_item_id.in_(products),
         scope=LOGS_SCOPE,
         order_by=InventoryStock.id,
     )
@@ -112,7 +117,7 @@ def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockR
         scope=LOGS_SCOPE,
     )
     log_ids = [log.id for log in logs]
-    doses = spray_items.standard_doses(repo, log_ids, [s.product_id for s in stocks])
+    doses = spray_items.standard_doses(repo, log_ids, [s.catalog_item_id for s in stocks])
     area = _log_areas(repo, {d.log_id for d in doses})
     by_product: dict[int, list[StandardDose]] = defaultdict(list)
     for d in doses:
@@ -122,7 +127,7 @@ def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockR
     for s in stocks:
         total, bad = Decimal(0), set()
         per_log: dict[int, list[StandardDose]] = defaultdict(list)
-        for d in by_product[s.product_id]:
+        for d in by_product[s.catalog_item_id]:
             per_log[d.log_id].append(d)
         sprays = set(per_log)
         for log_id, ds in per_log.items():
@@ -140,7 +145,7 @@ def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockR
         rows.append(
             StockRow(
                 stock=s,
-                product=products[s.product_id],
+                product=products[s.catalog_item_id],
                 purchased=s.purchased,
                 used=season_used,
                 on_hand=on_hand,
@@ -214,7 +219,7 @@ def item_stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[I
     stocks = repo.list(
         InventoryStock,
         InventoryStock.season == season,
-        InventoryStock.catalog_item_id.is_not(None),
+        InventoryStock.catalog_item_id.not_in(select(CropProtectionItem.catalog_item_id)),
         scope=LOGS_SCOPE,
         order_by=InventoryStock.id,
     )

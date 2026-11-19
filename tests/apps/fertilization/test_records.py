@@ -26,9 +26,10 @@ import pytest
 from sqlalchemy import select, update
 
 from farmcore.apps.inventory.models import InventoryStock
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import drafts
 from farmcore.core.models.canonical import CropSeason, Farm, Log
-from farmcore.core.models.catalog import CatalogItem, CropProtectionItem
+from farmcore.core.models.catalog import CatalogItem
 from farmcore.core.models.kernel import AppModule
 from tests.apps.fertilization.conftest import (
     APPLIED,
@@ -126,7 +127,7 @@ def test_a_proposal_is_refused_with_its_reason(session, settings, case, kind, pa
         session.flush()
         session.add(
             CropProtectionItem(
-                catalog_item_id=pesticide.id, product_type="contact", targets=["downy"]
+                catalog_item_id=pesticide.id, authorisation_no="X-1", active_substance="copper"
             )
         )
         payload = application(case, fertiliser={"name": "Copper", "catalog_item_id": pesticide.id})

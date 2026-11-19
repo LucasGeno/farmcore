@@ -28,7 +28,7 @@ def _count(session):
         {"duration_minutes": 1441},
         {"scheduled_start": "2024-04-09T06:00:00"},
         {"assessment_id": 2**63 - 1},
-        {"product_id": 2**63 - 1},
+        {"catalog_item_id": 2**63 - 1},
         {"notes": "x" * 10001},
         {"status": "cancelled"},
         {"config_version_id": 1},
@@ -82,7 +82,9 @@ def test_organic_mode_withholds_a_product_without_a_source(
     response = client.post(
         "/planning/jobs",
         params={"farm": farm.id},
-        json=job_payload(parcels, products, advice, product_id=products["cymoxanil-penetrant"].id),
+        json=job_payload(
+            parcels, products, advice, catalog_item_id=products["cymoxanil-penetrant"].id
+        ),
     )
     assert response.status_code == 422, response.text
     assert "organic" in response.text.lower()

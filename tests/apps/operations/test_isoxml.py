@@ -24,9 +24,8 @@ from farmcore.core.models.canonical import (
     Log,
     LogSource,
     Parcel,
-    Product,
-    Quantity,
 )
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from tests.apps.operations import isoxml_farm
 from tests.apps.operations.isoxml_farm import CLOCK, SQUARE, TZ, Farm, local, voice_spray
 
@@ -151,7 +150,9 @@ def test_import_merges_both_tasks_into_the_voice_log_with_machine_time_and_dose(
     assert {p.alias for p in log.parcels} == {"P5", "P6"}
     assert sorted(s.source_type for s in log.sources) == ["isoxml", "isoxml", "voice"]
     assert log.ts_start == local("2024-04-10 07:12:05")
-    assert sorted((q.product_id, q.value, q.unit) for q in log.quantities) == sorted(
+    assert sorted(
+        (q.catalog_item_id, q.entered_value, q.entered_unit) for q in log.typed_quantities
+    ) == sorted(
         [
             (farm.products["copper"].id, Decimal("1.94"), "kg/ha"),
             (farm.products["sulphur"].id, Decimal("2.06"), "kg/ha"),
@@ -190,7 +191,7 @@ def test_without_a_voice_log_each_task_becomes_its_own_machine_log(session, farm
     assert kinds == ["log.created", "log.created"]
 
 
-TABLES = (Log, LogSource, Quantity, Event, Product)
+TABLES = (Log, LogSource, TypedQuantity, Event, CatalogItem)
 
 
 def test_reimporting_the_same_bytes_changes_nothing(session, farm):
@@ -239,20 +240,20 @@ def test_a_late_task_or_unknown_partfield_writes_nothing(session, farm, clock, d
     assert {m.__name__: count(session, m) for m in TABLES} == before
 
 
-def test_an_unknown_product_is_a_labelled_quantity_without_product_id(session, farm):
+def test_an_unknown_product_is_a_labelled_quantity_without_catalog_item_id(session, farm):
     data = isoxml_demo.demo_taskdata().replace(
         b'B="Soufre mouillable 80 WG"', b'B="Mystery tank mix"'
     )
-    products = count(session, Product)
+    products = count(session, CatalogItem)
 
     run_import(farm, data)
 
-    rows = session.scalars(select(Quantity).order_by(Quantity.id)).all()
-    assert [(q.product_id is None, q.label) for q in rows] == [
+    rows = session.scalars(select(TypedQuantity).order_by(TypedQuantity.id)).all()
+    assert [(q.catalog_item_id is None, q.label) for q in rows] == [
         (False, "BOUILLIE BORDELAISE RSR DISPERSS NC"),
         (True, "Mystery tank mix"),
     ] * 2
-    assert count(session, Product) == products
+    assert count(session, CatalogItem) == products
 
 
 def test_a_product_matches_the_shortlist_by_its_active_substance_word(session, farm):
@@ -260,7 +261,7 @@ def test_a_product_matches_the_shortlist_by_its_active_substance_word(session, f
 
     run_import(farm, data)
 
-    ids = {q.product_id for q in session.scalars(select(Quantity))}
+    ids = {q.catalog_item_id for q in session.scalars(select(TypedQuantity))}
     assert ids == {farm.products["copper"].id, farm.products["sulphur"].id}
 
 

@@ -9,7 +9,8 @@ from sqlalchemy import select
 from farmcore.apps.operations import corrections
 from farmcore.core import logs
 from farmcore.core.logs import QuantityInput, SourceInput
-from farmcore.core.models.canonical import LogSource, Parcel, Quantity
+from farmcore.core.models.canonical import LogSource, Parcel
+from farmcore.core.models.catalog import TypedQuantity
 from farmcore.main import create_app
 from tests.apps.chat.test_handlers import COPPER, NOW_LOCAL, seed_farm
 from tests.core.test_member_sessions import _account, _login
@@ -35,7 +36,11 @@ def test_preview_cancel_confirm_moves_computed_stock_once_and_keeps_the_receipt(
     with committed_session_factory() as session:
         session.add(
             InventoryStock(
-                farm_id=c.farm_id, product_id=c.ids[COPPER], season=2024, unit="kg", purchased=20
+                farm_id=c.farm_id,
+                catalog_item_id=c.ids[COPPER],
+                season=2024,
+                unit="kg",
+                purchased=20,
             )
         )
         session.commit()
@@ -99,7 +104,7 @@ def correction_case(settings, committed_session_factory):
             occurred_at=NOW_LOCAL,
         )
         session.commit()
-        log_id, quantity_id = log.id, log.quantities[0].id
+        log_id, quantity_id = log.id, log.typed_quantities[0].id
     with TestClient(
         create_app(settings, session_factory=committed_session_factory),
         base_url="https://testserver",
@@ -118,7 +123,7 @@ def correction_case(settings, committed_session_factory):
                 "changes": {
                     "quantities": [
                         {
-                            "product_id": ids[COPPER],
+                            "catalog_item_id": ids[COPPER],
                             "measure": "rate",
                             "value": "1",
                             "unit": "kg/ha",
@@ -198,7 +203,7 @@ def test_foreign_hostile_or_unknown_targets_are_uniformly_not_found(
     form = {
         "request_key": "absent-log",
         "reason": "Correct notes",
-        "product_id": [str(c.ids[COPPER])],
+        "catalog_item_id": [str(c.ids[COPPER])],
         "dose_value": ["2"],
         "dose_unit": ["kg/ha"],
         "parcel_ids": [str(c.ids["P1"])],
@@ -250,7 +255,12 @@ def test_independent_previews_conflict_after_one_commits(
         == 409
     )
     with committed_session_factory() as session:
-        assert session.scalar(select(Quantity.value).where(Quantity.log_id == c.log_id)) == 1
+        assert (
+            session.scalar(
+                select(TypedQuantity.entered_value).where(TypedQuantity.log_id == c.log_id)
+            )
+            == 1
+        )
         assert session.get(OperationCorrection, second["id"]).status == "pending"
         assert len(session.scalars(select(Event).where(Event.kind == "log.corrected")).all()) == 1
 
@@ -282,7 +292,12 @@ def test_concurrent_terminal_actions_have_one_durable_outcome(
     with committed_session_factory() as session:
         row = session.get(OperationCorrection, correction_id)
         expected = 1 if row.status == "confirmed" else 2
-        assert session.scalar(select(Quantity.value).where(Quantity.log_id == c.log_id)) == expected
+        assert (
+            session.scalar(
+                select(TypedQuantity.entered_value).where(TypedQuantity.log_id == c.log_id)
+            )
+            == expected
+        )
         assert len(session.scalars(select(Event).where(Event.kind == "log.corrected")).all()) == (
             1 if row.status == "confirmed" else 0
         )
@@ -314,7 +329,7 @@ def test_retried_request_key_returns_the_same_correction_and_never_rewrites_it(
     assert c.browser.post(confirm).json() == terminal
     with committed_session_factory() as session:
         farm = session.get(Farm, c.farm_id)
-        farm.props = {**farm.props, "product_ids": []}
+        farm.props = {**farm.props, "catalog_item_ids": []}
         session.commit()
     replay = c.browser.post(c.endpoint, json=c.body)
     assert replay.status_code == 200, replay.text
@@ -405,8 +420,10 @@ def test_real_constraint_failure_rolls_back_canonical_audit_and_postcommit(
             )
         assert response.status_code == 500
         with committed_session_factory() as session:
-            [quantity] = session.scalars(select(Quantity).where(Quantity.log_id == c.log_id)).all()
-            assert (quantity.id, quantity.value) == (c.quantity_id, Decimal("2"))
+            [quantity] = session.scalars(
+                select(TypedQuantity).where(TypedQuantity.log_id == c.log_id)
+            ).all()
+            assert (quantity.id, quantity.entered_value) == (c.quantity_id, Decimal("2"))
             row = session.get(OperationCorrection, preview["id"])
             assert row.status == "pending" and row.finalized_at is None
             assert corrections.view(row) == preview
@@ -454,19 +471,19 @@ def test_invalid_correction_intent_is_rejected_without_writes(
     if field == "dose":
         dose["value"] = value
     elif field == "product":
-        dose["product_id"] = value
+        dose["catalog_item_id"] = value
     elif field == "catalogue":
         with committed_session_factory() as session:
             farm = session.get(Farm, c.farm_id)
-            farm.props = {**farm.props, "product_ids": []}
+            farm.props = {**farm.props, "catalog_item_ids": []}
             session.commit()
     else:
         c.body[field] = value
     assert c.browser.post(c.endpoint, json=c.body).status_code == 422
     with committed_session_factory() as session:
         assert session.scalars(select(OperationCorrection)).all() == []
-        [q] = session.scalars(select(Quantity).where(Quantity.log_id == c.log_id)).all()
-        assert (q.id, q.value) == (c.quantity_id, Decimal("2"))
+        [q] = session.scalars(select(TypedQuantity).where(TypedQuantity.log_id == c.log_id)).all()
+        assert (q.id, q.entered_value) == (c.quantity_id, Decimal("2"))
 
 
 def test_actual_machine_import_invalidates_preview_and_retains_weather_evidence(
@@ -544,8 +561,8 @@ def test_actual_machine_import_invalidates_preview_and_retains_weather_evidence(
                 s["raw_payload"] for s in receipts
             ]
             assert [
-                (q.id, str(q.value.normalize()))
-                for q in sorted(saved.quantities, key=lambda q: q.id)
+                (q.id, str(q.entered_value.normalize()))
+                for q in sorted(saved.typed_quantities, key=lambda q: q.id)
             ] == [(q["id"], q["value"]) for q in fresh["before"]["quantities"]]
 
         # Existing bounded operator reset retains this audit even when LogSource cascades.
@@ -640,7 +657,7 @@ def test_only_the_author_can_finalize_and_only_owners_can_preview(
             == finalize
         )
     with committed_session_factory() as session:
-        assert session.get(Quantity, c.quantity_id).value == Decimal("2")
+        assert session.get(TypedQuantity, c.quantity_id).entered_value == Decimal("2")
 
 
 @pytest.mark.parametrize("start", ["/operations/", "/operations/register"])
@@ -666,7 +683,7 @@ def test_owner_reaches_correction_from_records_and_confirms_in_the_browser(
             "request_key": key,
             "reason": "Correct duplicated dose",
             "parcel_ids": [str(c.ids["P1"])],
-            "product_id": [str(c.ids[COPPER])],
+            "catalog_item_id": [str(c.ids[COPPER])],
             "dose_value": ["1"],
             "dose_unit": ["kg/ha"],
             "ts_start": "2024-04-10T05:00",
@@ -743,7 +760,12 @@ def test_authority_revoked_while_request_waits_for_farm_lock_cannot_confirm(
         assert pending.result(timeout=10).status_code == 403
     with committed_session_factory() as session:
         assert session.get(OperationCorrection, correction_id).status == "pending"
-        assert session.scalar(select(Quantity.value).where(Quantity.log_id == c.log_id)) == 2
+        assert (
+            session.scalar(
+                select(TypedQuantity.entered_value).where(TypedQuantity.log_id == c.log_id)
+            )
+            == 2
+        )
 
 
 @pytest.mark.parametrize(
@@ -815,28 +837,28 @@ def test_another_writer_changing_the_record_invalidates_a_pending_preview(
     c = correction_case
     precise = Decimal("1.1234567890123456789012345678901")
     with committed_session_factory() as session:
-        session.get(Quantity, c.quantity_id).value = precise
+        session.get(TypedQuantity, c.quantity_id).entered_value = precise
         session.commit()
     c.body["changes"] = {"notes": "Corrected notes"}
     correction_id = c.browser.post(c.endpoint, json=c.body).json()["id"]
     with committed_session_factory() as session:
         if writer == "replace-row-same-value":
-            session.execute(delete(Quantity).where(Quantity.id == c.quantity_id))
+            session.execute(delete(TypedQuantity).where(TypedQuantity.id == c.quantity_id))
             session.add(
-                Quantity(
+                TypedQuantity(
                     log_id=c.log_id,
-                    product_id=c.ids[COPPER],
-                    measure="rate",
-                    value=precise,
-                    unit="kg/ha",
+                    catalog_item_id=c.ids[COPPER],
+                    entered_measure="rate",
+                    entered_value=precise,
+                    entered_unit="kg/ha",
                 )
             )
         else:
-            session.get(Quantity, c.quantity_id).value = Decimal(
+            session.get(TypedQuantity, c.quantity_id).entered_value = Decimal(
                 "1.1234567890123456789012345678902"
             )
         session.commit()
-        written = [(q.id, q.value) for q in session.scalars(select(Quantity))]
+        written = [(q.id, q.entered_value) for q in session.scalars(select(TypedQuantity))]
     assert (
         c.browser.post(
             f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}"
@@ -844,7 +866,7 @@ def test_another_writer_changing_the_record_invalidates_a_pending_preview(
         == 409
     )
     with committed_session_factory() as session:
-        assert [(q.id, q.value) for q in session.scalars(select(Quantity))] == written
+        assert [(q.id, q.entered_value) for q in session.scalars(select(TypedQuantity))] == written
 
 
 @pytest.mark.parametrize(
@@ -876,35 +898,37 @@ def test_an_edit_changes_only_the_edited_fact(correction_case, committed_session
         session.get(Log, c.log_id).ts_start = started
         if case == "dose-edit-keeps-other-product-row":
             session.add(
-                Quantity(
+                TypedQuantity(
                     log_id=c.log_id,
-                    product_id=c.ids[SULPHUR],
-                    measure="rate",
-                    value=Decimal("3"),
-                    unit="kg/ha",
+                    catalog_item_id=c.ids[SULPHUR],
+                    entered_measure="rate",
+                    entered_value=Decimal("3"),
+                    entered_unit="kg/ha",
                 )
             )
         elif case == "notes-edit-keeps-duplicate-doses":
             session.add(
-                Quantity(
+                TypedQuantity(
                     log_id=c.log_id,
-                    product_id=c.ids[COPPER],
-                    measure="rate",
-                    value=Decimal("0.5"),
-                    unit="kg/ha",
+                    catalog_item_id=c.ids[COPPER],
+                    entered_measure="rate",
+                    entered_value=Decimal("0.5"),
+                    entered_unit="kg/ha",
                     label="Second recorded dose",
                 )
             )
         elif case == "notes-edit-keeps-delisted-product":
             farm = session.get(Farm, c.farm_id)
-            farm.props = {**farm.props, "product_ids": []}
+            farm.props = {**farm.props, "catalog_item_ids": []}
         elif case == "notes-edit-keeps-huge-historical-dose":
-            session.get(Quantity, c.quantity_id).value = Decimal("1e5000")
+            session.get(TypedQuantity, c.quantity_id).entered_value = Decimal("1e5000")
         session.commit()
         before = [
-            (q.id, q.product_id, q.value, q.label)
+            (q.id, q.catalog_item_id, q.entered_value, q.label)
             for q in session.scalars(
-                select(Quantity).where(Quantity.log_id == c.log_id).order_by(Quantity.id)
+                select(TypedQuantity)
+                .where(TypedQuantity.log_id == c.log_id)
+                .order_by(TypedQuantity.id)
             )
         ]
     edit = c.browser.get(c.endpoint)
@@ -921,7 +945,7 @@ def test_an_edit_changes_only_the_edited_fact(correction_case, committed_session
             "request_key": re.search(r'name="request_key" value="([^"]+)"', edit.text)[1],
             "reason": "One fact changed",
             "parcel_ids": [str(c.ids["P1"])],
-            "product_id": [str(product_id) for _, product_id, _, _ in before],
+            "catalog_item_id": [str(catalog_item_id) for _, catalog_item_id, _, _ in before],
             "dose_value": values,
             "dose_unit": ["kg/ha"] * len(before),
             "ts_start": re.search(r'name="ts_start" value="([^"]+)"', edit.text)[1],
@@ -937,9 +961,11 @@ def test_an_edit_changes_only_the_edited_fact(correction_case, committed_session
         log = session.get(Log, c.log_id)
         assert log.ts_start.astimezone(UTC) == started.astimezone(UTC)
         after = [
-            (q.id, q.product_id, q.value, q.label)
+            (q.id, q.catalog_item_id, q.entered_value, q.label)
             for q in session.scalars(
-                select(Quantity).where(Quantity.log_id == c.log_id).order_by(Quantity.id)
+                select(TypedQuantity)
+                .where(TypedQuantity.log_id == c.log_id)
+                .order_by(TypedQuantity.id)
             )
         ]
     if dose_edit:
@@ -969,3 +995,38 @@ def test_form_cancel_redirects_and_a_bad_preview_renders_an_error(correction_cas
     )
     assert bad.status_code == 422
     assert "correction_error" in bad.text or "Check parcels" in bad.text
+
+
+def test_a_correction_previewed_before_the_move_is_reopened_never_applied(
+    correction_case, committed_session_factory
+):
+    """A correction pending at the core_0018 upgrade holds a version 1 snapshot (legacy product
+    and quantity ids): confirming it is the existing 409, the dose stays, and its receipt still
+    names the product through the frozen map."""
+    import json
+
+    from farmcore.apps.operations.corrections import fingerprint
+    from farmcore.core.models.catalog import LegacyProductMap
+    from farmcore.core.models.corrections import OperationCorrection
+
+    c = correction_case
+    correction_id = c.browser.post(c.endpoint, json=c.body).json()["id"]
+    with committed_session_factory() as session:
+        session.add(LegacyProductMap(product_id=77, catalog_item_id=c.ids[COPPER]))
+        row = session.get(OperationCorrection, correction_id)
+        v1 = json.loads(json.dumps(row.before_snapshot))
+        v1["version"] = 1
+        for q in v1["quantities"]:
+            del q["catalog_item_id"]
+            q["product_id"] = 77
+        row.before_snapshot, row.base_fingerprint = v1, fingerprint(v1)
+        session.commit()
+
+    confirm = c.browser.post(f"/operations/corrections/{correction_id}/confirm?farm={c.farm_id}")
+    receipt = c.browser.get(f"/operations/corrections/{correction_id}?farm={c.farm_id}")
+
+    assert confirm.status_code == 409
+    assert "preview again" in confirm.text
+    assert receipt.status_code == 200 and f"{COPPER} · 2 kg/ha" in receipt.text  # the v1 side
+    with committed_session_factory() as session:
+        assert session.get(TypedQuantity, c.quantity_id).entered_value == Decimal("2")

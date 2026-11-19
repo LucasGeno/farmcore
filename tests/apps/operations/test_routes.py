@@ -37,7 +37,7 @@ def _voice_spray(session, demo, products, ts=T_VOICE):
         ts_start=ts,
         ts_end=None,
         quantities=[
-            logs.QuantityInput("rate", Decimal("2"), "kg/ha", product_id=products[k].id)
+            logs.QuantityInput("rate", Decimal("2"), "kg/ha", catalog_item_id=products[k].id)
             for k in ("copper-contact", "sulphur-wettable")
         ],
         source=VOICE,

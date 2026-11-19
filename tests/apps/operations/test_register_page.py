@@ -18,8 +18,9 @@ from sqlalchemy import select
 
 from farmcore.apps.operations import register
 from farmcore.apps.operations import seed as ops_seed
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import clock, logs
-from farmcore.core.models.canonical import AccessLog, Product
+from farmcore.core.models.canonical import AccessLog
 
 # 10 Apr 2024 21:30 UTC = 23:30 Paris (CEST): the Paris date is still 10 Apr, the time 23:30.
 T_LATE = datetime(2024, 4, 10, 21, 30, tzinfo=UTC)
@@ -38,7 +39,7 @@ def _spray(session, demo, products, ts=T_LATE):
         ts_start=ts,
         ts_end=None,
         quantities=[
-            logs.QuantityInput("rate", Decimal("2"), "kg/ha", product_id=products[k].id)
+            logs.QuantityInput("rate", Decimal("2"), "kg/ha", catalog_item_id=products[k].id)
             for k in ("copper-contact", "sulphur-wettable")
         ],
         source=VOICE,
@@ -105,9 +106,9 @@ def test_register_page_links_the_csv_download_and_json_viewer_and_logs_access(
 
 def test_register_page_shows_placeholder_authorisations_plainly(client, session, settings, demo):
     products = ops_seed.ensure_products(session)
-    copper = products["copper-contact"]
+    copper = session.get(CropProtectionItem, products["copper-contact"].id)
     copper.props = {"placeholder": True}
-    sulphur = session.get(Product, products["sulphur-wettable"].id)
+    sulphur = session.get(CropProtectionItem, products["sulphur-wettable"].id)
     sulphur.props = {"placeholder": False}
     session.flush()
     _spray(session, demo, products)
@@ -117,7 +118,8 @@ def test_register_page_shows_placeholder_authorisations_plainly(client, session,
 
     _, rows = _table(page.text)
     flags = {(r[0], r[2]) for r in rows}
-    assert flags == {(copper.name, "yes"), (sulphur.name, "")}
+    names = {key: products[key].name for key in ("copper-contact", "sulphur-wettable")}
+    assert flags == {(names["copper-contact"], "yes"), (names["sulphur-wettable"], "")}
     assert page.text.count('data-placeholder="yes"') == 2  # one copper row per parcel
 
 
@@ -184,7 +186,7 @@ def test_a_copper_spray_above_4_kg_cu_warns_in_amber_with_the_reason(
             ts_end=None,
             quantities=[
                 logs.QuantityInput(
-                    "rate", Decimal("10"), "kg/ha", product_id=products["copper-contact"].id
+                    "rate", Decimal("10"), "kg/ha", catalog_item_id=products["copper-contact"].id
                 )
             ],
             source=logs.SourceInput("voice", f"tg:cu{day}", {}, 0.9, logs.RANK_VOICE),

@@ -120,7 +120,9 @@ class PlanningJob(Base):
     assessment_id: Mapped[int] = mapped_column(BigInteger)
     config_version_id: Mapped[int | None] = mapped_column(BigInteger)
     config_version_status: Mapped[str] = mapped_column(Text)
-    product_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("product.id"))
+    catalog_item_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("crop_protection_item.catalog_item_id")
+    )
     scheduled_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     # Work duration; the end is derived (scheduled_start + duration).
     duration_minutes: Mapped[int] = mapped_column(Integer)

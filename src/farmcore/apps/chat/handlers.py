@@ -180,7 +180,7 @@ def _echo(summary: str, draft: Draft, notes: Sequence[str] = (), *, details="") 
 def _preview(repo, log, now, tz):
     if log.type in NO_STOCK:
         return f"{NO_STOCK[log.type]}\nPreview only; nothing is recorded until you confirm."
-    lines = [f"{q.label}: {q.value.normalize():f} {q.unit}" for q in log.quantities]
+    lines = [f"{q.label}: {q.value.normalize():f} {q.unit}" for q in spray_items.doses_of_log(log)]
     try:
         checks = preview_checks(repo, log, now, tz=tz)
         lines.append(
@@ -323,7 +323,12 @@ def _payload(checked, missing, capture) -> dict:
     }
     if isinstance(checked, service.CheckedSpray):
         record["doses"] = [
-            {"product_id": product.id, "value": str(value), "unit": unit, "label": product.name}
+            {
+                "catalog_item_id": product.id,
+                "value": str(value),
+                "unit": unit,
+                "label": product.name,
+            }
             for product, value, unit in checked.product_doses
         ]
     elif isinstance(checked, service.CheckedIrrigation):
@@ -676,7 +681,13 @@ def _duplicate_note(repo: ScopedRepository, log: Log, tz: ZoneInfo) -> str:
     target = repo.get(Log, target_id, scope="logs:read")
     if target is None:
         return ""
-    dropped = events[0].payload["dropped_products"]
+    payload = events[0].payload
+    if "dropped_items" in payload:
+        dropped = payload["dropped_items"]
+    else:  # an event written before core_0018 names legacy product ids: resolved, never guessed
+        old = payload.get("dropped_products") or []
+        legacy = spray_items.legacy_item_ids(repo.session, [d for d in old if isinstance(d, int)])
+        dropped = [legacy.get(d) if isinstance(d, int) else d for d in old]
     duplicates = [
         q
         for q in spray_items.doses_of_log(target)

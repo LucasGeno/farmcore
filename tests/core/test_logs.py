@@ -11,8 +11,9 @@ from sqlalchemy import func, select
 
 from farmcore.core import logs
 from farmcore.core.logs import EnteredQuantity, QuantityInput, SourceInput
-from farmcore.core.models.canonical import Event, Farm, Log, LogSource, Parcel, Product, Quantity
+from farmcore.core.models.canonical import Event, Farm, Log, LogSource, Parcel
 from farmcore.core.models.catalog import TypedQuantity
+from tests.spray_products import add_product
 
 # Synthetic times and values.
 T0 = datetime(2024, 4, 10, 6, 0, tzinfo=UTC)
@@ -69,7 +70,7 @@ def _events(session, kind: str | None = None) -> list[Event]:
 
 
 def _doses(log: Log) -> list[Decimal]:
-    return [q.value for q in log.quantities]
+    return [q.entered_value for q in log.typed_quantities]
 
 
 def test_new_operation_creates_log_with_parcels_quantities_source_and_events(session):
@@ -80,7 +81,7 @@ def test_new_operation_creates_log_with_parcels_quantities_source_and_events(ses
     assert merged is False
     assert (log.farm_id, log.type, log.status, log.ts_start) == (farm.id, "spray", "done", T0)
     assert {p.id for p in log.parcels} == {parcels[0].id, parcels[1].id}
-    assert [(q.measure, q.value, q.unit) for q in log.quantities] == [
+    assert [(q.entered_measure, q.entered_value, q.entered_unit) for q in log.typed_quantities] == [
         ("rate", Decimal("2"), "kg/ha")
     ]
     [src] = log.sources
@@ -257,7 +258,12 @@ def test_a_record_type_refuses_the_other_kind_of_quantity(session, type, quantit
             occurred_at=T0,
         )
 
-    assert _count(session, Log) == _count(session, Quantity) == _count(session, TypedQuantity) == 0
+    assert (
+        _count(session, Log)
+        == _count(session, TypedQuantity)
+        == _count(session, TypedQuantity)
+        == 0
+    )
 
 
 def test_parcels_of_another_farm_are_rejected(session):
@@ -327,7 +333,7 @@ def test_confirm_merges_into_a_done_spray_and_moves_the_source(session):
     # Voice (10) outranks seed (5): its time and dose win.
     assert log.ts_start == T0 + timedelta(hours=2)
     assert _doses(log) == [Decimal("2")]
-    assert _count(session, Quantity) == 1
+    assert _count(session, TypedQuantity) == 1
     assert [e.res_id for e in _events(session, "log.merged")] == [parcels[0].id]
 
 
@@ -339,7 +345,7 @@ def test_cancel_deletes_the_pending_log_and_posts_cancelled(session):
     logs.cancel(session, pending_id, actor="owner", occurred_at=T0)
 
     assert session.get(Log, pending_id) is None
-    assert _count(session, Quantity) == 0
+    assert _count(session, TypedQuantity) == 0
     assert _count(session, LogSource) == 0
     assert [e.res_id for e in _events(session, "log.cancelled")] == [parcels[0].id]
 
@@ -420,21 +426,10 @@ def test_resending_the_same_source_changes_nothing(session):
 @pytest.mark.parametrize("rank", [logs.RANK_VOICE, logs.RANK_SEED])
 def test_confirm_merge_keeps_target_product_and_moves_second_product(session, rank):
     farm, parcels = _farm(session)
-    products = [
-        Product(
-            name=name,
-            authorisation_no=f"TEST-{name}",
-            active_substance=name,
-            product_type="contact",
-            targets=[],
-        )
-        for name in ("copper", "sulphur")
-    ]
-    session.add_all(products)
-    session.flush()
+    products = [add_product(session, name) for name in ("copper", "sulphur")]
     copper, sulphur = products
     target, _ = _spray(session, farm, parcels[:1], VOICE, T0)
-    target.quantities[0].product_id = copper.id
+    target.typed_quantities[0].catalog_item_id = copper.id
     session.flush()
     pending = logs.create_pending(
         session,
@@ -451,7 +446,7 @@ def test_confirm_merge_keeps_target_product_and_moves_second_product(session, ra
         actor="owner",
         occurred_at=T0,
     )
-    sulphur_quantity_id = pending.quantities[1].id
+    sulphur_quantity_id = pending.typed_quantities[1].id
     pending_id = pending.id
 
     log, merged = logs.confirm(session, pending_id, actor="owner", occurred_at=T0)
@@ -460,13 +455,16 @@ def test_confirm_merge_keeps_target_product_and_moves_second_product(session, ra
     assert merged is True
     assert log.id == target.id
     assert session.get(Log, pending_id) is None
-    assert sorted((q.product_id, q.value, q.unit, q.measure, q.label) for q in log.quantities) == [
+    assert sorted(
+        (q.catalog_item_id, q.entered_value, q.entered_unit, q.entered_measure, q.label)
+        for q in log.typed_quantities
+    ) == [
         (copper.id, Decimal("2"), "kg/ha", "rate", "copper"),
         (sulphur.id, Decimal("5"), "kg/ha", "rate", "sulphur"),
     ]
-    assert session.get(Quantity, sulphur_quantity_id).log_id == target.id
-    assert _count(session, Quantity) == 2
-    assert _events(session, "log.merged")[-1].payload["added_products"] == [sulphur.id]
+    assert session.get(TypedQuantity, sulphur_quantity_id).log_id == target.id
+    assert _count(session, TypedQuantity) == 2
+    assert _events(session, "log.merged")[-1].payload["added_items"] == [sulphur.id]
 
 
 @pytest.mark.parametrize(
@@ -493,7 +491,7 @@ def test_confirm_merge_null_product_uses_measure_label_unit(session, measure, la
         actor="owner",
         occurred_at=T0,
     )
-    quantity_id = pending.quantities[0].id
+    quantity_id = pending.typed_quantities[0].id
 
     log, merged = logs.confirm(session, pending.id, actor="owner", occurred_at=T0)
 
@@ -503,39 +501,30 @@ def test_confirm_merge_null_product_uses_measure_label_unit(session, measure, la
     expected = [("rate", "copper", "kg/ha", Decimal("2"))] + (
         [(measure, label, unit, Decimal("5"))] if added else []
     )
-    assert sorted((q.measure, q.label, q.unit, q.value) for q in log.quantities) == sorted(expected)
+    assert sorted(
+        (q.entered_measure, q.label, q.entered_unit, q.entered_value) for q in log.typed_quantities
+    ) == sorted(expected)
     if added:
-        assert session.get(Quantity, quantity_id).log_id == target.id
-    assert _count(session, Quantity) == 1 + added
-    assert _events(session, "log.merged")[-1].payload["added_products"] == (
-        [label] if added else []
-    )
+        assert session.get(TypedQuantity, quantity_id).log_id == target.id
+    assert _count(session, TypedQuantity) == 1 + added
+    assert _events(session, "log.merged")[-1].payload["added_items"] == ([label] if added else [])
 
 
-@pytest.mark.parametrize("product_ids", [False, True])
+@pytest.mark.parametrize("catalog_item_ids", [False, True])
 @pytest.mark.parametrize("pending_indices", [(0,), (1, 2)])
-def test_confirm_keeps_new_product_on_its_reported_parcels(session, product_ids, pending_indices):
+def test_confirm_keeps_new_product_on_its_reported_parcels(
+    session, catalog_item_ids, pending_indices
+):
     farm, parcels = _farm(session)
     reported = [parcels[i] for i in pending_indices]
     copper_id = sulphur_id = None
-    if product_ids:
-        products = [
-            Product(
-                name=name,
-                authorisation_no=f"TEST-{name}",
-                active_substance=name,
-                product_type="contact",
-                targets=[],
-            )
-            for name in ("copper", "sulphur")
-        ]
-        session.add_all(products)
-        session.flush()
+    if catalog_item_ids:
+        products = [add_product(session, name) for name in ("copper", "sulphur")]
         copper_id, sulphur_id = [p.id for p in products]
     target, _ = _spray(session, farm, parcels[:2], VOICE, T0)
-    target.quantities[0].product_id = copper_id
+    target.typed_quantities[0].catalog_item_id = copper_id
     session.flush()
-    target_quantity_id = target.quantities[0].id
+    target_quantity_id = target.typed_quantities[0].id
     pending = logs.create_pending(
         session,
         farm_id=farm.id,
@@ -552,7 +541,7 @@ def test_confirm_keeps_new_product_on_its_reported_parcels(session, product_ids,
         occurred_at=T0,
     )
     pending_id = pending.id
-    sulphur_quantity_id = pending.quantities[1].id
+    sulphur_quantity_id = pending.typed_quantities[1].id
 
     saved, merged = logs.confirm(session, pending_id, actor="owner", occurred_at=T0)
 
@@ -563,7 +552,8 @@ def test_confirm_keeps_new_product_on_its_reported_parcels(session, product_ids,
     assert saved.ts_start == T0 + timedelta(hours=1)
     assert {p.id for p in saved.parcels} == {p.id for p in reported}
     assert [
-        (q.id, q.product_id, q.label, q.value, q.unit, q.measure) for q in saved.quantities
+        (q.id, q.catalog_item_id, q.label, q.entered_value, q.entered_unit, q.entered_measure)
+        for q in saved.typed_quantities
     ] == [
         (sulphur_quantity_id, sulphur_id, "sulphur", Decimal("5"), "kg/ha", "rate"),
     ]
@@ -571,12 +561,14 @@ def test_confirm_keeps_new_product_on_its_reported_parcels(session, product_ids,
     assert target.status == "done"
     assert target.ts_start == T0
     assert {p.id for p in target.parcels} == {p.id for p in [*parcels[:2], *reported]}
-    assert [(q.id, q.product_id, q.label, q.value) for q in target.quantities] == [
+    assert [
+        (q.id, q.catalog_item_id, q.label, q.entered_value) for q in target.typed_quantities
+    ] == [
         (target_quantity_id, copper_id, "copper", Decimal("2")),
     ]
     assert [s.external_key for s in target.sources] == [VOICE.external_key]
     assert _count(session, Log) == 2
-    assert _count(session, Quantity) == 2
+    assert _count(session, TypedQuantity) == 2
     expanded = pending_indices == (1, 2)
     merged_events = _events(session, "log.merged")
     assert {e.res_id for e in merged_events} == ({p.id for p in parcels} if expanded else set())
@@ -589,12 +581,12 @@ def test_confirm_keeps_new_product_on_its_reported_parcels(session, product_ids,
     assert {e.res_id for e in confirmed_events} == {p.id for p in reported}
     for confirmed in confirmed_events:
         assert confirmed.payload["duplicate_of"] == target.id
-        assert confirmed.payload["dropped_products"] == [copper_id if product_ids else "copper"]
+        assert confirmed.payload["dropped_items"] == [copper_id if catalog_item_ids else "copper"]
     coverage = sorted(
         (p.alias, q.label, q.value)
         for log in (target, saved)
         for p in log.parcels
-        for q in log.quantities
+        for q in log.typed_quantities
     )
     assert coverage == (
         [

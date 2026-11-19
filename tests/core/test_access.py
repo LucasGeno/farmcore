@@ -38,10 +38,8 @@ from farmcore.core.models.canonical import (
     LogSource,
     Observation,
     Parcel,
-    Product,
-    Quantity,
 )
-from farmcore.core.models.catalog import TypedQuantity
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from farmcore.core.models.weather import WeatherStation
 from farmcore.core.seed import ensure_default_farm
 
@@ -62,7 +60,6 @@ def _farm_with_data(session, name: str) -> Farm:
     session.flush()
     log = Log(farm_id=farm.id, type="spray", status="done", name="spray", ts_start=T0)
     log.parcels.append(parcel)
-    log.quantities.append(Quantity(measure="rate", value=Decimal("2"), unit="kg/ha"))
     log.sources.append(LogSource(source_type="seed", external_key=name, precision_rank=5))
     session.add(log)
     session.add(Observation(asset_id=station.id, ts=T0, variable="t_c", value=11.5))
@@ -103,7 +100,6 @@ def test_other_farms_parcels_are_invisible(session):
     ("model", "scope"),
     [
         (Log, "logs:read"),
-        (Quantity, "logs:read"),
         (LogSource, "logs:read"),
         (TypedQuantity, "logs:read"),
         (Observation, "stations:read"),
@@ -161,11 +157,11 @@ def test_a_scope_reads_only_its_own_resources(session, model, scope):
         (Parcel, "fields:read"),
         (Parcel, "register:read"),
         (Log, "register:read"),
-        (Quantity, "register:read"),
+        (TypedQuantity, "register:read"),
         (Event, "logs:read"),
         (Event, "advice:read"),
         (Advice, "advice:read"),
-        (Product, "register:read"),
+        (CatalogItem, "register:read"),
         (Farm, "stations:read"),
     ],
 )

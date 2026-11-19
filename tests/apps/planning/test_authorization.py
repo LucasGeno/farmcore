@@ -139,7 +139,7 @@ def _completion(job):
         "actual_start": (NOW - timedelta(hours=2)).isoformat(),
         "duration_minutes": 60,
         "parcel_ids": [p["id"] for p in job["parcels"]],
-        "quantities": [{"product_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
+        "quantities": [{"catalog_item_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
         "notes": "",
     }
 
@@ -291,7 +291,7 @@ def test_cross_farm_assessment_and_parcel_ids_are_refused(
                 "parcel_ids": [other_parcel.id],
                 "quantities": [
                     {
-                        "product_id": products["copper-contact"].id,
+                        "catalog_item_id": products["copper-contact"].id,
                         "value": "1.5",
                         "unit": "kg/ha",
                     }

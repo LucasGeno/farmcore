@@ -59,7 +59,7 @@ from farmcore.core.models.canonical import (
     Quantity,
     Source,
 )
-from farmcore.core.models.catalog import CatalogItem, TypedQuantity
+from farmcore.core.models.catalog import CatalogItem, LegacyQuantityMap, TypedQuantity
 from farmcore.core.models.identity import (
     AccessToken,
     FarmMembership,
@@ -176,8 +176,12 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "planning_operator": frozenset({"planning:read", "planning:write"}),
     "planning_resource_window": frozenset({"planning:read", "planning:write"}),
     "planning_job_assignment": frozenset({"planning:read", "planning:write"}),
+    # Frozen by core_0018 (kept for its rollback; no runtime reader).
     "product": _ANY,
     "quantity": _LOG_READS,
+    # core_0018's frozen maps: legacy ids kept in historic JSON and published ids resolve here.
+    "legacy_product_map": _ANY,
+    "legacy_quantity_map": _LOG_READS,
     # Recommendation-review events are advice material; a logs-only consent cannot read the
     # farmer's or advisor's note by naming the generic `event` table.
     "recommendation_review": frozenset({"advice:read"}),
@@ -274,7 +278,12 @@ class ScopedRepository:
                 not in {
                     "farm",
                     "parcel",
-                    "product",
+                    # Spray products (core_0018): the item, its label facts and its crop
+                    # protection attributes, and the frozen map old published ids resolve by.
+                    "catalog_item",
+                    "crop_protection_item",
+                    "advisor_product",
+                    "legacy_product_map",
                     "source",
                     "asset",
                     "weather_station",
@@ -282,7 +291,10 @@ class ScopedRepository:
                     "weather_observation",
                     "weather_forecast",
                     "log",
-                    "quantity",
+                    # A spray's doses; readers keep to spray logs (another record's amounts are
+                    # not doses).
+                    "typed_quantity",
+                    "legacy_quantity_map",
                     "log_parcel",
                     "log_source",
                     "ext_id",
@@ -390,6 +402,13 @@ class ScopedRepository:
             if self.grant_view and parent is WeatherReceipt:
                 owned = owned.where(WeatherReceipt.redistribution)
             return stmt.where(fk.in_(owned))
+        if model is LegacyQuantityMap:  # two hops: its typed quantity's log
+            owned = (
+                select(TypedQuantity.id)
+                .join(Log, Log.id == TypedQuantity.log_id)
+                .where(Log.farm_id == self.farm_id)
+            )
+            return stmt.where(LegacyQuantityMap.typed_quantity_id.in_(owned))
         if model in _OWNED_OR_PUBLIC:
             owner = _OWNED_OR_PUBLIC[model]
             return stmt.where(or_(owner == self.farm_id, owner.is_(None)))

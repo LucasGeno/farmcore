@@ -21,6 +21,7 @@ from farmcore.core import logs
 from farmcore.core.access import OWNER
 from farmcore.core.clock import set_replay
 from farmcore.core.models.canonical import AccessLog
+from farmcore.core.models.catalog import LegacyProductMap, LegacyQuantityMap
 from tests.apps.share.synth import NOW, T_SPRAY, VOICE
 
 REQUIRED = (
@@ -86,10 +87,10 @@ def test_one_entity_per_done_log_parcel_and_product_quantity(owner_repo, demo, s
         e
         for e in entities
         if e["hasAgriParcel"].endswith(f"-{p1.id}")
-        and e.get("hasAgriProductType", "").endswith(f"-{copper.id}")
+        and e.get("hasAgriProductType", "").endswith(f"-ci{copper.id}")
     )
-    q_copper = next(q for q in log.quantities if q.product_id == copper.id)
-    assert first["id"] == f"{ENTITY_PREFIX}{log.id}-{p1.id}-{q_copper.id}"
+    q_copper = next(q for q in log.typed_quantities if q.catalog_item_id == copper.id)
+    assert first["id"] == f"{ENTITY_PREFIX}{log.id}-{p1.id}-tq{q_copper.id}"
     assert first["operationType"] == "pesticide"
     assert first["status"] == "finished"
     assert first["startedAt"] == "2024-04-10T06:00:00Z"
@@ -260,27 +261,45 @@ def test_a_labelled_quantity_without_products_entry_keeps_its_label(
     assert e["description"].startswith("Unmatched product")
 
 
-def test_ngsi_v1_keeps_its_published_ids(admin, session, demo, spray) -> None:
-    """v1 is a frozen contract (`core/representations.py`): its entity ids name the dose and its
-    product URNs the product, whatever table later holds them."""
+def test_ngsi_v1_keeps_its_published_legacy_ids_and_v2_names_catalog_rows(
+    admin, session, demo, spray
+) -> None:
+    """v1 is a frozen contract (`core/representations.py`): a dose and product moved by core_0018
+    keep the legacy ids it published (through the frozen maps), a row written since takes its
+    catalog ref, and v1 says it is deprecated. v2 names catalog rows everywhere."""
     log = spray(doses=(("copper-contact", "2", "kg/ha"), ("sulphur-wettable", "3", "kg/ha")))
     session.refresh(log)
-    doses = {q.id: q.product_id for q in log.quantities}
+    copper, sulphur = log.typed_quantities
+    session.add_all(  # what core_0018 records for a moved product and dose
+        [
+            LegacyProductMap(product_id=77, catalog_item_id=copper.catalog_item_id),
+            LegacyQuantityMap(quantity_id=9001, typed_quantity_id=copper.id),
+        ]
+    )
+    session.commit()
+
+    def refs(response):
+        return {
+            (e["id"].rsplit("-", 1)[1], e["hasAgriProductType"].rsplit("-", 1)[1])
+            for e in response.json()
+            if e["type"] == "AgriParcelOperation"
+        }
 
     default = admin.get("/share/ngsi-ld.json")
-    pinned = admin.get("/share/ngsi-ld.json?v=1")
+    v2 = admin.get("/share/ngsi-ld.json?v=2")
 
     assert default.headers["FarmCore-Representation"] == "ngsi-ld; v=1"
-    assert "Deprecation" not in default.headers
-    assert pinned.json() == default.json()
-    ops = [e for e in default.json() if e["type"] == "AgriParcelOperation"]
-    assert len(ops) == 2 * len(demo.parcels)
-    for e in ops:
-        log_id, parcel_id, quantity_id = e["id"].removeprefix(ENTITY_PREFIX).split("-")
-        assert (int(log_id), int(parcel_id)) in {(log.id, p.id) for p in demo.parcels}
-        assert e["hasAgriProductType"] == (
-            f"urn:ngsi-ld:AgriProductType:farmcore-{doses[int(quantity_id)]}"
-        )
+    assert default.headers["Deprecation"].startswith("@")
+    assert 'rel="deprecation"' in default.headers["Link"]
+    assert admin.get("/share/ngsi-ld.json?v=1").json() == default.json()
+    assert refs(default) == {("9001", "77"), (f"tq{sulphur.id}", f"ci{sulphur.catalog_item_id}")}
+    assert v2.headers["FarmCore-Representation"] == "ngsi-ld; v=2"
+    assert "Deprecation" not in v2.headers
+    assert refs(v2) == {
+        (f"tq{copper.id}", f"ci{copper.catalog_item_id}"),
+        (f"tq{sulphur.id}", f"ci{sulphur.catalog_item_id}"),
+    }
+    assert len(v2.json()) == len(default.json())
 
 
 def test_an_unserved_ngsi_version_is_a_400_after_authorisation(
@@ -301,9 +320,9 @@ def test_an_unserved_ngsi_version_is_a_400_after_authorisation(
     )
     session.commit()
 
-    for raw in ("2", "9" * 5000, "\u0661", "01", ""):
+    for raw in ("3", "9" * 5000, "\u0661", "01", ""):
         unknown = admin.get("/share/ngsi-ld.json", params={"v": raw})
         assert unknown.status_code == 400, raw[:8]
-        assert "served versions: 1" in unknown.text
+        assert "served versions: 1, 2" in unknown.text
     denied = grantee_client.get(f"/share/as/{grant.id}/ngsi-ld.json", params={"v": "9"})
     assert denied.status_code == 403

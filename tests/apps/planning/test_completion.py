@@ -12,7 +12,8 @@ from farmcore.apps.inventory.service import stock_rows
 from farmcore.apps.planning.models import PlanningJob, PlanningJobRevision
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Asset, Log, LogSource, Quantity
+from farmcore.core.models.canonical import Advice, Asset, Log, LogSource
+from farmcore.core.models.catalog import TypedQuantity
 from tests.apps.planning.conftest import NOW, job_payload
 
 
@@ -34,7 +35,7 @@ def completion_body(job, *, parcel_ids=None, quantities=None, **overrides):
         "duration_minutes": job["duration_minutes"],
         "parcel_ids": parcel_ids or [p["id"] for p in job["parcels"]],
         "quantities": quantities
-        or [{"product_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
+        or [{"catalog_item_id": job["product"]["id"], "value": "1.5", "unit": "kg/ha"}],
         "notes": "Completed as planned",
     }
     body.update(overrides)
@@ -44,7 +45,7 @@ def completion_body(job, *, parcel_ids=None, quantities=None, **overrides):
 def _stock(session, farm, products, purchased="10"):
     row = InventoryStock(
         farm_id=farm.id,
-        product_id=products["copper-contact"].id,
+        catalog_item_id=products["copper-contact"].id,
         season=NOW.year,
         unit="kg",
         purchased=Decimal(purchased),
@@ -75,7 +76,7 @@ def test_completion_preview_shows_actual_differences_and_writes_nothing(
             duration_minutes=60,
             parcel_ids=[p.id for p in parcels],
             quantities=[
-                {"product_id": products["copper-contact"].id, "value": "2", "unit": "kg/ha"}
+                {"catalog_item_id": products["copper-contact"].id, "value": "2", "unit": "kg/ha"}
             ],
             notes="Pass was slower and covered the second block",
         ),
@@ -120,7 +121,9 @@ def test_completion_creates_one_confirmed_operation_and_retries_are_idempotent(
         actual_start=(NOW - timedelta(hours=1)).isoformat(),
         duration_minutes=60,
         parcel_ids=[p.id for p in parcels],
-        quantities=[{"product_id": products["copper-contact"].id, "value": "1.5", "unit": "kg/ha"}],
+        quantities=[
+            {"catalog_item_id": products["copper-contact"].id, "value": "1.5", "unit": "kg/ha"}
+        ],
     )
 
     response = client.post(
@@ -151,9 +154,10 @@ def test_completion_creates_one_confirmed_operation_and_retries_are_idempotent(
     assert operation.ts_start == NOW - timedelta(hours=1)
     assert operation.ts_end == NOW
     assert {p.id for p in operation.parcels} == {p.id for p in parcels}
-    assert [(p.product_id, str(p.value), p.unit) for p in operation.quantities] == [
-        (products["copper-contact"].id, "1.5", "kg/ha")
-    ]
+    assert [
+        (p.catalog_item_id, str(p.entered_value), p.entered_unit)
+        for p in operation.typed_quantities
+    ] == [(products["copper-contact"].id, "1.5", "kg/ha")]
     source = session.scalar(select(LogSource).where(LogSource.log_id == operation.id))
     assert source.source_type == "planning"
     assert source.external_key == f"job:{created['id']}:completion-key-1"
@@ -251,7 +255,7 @@ def test_completion_merges_into_a_matching_confirmed_spray_once(
                 measure="rate",
                 value=Decimal("1"),
                 unit="kg/ha",
-                product_id=products["copper-contact"].id,
+                catalog_item_id=products["copper-contact"].id,
                 label=products["copper-contact"].name,
             )
         ],
@@ -270,7 +274,7 @@ def test_completion_merges_into_a_matching_confirmed_spray_once(
             actual_start=(NOW - timedelta(hours=2)).isoformat(),
             duration_minutes=60,
             quantities=[
-                {"product_id": products["copper-contact"].id, "value": "1.5", "unit": "kg/ha"}
+                {"catalog_item_id": products["copper-contact"].id, "value": "1.5", "unit": "kg/ha"}
             ],
         ),
     )
@@ -282,7 +286,9 @@ def test_completion_merges_into_a_matching_confirmed_spray_once(
     operation = session.get(Log, existing.id)
     assert session.scalar(select(func.count()).select_from(Log)) == 1
     assert {s.source_type for s in operation.sources} == {"file", "planning"}
-    assert [(str(q.value), q.unit) for q in operation.quantities] == [("1.5", "kg/ha")]
+    assert [(str(q.entered_value), q.entered_unit) for q in operation.typed_quantities] == [
+        ("1.5", "kg/ha")
+    ]
     usage = _usage(session, farm)[products["copper-contact"].id]
     assert (usage.sprays, usage.on_hand) == (1, Decimal("8.125"))
 
@@ -334,7 +340,7 @@ def test_a_failed_completion_leaves_plan_log_and_stock_unchanged(
             second,
             request_key="valid-key",
             quantities=[
-                {"product_id": products["copper-contact"].id, "value": "1", "unit": "cups"}
+                {"catalog_item_id": products["copper-contact"].id, "value": "1", "unit": "cups"}
             ],
         ),
     )
@@ -360,7 +366,7 @@ def test_the_completion_form_previews_differences_then_confirms(
         "actual_start": "2024-04-09T04:30",
         "duration_minutes": "60",
         "parcel_ids": [str(p.id) for p in parcels],
-        "product_id": [str(products["copper-contact"].id)],
+        "catalog_item_id": [str(products["copper-contact"].id)],
         "dose_value": ["1.5"],
         "dose_unit": ["kg/ha"],
         "notes": "Form completed",
@@ -390,10 +396,11 @@ def test_the_completion_form_previews_differences_then_confirms(
     assert (saved.status, saved.revision) == ("completed", 2)
     operation = session.get(Log, saved.operation_log_id)
     assert operation.ts_start == NOW - timedelta(hours=1, minutes=30)
-    assert [(q.product_id, str(q.value), q.unit) for q in operation.quantities] == [
-        (products["copper-contact"].id, "1.5", "kg/ha")
-    ]
-    assert session.scalar(select(func.count()).select_from(Quantity)) == 1
+    assert [
+        (q.catalog_item_id, str(q.entered_value), q.entered_unit)
+        for q in operation.typed_quantities
+    ] == [(products["copper-contact"].id, "1.5", "kg/ha")]
+    assert session.scalar(select(func.count()).select_from(TypedQuantity)) == 1
 
 
 def test_a_future_completion_is_refused_with_a_clean_form_error(
@@ -439,7 +446,7 @@ def test_a_future_completion_is_refused_with_a_clean_form_error(
         "actual_start": "2024-04-09T08:00",
         "duration_minutes": "30",
         "parcel_ids": [str(parcels[0].id)],
-        "product_id": [str(products["copper-contact"].id)],
+        "catalog_item_id": [str(products["copper-contact"].id)],
         "dose_value": ["1.5"],
         "dose_unit": ["kg/ha"],
         "notes": "",

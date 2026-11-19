@@ -19,7 +19,7 @@ def test_no_scene_seeds_no_stock(session, inv, tmp_path):
 
 
 def test_scene_b_seeds_demo_rows_on_the_default_farm_only(session, inv, tmp_path, monkeypatch):
-    other = Farm(name="Spanish demo", props={"country": "ES", "product_ids": []})
+    other = Farm(name="Spanish demo", props={"country": "ES", "catalog_item_ids": []})
     session.add(other)
     session.flush()
 
@@ -31,7 +31,7 @@ def test_scene_b_seeds_demo_rows_on_the_default_farm_only(session, inv, tmp_path
     assert {r.farm_id for r in rows} == {inv.farm.id}
     assert all(r.props.get("demo_data") is True for r in rows)
     assert all(r.season == 2024 for r in rows)
-    assert {r.product_id for r in rows} <= {p.id for p in inv.products.values()}
+    assert {r.catalog_item_id for r in rows} <= {p.id for p in inv.products.values()}
 
 
 def test_scene_b_seed_is_idempotent(session, inv, tmp_path):

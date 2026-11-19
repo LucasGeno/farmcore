@@ -13,9 +13,11 @@ from sqlalchemy import select
 
 from farmcore.apps.operations import register
 from farmcore.apps.operations import seed as ops_seed
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import AccessLog, Quantity
+from farmcore.core.models.canonical import AccessLog
+from farmcore.core.models.catalog import TypedQuantity, enter_quantity
 
 # 2024-04-10 08:00 Europe/Paris (CEST) = 06:00 UTC. Synthetic values.
 T_SPRAY = datetime(2024, 4, 10, 6, 0, tzinfo=UTC)
@@ -29,7 +31,7 @@ def _repo(session, farm) -> ScopedRepository:
 
 def _spray(session, demo, products, *, parcels=None, status="done", ts=T_SPRAY, **kw):
     quantities = [
-        logs.QuantityInput("rate", Decimal(dose), "kg/ha", product_id=products[key].id)
+        logs.QuantityInput("rate", Decimal(dose), "kg/ha", catalog_item_id=products[key].id)
         for key, dose in kw.pop("doses", [("copper-contact", "2"), ("sulphur-wettable", "3")])
     ]
     write = logs.create_pending if status == "pending" else logs.record_operation
@@ -298,8 +300,8 @@ def test_unconvertible_copper_rate_warns_and_keeps_later_known_sum(session, demo
         doses=[("copper-contact", "2")],
         ts=datetime(2024, 4, 1, 6, tzinfo=UTC),
     )
-    q = session.scalar(select(Quantity).where(Quantity.log_id == earlier.id))
-    q.unit = "l/ha"  # no density: cannot convert the actual recorded 2 L/ha to kg/ha
+    q = session.scalar(select(TypedQuantity).where(TypedQuantity.log_id == earlier.id))
+    q.entered_unit = "l/ha"  # no density: cannot convert the actual recorded 2 L/ha to kg/ha
     later = _spray(
         session,
         demo,
@@ -328,19 +330,18 @@ def test_register_checks_combine_same_product_rates_only(session, demo, second_u
         doses=[("copper-contact", "2"), ("copper-contact", "2")],
     )
     quantities = session.scalars(
-        select(Quantity).where(Quantity.log_id == log.id).order_by(Quantity.id)
+        select(TypedQuantity).where(TypedQuantity.log_id == log.id).order_by(TypedQuantity.id)
     ).all()
-    quantities[1].unit = second_unit
-    quantities[1].value = Decimal("2000") if second_unit == "g/ha" else Decimal("2")
-    session.add(
-        Quantity(
-            log_id=log.id,
-            measure="volume",
-            value=Decimal("1000"),
-            unit="kg/ha",
-            product_id=products["copper-contact"].id,
-            label="Tank volume",
-        )
+    quantities[1].entered_unit = second_unit
+    quantities[1].entered_value = Decimal("2000") if second_unit == "g/ha" else Decimal("2")
+    enter_quantity(
+        session,
+        log_id=log.id,
+        entered_measure="volume",
+        value=Decimal("1000"),
+        unit="kg/ha",
+        catalog_item_id=products["copper-contact"].id,
+        label="Tank volume",
     )
     session.flush()
     rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
@@ -365,8 +366,13 @@ def test_only_labelled_rates_are_products_without_catalogue_or_props(session, de
         ("rate", ""),
         ("rate", "  "),
     ]:
-        session.add(
-            Quantity(log_id=log.id, measure=measure, label=label, value=Decimal("2"), unit="kg/ha")
+        enter_quantity(
+            session,
+            log_id=log.id,
+            entered_measure=measure,
+            label=label,
+            value=Decimal("2"),
+            unit="kg/ha",
         )
     session.flush()
     rows = register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
@@ -404,7 +410,7 @@ def test_register_interval_reaches_december_without_counting_it_in_january(sessi
 
 def test_register_warns_for_known_copper_identity_without_composition(session, demo):
     products = ops_seed.ensure_products(session)
-    copper = products["copper-contact"]
+    copper = session.get(CropProtectionItem, products["copper-contact"].id)
     copper.props = {k: v for k, v in copper.props.items() if k != "cu_fraction"}
     _spray(session, demo, products, parcels=demo.parcels[:1], doses=[("copper-contact", "2")])
     rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")

@@ -16,10 +16,11 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from farmcore.apps.operations import seed as ops_seed
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.core import ext_ids, logs
 from farmcore.core.access import OWNER, ScopedRepository, ensure_owner_grant
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Farm, Log, Parcel, Product
+from farmcore.core.models.canonical import Farm, Log, Parcel
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
 from tests.apps.share.synth import NOW, T_SPRAY, VOICE
@@ -33,7 +34,7 @@ TOKEN = "tok-share"
 class ShareFarm:
     farm: Farm
     parcels: list[Parcel]
-    products: dict[str, Product]
+    products: dict[str, SprayItem]
 
 
 def make_parcel(session, farm: Farm, n: int, *, area: str = "1.00") -> Parcel:
@@ -99,7 +100,7 @@ def spray(session, demo) -> Callable[..., Log]:
         source: logs.SourceInput = VOICE,
     ) -> Log:
         quantities = [
-            logs.QuantityInput("rate", Decimal(dose), unit, product_id=demo.products[key].id)
+            logs.QuantityInput("rate", Decimal(dose), unit, catalog_item_id=demo.products[key].id)
             for key, dose, unit in doses
         ]
         result = logs.record_operation(

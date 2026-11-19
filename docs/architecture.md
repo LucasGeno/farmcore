@@ -30,11 +30,14 @@ database, a small core and installable apps, in the style of Odoo.
   (Today, Map & parcels, Records) are always on; the others switch on and off on `/apps`
   (administrator only) or with `farmcore apps` ([module lifecycle](#module-lifecycle)).
 - **Canonical model**, farmOS-shaped: `farm`, `parcel` (PostGIS polygon + validated `props`
-  JSONB), `asset`, `log` + `quantity` + `product`, `observation`, `advice`, `event`.
+  JSONB), `asset`, `log` + `typed_quantity` + `catalog_item`, `observation`, `advice`, `event`.
   Apps extend it with 1:1 side tables or `props`, never by injecting columns at runtime.
-  Spray products and doses are read through one seam: `operations.spray_items` (record facts)
-  and `advisor.products` (contact/penetrant, targets). Published JSON shapes are versioned:
-  [API compatibility](api-compatibility.md).
+  A spray product is a `catalog_item` with operations' `crop_protection_item` (label facts) and
+  crop protection's `advisor_product` (contact/penetrant, targets); its doses are typed
+  quantities that keep what was entered. They are read through one seam:
+  `operations.spray_items` and `advisor.products`. core_0018 moved them off the legacy
+  `product`/`quantity` tables (frozen for its rollback); ids kept in older JSON resolve through
+  its frozen maps. Published JSON shapes are versioned: [API compatibility](api-compatibility.md).
 - **Provenance.** `ext_id(source, key)` makes re-imports idempotent; `log_source` lets one spray
   carry several sources (voice + machine file). An incoming spray merges with a log of the same
   farm whose parcels overlap and whose start is within 12 h, keeping the more precise values.
@@ -316,7 +319,8 @@ a wall-clock expiry (seven days by default, an assumed product choice).
   `/drafts/<id>`; the web panel's draft answer links there.
 - Fertilization's kinds (`fertilization`, `fertilization-correction`) write one `fertilise` log
   whose entered amount names the fertiliser's catalog item; Inventory counts done records of that
-  item (`inventory_0002`: a stock row names a product or a catalog item), so stock is computed,
+  item (a stock row names a catalog item; a plant-protection item's row is counted from sprays,
+  any other item's from its records, never both), so stock is computed,
   never decremented, and moves once. A draft that lacks a composition, a density (litres) or an
   area (a per-hectare amount on a parcel of unknown area) names it and cannot be confirmed. A
   correction is refused if the record changed since it was proposed, and keeps an

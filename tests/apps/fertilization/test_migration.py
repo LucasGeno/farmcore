@@ -34,8 +34,7 @@ def test_legacy_stock_survives_and_a_fertiliser_stock_is_never_dropped(scratch_d
                 {"farm": farm, "product": product},
             )
             legacy = db.execute(text(STOCK)).all()
-        command.upgrade(cfg, "head")
-        command.check(cfg)  # the models and the migrated schema agree
+        command.upgrade(cfg, "inventory_0002")  # core_0018 later moves product stock rows
         with engine.begin() as db:
             assert db.execute(text(STOCK)).all() == legacy
             item = db.execute(

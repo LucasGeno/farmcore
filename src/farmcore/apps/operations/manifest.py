@@ -2,6 +2,7 @@
 ISOXML TaskData import."""
 
 from farmcore.apps.operations.tools import TOOLS
+from farmcore.core.access import SCOPES
 from farmcore.core.manifest import DraftKind, Manifest, NavItem
 
 _DRAFTS = "farmcore.apps.operations.drafts"
@@ -20,6 +21,9 @@ MANIFEST = Manifest(
         "farmcore.apps.operations.map_sections:router",
     ),
     seed="farmcore.apps.operations.seed:seed",
+    models=("farmcore.apps.operations.models",),
+    # Shared reference data, like `catalog_item`: every scope may read a product's label facts.
+    resource_scopes=(("crop_protection_item", tuple(sorted(SCOPES))),),
     demo_presets=(
         "farmcore.apps.operations.demo:DEMO_START",
         "farmcore.apps.operations.demo:SEASON_END",

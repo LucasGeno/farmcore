@@ -26,9 +26,9 @@ from farmcore.core.models.canonical import (
     LogSource,
     Observation,
     Parcel,
-    Product,
-    Quantity,
 )
+from farmcore.core.models.catalog import typed_quantity
+from tests.spray_products import add_product
 
 T0 = datetime(2025, 5, 20, 6, 0, tzinfo=UTC)
 # Synthetic square near Saint-Emilion.
@@ -147,7 +147,7 @@ def test_the_installed_task_library_has_the_schema_core_0009_applied() -> None:
 
 
 def test_single_migration_head_creates_every_core_table(session) -> None:
-    head = "core_0017"  # core_0016 -> core_0017
+    head = "core_0018"  # core_0017 -> core_0018
     assert ScriptDirectory.from_config(alembic_config()).get_heads() == [head]
     assert session.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     assert _tables(session) >= CANONICAL_TABLES | IDENTITY_TABLES
@@ -414,25 +414,20 @@ def test_deleting_a_log_cascades_to_parcel_links_quantities_and_sources(session)
         area_ha=Decimal("1.0"),
         geom=func.ST_SetSRID(func.ST_GeomFromGeoJSON(MULTIPOLYGON_GEOJSON), 4326),
     )
-    product = Product(
-        name="Copper",
-        authorisation_no="0000000",
-        active_substance="copper",
-        product_type="contact",
-        targets=["downy"],
-    )
-    session.add_all([parcel, product])
-    session.flush()
+    session.add(parcel)
+    product = add_product(session, "Copper", authorisation_no="0000000", targets=["downy"])
     log = Log(farm_id=farm.id, type="spray", status="done", name="Spray A", ts_start=T0)
     log.parcels.append(parcel)
-    log.quantities.append(
-        Quantity(product_id=product.id, measure="rate", value=Decimal("2.5"), unit="kg/ha")
+    log.typed_quantities.append(
+        typed_quantity(
+            catalog_item_id=product.id, entered_measure="rate", value=Decimal("2.5"), unit="kg/ha"
+        )
     )
     log.sources.append(LogSource(source_type="voice", external_key="msg-1", precision_rank=1))
     session.add(log)
     session.flush()
     linked = "SELECT count(*) FROM {table} WHERE log_id = :id"
-    tables = ("log_parcel", "quantity", "log_source")
+    tables = ("log_parcel", "typed_quantity", "log_source")
     for table in tables:
         assert session.execute(text(linked.format(table=table)), {"id": log.id}).scalar() == 1
 
@@ -481,7 +476,7 @@ def test_catalog_upgrade_reads_legacy_rows_without_inventing_facts(scratch_db_ur
                     ),
                     {"log": log_id, "product": product, "value": value, "unit": unit},
                 )
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "core_0017")  # core_0018 refuses the NaN dose (its own test)
         with engine.begin() as conn:
             assert conn.execute(
                 text(
@@ -513,7 +508,7 @@ def test_catalog_upgrade_reads_legacy_rows_without_inventing_facts(scratch_db_ur
         command.downgrade(cfg, "core_0005")
         with engine.connect() as conn:
             assert conn.execute(text("SELECT count(*) FROM quantity")).scalar_one() == 3
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, "core_0017")
     finally:
         engine.dispose()
 

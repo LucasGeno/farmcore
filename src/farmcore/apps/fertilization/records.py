@@ -40,16 +40,12 @@ from sqlalchemy.orm import Session
 
 from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.operations.corrections import decimal_text, fingerprint
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import logs, units
 from farmcore.core.farm_location import farm_time_zone
 from farmcore.core.logs import FACTORS, EnteredQuantity, SourceInput
 from farmcore.core.models.canonical import CropSeason, Farm, Log, Parcel
-from farmcore.core.models.catalog import (
-    CatalogItem,
-    CropProtectionItem,
-    TypedQuantity,
-    enter_quantity,
-)
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity, enter_quantity
 from farmcore.core.models.corrections import OperationCorrection
 from farmcore.core.models.drafts import Draft
 from farmcore.core.models.identity import LocalIdentity

@@ -110,7 +110,7 @@ def test_propose_tools_write_open_drafts_and_nothing_else(
     session.add(product)
     session.flush()
     for kind, fields in (
-        ("spray", {"doses": [{"product_id": product.id, "value": "2", "unit": "kg/ha"}]}),
+        ("spray", {"doses": [{"catalog_item_id": product.id, "value": "2", "unit": "kg/ha"}]}),
         ("irrigation", {"fact": {"amount": "10", "unit": "mm"}}),
     ):
         tools.call(

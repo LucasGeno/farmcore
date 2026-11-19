@@ -42,7 +42,8 @@ from farmcore.apps.chat.transcribe import FakeTranscriber, Transcript
 from farmcore.apps.operations import seed as ops_seed
 from farmcore.core import ext_ids, jobs, outbox
 from farmcore.core.access import default_farm
-from farmcore.core.models.canonical import Parcel, Product
+from farmcore.core.models.canonical import Parcel
+from farmcore.core.models.catalog import CatalogItem
 from farmcore.core.models.drafts import Draft
 from tests.apps.advisor import scenes
 from tests.apps.advisor.scenes import local
@@ -182,10 +183,10 @@ class Demo:
         asyncio.run(self.runtime.on_callback(callback_update(data), self.context))
         return self.replies.sent[-1].text
 
-    def copper(self) -> Product:
+    def copper(self) -> CatalogItem:
         """The seeded copper product, by its shortlist key (its name may change)."""
         product = ext_ids.lookup(self.session, ops_seed.PRODUCT_SOURCE, COPPER_KEY)
-        assert isinstance(product, Product), product
+        assert isinstance(product, CatalogItem), product
         return product
 
     def advice(self, alias: str) -> dict:

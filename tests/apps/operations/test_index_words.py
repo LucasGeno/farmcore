@@ -32,7 +32,7 @@ def pages(settings, session_factory, session, demo):
         ts_end=None,
         quantities=[
             logs.QuantityInput(
-                "rate", Decimal("2"), "kg/ha", product_id=products["copper-contact"].id
+                "rate", Decimal("2"), "kg/ha", catalog_item_id=products["copper-contact"].id
             )
         ],
         source=logs.SourceInput("voice", "tg:1", {"transcript": "synthetic"}, 0.9, 30),

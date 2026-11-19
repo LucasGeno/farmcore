@@ -1,8 +1,8 @@
 # API compatibility
 
 Some FarmCore responses are read by other systems: a co-op's adviser, a FIWARE broker, an agent.
-Their shape is a contract. When the data under one moves (spray products and doses move from
-`product`/`quantity` to the neutral catalog and crop protection's extension), the
+Their shape is a contract. When the data under one moves (spray products and doses moved from
+`product`/`quantity` to the neutral catalog and its extensions in migration `core_0018`), the
 published keys and ids keep their meaning. A change that would alter them ships as a new version
 beside the old one, and the old one is deprecated with a date before it is removed.
 
@@ -25,13 +25,15 @@ registers it.
 
 `/share/ngsi-ld.json` (owner) and `/share/as/{grant}/ngsi-ld.json` (grantee).
 
-- **v1** (default, current). `AgriParcelOperation` entity ids are
+- **v1** (default; deprecated since 2026-11-19 for one release, Sunset date set by the contract
+  step that drops the legacy tables). `AgriParcelOperation` entity ids are
   `urn:ngsi-ld:AgriParcelOperation:farmcore-<log>-<parcel>-<dose>` and `hasAgriProductType` is
-  `urn:ngsi-ld:AgriProductType:farmcore-<product>`, where `<dose>` and `<product>` are the ids
-  published since the first export. v1 keeps naming the same dose and product after they move
-  tables.
-- **Planned v2** (with the move): catalog-native ids. v1 is then deprecated for one release,
-  and its Sunset date is set by the contract step that drops the legacy tables.
+  `urn:ngsi-ld:AgriProductType:farmcore-<product>`. For a dose and product recorded before
+  `core_0018`, `<dose>` and `<product>` are the ids published since the first export (read
+  through its frozen maps); one recorded since has none and takes its v2 ref.
+- **v2** (`?v=2`): catalog-native refs everywhere: `<dose>` is `tq<typed quantity id>` and
+  `<product>` is `ci<catalog item id>`, a namespace no v1 id uses. Description, quantity and
+  every other property are the same as v1.
 
 ### `advice` (shared advice)
 
@@ -42,6 +44,24 @@ registers it.
   `current_inputs_status`. `products` lists crop protection's generic recommendations
   (`name`, `product_type`, `targets`), never a farm's product rows or ids, so the catalog move
   does not change it.
+
+## Inputs
+
+### Spray drafts (`drafts:propose`, kind `spray`)
+
+- **v2** (current): each dose names its product by `catalog_item_id`.
+- **v1** (deprecated since 2026-11-19): a dose naming `product_id`, a legacy product id, is
+  still accepted: it is resolved once through `core_0018`'s frozen map and stored as v2. An id
+  the map does not hold, or a dose naming both keys, is refused (never guessed). New clients
+  send v2.
+
+## Stored evidence
+
+Assessment evidence (`/advisor/parcels/{id}/assessments/{assessment}.json`) is returned as it
+was saved and never rewritten. Since `core_0018` its `input_snapshot` carries
+`evidence_version: 2` and each dose as `{typed_quantity, catalog_item, crop_protection_item,
+advisor_product}`; a snapshot saved before has no `evidence_version` and holds
+`{quantity, product}`.
 
 ## Unchanged and not versioned
 

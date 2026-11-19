@@ -139,7 +139,7 @@ def test_two_sessions_past_the_pre_check_hit_the_database_overlap_guard(
             name="First booking",
             parcel_ids=[parcel.id],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW + timedelta(hours=2),
             duration_minutes=90,
         )
@@ -150,7 +150,7 @@ def test_two_sessions_past_the_pre_check_hit_the_database_overlap_guard(
             name="Second booking",
             parcel_ids=[parcel.id],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW + timedelta(hours=2),
             duration_minutes=90,
         )
@@ -269,7 +269,7 @@ def test_http_assignment_after_the_machine_is_deleted_is_a_clean_conflict(
             name="HTTP booking race",
             parcel_ids=[parcel.id],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW + timedelta(hours=2),
             duration_minutes=90,
         )

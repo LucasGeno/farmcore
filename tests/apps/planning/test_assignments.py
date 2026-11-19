@@ -453,7 +453,7 @@ def test_a_concurrent_booking_that_beats_the_precheck_is_a_clean_job_conflict(
                 name=f"Job {offset}",
                 assessment_id=advice.id,
                 config_version_status="unversioned",
-                product_id=products["copper-contact"].id,
+                catalog_item_id=products["copper-contact"].id,
                 scheduled_start=NOW + timedelta(hours=offset),
                 duration_minutes=90,
                 notes="",

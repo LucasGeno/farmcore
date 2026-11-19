@@ -321,15 +321,40 @@ def test_generated_retry_keys_keep_principal_scope_and_reject_invalid_values(dat
         )
 
 
-def planned_job(db, farm_id, assessment_id, product_id, *, version_id=None):
+def spray_item(db):
+    """A plant-protection item: a catalog item with its extension since core_0018, a legacy
+    product before it."""
+    if db.execute(text("SELECT to_regclass('legacy_product_map')")).scalar() is None:
+        return db.execute(
+            text(
+                "INSERT INTO product(name,authorisation_no,active_substance,product_type) "
+                "VALUES ('Copper','1','copper','contact') RETURNING id"
+            )
+        ).scalar_one()
+    item = db.execute(
+        text("INSERT INTO catalog_item(name) VALUES ('Copper') RETURNING id")
+    ).scalar_one()
+    db.execute(
+        text(
+            "INSERT INTO crop_protection_item(catalog_item_id,authorisation_no,active_substance) "
+            "VALUES (:item,'1','copper')"
+        ),
+        {"item": item},
+    )
+    return item
+
+
+def planned_job(db, farm_id, assessment_id, item_id, *, version_id=None):
+    moved = db.execute(text("SELECT to_regclass('legacy_product_map')")).scalar() is not None
+    column = "catalog_item_id" if moved else "product_id"
     return db.execute(
         text(
             "INSERT INTO planning_job (farm_id,name,assessment_id,config_version_id,"
-            "config_version_status,product_id,scheduled_start,duration_minutes,created_by,"
-            "updated_by) VALUES (:farm,'Spray block A',:advice,:version,'approved',:product,"
+            f"config_version_status,{column},scheduled_start,duration_minutes,created_by,"
+            "updated_by) VALUES (:farm,'Spray block A',:advice,:version,'approved',:item,"
             "now(),90,'user:1','user:1') RETURNING id"
         ),
-        {"farm": farm_id, "advice": assessment_id, "version": version_id, "product": product_id},
+        {"farm": farm_id, "advice": assessment_id, "version": version_id, "item": item_id},
     ).scalar_one()
 
 
@@ -350,15 +375,10 @@ def test_planned_jobs_are_farm_scoped_with_append_only_revisions(database):
         ),
         {"farm": first, "parcel": parcel},
     ).scalar_one()
-    product = db.execute(
-        text(
-            "INSERT INTO product(name,authorisation_no,active_substance,product_type) "
-            "VALUES ('Copper','1','copper','contact') RETURNING id"
-        )
-    ).scalar_one()
+    product = spray_item(db)
     foreign_version = version(db, second)
     for kwargs in ({"farm_id": second}, {"version_id": foreign_version}):
-        args = {"farm_id": first, "assessment_id": advice, "product_id": product} | kwargs
+        args = {"farm_id": first, "assessment_id": advice, "item_id": product} | kwargs
         with pytest.raises(IntegrityError), db.begin_nested():
             planned_job(db, args.pop("farm_id"), **args)
     job = planned_job(db, first, advice, product, version_id=version(db, first))
@@ -413,13 +433,8 @@ def _planning_fixture(db):
         ),
         {"farm": first, "parcel": parcel},
     ).scalar_one()
-    product = db.execute(
-        text(
-            "INSERT INTO product(name,authorisation_no,active_substance,product_type) "
-            "VALUES ('Copper','1','copper','contact') RETURNING id"
-        )
-    ).scalar_one()
-    return first, second, {"assessment_id": advice, "product_id": product}
+    product = spray_item(db)
+    return first, second, {"assessment_id": advice, "item_id": product}
 
 
 def resource(db, kind, farm_id, name="R"):
@@ -677,7 +692,7 @@ def test_chat_pending_logs_become_drafts_and_clarifications_are_cleared_with_cou
         with engine.begin() as db:
             first, _, args = _planning_fixture(db)
             parcel = db.execute(text("SELECT id FROM parcel")).scalar_one()
-            product = args["product_id"]
+            product = args["item_id"]
             db.execute(
                 text(
                     "UPDATE farm SET props = CAST(:props AS jsonb) WHERE id = :farm",
@@ -777,11 +792,18 @@ def test_chat_pending_logs_become_drafts_and_clarifications_are_cleared_with_cou
             "tg:42:7",
         )
         assert chat.payload["parcel_ids"] == [parcel]
-        assert chat.payload["doses"][0]["product_id"] == product
+        # core_0018 moved the product: the open draft names its catalog item, the closed one
+        # keeps the legacy id it was proposed with (read through the v1 input adapter).
+        with engine.connect() as db:
+            item = db.execute(
+                text("SELECT catalog_item_id FROM legacy_product_map WHERE product_id = :p"),
+                {"p": product},
+            ).scalar_one()
+        assert chat.payload["doses"][0]["catalog_item_id"] == item
         assert chat.payload["capture"]["input"] == "text"
         assert (web.actor, web.status) == ("operator", "open")  # the farm owner on the web
         assert (other.status, other.request_key) == ("expired", f"log:{logs['receipt-1']}")
-        assert other.payload["doses"] == chat.payload["doses"]  # kept, never confirmable
+        assert other.payload["doses"][0]["product_id"] == product  # kept, never confirmable
         [source] = other.provenance["details"]["sources"]
         assert source["raw_payload"]["transcript"] == "P copper 2 kg at 5"
         assert chat.provenance["details"]["migrated_from_log"] == logs["tg:42:7"]

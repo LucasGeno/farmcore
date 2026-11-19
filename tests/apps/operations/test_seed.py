@@ -4,27 +4,54 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.catalog import AdvisorProduct
 from farmcore.apps.chat.extractor import ExtractRequest, RegexExtractor
 from farmcore.apps.chat.extractor.base import ProductRef
 from farmcore.apps.operations import checks
 from farmcore.apps.operations import seed as ops_seed
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import ext_ids
-from farmcore.core.models.canonical import Event, Log, LogSource, Product
+from farmcore.core.models.canonical import Event, ExtId, Log, LogSource
+from farmcore.core.models.catalog import CatalogItem
+from tests.spray_products import add_product
 
 
 def _count(session, model, *where) -> int:
     return session.scalar(select(func.count()).select_from(model).where(*where))
 
 
+def _products(session) -> dict[str, SimpleNamespace]:
+    """active substance -> the seeded product's catalog item, label facts and attributes."""
+    rows = session.execute(
+        select(CatalogItem, CropProtectionItem, AdvisorProduct)
+        .join(CropProtectionItem, CropProtectionItem.catalog_item_id == CatalogItem.id)
+        .outerjoin(AdvisorProduct, AdvisorProduct.catalog_item_id == CatalogItem.id)
+        .order_by(CatalogItem.id)
+    )
+    return {
+        facts.active_substance: SimpleNamespace(
+            id=item.id,
+            name=item.name,
+            authorisation_no=facts.authorisation_no,
+            active_substance=facts.active_substance,
+            props=facts.props,
+            product_type=ref.product_type,
+            targets=ref.targets,
+        )
+        for item, facts, ref in rows
+    }
+
+
 def test_seed_without_scene_creates_the_three_shortlist_products(session, demo, tmp_path):
     ops_seed.seed(session, scene=None, data_dir=tmp_path)
 
-    products = {p.active_substance: p for p in session.scalars(select(Product))}
+    products = _products(session)
     assert set(products) == {"copper", "sulphur", "cymoxanil"}
     assert products["copper"].product_type == "contact"
     assert products["copper"].targets == ["downy"]
@@ -53,7 +80,7 @@ EPHY = {
 def test_shortlist_products_carry_their_verified_e_phy_name_and_amm(session, demo, tmp_path):
     ops_seed.seed(session, scene=None, data_dir=tmp_path)
 
-    products = {p.active_substance: p for p in session.scalars(select(Product))}
+    products = _products(session)
     assert {
         s: (p.name, p.authorisation_no, p.props.get("source")) for s, p in products.items()
     } == EPHY
@@ -87,7 +114,7 @@ LABEL_KEYS = (
 def test_shortlist_products_carry_their_vine_label_limits(session, demo, tmp_path):
     ops_seed.seed(session, scene=None, data_dir=tmp_path)
 
-    products = {p.active_substance: p for p in session.scalars(select(Product))}
+    products = _products(session)
     got = {s: {k: p.props[k] for k in LABEL_KEYS if k in p.props} for s, p in products.items()}
     assert got == LABELS
     assert all(p.props["label_usage"] == "Vigne, Trt Part.Aer." for p in products.values())
@@ -112,26 +139,28 @@ def test_reseeding_an_older_shortlist_updates_the_products_in_place(
         ("sulphur-wettable", "sulphur"),
         ("cymoxanil-penetrant", "cymoxanil"),
     ]:
-        old[substance], _ = ext_ids.upsert(
+        old[substance] = add_product(
             session,
-            source=ops_seed.PRODUCT_SOURCE,
-            key=key,
-            model=Product,
-            values={
-                "name": old_name.format(s=substance),
-                "authorisation_no": old_amm.format(S=substance.upper()),
-                "active_substance": substance,
-                "product_type": "contact",
-                "targets": [],
-                "props": {"placeholder": True},
-            },
+            old_name.format(s=substance),
+            authorisation_no=old_amm.format(S=substance.upper()),
+            active_substance=substance,
+            props={"placeholder": True},
+        )
+        ext_ids.ensure_source(session, ops_seed.PRODUCT_SOURCE, "demo", "seed", "Apache-2.0")
+        session.add(
+            ExtId(
+                source=ops_seed.PRODUCT_SOURCE,
+                key=key,
+                model="catalog_item",
+                res_id=old[substance].id,
+            )
         )
     ids = {s: p.id for s, p in old.items()}
 
     ops_seed.seed(session, scene=None, data_dir=tmp_path)
 
-    assert _count(session, Product) == 3
-    products = {p.active_substance: p for p in session.scalars(select(Product))}
+    assert _count(session, CropProtectionItem) == 3
+    products = _products(session)
     assert {s: p.id for s, p in products.items()} == ids
     assert {s: p.authorisation_no for s, p in products.items()} == {
         s: amm for s, (_, amm, _) in EPHY.items()
@@ -152,7 +181,7 @@ def test_regex_extractor_maps_the_french_demo_sentence_to_the_seeded_copper(
             product_type=p.product_type,
             targets=p.targets,
         )
-        for p in session.scalars(select(Product).order_by(Product.id))
+        for p in _products(session).values()
     ]
     now = datetime(2024, 4, 10, 10, 0, tzinfo=ZoneInfo("Europe/Paris"))
 
@@ -189,18 +218,18 @@ def test_scene_b_twice_sprays_copper_once_per_parcel_on_9_may(session, demo, tmp
 
     assert first == {"products": 3, "scene_b_sprays": 2}
     assert second == {"products": 3, "scene_b_sprays": 2}
-    assert _count(session, Product) == 3
+    assert _count(session, CropProtectionItem) == 3
     sprays = list(session.scalars(select(Log).order_by(Log.id)))
     assert len(sprays) == 2
     # 2024-05-09 08:00 Europe/Paris (CEST, UTC+2) is 06:00 UTC.
     nine_may = datetime(2024, 5, 9, 6, 0, tzinfo=UTC)
-    copper = session.scalar(select(Product).where(Product.active_substance == "copper"))
+    copper = _products(session)["copper"]
     for log, parcel in zip(sprays, demo.parcels, strict=True):
         assert (log.type, log.status, log.ts_start) == ("spray", "done", nine_may)
         assert [p.id for p in log.parcels] == [parcel.id]
-        assert [(q.product_id, q.value, q.unit) for q in log.quantities] == [
-            (copper.id, Decimal("2"), "kg/ha")
-        ]
+        assert [
+            (q.catalog_item_id, q.entered_value, q.entered_unit) for q in log.typed_quantities
+        ] == [(copper.id, Decimal("2"), "kg/ha")]
         assert [s.source_type for s in log.sources] == ["seed"]
     assert _count(session, LogSource) == 2
     # One log.created event per spray, at the spray's clock time, tagged with its source.

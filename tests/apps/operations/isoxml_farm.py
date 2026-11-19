@@ -12,9 +12,10 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from farmcore.apps.operations import seed as ops_seed
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.core import ext_ids, logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Log, Parcel, Product
+from farmcore.core.models.canonical import Log, Parcel
 from farmcore.core.seed import ensure_default_farm
 
 TZ = "Europe/Paris"
@@ -31,7 +32,7 @@ def local(s: str) -> datetime:
 class Farm:
     repo: ScopedRepository
     parcels: dict[str, Parcel]
-    products: dict[str, Product]  # by active substance
+    products: dict[str, SprayItem]  # by active substance
 
 
 @pytest.fixture

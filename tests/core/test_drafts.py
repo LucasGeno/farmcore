@@ -21,6 +21,7 @@ from sqlalchemy import func, select, update
 from farmcore.core import drafts, registry
 from farmcore.core.access import ensure_owner_grant
 from farmcore.core.models.canonical import DataGrant, Farm, Log, LogSource, Parcel
+from farmcore.core.models.catalog import LegacyProductMap
 from farmcore.core.models.drafts import Draft
 from farmcore.core.models.identity import AccessToken
 from farmcore.main import create_app
@@ -35,7 +36,7 @@ def _spray(ids, *, dose="2"):
     return {
         "parcel_ids": [ids["P1"]],
         "ts_start": NOW_LOCAL.replace(hour=5).isoformat(),
-        "doses": [{"product_id": ids[COPPER], "value": dose, "unit": "kg/ha"}],
+        "doses": [{"catalog_item_id": ids[COPPER], "value": dose, "unit": "kg/ha"}],
     }
 
 
@@ -69,7 +70,7 @@ def case(settings, committed_session_factory):
         farm_id = _farm_id(session, ids)
         session.add(
             InventoryStock(
-                farm_id=farm_id, product_id=ids[COPPER], season=2024, unit="kg", purchased=20
+                farm_id=farm_id, catalog_item_id=ids[COPPER], season=2024, unit="kg", purchased=20
             )
         )
         session.commit()
@@ -432,3 +433,45 @@ def test_validation_reasons_preserve_domain_guidance_without_pydantic_details(is
         "PrivateInputModel", [{**issue, "loc": ("amount",), "input": "PRIVATE_INPUT"}]
     )
     assert drafts.validation_reason(error) == expected
+
+
+def test_a_v1_spray_proposal_resolves_legacy_product_ids_and_never_guesses(session, settings):
+    """A proposal still written for v1 names its product by the legacy `product_id`: stored as
+    the catalog item core_0018's frozen map gives; an id the map does not hold, or one dose
+    naming both keys, is refused and nothing is stored."""
+    ids = seed_farm(session, settings)
+    farm_id = _farm_id(session, ids)
+    session.add(LegacyProductMap(product_id=77, catalog_item_id=ids[COPPER]))
+    session.flush()
+    v1 = _spray(ids)
+    v1["doses"] = [{"product_id": 77, "value": "2", "unit": "kg/ha"}]
+
+    draft, _ = drafts.propose(
+        session,
+        MANIFESTS,
+        farm_id=farm_id,
+        actor="operator",
+        kind="spray",
+        payload=v1,
+        provenance={"source_type": "agent"},
+        request_key="v1",
+    )
+
+    assert [d["catalog_item_id"] for d in draft.payload["doses"]] == [ids[COPPER]]
+    assert "product_id" not in draft.payload["doses"][0]
+    for dose in (
+        {"product_id": ids[COPPER], "value": "2", "unit": "kg/ha"},  # not a legacy id
+        {"product_id": 77, "catalog_item_id": ids[COPPER], "value": "2", "unit": "kg/ha"},
+    ):
+        with pytest.raises(drafts.DraftInvalid):
+            drafts.propose(
+                session,
+                MANIFESTS,
+                farm_id=farm_id,
+                actor="operator",
+                kind="spray",
+                payload={**v1, "doses": [dose]},
+                provenance={"source_type": "agent"},
+                request_key=f"bad-{len(dose)}",
+            )
+    assert session.scalar(select(func.count(Draft.id))) == 1
