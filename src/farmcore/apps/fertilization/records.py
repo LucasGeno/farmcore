@@ -116,9 +116,7 @@ class Amount(_Strict):
         try:
             measured = units.measure(self.value, self.unit)
         except units.UnitError as exc:
-            raise ValueError(
-                f"Give the amount in a known unit (kg, t, l, kg/ha, l/ha…), not {self.unit!r}."
-            ) from exc
+            raise ValueError("Give the amount in a known unit (kg, t, l, kg/ha, l/ha…).") from exc
         if measured.measure not in AMOUNT_MEASURES:
             raise ValueError("Give the amount as a mass or a volume, in total or per hectare.")
         return self

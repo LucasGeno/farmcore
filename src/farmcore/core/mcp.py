@@ -42,6 +42,7 @@ from farmcore.core.access import (
     authenticate_token,
 )
 from farmcore.core.clock import get_clock
+from farmcore.core.drafts import DraftError
 from farmcore.core.farm_location import farm_zone
 from farmcore.core.manifest import Manifest
 from farmcore.core.models.canonical import AccessLog, Farm
@@ -164,12 +165,16 @@ class FarmTools:
                 repo=repo,
                 now=get_clock(session, self._settings).now(),
                 tz=farm_zone(session.get(Farm, repo.farm_id), self._settings),
+                manifests=self._manifests,
             )
             try:
                 with session.begin_nested():
                     return call_tool(tool, ctx, args)
             except ScopeDenied:
                 error = OUT_OF_SCOPE
+            except DraftError as exc:
+                # Draft validators shorten field errors before they reach this boundary.
+                error = str(exc)
             except Exception as exc:
                 logger.warning("mcp tool %s failed (%s)", tool.name, type(exc).__name__)
                 error = FAILED

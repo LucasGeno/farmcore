@@ -124,13 +124,43 @@ def _kind(session: Session, manifests: Sequence[Manifest], key: str):
     return found[1]
 
 
+def validation_reason(error: ValueError) -> str:
+    """Short validation feedback without model names, input echoes or library URLs."""
+    if isinstance(error, ValidationError):
+        issue = error.errors(include_url=False, include_input=False)[0]
+        # These two codes wrap an exception from our validator, not a Pydantic
+        # type/shape diagnostic. Keep the authored guidance, not Pydantic's msg
+        # (which adds prefixes); validators must not interpolate rejected values.
+        if issue["type"] in {"value_error", "assertion_error"}:
+            cause = issue.get("ctx", {}).get("error")
+            if isinstance(cause, (ValueError, AssertionError)):
+                return str(cause) or "draft: invalid value."
+        field = ".".join(str(part) for part in issue["loc"])[:80] or "draft"
+        reason = {"extra_forbidden": "unexpected field", "missing": "required field"}.get(
+            issue["type"], "invalid value"
+        )
+        return f"{field}: {reason}."
+    reason = str(error)
+    # Domain validators raise short sentences. Native parser exceptions are not
+    # field guidance and must not echo the raw conversion input.
+    if (
+        "\n" in reason
+        or len(reason) > 180
+        or reason.startswith(
+            ("invalid literal", "could not convert", "not enough values", "too many values")
+        )
+    ):
+        return "draft: invalid value."
+    return reason or "draft: invalid value."
+
+
 def _validated(session: Session, manifests, farm_id: int, kind: str, payload: dict) -> dict:
     definition = _kind(session, manifests, kind)
     validator = import_string(definition.validator)
     try:
         clean = validator(session, farm_id, dict(payload))
     except (ValueError, ValidationError) as exc:
-        raise DraftInvalid(str(exc)) from exc
+        raise DraftInvalid(validation_reason(exc)) from exc
     if len(json.dumps(clean, default=str).encode("utf-8")) > definition.max_payload_bytes:
         raise DraftInvalid("This draft is too large.")
     return clean
@@ -159,7 +189,7 @@ def propose(
     try:
         source = Provenance.model_validate(provenance).model_dump(mode="json", exclude_none=True)
     except ValidationError as exc:
-        raise DraftInvalid(str(exc)) from exc
+        raise DraftInvalid(validation_reason(exc)) from exc
     if len(json.dumps(source)) > MAX_PROVENANCE_BYTES:
         raise DraftInvalid("This draft's provenance is too large.")
     reviewer = _token_issuer(session, farm_id, actor)
@@ -352,7 +382,7 @@ def confirm(
     try:
         model, record_id = service(session, draft, actor=actor, now=now, services=services or {})
     except ValueError as exc:
-        raise DraftInvalid(str(exc)) from exc
+        raise DraftInvalid(validation_reason(exc)) from exc
     draft.status = "confirmed"
     draft.result_model, draft.result_id = model, record_id
     draft.finalized_at, draft.finalized_by = wall_now(), actor

@@ -1,5 +1,6 @@
 """Manifest of app `onboarding`: the first-run location step (no models, no jobs)."""
 
+from farmcore.apps.onboarding.tools import TOOLS
 from farmcore.core.manifest import DraftKind, Manifest, NavItem, Widget
 
 MANIFEST = Manifest(
@@ -21,8 +22,15 @@ MANIFEST = Manifest(
             "farmcore.apps.onboarding.importers.service:confirm",
             max_payload_bytes=2_000_000,
         ),
+        DraftKind(
+            "crop-assignments",
+            "farmcore.apps.onboarding.drafts:validate",
+            "/onboarding/crops/review",
+            "farmcore.apps.onboarding.drafts:confirm",
+        ),
     ),
     seed="farmcore.apps.onboarding.seed:seed",
+    tools=TOOLS,
     title="Set up your farm",
     category="Getting started",
     nav=("Set up", "/onboarding/"),

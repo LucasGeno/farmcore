@@ -17,13 +17,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from zoneinfo import ZoneInfo
 
-from farmcore.core.manifest import import_string
+from farmcore.core.manifest import Manifest, import_string
 
 if TYPE_CHECKING:
     from farmcore.core.access import ScopedRepository
@@ -93,6 +93,9 @@ class ToolContext:
     # A tool that reads member-only material must check it, never assume the repo's actor.
     member_role: str | None = None
     is_admin: bool = False
+    # The loaded manifests, for propose tools to resolve draft kinds (`drafts.propose`) the way
+    # web routes do. Empty for the read-only assistant/chat surfaces, which never propose.
+    manifests: Sequence[Manifest] = ()
 
 
 @dataclass(frozen=True)

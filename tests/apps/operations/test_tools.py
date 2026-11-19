@@ -105,8 +105,8 @@ def test_reads_as_the_assistant_and_writes_nothing(session, settings, seeded):
     assert write_counts(session) == before
 
 
-def test_declared_tool():
-    [spec, recent] = tools.TOOLS
+def test_declared_tools():
+    [spec, recent, propose, draft] = tools.TOOLS
     assert (spec.name, spec.scope) == (
         "operations_last_spray",
         "logs:read",
@@ -117,6 +117,16 @@ def test_declared_tool():
         "logs:read",
     )
     assert "which parcels did i spray" in recent.keywords
+    assert (propose.name, propose.scope, propose.effect) == (
+        "propose_record",
+        "drafts:propose",
+        "propose",
+    )
+    assert (draft.name, draft.scope, draft.effect) == (
+        "get_draft",
+        "drafts:propose",
+        "read",
+    )
 
 
 def _record_p5(session, settings, quantities) -> None:
