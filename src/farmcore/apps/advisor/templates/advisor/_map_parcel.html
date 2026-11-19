@@ -3,9 +3,10 @@
    evaluated "No spray needed". Unknown rain is never 0 mm. A fragment: no page chrome. #}
 {% from "core/_icons.html" import icon %}
 {% from "core/_ui.html" import decision_chip, priority_badge, priority_why %}
+{% from "core/_validation.html" import validation_badge with context %}
 <section data-poll-feed hx-get="{{ poll_url }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" class="flex flex-col gap-2" data-map-section="advisor-parcel" data-parcel-id="{{ row.id }}" aria-labelledby="map-advisor-parcel-h-{{ row.id }}">
   <h3 id="map-advisor-parcel-h-{{ row.id }}" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("advisor", "h-4 w-4") }}Spray advice</h3>
-  <p data-fact="decision" data-advised="{{ 'yes' if row.has_advice else 'no' }}">{{ decision_chip(row.decision, chip_label) }}</p>
+  <p data-fact="decision" data-advised="{{ 'yes' if row.has_advice else 'no' }}">{{ decision_chip(row.decision, chip_label) }}{% if row.has_advice %} {{ validation_badge("advisor.spray", link=False) }}{% endif %}</p>
   {% if row.has_advice %}
   <dl class="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[15px]">
     {% if row.decision in ("spray", "wait") and when %}

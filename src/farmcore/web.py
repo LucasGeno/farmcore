@@ -17,6 +17,7 @@ from jinja2 import ChoiceLoader, FileSystemLoader, pass_context
 from jinja2.runtime import Context
 from starlette.responses import HTMLResponse
 
+from farmcore.core.model_spec import KindValidation, kind_validation
 from farmcore.core.nav import active_path, build_nav
 from farmcore.core.navigation import map_read_url as _map_read_url
 from farmcore.core.navigation import resolved_url
@@ -95,12 +96,23 @@ def resolved_farm_url(context: Context, path: str) -> str:
     return resolved_url(context.get("request"), path)
 
 
+@pass_context
+def model_validation(context: Context, kind: str) -> KindValidation | None:
+    """The validation a result of assessment `kind` shows (`core/_validation.html`)."""
+    manifests = context.get("manifests")
+    if manifests is None:
+        request = context.get("request")
+        manifests = getattr(getattr(getattr(request, "app", None), "state", None), "manifests", ())
+    return kind_validation(manifests, kind)
+
+
 templates = Jinja2Templates(directory=template_dirs()[0])
 templates.env.loader = ChoiceLoader([FileSystemLoader(d) for d in template_dirs()])
 templates.env.filters["local"] = local
 templates.env.globals["farm_url"] = farm_url
 templates.env.globals["map_read_url"] = map_read_url
 templates.env.globals["resolved_farm_url"] = resolved_farm_url
+templates.env.globals["model_validation"] = model_validation
 
 
 def operator_authenticated(request: Request) -> bool:

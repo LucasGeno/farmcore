@@ -62,6 +62,7 @@ from farmcore.core.manifest import (
     collect_record_types,
     import_string,
 )
+from farmcore.core.model_spec import collect_model_specs
 from farmcore.core.models.base import Base
 from farmcore.core.models.kernel import AppModule
 
@@ -118,13 +119,15 @@ def resolve_order(manifests: list[Manifest]) -> list[Manifest]:
     not given.
 
     Raises `RegistryError` on a duplicate name, an app built for another `core_api`, an unmet
-    dependency or version requirement (`Manifest.requires`), or a cycle. It runs before any
+    dependency or version requirement (`Manifest.requires`), or a cycle; `ModelSpecInvalid` on an
+    assessment kind whose models are not declared (`core.model_spec`). It runs before any
     write: at start (`load`) and before any migration (`migrations/env.py` discovers first).
     """
     collect_parcel_views(manifests)
     collect_record_types(manifests)
     collect_draft_kinds(manifests)
     collect_assessment_kinds(manifests)
+    collect_model_specs(manifests)
     by_name: dict[str, Manifest] = {}
     for m in manifests:
         if m.name in by_name and by_name[m.name] is not m:

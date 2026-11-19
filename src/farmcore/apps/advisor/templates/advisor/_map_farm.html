@@ -3,8 +3,9 @@
    always comes with an icon and a word. A fragment: no page chrome; links keep the farm query. #}
 {% from "core/_icons.html" import icon %}
 {% from "core/_ui.html" import decision_chip %}
+{% from "core/_validation.html" import validation_badge with context %}
 <section data-poll-feed hx-get="{{ farm_url('/advisor/map/farm') }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" class="flex flex-col gap-2" data-map-section="advisor-farm" aria-labelledby="map-advisor-farm-h">
-  <h3 id="map-advisor-farm-h" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("advisor", "h-4 w-4") }}Spray advice</h3>
+  <h3 id="map-advisor-farm-h" class="flex items-center gap-2 text-[13px] font-semibold uppercase tracking-wider text-muted">{{ icon("advisor", "h-4 w-4") }}Spray advice{% if total %} {{ validation_badge("advisor.spray", link=False) }}{% endif %}</h3>
   {% if not total %}
   <p class="text-[15px] text-muted" data-fact="no-parcels">No parcels on this farm yet</p>
   {% else %}

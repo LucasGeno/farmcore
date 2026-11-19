@@ -1,6 +1,7 @@
 {% from "core/_parcel_shape.html" import parcel_shape with context %}
 {# Parcel cards share the map data and poll without remounting the map or panel. #}
 {% from "core/_ui.html" import decision_chip, empty_state %}
+{% from "core/_validation.html" import validation_badge with context %}
 {% from "core/_icons.html" import icon %}
 {%- macro day(iso) -%}
 {#- `2024-04-10` -> `10 Apr 2024`, the date format used across the app. -#}
@@ -35,7 +36,7 @@
         <span class="block truncate text-[13px] leading-snug text-muted">{{ p.variety or "Unknown variety" }} · {{ "%.2f"|format(p.area_ha) }} ha</span>
         <span class="block text-[13px] leading-snug text-muted">{{ "Last spray " ~ day(p.last_spray) if p.last_spray else "No spray recorded" }}</span>
       </span>
-      {% if advice_on %}<span data-icon="{{ p.decision }}">{{ decision_chip(p.decision, label, size="sm") }}</span>{% endif %}
+      {% if advice_on %}<span data-icon="{{ p.decision }}">{{ decision_chip(p.decision, label, size="sm") }}</span>{% if p.advised %}{{ validation_badge("advisor.spray", link=False) }}{% endif %}{% endif %}
       {{ icon("chevron-right", "h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5") }}
     </a>
     {{ show_on_map(p) }}

@@ -40,6 +40,7 @@ from farmcore.apps.fields.seasons import season_evidence
 from farmcore.apps.stations import service as stations
 from farmcore.core import assessments
 from farmcore.core.access import ScopeDenied, ScopedRepository
+from farmcore.core.model_spec import validation_json
 from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.canonical import (
     Advice,
@@ -600,6 +601,7 @@ def advice_json(row: Advice) -> dict[str, Any]:
         "passes": props.get("passes", 0),
         "treatments": props.get("treatments", 0),
         "card_path": CARD_PATH.format(id=row.parcel_id),
+        "model_validation": validation_json(SPRAY_KIND),
         **priority.as_dict(priority.of_advice(row)),
     }
 

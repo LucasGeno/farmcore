@@ -333,6 +333,16 @@ products and windows). Its `advice` row stays the public representation every re
 points at its envelope (`advice.assessment_id`, same farm, parcel and time); advice saved before
 `core_0012` keeps its evidence in `advice.props` and has no envelope.
 
+Each kind names the models that compute it (`AssessmentKind.models`), each a `ModelSpec`
+(`core/model_spec.py`): method and citation, EPPO host and pest codes, BBCH window, inputs, every
+parameter with its source and status (`sourced`, `assumed`, or `unsourced`, never a guessed
+citation), validation level (`unvalidated`, `literature-evaluated`, `locally-evaluated`,
+`official-service`, each above the first with what backs it) and provenance. The registry checks
+them at load, so a missing declaration or a kind with no model fails the start. The UI shows the
+weakest model's level beside every result (`core/_validation.html`) and links it to "About this
+model" (`GET /models/{key}`, `GET /models?kind=`); the advice JSON carries it as
+`model_validation`. Crop protection's specs are in `apps/advisor/specs.py`.
+
 ### Module lifecycle
 
 An app is **on** when its `app_module` row is installed (no row counts as installed) and every

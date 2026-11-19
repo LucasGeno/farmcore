@@ -1,4 +1,5 @@
 {% from "core/_icons.html" import icon %}
+{% from "core/_validation.html" import validation_badge with context %}
 {% set plan_next = resolved_farm_url('/forecast/plan?day=' ~ selected.day) %}
 <section id="plan-days" data-field-week data-selected-day="{{ selected.day }}" data-poll-feed hx-get="{{ resolved_farm_url('/forecast/plan/days?day=' ~ selected.day) }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop" aria-label="Fourteen-day spraying plan">
   {% include "forecast/_freshness.html" %}
@@ -42,7 +43,7 @@
           {% if d.parcels %}
             {% for decision in d.parcels|groupby('decision') %}
               {% for window in decision.list|groupby('window') %}
-                <h4 class="fc-plan-treatment-window">{{ decision.grouper|capitalize }} · {{ window.grouper }}</h4>
+                <h4 class="fc-plan-treatment-window">{{ decision.grouper|capitalize }} · {{ window.grouper }} {{ validation_badge("advisor.spray") }}</h4>
                 <ul class="fc-plan-parcel-list">{% for p in window.list %}<li data-advice-parcel="{{ p.id }}"><a href="{{ workspace_links[p.id] }}" aria-label="{{ p.label }} · {{ p.decision }} · {{ p.window }}">{{ p.label }}</a>{% if is_farm_owner %} <a class="ml-2 inline-flex min-h-[44px] items-center text-[13px] text-brand-700 underline" href="{{ resolved_farm_url('/planning/new?parcel=' ~ p.id ~ '&assessment=' ~ p.assessment ~ '&day=' ~ d.day) }}">Plan job</a>{% endif %}</li>{% endfor %}</ul>
                 {% for moved in window.list|selectattr('rescheduled_from', 'defined')|groupby('from_label') %}<p class="fc-plan-caption">Rescheduled from {{ moved.grouper }} · {{ moved.list|length }} {{ 'parcel' if moved.list|length == 1 else 'parcels' }}.</p>{% endfor %}
               {% endfor %}
