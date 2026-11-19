@@ -6,10 +6,10 @@ from __future__ import annotations
 import re
 from datetime import timedelta
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.presenter import ParcelRow, by_priority, present_farm_advice
 from farmcore.apps.chat.push import digest
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.scenes import local

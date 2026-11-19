@@ -318,8 +318,8 @@ PROBES = {
     "UPDATE alembic_version": "has_table_privilege({r!r}, 'alembic_version', 'UPDATE')",
     "DELETE alembic_version": "has_table_privilege({r!r}, 'alembic_version', 'DELETE')",
     "UPDATE unit_definition": "has_table_privilege({r!r}, 'unit_definition', 'UPDATE')",
-    # core_0018 froze the legacy spray tables and wrote the maps; only it may write them.
-    "INSERT quantity": "has_table_privilege({r!r}, 'quantity', 'INSERT')",
+    # core_0018 wrote the maps (legacy ids resolve through them); only it may write them.
+    "INSERT legacy_product_map": "has_table_privilege({r!r}, 'legacy_product_map', 'INSERT')",
     "DELETE legacy_quantity_map": "has_table_privilege({r!r}, 'legacy_quantity_map', 'DELETE')",
     "TRUNCATE farm": "has_table_privilege({r!r}, 'farm', 'TRUNCATE')",
     "TRIGGER farm": "has_table_privilege({r!r}, 'farm', 'TRIGGER')",

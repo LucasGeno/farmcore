@@ -5,9 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.forecast import sources, store
 from farmcore.core import clock
-from farmcore.core.models.canonical import Advice
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.forecast.test_routes import parcel as parcel
 

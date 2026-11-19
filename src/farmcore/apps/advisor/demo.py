@@ -7,9 +7,10 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from farmcore.apps.advisor.advice import ADVICE_DECISIONS, Advice
 from farmcore.apps.advisor.engine.config import AdvisorConfig
 from farmcore.apps.advisor.engine.simulate import season_span, simulate
 from farmcore.apps.advisor.engine.types import HourlyObs
@@ -246,3 +247,29 @@ def apply_season_2024(session: Session, farm: Farm, now: datetime) -> None:
     from farmcore.apps.inventory import demo_purchases  # optional app: its own demo rows only
 
     demo_purchases.apply(session, farm, usage)
+
+
+def decision_counts(session: Session, farm: Farm, now: datetime) -> dict[str, int]:
+    """Demo control's counts: each parcel's latest decision up to `now`, and the parcels not
+    evaluated yet."""
+    total = session.scalar(
+        select(func.count()).select_from(Parcel).where(Parcel.farm_id == farm.id)
+    )
+    ranked = (
+        select(
+            Advice.decision,
+            func.row_number()
+            .over(
+                partition_by=Advice.parcel_id,
+                order_by=(Advice.evaluated_at.desc(), Advice.id.desc()),
+            )
+            .label("rank"),
+        )
+        .where(Advice.farm_id == farm.id, Advice.evaluated_at <= now)
+        .subquery()
+    )
+    counts = dict.fromkeys(ADVICE_DECISIONS, 0)
+    for decision in session.scalars(select(ranked.c.decision).where(ranked.c.rank == 1)):
+        counts[decision] += 1
+    counts["not evaluated"] = total - sum(counts.values())
+    return counts

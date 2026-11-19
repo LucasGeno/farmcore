@@ -19,11 +19,12 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.manifest import MANIFEST
 from farmcore.apps.advisor.map_sections import nearest_spray_deadline
 from farmcore.core import clock, jobs
 from farmcore.core.access import FARM_COOKIE, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Farm
+from farmcore.core.models.canonical import Farm
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.advisor import scenes
 from tests.apps.advisor.review_fixtures import complete_station

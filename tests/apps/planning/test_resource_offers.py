@@ -210,7 +210,7 @@ def test_a_busy_machine_offers_another_configured_machine_but_not_unknown_capaci
 def test_an_infeasible_job_offers_another_parcel_with_current_advice(
     client, session, farm, parcels, products, advice
 ):
-    from farmcore.core.models.canonical import Advice
+    from farmcore.apps.advisor.advice import Advice
 
     _forecast(session, farm)
     second = make_parcel(session, farm, 2)
@@ -273,7 +273,7 @@ def test_a_busy_farm_day_keeps_the_job_infeasible_and_offers_another_day(
 def test_wait_advice_and_a_non_overlapping_window_are_not_offered_as_eligible(
     client, session, farm, parcels, products, advice
 ):
-    from farmcore.core.models.canonical import Advice
+    from farmcore.apps.advisor.advice import Advice
 
     _forecast(session, farm)
     waiting = make_parcel(session, farm, 2)
@@ -327,7 +327,7 @@ def test_wait_advice_and_a_non_overlapping_window_are_not_offered_as_eligible(
 def test_a_parcel_advice_window_must_cover_the_full_job_duration(
     client, session, farm, parcels, products, advice
 ):
-    from farmcore.core.models.canonical import Advice
+    from farmcore.apps.advisor.advice import Advice
 
     _forecast(session, farm)
     partial = make_parcel(session, farm, 2)

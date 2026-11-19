@@ -30,13 +30,14 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from farmcore.apps.advisor import service as advisor
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.forecast import store as forecast_store
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.apps.forecast.models import ForecastValue as LegacyForecastValue
 from farmcore.apps.forecast.normalised import mirror_run
 from farmcore.apps.stations import service as stations
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Event, Farm, Observation, Parcel
+from farmcore.core.models.canonical import Event, Farm, Observation, Parcel
 from farmcore.core.models.weather import (
     WeatherForecast,
     WeatherObservation,

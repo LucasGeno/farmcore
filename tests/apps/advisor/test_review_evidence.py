@@ -6,9 +6,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.job import evaluate
 from farmcore.core.manifest import JobContext
-from farmcore.core.models.canonical import Advice, Asset, Farm, Parcel
+from farmcore.core.models.canonical import Asset, Farm, Parcel
 from tests.apps.chat.test_handlers import COPPER, seed_farm
 
 NOW = datetime(2024, 4, 10, 4, tzinfo=UTC)

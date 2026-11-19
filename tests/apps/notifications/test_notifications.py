@@ -5,8 +5,8 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.advisor import scenes
 from tests.apps.advisor.review_fixtures import complete_station

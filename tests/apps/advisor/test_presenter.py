@@ -9,8 +9,9 @@ from html import unescape
 
 import pytest
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.presenter import FarmAdvice, ParcelRow, parcel_row, present_farm_advice
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.core.models.canonical import Parcel
 from farmcore.web import templates
 from tests.apps.advisor.scenes import local
 

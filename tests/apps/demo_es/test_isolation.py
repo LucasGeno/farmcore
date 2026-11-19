@@ -3,11 +3,11 @@ from datetime import UTC, datetime
 import pytest
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.job import evaluate
 from farmcore.apps.chat.service import load_context
 from farmcore.core.access import repo_for_job
 from farmcore.core.manifest import JobContext
-from farmcore.core.models.canonical import Advice
 
 pytestmark = [pytest.mark.data, pytest.mark.spanish_data]
 

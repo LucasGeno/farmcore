@@ -16,9 +16,10 @@ from pydantic import SecretStr
 from sqlalchemy import func, select
 
 from farmcore.apps.advisor import debug as advisor_debug
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core import logs
 from farmcore.core import seed as core_seed
-from farmcore.core.models.canonical import Advice, DataGrant, Event, Log, Parcel
+from farmcore.core.models.canonical import DataGrant, Event, Log, Parcel
 from farmcore.main import create_app
 from tests.apps.advisor import scenes
 

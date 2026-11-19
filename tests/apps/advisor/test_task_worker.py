@@ -13,12 +13,13 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select, text
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.manifest import JOB_NAME
 from farmcore.apps.stations.seed import seed as seed_station
 from farmcore.core import clock
 from farmcore.core import seed as core_seed
 from farmcore.core.logs import lock_farm
-from farmcore.core.models.canonical import Advice, Farm, Parcel
+from farmcore.core.models.canonical import Farm, Parcel
 
 WAIT = 15.0  # seconds; every wait below ends on an observable state, this only bounds a hang
 PARCEL = "SRID=4326;MULTIPOLYGON(((-0.19 44.91,-0.18 44.91,-0.18 44.92,-0.19 44.91)))"

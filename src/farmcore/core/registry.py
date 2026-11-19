@@ -94,7 +94,21 @@ def discover(packages: tuple[str, ...] = ("farmcore.apps",)) -> list[Manifest]:
     ordered = resolve_order(found)
     for manifest in ordered:
         register_scopes(manifest)
+        register_contributions(manifest)
     return ordered
+
+
+def register_contributions(manifest: Manifest) -> None:
+    """Register what core renders for `manifest` without importing it: its activity products
+    column, its demo-control counts and the query values its pages accept."""
+    from farmcore.core import activity, demo_control, navigation
+
+    if manifest.activity_products:
+        activity.PRODUCT_COLUMNS[manifest.name] = manifest.activity_products
+    if manifest.demo_counts:
+        demo_control.DEMO_COUNTS[manifest.name] = manifest.demo_counts
+    for key, values in manifest.query_values:
+        navigation.QUERY_VALUES[key] = navigation.QUERY_VALUES.get(key, frozenset()) | set(values)
 
 
 def register_scopes(manifest: Manifest) -> None:

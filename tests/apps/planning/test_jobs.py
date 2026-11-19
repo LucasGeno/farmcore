@@ -350,8 +350,8 @@ def test_the_planning_form_creates_and_cancels_a_job(
 def test_demo_reset_removes_planned_jobs_before_deleting_their_assessments(
     client, session, farm, parcels, products, advice
 ):
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.core import demo_control, registry
-    from farmcore.core.models.canonical import Advice
 
     created = _created(client, farm, parcels, products, advice)
     session.add(

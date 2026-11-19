@@ -11,13 +11,14 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import func, select, text
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.job import evaluate_live
 from farmcore.apps.advisor.manifest import JOB_NAME
 from farmcore.apps.stations.seed import seed as seed_station
 from farmcore.core import clock, tasks
 from farmcore.core import seed as core_seed
 from farmcore.core.logs import lock_farm
-from farmcore.core.models.canonical import Advice, Event, Parcel
+from farmcore.core.models.canonical import Event, Parcel
 
 PARCEL = "SRID=4326;MULTIPOLYGON(((-0.19 44.91,-0.18 44.91,-0.18 44.92,-0.19 44.91)))"
 

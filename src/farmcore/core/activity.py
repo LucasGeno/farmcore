@@ -31,11 +31,11 @@ from datetime import datetime, timedelta
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import and_, column, or_, select, table
+from sqlalchemy import and_, or_
 
 from farmcore.core.access import ScopedRepository
+from farmcore.core.manifest import import_string
 from farmcore.core.models.canonical import Event, LogSource, Parcel
-from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 
 SCOPE = "logs:read"
 PARCEL_SCOPE = "fields:read"
@@ -50,7 +50,6 @@ SOURCES = {
     "file": ("register", "File", "a file"),
     "seed": ("leaf", "Demo data", "demo data"),
 }
-DECISION_WORDS = {"spray": "Spray", "wait": "Wait", "protected": "Protected", "none": "No advice"}
 REGISTER = "/operations/register"
 DIARY = "/operations/"
 ACTIVITY = "/activity/"
@@ -126,47 +125,20 @@ def when(at: datetime, now: datetime, tz: str) -> str:
     return f"{local.strftime('%a %-d %b')} · {time}"
 
 
-def _dose(value: Any) -> str:
-    text = format(value, "f") if hasattr(value, "as_tuple") else str(value)
-    return text.rstrip("0").rstrip(".") if "." in text else text
+# Apps' products column (`Manifest.activity_products`): owner app -> `module:attr` provider
+# `(repo, log_ids) -> {log id: ["copper 2 kg/ha", ...]}`. Filled at discovery (`registry`);
+# core imports no app, and a switched-off app contributes nothing.
+PRODUCT_COLUMNS: dict[str, str] = {}
 
 
-# Operations' plant-protection extension, by name only: core imports no app. The contract step
-# makes this column an app contribution and drops the handle.
-_CROP_PROTECTION = table(
-    "crop_protection_item", column("catalog_item_id"), column("active_substance")
-)
-
-
-def _products(repo: ScopedRepository, log_ids: list[int]) -> dict[int, list[str]]:
-    """log id -> `copper 2 kg/ha` per rate that names a product (by its active substance)."""
+def _products(repo: ScopedRepository, log_ids: list[int], apps: set[str]) -> dict[int, list[str]]:
     out: dict[int, list[str]] = {}
     if not log_ids:
         return out
-    rates = repo.list(
-        TypedQuantity,
-        TypedQuantity.log_id.in_(log_ids),
-        TypedQuantity.entered_measure == "rate",
-        scope=SCOPE,
-        order_by=TypedQuantity.id,
-    )
-    ids = {q.catalog_item_id for q in rates if q.catalog_item_id is not None}
-    names = {}
-    if ids:
-        cpi = _CROP_PROTECTION.c
-        for item_id, name, substance in repo.execute(
-            select(CatalogItem.id, CatalogItem.name, cpi.active_substance)
-            .join(_CROP_PROTECTION, cpi.catalog_item_id == CatalogItem.id)
-            .where(CatalogItem.id.in_(ids)),
-            scope=SCOPE,
-            resource="crop_protection_item",
-        ):
-            names[item_id] = substance or name
-    for q in rates:
-        name = names.get(q.catalog_item_id) if q.catalog_item_id is not None else q.label
-        if not name:
-            continue
-        out.setdefault(q.log_id, []).append(f"{name} {_dose(q.entered_value)} {q.entered_unit}")
+    for owner, path in PRODUCT_COLUMNS.items():
+        if owner in apps:
+            for log_id, lines in import_string(path)(repo, log_ids).items():
+                out.setdefault(log_id, []).extend(lines)
     return out
 
 
@@ -390,7 +362,7 @@ def _grouped(
         for parcel in repo.list(Parcel, Parcel.id.in_(parcel_ids), scope=PARCEL_SCOPE):
             aliases[parcel.id] = parcel.alias
     log_ids = list({i for g in shown for i in g.log_ids})
-    products = _products(repo, log_ids)
+    products = _products(repo, log_ids, apps)
     devices = _devices(repo, log_ids) if with_raw else {}
     newest = {}
     if with_raw and log_ids:

@@ -72,9 +72,9 @@ def ensure_installation_id(conn: Connection) -> str:
 # loads them from a bundle (the copy's own migration wrote them), and test fixtures that empty
 # the database keep them.
 MIGRATION_OWNED_TABLES = ("alembic_version", "unit_definition", "weather_variable")
-# Instance data the runtime role only reads: the legacy spray tables core_0018 froze (kept for
-# its rollback) and the maps it wrote. Unlike the tables above they are backed up and restored.
-FROZEN_TABLES = ("product", "quantity", "legacy_product_map", "legacy_quantity_map")
+# Instance data the runtime role only reads: the maps core_0018 wrote (legacy ids still resolve
+# through them). Unlike the tables above they are backed up and restored.
+FROZEN_TABLES = ("legacy_product_map", "legacy_quantity_map")
 
 RUNTIME_ATTRIBUTES = (
     "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS "

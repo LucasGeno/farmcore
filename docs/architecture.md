@@ -36,8 +36,10 @@ database, a small core and installable apps, in the style of Odoo.
   crop protection's `advisor_product` (contact/penetrant, targets); its doses are typed
   quantities that keep what was entered. They are read through one seam:
   `operations.spray_items` and `advisor.products`. core_0018 moved them off the legacy
-  `product`/`quantity` tables (frozen for its rollback); ids kept in older JSON resolve through
-  its frozen maps. Published JSON shapes are versioned: [API compatibility](api-compatibility.md).
+  `product`/`quantity` tables and core_0019 dropped those; ids kept in older JSON resolve through
+  core_0018's frozen maps. Core holds no crop-protection term (`tests/core/test_core_is_neutral.py`):
+  advice (`advisor.advice`), its decisions and the activity products column belong to apps,
+  contributed through `Manifest.activity_products`, `demo_counts` and `query_values`. Published JSON shapes are versioned: [API compatibility](api-compatibility.md).
 - **Provenance.** `ext_id(source, key)` makes re-imports idempotent; `log_source` lets one spray
   carry several sources (voice + machine file). An incoming spray merges with a log of the same
   farm whose parcels overlap and whose start is within 12 h, keeping the more precise values.

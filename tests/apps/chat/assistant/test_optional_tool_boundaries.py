@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import select, text
 
 from farmcore.apps.advisor import tools as advisor_tools
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.chat.dto import Incoming
 from farmcore.apps.chat.handlers import ChatDeps, on_message
 from farmcore.apps.fields import tools as fields_tools
@@ -17,7 +18,7 @@ from farmcore.apps.operations import tools as operation_tools
 from farmcore.apps.stations import tools as station_tools
 from farmcore.core import logs, registry
 from farmcore.core.manifest import Manifest
-from farmcore.core.models.canonical import AccessLog, Advice, Parcel
+from farmcore.core.models.canonical import AccessLog, Parcel
 from farmcore.core.tools import ToolSpec, object_schema
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.chat.assistant.toolkit import CHAT, ctx_at, write_counts

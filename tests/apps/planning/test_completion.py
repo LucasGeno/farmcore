@@ -7,12 +7,13 @@ from decimal import Decimal
 
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.inventory.service import stock_rows
 from farmcore.apps.planning.models import PlanningJob, PlanningJobRevision
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Asset, Log, LogSource
+from farmcore.core.models.canonical import Asset, Log, LogSource
 from farmcore.core.models.catalog import TypedQuantity
 from tests.apps.planning.conftest import NOW, job_payload
 

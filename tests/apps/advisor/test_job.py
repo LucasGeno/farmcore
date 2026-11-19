@@ -14,11 +14,12 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.chat import push
 from farmcore.apps.chat.telegram import FakeTelegramSender
 from farmcore.core import jobs, outbox
 from farmcore.core import seed as core_seed
-from farmcore.core.models.canonical import Advice, Event, Parcel
+from farmcore.core.models.canonical import Event, Parcel
 from tests.apps.advisor import scenes
 from tests.apps.advisor.scenes import confirm_spray, local
 

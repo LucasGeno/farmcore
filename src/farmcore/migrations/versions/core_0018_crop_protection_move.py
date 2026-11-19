@@ -23,7 +23,9 @@ malformed shortlists, existing extension rows, an irrigation that would end with
 amount) and refuses with all of them: legacy data is never coerced. A post-check compares
 counts and per-record dose totals before the transaction commits.
 
-Downgrade refuses while anything written since the upgrade has no legacy row to return to (a
+Downgrade (its refusals over the frozen tables hold only while they exist: core_0019 drops
+them and its downgrade rebuilds them as the rows are now) refuses while anything written since
+the upgrade has no legacy row to return to (a
 spray dose or plant-protection item without a map entry, a stock row, planning job or shortlist
 entry naming one) or a moved dose was changed or removed, naming the counts. Otherwise it maps
 everything back and deletes the moved rows: the frozen tables were never changed.

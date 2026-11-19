@@ -5,7 +5,8 @@ import html
 import pytest
 from sqlalchemy import func, select
 
-from farmcore.core.models.canonical import Advice, Farm
+from farmcore.apps.advisor.advice import Advice
+from farmcore.core.models.canonical import Farm
 from tests.apps.advisor import scenes
 
 manifests, seeded, step = scenes.manifests, scenes.seeded, scenes.step

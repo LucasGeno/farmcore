@@ -5,8 +5,9 @@ from __future__ import annotations
 from zoneinfo import ZoneInfo
 
 from farmcore.apps.advisor import routes, tools
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Asset
+from farmcore.core.models.canonical import Asset
 from farmcore.core.tools import ToolContext
 from tests.apps.planning.conftest import NOW
 

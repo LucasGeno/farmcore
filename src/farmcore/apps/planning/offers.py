@@ -18,6 +18,7 @@ from sqlalchemy.dialects.postgresql import distinct_on
 
 from farmcore.apps.advisor import products as advisor_products
 from farmcore.apps.advisor import service as advice_service
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine import AdvisorConfig
 from farmcore.apps.forecast import availability as farm_availability
 from farmcore.apps.forecast import store
@@ -31,7 +32,7 @@ from farmcore.apps.planning.models import (
     PlanningOperator,
 )
 from farmcore.core.access import ScopeDenied, ScopedRepository
-from farmcore.core.models.canonical import Advice, Farm, Parcel
+from farmcore.core.models.canonical import Farm, Parcel
 
 SCOPE = "planning:read"
 HORIZON_HOURS = 72

@@ -62,7 +62,7 @@ def test_busy_toggles_keep_unknown_weather_honest_and_rerank_home_identically(
 def test_plan_replans_busy_advice_and_keeps_other_current_windows(
     client, session, settings, farm, imported
 ):
-    from farmcore.core.models.canonical import Advice
+    from farmcore.apps.advisor.advice import Advice
     from tests.apps.share.conftest import make_parcel
 
     now = datetime(2024, 4, 9, 4, tzinfo=UTC)

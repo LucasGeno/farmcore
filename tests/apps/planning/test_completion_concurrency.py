@@ -9,13 +9,14 @@ from decimal import Decimal
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.inventory.service import stock_rows
 from farmcore.apps.operations.seed import ensure_products
 from farmcore.apps.planning.models import PlanningJob, PlanningJobRevision
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice, Farm, Log
+from farmcore.core.models.canonical import Farm, Log
 from farmcore.core.models.catalog import TypedQuantity
 from farmcore.main import create_app
 from tests.apps.planning.conftest import NOW, job_payload

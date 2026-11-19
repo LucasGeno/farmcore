@@ -6,11 +6,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine import AdvisorConfig
 from farmcore.apps.review import parameters, recommendations, routes, tools
 from farmcore.apps.review.models import ParameterVersion
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice
 from farmcore.core.tools import ToolContext
 from tests.apps.planning.conftest import NOW
 

@@ -25,6 +25,7 @@ import pytest
 from pydantic import BaseModel
 
 from farmcore.apps.advisor import tools as advisor_tools
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine.config import AdvisorConfig
 from farmcore.apps.advisor.specs import DOWNY_3_10, SPECS
 from farmcore.apps.review import recommendations
@@ -45,7 +46,6 @@ from farmcore.core.model_spec import (
     Stages,
     Validation,
 )
-from farmcore.core.models.canonical import Advice
 from farmcore.core.registry import resolve_order
 from farmcore.core.seed import ensure_default_farm
 from farmcore.core.timeline import post_event

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import distinct_on
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.service import model_validation
 from farmcore.apps.review import recommendations, service
 from farmcore.apps.review.models import ParameterActivation, ParameterReview, ParameterVersion
@@ -15,7 +16,7 @@ from farmcore.apps.review.parameters import catalog
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.identity import principal_for
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.core.models.canonical import Parcel
 from farmcore.core.models.identity import FarmMembership, LocalIdentity
 from farmcore.core.tour import is_tour
 from farmcore.web import LOCAL_FORMAT, is_admin

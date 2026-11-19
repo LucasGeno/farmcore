@@ -9,8 +9,9 @@ import pytest
 from sqlalchemy import select
 
 from farmcore.apps.advisor import tools
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core import jobs
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.core.models.canonical import Parcel
 from tests.apps.advisor import scenes
 from tests.apps.advisor.scenes import confirm_spray, local
 from tests.apps.chat.assistant.toolkit import CHAT, assistant_reads, ctx_at, keys, write_counts

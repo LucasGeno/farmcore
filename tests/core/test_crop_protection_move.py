@@ -37,6 +37,7 @@ from tests.core.crop_protection_legacy import _dose, _log, _one, _product
 from tests.core.test_revamp_migrations import scratch_db_url  # noqa: F401
 
 BEFORE = "core_0017"
+MOVED_AT = "core_0018"  # the move; core_0019 then drops the frozen legacy tables
 # Rendered by the release before the move (`crop_protection_legacy` says how to regenerate it).
 BEFORE_RENDER = Path(__file__).parent / "snapshots" / "crop_protection_move_before.json"
 LEGACY = {  # what the frozen tables and the ids outside them hold, by content
@@ -93,7 +94,7 @@ def test_a_populated_upgrade_keeps_every_meaning_and_id(scratch_db_url):  # noqa
                 "Copper",
                 "Pending AMM",
             ]
-            assert db.execute(text(LEGACY["product"])).all() == legacy["product"]  # frozen
+            assert _one(db, "SELECT to_regclass('product')::text") is None  # core_0019
             assert _one(db, "SELECT catalog_item_id FROM inventory_stock") == item[ids["copper"]]
             assert _one(db, "SELECT catalog_item_id FROM planning_job") == item[ids["copper"]]
             assert _one(db, "SELECT model || ':' || res_id FROM ext_id") == (
@@ -215,7 +216,7 @@ def test_a_downgrade_refuses_new_or_changed_sprays_and_else_returns_every_row(
         with engine.begin() as db:
             ids = fixture.legacy(db)
             before = _capture(db)
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, MOVED_AT)
         with engine.begin() as db:
             moved = db.execute(text(MOVED_VIEW)).all()
             first = _one(db, "SELECT min(typed_quantity_id) FROM legacy_quantity_map")
@@ -256,6 +257,64 @@ def test_a_downgrade_refuses_new_or_changed_sprays_and_else_returns_every_row(
         with engine.begin() as db:
             assert _capture(db) == before
             assert _one(db, "SELECT count(*) FROM typed_quantity") == 0
+        command.upgrade(cfg, MOVED_AT)
+        with engine.begin() as db:
+            assert db.execute(text(MOVED_VIEW)).all() == moved
+    finally:
+        engine.dispose()
+
+
+def test_dropping_the_legacy_tables_downgrades_by_rebuilding_them_from_the_maps(
+    scratch_db_url,  # noqa: F811
+):
+    """core_0019's downgrade rebuilds `product` and `quantity` from the maps and the catalog
+    rows under their legacy ids, so core_0018's downgrade returns every legacy row; it refuses,
+    naming ids, while a plant-protection item or a measured dose has no map entry."""
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, BEFORE)
+    engine = create_engine(scratch_db_url)
+    try:
+        with engine.begin() as db:
+            ids = fixture.legacy(db)
+            before = _capture(db)
+        command.upgrade(cfg, "head")
+        with engine.begin() as db:
+            moved = db.execute(text(MOVED_VIEW)).all()
+            item = _one(db, "INSERT INTO catalog_item(name) VALUES ('New') RETURNING id")
+            db.execute(
+                text(
+                    "INSERT INTO crop_protection_item(catalog_item_id,authorisation_no,"
+                    "active_substance) VALUES (:i,'X','x')"
+                ),
+                {"i": item},
+            )
+            dose = _one(
+                db,
+                "INSERT INTO typed_quantity(log_id,entered_value,entered_unit,entered_measure) "
+                "VALUES (:log,1,'kg/ha','rate') RETURNING id",
+                log=ids["spray"],
+            )
+
+        with pytest.raises(RuntimeError) as refused:
+            command.downgrade(cfg, MOVED_AT)
+
+        assert f"1 plant-protection item(s) without a legacy product id ({item})" in str(
+            refused.value
+        )
+        assert f"1 measured typed quantit(y/ies) without a legacy quantity id ({dose})" in str(
+            refused.value
+        )
+        with engine.begin() as db:
+            assert _one(db, "SELECT to_regclass('product')::text") is None
+            db.execute(text("DELETE FROM typed_quantity WHERE id = :t"), {"t": dose})
+            db.execute(text("DELETE FROM catalog_item WHERE id = :i"), {"i": item})
+        command.downgrade(cfg, MOVED_AT)
+        with engine.begin() as db:
+            for table in ("product", "quantity"):
+                assert db.execute(text(LEGACY[table])).all() == before[table], table
+        command.downgrade(cfg, BEFORE)  # core_0018's rules over the rebuilt tables
+        with engine.begin() as db:
+            assert _capture(db) == before
         command.upgrade(cfg, "head")
         with engine.begin() as db:
             assert db.execute(text(MOVED_VIEW)).all() == moved

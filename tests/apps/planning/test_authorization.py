@@ -8,11 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.operations.seed import ensure_products
 from farmcore.apps.planning.models import PlanningJob
 from farmcore.core.access import DataGrant, ScopeDenied, ScopedRepository, ensure_owner_grant
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice, Farm
+from farmcore.core.models.canonical import Farm
 from farmcore.core.models.identity import FarmMembership
 from farmcore.main import create_app
 from tests.apps.planning.conftest import NOW, job_payload

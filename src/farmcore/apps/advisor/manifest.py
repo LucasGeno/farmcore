@@ -21,7 +21,9 @@ MANIFEST = Manifest(
     depends=("fields", "stations", "operations"),
     # advice:read is the app's own; the others are the reads its job and card make.
     scopes=("advice:read", "parameters:read", "fields:read", "stations:read", "logs:read"),
-    models=("farmcore.apps.advisor.catalog",),
+    models=("farmcore.apps.advisor.catalog", "farmcore.apps.advisor.advice"),
+    demo_counts="farmcore.apps.advisor.demo:decision_counts",
+    query_values=(("model", ("all", "downy", "powdery")),),
     # Shared reference data, like `crop_protection_item` (planning and chat read it too).
     resource_scopes=(("advisor_product", tuple(sorted(SCOPES))),),
     jobs=(

@@ -42,7 +42,7 @@ from farmcore.apps.chat.telegram import (
 from farmcore.core import outbox
 from farmcore.core.access import repo_for_job
 from farmcore.core.manifest import JobContext
-from farmcore.core.models.canonical import Advice, Event, Farm, Parcel
+from farmcore.core.models.canonical import Event, Farm, Parcel
 from farmcore.core.urls import with_farm
 from farmcore.settings import Settings
 
@@ -202,10 +202,7 @@ def _advance_farm(ctx: JobContext, farm_id: int) -> None:
         return
     parcels = {p.id: p for p in repo.list(Parcel, Parcel.id.in_(latest), scope="fields:read")}
     advice_ids = [(e.payload or {}).get("advice_id") for e in latest.values()]
-    rows = repo.list(
-        Advice, Advice.id.in_([i for i in advice_ids if i is not None]), scope="advice:read"
-    )
-    priorities = {a.id: getattr(_priority_of(a), "level", None) for a in rows}
+    priorities = _priorities(repo, [i for i in advice_ids if i is not None])
     changes = [_change(e, parcels, priorities) for e in latest.values()]
     text, buttons = digest(changes, ctx.settings.public_base_url, repo.farm_id)
     for chat_id in chats:
@@ -220,14 +217,16 @@ def _advance_farm(ctx: JobContext, farm_id: int) -> None:
         )
 
 
-def _priority_of(advice: Advice) -> Any:
-    """Crop protection's priority of a stored advice row; None in a bundle without crop
+def _priorities(repo: Any, advice_ids: list[int]) -> dict[int, Any]:
+    """Crop protection's priority level per stored advice row; none in a bundle without crop
     protection (events it wrote before it was removed still go out, ordered by alias)."""
     try:
         from farmcore.apps.advisor import priority
+        from farmcore.apps.advisor.advice import Advice
     except ModuleNotFoundError:
-        return None
-    return priority.of_advice(advice)
+        return {}
+    rows = repo.list(Advice, Advice.id.in_(advice_ids), scope="advice:read")
+    return {a.id: getattr(priority.of_advice(a), "level", None) for a in rows}
 
 
 class TelegramDelivery:

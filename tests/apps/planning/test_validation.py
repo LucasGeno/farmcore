@@ -5,8 +5,8 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.planning.models import PlanningJob
-from farmcore.core.models.canonical import Advice
 from tests.apps.planning.conftest import NOW, job_payload
 
 

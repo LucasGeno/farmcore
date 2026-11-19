@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.operations.seed import ensure_products
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.share.conftest import make_parcel
 

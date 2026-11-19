@@ -3,7 +3,6 @@
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 from fastapi import Request
@@ -74,7 +73,9 @@ _PARCEL_ROUTE = re.compile(r"/(fields|operations)/parcels/([1-9][0-9]{0,9})")
 _DATE = TypeAdapter(date)
 _DATETIME = TypeAdapter(datetime)
 _KIND = TypeAdapter(ActivityType)
-_MODEL = TypeAdapter(Literal["all", "downy", "powdery"])
+# Query values apps declare for their own pages (`Manifest.query_values`): key -> allowed values.
+# Filled at discovery (`registry`); a key no loaded app declares has no allowed value.
+QUERY_VALUES: dict[str, frozenset[str]] = {}
 
 
 def _parcel(repo: ScopedRepository, value: str) -> bool:
@@ -167,8 +168,8 @@ def reading_destination(
             if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", query["day"]):
                 return None
             _DATE.validate_python(query["day"])
-        if "model" in query:
-            _MODEL.validate_python(query["model"])
+        if "model" in query and query["model"] not in QUERY_VALUES.get("model", frozenset()):
+            return None
         if parts.path == "/activity/":
             _activity(query)
         if parts.fragment:

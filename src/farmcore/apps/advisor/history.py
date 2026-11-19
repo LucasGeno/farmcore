@@ -28,9 +28,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, literal_column, select
 from sqlalchemy.dialects.postgresql import JSONB
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.operations import spray_items
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Advice, Event, Log, LogParcel, LogSource
+from farmcore.core.models.canonical import Event, Log, LogParcel, LogSource
 
 LOGS_SCOPE = "logs:read"
 ADVICE_SCOPE = "advice:read"

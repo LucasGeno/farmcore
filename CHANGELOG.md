@@ -4,6 +4,19 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- Migration `core_0019` drops the legacy `product` and `quantity` tables that `core_0018`
+  froze; the maps stay. Downgrading below it rebuilds both from the maps and the catalog rows
+  under their legacy ids, and refuses, naming ids, while a plant-protection item or a measured
+  dose has no legacy id. The rebuild holds the rows as they are now, so `core_0018`'s refusals
+  to undo a moved dose that a correction changed or removed apply only while the tables exist
+  (before `core_0019`); past it, a rollback returns the current values.
+- NGSI-LD v1 has a Sunset date: 19 Feb 2027 (provisional), sent as `Sunset` (RFC 8594).
+- App authors: core no longer defines `Product`, `Quantity`, `PRODUCT_TYPES`, `PRODUCT_TARGETS`
+  or `ADVICE_DECISIONS`; the `Advice` model and its decisions moved to
+  `farmcore.apps.advisor.advice` (the `advice` table is unchanged). New manifest fields:
+  `activity_products` (the activity products column), `demo_counts` (demo control's counts) and
+  `query_values` (query values an app's page accepts, checked by return links).
+
 - Spray products and doses move onto the catalog tables (migration `core_0018`): each product
   becomes a `catalog_item` with operations' `crop_protection_item` (label facts) and crop
   protection's `advisor_product` (contact/penetrant, targets); each dose a `typed_quantity` that

@@ -14,10 +14,11 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.forecast import sources, store
 from farmcore.core import clock, registry
 from farmcore.core.access import FARM_COOKIE
-from farmcore.core.models.canonical import Advice, DataGrant, Log
+from farmcore.core.models.canonical import DataGrant, Log
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
 from tests.apps.forecast.conftest import FIXTURE

@@ -17,8 +17,9 @@ from datetime import datetime
 
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Advice, Event, Parcel
+from farmcore.core.models.canonical import Event, Parcel
 from farmcore.core.timeline import post_event
 
 REQUEST_KIND = "advice.review_requested"
