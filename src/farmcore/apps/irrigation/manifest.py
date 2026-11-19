@@ -11,5 +11,11 @@ MANIFEST = Manifest(
     category="Insights",
     icon="rain",
     color="brand",
+    keywords={
+        "en": ("irrigation", "crop coefficient", "kc"),
+        "fr": ("irrigation", "coefficient cultural"),
+        "es": ("riego", "coeficiente de cultivo"),
+        "it": ("irrigazione", "coefficiente colturale"),
+    },
     maturity="alpha",
 )
