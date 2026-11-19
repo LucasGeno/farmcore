@@ -1,21 +1,27 @@
-"""One bounded, expiring clarification per farm/chat; no long-term memory or new tables."""
+"""A chat's unfinished capture is an open draft (`core/drafts.py`); there is no other state.
 
-from datetime import UTC, datetime, timedelta
+The open draft of one actor on one farm that still names something `missing` is the
+clarification the actor's next message continues: each turn revises it (a revision bump), and it
+expires `TTL` after its last turn. It carries the extracted operation and up to `MAX_TURNS`
+recent turns (`capture`), never older records or other chats. The demo epoch is stored with it:
+after a demo reset or a clock jump the old draft is no longer continued.
+"""
 
-from farmcore.apps.chat.extractor.base import (
-    NOTE_TIME_MISSING,
-    DraftOperation,
-    ProductDose,
-)
-from farmcore.apps.chat.push import chat_props, set_chat_props
+from datetime import timedelta
+
+from sqlalchemy import select
+
+from farmcore.apps.chat.extractor.base import DraftOperation, ProductDose
+from farmcore.core.drafts import wall_now
 from farmcore.core.logs import lock_farm
 from farmcore.core.models.canonical import Farm
+from farmcore.core.models.drafts import Draft
 from farmcore.core.models.kernel import ClockState
 
-KEY = "clarifications"
 TTL = timedelta(minutes=15)
 MAX_TURNS = 6
 MAX_CHARS = 2000
+DEMO_RESET = "demo-reset"
 
 
 def epoch(session):
@@ -33,52 +39,70 @@ def unchanged(session, farm_id, expected):
     return epoch(session) == expected
 
 
-def load(session, farm_id, chat_id, now):
-    farm = session.get(Farm, farm_id, populate_existing=True)
-    state = (chat_props(farm).get(KEY) or {}).get(str(chat_id))
-    if not state:
+def open_captures(session, farm_id, actor) -> list[Draft]:
+    """The actor's open, unexpired conversational drafts on the farm, oldest first."""
+    return list(
+        session.scalars(
+            select(Draft)
+            .where(
+                Draft.farm_id == farm_id,
+                Draft.actor == actor,
+                Draft.status == "open",
+                Draft.expires_at > wall_now(),
+                Draft.payload.has_key("capture"),
+            )
+            .order_by(Draft.id)
+            .execution_options(populate_existing=True)
+        )
+    )
+
+
+def load(session, farm_id, actor) -> Draft | None:
+    """The clarification this actor's next message continues: its latest open draft that still
+    misses something, from the current demo epoch."""
+    current = epoch(session)
+    for draft in reversed(open_captures(session, farm_id, actor)):
+        capture = draft.payload.get("capture") or {}
+        if draft.payload.get("missing") and capture.get("epoch") == current:
+            return draft
+    return None
+
+
+def state(draft: Draft | None):
+    """The extractor's view of a clarification: its operation so far and recent turns."""
+    if draft is None:
         return None
-    if state.get("epoch") != epoch(session):
-        return None
-    if datetime.now(UTC) - datetime.fromisoformat(state["updated_at"]) > TTL:
-        return None
-    return state
+    capture = draft.payload["capture"]
+    return {"draft": capture["operation"], "history": capture["history"]}
 
 
-def save(session, farm_id, chat_id, now, draft, history):
-    lock_farm(session, farm_id)
-    farm = session.get(Farm, farm_id, with_for_update=True, populate_existing=True)
-    stamp = datetime.now(UTC)
-    states = {
-        key: value
-        for key, value in (chat_props(farm).get(KEY) or {}).items()
-        if stamp - datetime.fromisoformat(value["updated_at"]) <= TTL
-    }
-    # The private demo allowlist is small; bound persisted state even on a busy farm.
-    states = dict(list(states.items())[-31:])
-    states[str(chat_id)] = {
-        "updated_at": stamp.isoformat(),
-        "clock": now.isoformat(),
-        "epoch": epoch(session),
-        "draft": draft.model_dump(mode="json"),
-        "history": history[-MAX_TURNS:],
-    }
-    set_chat_props(farm, **{KEY: states})
-
-
-def clear(session, farm_id, chat_id):
-    lock_farm(session, farm_id)
-    farm = session.get(Farm, farm_id, with_for_update=True, populate_existing=True)
-    states = dict(chat_props(farm).get(KEY) or {})
-    states.pop(str(chat_id), None)
-    set_chat_props(farm, **{KEY: states})
+def held(session, farm_id, actor, request_key) -> Draft | None:
+    """The draft that already took this message (Telegram re-delivers unanswered ones)."""
+    return session.scalar(
+        select(Draft)
+        .where(
+            Draft.farm_id == farm_id,
+            Draft.actor == actor,
+            (Draft.request_key == request_key)
+            | Draft.payload["capture"]["messages"].has_key(request_key),
+        )
+        .order_by(Draft.id.desc())
+        .limit(1)
+        .execution_options(populate_existing=True)
+    )
 
 
 def reset(session, farm):
-    """Manifest hook: demo reset preserves the chat binding, but clears unfinished input."""
-    chat = chat_props(farm)
-    if KEY in chat:
-        farm.props = {**(farm.props or {}), "chat": {k: v for k, v in chat.items() if k != KEY}}
+    """Manifest hook: demo reset keeps the chat binding but cancels unfinished captures."""
+    now = wall_now()
+    for draft in session.scalars(
+        select(Draft).where(
+            Draft.farm_id == farm.id,
+            Draft.status == "open",
+            Draft.payload.has_key("capture"),
+        )
+    ):
+        draft.status, draft.finalized_at, draft.finalized_by = "cancelled", now, DEMO_RESET
 
 
 def continue_draft(current: DraftOperation, state):
@@ -138,10 +162,4 @@ def continue_draft(current: DraftOperation, state):
                     product=name, value=current.dose_value, unit=current.dose_unit
                 )
         values["product_doses"] = list(rates.values())
-    if NOTE_TIME_MISSING in current.notes:
-        values["ts_start"] = previous.ts_start
-        values["notes"] = [n for n in current.notes if n != NOTE_TIME_MISSING]
-        values["notes"] += [
-            n for n in previous.notes if n.startswith("time ") or n == NOTE_TIME_MISSING
-        ]
     return current.model_copy(update=values)

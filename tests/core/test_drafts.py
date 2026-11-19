@@ -370,3 +370,40 @@ def test_proposing_twice_with_one_key_returns_one_draft(session, settings):
     assert _propose(session, farm_id, ids).id == first.id
     with pytest.raises(drafts.DraftConflict):
         _propose(session, farm_id, ids, dose="3")
+
+
+@pytest.mark.parametrize(
+    ("reviewer", "allowed"),
+    [("owner", True), ("advisor", False), ("revoked owner", False), ("other farm owner", False)],
+)
+def test_a_chat_draft_is_reviewed_by_an_active_owner_of_its_farm(
+    session_factory, session, settings, reviewer, allowed
+):
+    """A Telegram chat is linked to its farm, not to a person: the farm's owners review its
+    draft on the web, checked live (a revoked owner loses it), and nobody else."""
+    from farmcore.core.models.identity import FarmMembership
+
+    ids = seed_farm(session, settings)
+    farm_id = _farm_id(session, ids)
+    draft = _propose(session, farm_id, ids, actor="chat:42")
+    session.commit()
+    role = "advisor" if reviewer == "advisor" else "owner"
+    identity_id, _ = _account(
+        session_factory,
+        login="member",
+        role=role,
+        farm_id=None if reviewer == "other farm owner" else farm_id,
+    )
+    if reviewer == "revoked owner":
+        session.scalar(
+            select(FarmMembership).where(FarmMembership.identity_id == identity_id)
+        ).revoked_at = datetime.now(UTC)
+        session.flush()
+    confirm = dict(farm_id=farm_id, draft_id=draft.id, actor=f"identity:{identity_id}", revision=1)
+
+    if allowed:
+        confirmed, recorded = drafts.confirm(session, MANIFESTS, **confirm, now=NOW_LOCAL)
+        assert (confirmed.status, recorded) == ("confirmed", True)
+    else:
+        with pytest.raises(drafts.DraftNotFound):
+            drafts.confirm(session, MANIFESTS, **confirm, now=NOW_LOCAL)

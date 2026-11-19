@@ -21,7 +21,7 @@
   product (a log said without a verb or a dose, "P6 au cuivre ce matin", keeps the log path).
 
 Only a question, and an *other* naming nothing on the farm, leave the existing extractor →
-pending → ✅/❌ path.
+draft → ✅/❌ path.
 """
 
 from __future__ import annotations

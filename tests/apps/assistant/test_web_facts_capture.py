@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy import select
 
 from farmcore.apps.chat.handlers import ChatDeps
-from farmcore.core.models.canonical import Log
+from farmcore.core.models.canonical import Log, Parcel
+from farmcore.core.models.drafts import Draft
 from tests.apps.advisor import scenes
 
 manifests, seeded, step = scenes.manifests, scenes.seeded, scenes.step
@@ -40,9 +41,12 @@ def _say(client, q, conversation="one", request_key=None):
     )
 
 
-def _pending(session) -> list[Log]:
+def _pending(session) -> list[Draft]:
+    """Complete drafts awaiting ✅; no pending log is ever committed."""
     session.expire_all()
-    return list(session.scalars(select(Log).where(Log.status == "pending")).all())
+    assert session.scalars(select(Log).where(Log.status == "pending")).all() == []
+    drafts = session.scalars(select(Draft).where(Draft.status == "open")).all()
+    return [d for d in drafts if not d.payload["missing"]]
 
 
 def test_the_panel_previews_then_confirms_an_irrigation(client, session, seeded, step):
@@ -57,9 +61,8 @@ def test_the_panel_previews_then_confirms_an_irrigation(client, session, seeded,
     [confirm, cancel] = body["actions"]
     assert confirm["label"].endswith("Confirm") and cancel["label"].endswith("Cancel")
     [pending] = _pending(session)
-    assert (pending.type, pending.status) == ("irrigate", "pending")
-    assert pending.props == {"irrigation": {"amount": "20", "unit": "mm", "basis": "gross"}}
-    assert pending.quantities == []
+    assert pending.kind == "irrigation"
+    assert pending.payload["fact"] == {"amount": "20", "unit": "mm", "basis": "gross"}
 
     done = client.post("/assistant/confirm", data={"action": confirm["action"]}).json()
 
@@ -67,7 +70,7 @@ def test_the_panel_previews_then_confirms_an_irrigation(client, session, seeded,
     assert done["text"].startswith("✅ Logged: P5 Les Granges · irrigation 20 mm gross")
     assert "No spray stock was used and no advice was calculated." in done["text"]
     session.expire_all()
-    assert session.get(Log, pending.id).status == "done"
+    assert session.get(Draft, pending.id).status == "confirmed"
 
 
 def test_the_panel_asks_for_the_unit_before_any_preview_then_keeps_net(
@@ -87,7 +90,7 @@ def test_the_panel_asks_for_the_unit_before_any_preview_then_keeps_net(
     assert body["kind"] == "draft", body
     assert "irrigation 20 mm net" in body["text"]
     [pending] = _pending(session)
-    assert pending.props == {"irrigation": {"amount": "20", "unit": "mm", "basis": "net"}}
+    assert pending.payload["fact"] == {"amount": "20", "unit": "mm", "basis": "net"}
     action = body["actions"][0]["action"]
     assert client.post("/assistant/confirm", data={"action": action}).status_code == 200
 
@@ -100,8 +103,9 @@ def test_the_panel_captures_an_irrigation_said_without_a_verb(client, session, s
 
     assert body["kind"] == "draft", body
     [pending] = _pending(session)
-    assert (pending.type, pending.parcels[0].alias) == ("irrigate", "P5")
-    assert pending.props["irrigation"] == {"amount": "20", "unit": "mm", "basis": "gross"}
+    [parcel_id] = pending.payload["parcel_ids"]
+    assert (pending.kind, session.get(Parcel, parcel_id).alias) == ("irrigation", "P5")
+    assert pending.payload["fact"] == {"amount": "20", "unit": "mm", "basis": "gross"}
 
 
 def test_the_panel_previews_then_confirms_an_observation(client, session, seeded, step):
@@ -113,15 +117,14 @@ def test_the_panel_previews_then_confirms_an_observation(client, session, seeded
     assert body["kind"] == "draft", body
     assert "observation: Observed powdery mildew on Les Granges at 6" in body["text"]
     [pending] = _pending(session)
-    assert pending.type == "observation"
-    assert pending.props == {"observation": {"text": "Observed powdery mildew on Les Granges at 6"}}
-    assert pending.quantities == []
+    assert pending.kind == "observation"
+    assert pending.payload["fact"] == {"text": "Observed powdery mildew on Les Granges at 6"}
 
     done = client.post("/assistant/confirm", data={"action": body["actions"][0]["action"]})
 
     assert done.json()["kind"] == "done", done.text
     session.expire_all()
-    assert session.get(Log, pending.id).status == "done"
+    assert session.get(Draft, pending.id).status == "confirmed"
 
 
 def test_asking_the_panel_never_pretends_to_record_an_irrigation(client, seeded, step):
@@ -164,13 +167,10 @@ def test_a_retried_panel_submission_creates_one_draft_and_one_record(
     later = client.post("/assistant/message", data=data).json()
     assert later["kind"] == "reply" and "already logged" in later["text"], later
     session.expire_all()
-    from farmcore.core.models.canonical import LogSource
-
-    web_keys = session.scalars(
-        select(LogSource.external_key).where(LogSource.external_key.like("web:%"))
-    ).all()
-    assert len(web_keys) == 1
-    saved = session.scalars(select(Log).where(Log.id == pending.id)).all()
+    [draft] = session.scalars(select(Draft)).all()
+    assert (draft.id, draft.status) == (pending.id, "confirmed")
+    assert draft.request_key.startswith("web:")
+    saved = session.scalars(select(Log).where(Log.id == draft.result_id)).all()
     assert len(saved) == 1 and saved[0].status == "done"
 
 

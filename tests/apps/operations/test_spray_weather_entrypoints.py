@@ -184,12 +184,11 @@ def test_a_pending_draft_or_a_cancel_saves_nothing(session_factory, session, set
     ids = seed_farm(session, settings)
     d = _bot_deps(settings, session_factory, fake())
     echo = on_message(d, voice("copper + sulphur, 2 kg, this morning"))
-    [src] = _sources(session, "voice")
-    assert NS not in src.raw_payload  # pending
+    assert _sources(session, "voice") == []  # a draft has no source yet
 
     on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[1][1]))  # ❌
 
-    assert all(NS not in s.raw_payload for s in _sources(session, "voice"))
+    assert _sources(session, "voice") == []
     assert ids  # farm seeded
 
 
@@ -256,11 +255,10 @@ def test_a_capture_error_rolls_the_confirm_back_not_already_logged(
     )
     echo = on_message(d, voice("copper + sulphur, 2 kg, this morning"))
 
-    with pytest.raises(ValueError, match="station payload invalid"):
-        on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
+    refused = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
 
-    [log] = logs_of(session)
-    assert log.status == "pending"  # rolled back, and a clean retry still works
+    assert not refused.text.startswith("✅") and refused.text != REPLY_ALREADY_LOGGED
+    assert logs_of(session) == []  # rolled back, and a clean retry still works
     ok = ChatDeps(base.session_factory, base.extractor, base.settings, base.manifests)
     out = on_callback(ok, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
     assert out.text.startswith("✅ Logged")
@@ -294,35 +292,3 @@ def test_the_bot_command_injects_the_reader_from_the_discovered_apps(
     [deps] = seen
     assert deps.weather_reader is read_slot
     assert "chat" in {m.name for m in deps.manifests}  # jobs keep the active list
-
-
-def test_a_voice_note_without_a_stated_time_saves_time_unknown_without_a_station_read(
-    session_factory, session, settings
-):
-    from farmcore.apps.chat.extractor import RegexExtractor
-
-    ids = seed_farm(session, settings)
-    farm_id = session.get(Parcel, ids["P1"]).farm_id
-    reading = {"t_c": 7.0, "ff_kmh": 4.0, "rr1_mm": 0.0}
-    add_station(session, farm_id, {datetime(2024, 4, 10, 4, tzinfo=UTC): reading})  # replay hour
-    session.commit()
-    calls = []
-    base = _bot_deps(settings, session_factory, RegexExtractor())
-    d = ChatDeps(
-        base.session_factory,
-        base.extractor,
-        base.settings,
-        base.manifests,
-        weather_reader=lambda repo, slot: calls.append(slot) or read_slot(repo, slot),
-    )
-    echo = on_message(d, voice("P1 copper 2 kg"))  # no time said: the draft uses now
-    assert "No time was said" in echo.text
-
-    out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
-
-    assert out.text.startswith("✅ Logged")
-    [src] = _sources(session, "voice")
-    evidence = src.raw_payload[NS]
-    assert evidence["status"] == "unavailable" and evidence["reason"] == spray_weather.NO_TIME
-    assert evidence["source_time"] is None and evidence["slot"] is None
-    assert calls == []  # never the replay hour's reading

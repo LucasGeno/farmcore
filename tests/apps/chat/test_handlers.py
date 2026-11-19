@@ -6,21 +6,18 @@ Synthetic parcels and products only.
 from __future__ import annotations
 
 import threading
-import time
 from datetime import datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy import text as sql_text
 
 from farmcore.apps.chat.audit import DbAuditSink
 from farmcore.apps.chat.dto import Callback, Incoming
 from farmcore.apps.chat.extractor import DraftOperation, FakeExtractor, RegexExtractor
 from farmcore.apps.chat.handlers import (
     REPLY_ALREADY_LOGGED,
-    REPLY_GONE,
     ChatDeps,
     build_deps,
     on_callback,
@@ -29,6 +26,7 @@ from farmcore.apps.chat.handlers import (
 from farmcore.core.clock import set_replay
 from farmcore.core.manifest import JobContext, JobSpec, Manifest
 from farmcore.core.models.canonical import Event, Log, LogSource, Parcel, Product, Quantity
+from farmcore.core.models.drafts import Draft
 from farmcore.core.seed import ensure_default_farm
 
 PARIS = ZoneInfo("Europe/Paris")
@@ -108,11 +106,17 @@ def logs_of(session) -> list[Log]:
     )
 
 
+def drafts_of(session) -> list[Draft]:
+    return list(
+        session.scalars(select(Draft).order_by(Draft.id).execution_options(populate_existing=True))
+    )
+
+
 def events(session, kind: str) -> list[Event]:
     return list(session.scalars(select(Event).where(Event.kind == kind).order_by(Event.id)))
 
 
-def test_voice_note_on_p1_becomes_a_pending_log_echoed_with_confirm_and_cancel(
+def test_voice_note_on_p1_becomes_an_open_draft_echoed_with_confirm_and_cancel(
     session_factory, session, settings
 ):
     ids = seed_farm(session, settings)
@@ -120,19 +124,23 @@ def test_voice_note_on_p1_becomes_a_pending_log_echoed_with_confirm_and_cancel(
 
     out = on_message(d, voice("copper + sulphur, 2 kg, this morning"))
 
-    [log] = logs_of(session)
-    assert (log.type, log.status) == ("spray", "pending")
-    assert [p.id for p in log.parcels] == [ids["P1"]]
+    assert logs_of(session) == []  # no pending log is ever committed
+    [draft] = drafts_of(session)
+    assert (draft.kind, draft.status, draft.actor) == ("spray", "open", f"chat:{CHAT}")
+    assert draft.payload["parcel_ids"] == [ids["P1"]]
     assert out.text == (
         "P1 Le Plateau · copper + sulphur · 2 kg/ha · 10 Apr 05:00 — confirm?\n"
         "Copper Shield 20 WP: 2 kg/ha\nSulfo Jet 80 WG: 2 kg/ha\n"
         "Checks: Warning: Copper at least 0 kg Cu/ha this year (incomplete)\n"
         "Preview only; checks run again after confirmation."
     )
-    assert out.buttons == [("✅ Confirm", f"confirm:{log.id}"), ("❌ Cancel", f"cancel:{log.id}")]
+    assert out.buttons == [
+        ("✅ Confirm", f"confirm:{draft.id}:1"),
+        ("❌ Cancel", f"cancel:{draft.id}:1"),
+    ]
 
 
-def test_confirm_turns_the_pending_log_done_with_quantities_voice_source_and_event(
+def test_confirm_records_a_done_log_with_quantities_voice_source_and_event(
     session_factory, session, settings
 ):
     ids = seed_farm(session, settings)
@@ -156,7 +164,7 @@ def test_confirm_turns_the_pending_log_done_with_quantities_voice_source_and_eve
     assert src.confidence == pytest.approx(0.9)
     [confirmed] = events(session, "log.confirmed")
     assert (confirmed.res_model, confirmed.res_id) == ("parcel", ids["P1"])
-    assert confirmed.source_app == "chat"
+    assert confirmed.source_app == "operations"  # the Records app's draft confirm writes it
     assert out.text.startswith("✅ Logged: P1 Le Plateau · copper + sulphur · 2 kg/ha")
     assert out.buttons == []
 
@@ -202,10 +210,8 @@ def test_confirm_without_an_advisor_job_still_confirms(session_factory, session,
     assert "Advice" not in out.text
 
 
-def test_cancel_discards_the_pending_log_and_posts_log_cancelled(
-    session_factory, session, settings
-):
-    ids = seed_farm(session, settings)
+def test_cancel_closes_the_draft_and_writes_no_record(session_factory, session, settings):
+    seed_farm(session, settings)
     d = deps(session_factory, settings, fake())
     echo = on_message(d, voice("copper + sulphur, 2 kg, this morning"))
 
@@ -213,9 +219,7 @@ def test_cancel_discards_the_pending_log_and_posts_log_cancelled(
 
     assert count(session, Log) == 0
     assert count(session, Quantity) == 0
-    assert count(session, LogSource) == 0
-    [cancelled] = events(session, "log.cancelled")
-    assert (cancelled.res_model, cancelled.res_id) == ("parcel", ids["P1"])
+    assert [d.status for d in drafts_of(session)] == ["cancelled"]
     assert out.text == "❌ Cancelled. Nothing was logged."
     assert out.buttons == []
 
@@ -243,24 +247,30 @@ def test_a_second_tap_or_a_stale_button_replies_plainly_and_changes_nothing(
     assert len(events(session, "log.confirmed")) == 1
 
 
-def test_a_button_for_another_farms_log_finds_nothing(session_factory, session, settings):
+def test_a_button_for_another_farms_draft_finds_nothing(session_factory, session, settings):
     from farmcore.core.models.canonical import Farm
 
     seed_farm(session, settings)
     other = Farm(name="Other")
     session.add(other)
     session.flush()
-    parcel = Parcel(farm_id=other.id, alias="P1", name="X", area_ha=Decimal("1"), geom=SQUARE)
-    log = Log(farm_id=other.id, type="spray", status="pending", name="x", ts_start=NOW_LOCAL)
-    log.parcels.append(parcel)
-    session.add_all([parcel, log])
+    draft = Draft(
+        farm_id=other.id,
+        actor=f"chat:{CHAT}",
+        kind="spray",
+        request_key="k",
+        payload={},
+        provenance={"source_type": "voice"},
+        expires_at=NOW_LOCAL + timedelta(days=9999),
+    )
+    session.add(draft)
     session.commit()
     d = deps(session_factory, settings, fake())
 
-    out = on_callback(d, Callback(chat_id=CHAT, data=f"confirm:{log.id}"))
+    out = on_callback(d, Callback(chat_id=CHAT, data=f"confirm:{draft.id}:1"))
 
     assert out.text == "This spray was cancelled or no longer exists."
-    assert session.get(Log, log.id, populate_existing=True).status == "pending"
+    assert drafts_of(session)[0].status == "open"
 
 
 def test_this_morning_at_a_0600_replay_clock_is_dated_on_the_replay_day_and_clamped(
@@ -271,10 +281,11 @@ def test_this_morning_at_a_0600_replay_clock_is_dated_on_the_replay_day_and_clam
 
     out = on_message(d, voice("P1 copper + sulphur, 2 kg, this morning"))
 
-    [log] = logs_of(session)
-    assert log.ts_start == NOW_LOCAL  # 10 Apr 2024 06:00 local, not today's date
-    assert log.ts_start.astimezone(PARIS).date().isoformat() == "2024-04-10"
-    assert "time clamped to now" in log.sources[0].raw_payload["notes"]
+    [draft] = drafts_of(session)
+    ts_start = datetime.fromisoformat(draft.payload["ts_start"])
+    assert ts_start == NOW_LOCAL  # 10 Apr 2024 06:00 local, not today's date
+    assert ts_start.astimezone(PARIS).date().isoformat() == "2024-04-10"
+    assert "time clamped to now" in draft.payload["capture"]["notes"]
     assert out.text.splitlines()[0].endswith("· 10 Apr 06:00 — confirm?")
     assert "Note: The time you said is later than now, so I used now." in out.text
 
@@ -291,9 +302,9 @@ def test_the_request_carries_the_replay_date_and_a_later_parsed_time_is_clamped(
     [req] = extractor.requests
     assert req.today.isoformat() == "2024-04-10"
     assert req.now_local == NOW_LOCAL
-    [log] = logs_of(session)
-    assert log.ts_start == NOW_LOCAL
-    assert log.sources[0].raw_payload["notes"] == ["time clamped to now"]
+    [draft] = drafts_of(session)
+    assert datetime.fromisoformat(draft.payload["ts_start"]) == NOW_LOCAL
+    assert draft.payload["capture"]["notes"] == ["time clamped to now"]
     assert "Note: The time you said is later than now, so I used now." in out.text
 
 
@@ -308,9 +319,10 @@ def test_spec_sentence_logs_one_spray_on_p5_and_p6_and_confirms_on_both(
 
     echo = on_message(d, voice(SPEC_SENTENCE))
 
-    [log] = logs_of(session)
-    assert sorted(p.id for p in log.parcels) == sorted([ids["P5"], ids["P6"]])
-    assert sorted(q.product_id for q in log.quantities) == sorted([ids[COPPER], ids[SULPHUR]])
+    [draft] = drafts_of(session)
+    assert sorted(draft.payload["parcel_ids"]) == sorted([ids["P5"], ids["P6"]])
+    doses = draft.payload["doses"]
+    assert sorted(d["product_id"] for d in doses) == sorted([ids[COPPER], ids[SULPHUR]])
     assert echo.text.startswith("P5 Les Granges, P6 Peyrot · copper + sulphur · 2 kg/ha")
 
     on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
@@ -373,20 +385,21 @@ def test_a_text_message_is_logged_with_its_text_as_transcript(session_factory, s
     seed_farm(session, settings)
     d = deps(session_factory, settings, RegexExtractor())
 
-    on_message(d, Incoming(chat_id=CHAT, text=SPEC_SENTENCE, transcript=None, message_id=7))
+    echo = on_message(d, Incoming(chat_id=CHAT, text=SPEC_SENTENCE, transcript=None, message_id=7))
+    on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
 
     [log] = logs_of(session)
     [src] = log.sources
     assert src.raw_payload["transcript"] == SPEC_SENTENCE
     assert src.raw_payload["input"] == "text"
-    assert src.external_key == f"tg:{CHAT}:7"
+    assert drafts_of(session)[0].request_key == f"tg:{CHAT}:7"
 
 
 def test_before_the_farm_is_seeded_the_bot_says_so(session_factory, session, settings):
     d = deps(session_factory, settings, fake())
 
     message = on_message(d, voice("P1 copper, 2 kg"))
-    button = on_callback(d, Callback(chat_id=CHAT, data="confirm:1"))
+    button = on_callback(d, Callback(chat_id=CHAT, data="confirm:1:1"))
 
     assert message.text == button.text == "The farm is not set up yet. Run `farmcore seed` first."
     assert count(session, Log) == 0
@@ -476,9 +489,8 @@ def test_confirm_does_not_merge_into_a_spray_logged_later_than_now(
 
     assert "11:00" in out.text and "later than the current time" in out.text
     assert out.buttons == [echo.buttons[1]]  # cancel stays possible
-    statuses = {log.id: log.status for log in logs_of(session)}
-    assert statuses[later.id] == "done"
-    assert sorted(statuses.values()) == ["done", "pending"]
+    assert [(log.id, log.status) for log in logs_of(session)] == [(later.id, "done")]
+    assert [d.status for d in drafts_of(session)] == ["open"]
     assert len(session.get(Log, later.id, populate_existing=True).sources) == 1
     assert events(session, "log.merged") == []
 
@@ -493,13 +505,11 @@ def test_extractor_notes_are_echoed_in_plain_words_and_kept_raw(session_factory,
 
     assert "fallback:" not in out.text and "HTTP 500" not in out.text
     assert "Please check the details" in out.text
-    [log] = logs_of(session)
-    assert log.sources[0].raw_payload["notes"] == ["fallback: regex (HTTP 500)"]
+    [draft] = drafts_of(session)
+    assert draft.payload["capture"]["notes"] == ["fallback: regex (HTTP 500)"]
 
 
-def test_a_button_from_another_chat_does_not_touch_the_pending_log(
-    session_factory, session, settings
-):
+def test_a_button_from_another_chat_does_not_touch_the_draft(session_factory, session, settings):
     seed_farm(session, settings)
     d = deps(session_factory, settings, fake())
     echo = on_message(d, voice("copper + sulphur, 2 kg, this morning"))
@@ -508,11 +518,19 @@ def test_a_button_from_another_chat_does_not_touch_the_pending_log(
     cancel = on_callback(d, Callback(chat_id=CHAT + 1, data=echo.buttons[1][1]))
 
     assert confirm.text == cancel.text == "This spray was cancelled or no longer exists."
-    assert [log.status for log in logs_of(session)] == ["pending"]
-    assert events(session, "log.confirmed") == events(session, "log.cancelled") == []
+    assert [d.status for d in drafts_of(session)] == ["open"]
+    assert logs_of(session) == []
+    # A button sent before the upgrade names the pending log the draft was migrated from:
+    # it still confirms for its own chat only (core_0011).
+    [draft] = drafts_of(session)
+    draft.provenance = {**draft.provenance, "details": {"migrated_from_log": 777}}
+    session.commit()
+    stolen = on_callback(d, Callback(chat_id=CHAT + 1, data="confirm:777"))
+    assert stolen.text == "This spray was cancelled or no longer exists."
+    assert on_callback(d, Callback(chat_id=CHAT, data="confirm:777")).text.startswith("✅ Logged")
 
 
-def test_a_redelivered_message_echoes_the_same_pending_log_without_a_second(
+def test_a_redelivered_message_echoes_the_same_draft_without_a_second(
     session_factory, session, settings
 ):
     seed_farm(session, settings)
@@ -522,7 +540,7 @@ def test_a_redelivered_message_echoes_the_same_pending_log_without_a_second(
 
     again = on_message(d, voice("copper + sulphur, 2 kg, this morning", message_id=5))
 
-    assert count(session, Log) == 1
+    assert count(session, Draft) == 1
     assert len(extractor.requests) == 1
     assert again.buttons == first.buttons
     assert again.text.startswith("P1 Le Plateau · copper + sulphur · 2 kg/ha · 10 Apr 05:00")
@@ -644,46 +662,23 @@ def test_confirm_merged_spray_uses_canonical_checks_and_excludes_future_history(
 
 @pytest.mark.parametrize(
     ("message_id", "transcript"),
-    [(101, "first note on the merged spray"), (102, "second note on the merged spray")],
+    [(101, "P1 copper first note"), (102, "P1 copper second note")],
 )
 def test_replaying_either_source_of_a_merged_spray_returns_the_record(
     session_factory, session, settings, message_id, transcript
 ):
-    """A merged spray holds two same-chat sources. A replay compares the source with the exact
-    external key, never with the other source's transcript."""
-    from farmcore.core import logs
-    from farmcore.core.logs import QuantityInput, SourceInput
-
-    ids = seed_farm(session, settings)
-    farm_id = session.get(Parcel, ids["P1"]).farm_id
+    """Two messages confirmed into one merged spray: replaying either answers for its own
+    draft, never with the other message's transcript."""
+    seed_farm(session, settings)
     for mid, text, when in (
-        (101, "first note on the merged spray", NOW_LOCAL.replace(hour=4)),
-        (102, "second note on the merged spray", NOW_LOCAL.replace(hour=5)),
+        (101, "P1 copper first note", NOW_LOCAL.replace(hour=4)),
+        (102, "P1 copper second note", NOW_LOCAL.replace(hour=5)),
     ):
-        pending = logs.create_pending(
-            session,
-            farm_id=farm_id,
-            type="spray",
-            parcel_ids=[ids["P1"]],
-            ts_start=when,
-            ts_end=None,
-            quantities=[QuantityInput("rate", Decimal("2"), "kg/ha", ids[COPPER])],
-            source=SourceInput(
-                "voice",
-                f"tg:{CHAT}:{mid}",
-                {"transcript": text, "input": "voice", "notes": []},
-                0.9,
-                logs.RANK_VOICE,
-            ),
-            actor=f"chat:{CHAT}",
-            occurred_at=when,
-            source_app="chat",
-        )
-        logs.confirm(session, pending.id, f"chat:{CHAT}", when, source_app="chat")
-    session.commit()
+        d = deps(session_factory, settings, fake(ts_start=when))
+        echo = on_message(d, voice(text, mid))
+        on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
     [merged] = logs_of(session)
-    assert sorted(s.external_key for s in merged.sources) == [f"tg:{CHAT}:101", f"tg:{CHAT}:102"]
-    d = deps(session_factory, settings, RegexExtractor())
+    assert len(merged.sources) == 2
 
     out = on_message(d, voice(transcript, message_id))
 
@@ -710,8 +705,8 @@ def test_a_redelivered_message_id_with_a_different_transcript_is_refused(
 def test_a_callback_with_a_non_positive_log_id_is_gone(session_factory, session, settings):
     seed_farm(session, settings)
     d = deps(session_factory, settings, fake())
-    assert on_callback(d, Callback(chat_id=CHAT, data="confirm:0")).text
-    assert on_callback(d, Callback(chat_id=CHAT, data="cancel:0")).text
+    assert on_callback(d, Callback(chat_id=CHAT, data="confirm:0:1")).text
+    assert on_callback(d, Callback(chat_id=CHAT, data="cancel:0:1")).text
 
 
 class _BlockingExtractor(FakeExtractor):
@@ -730,7 +725,12 @@ class _BlockingExtractor(FakeExtractor):
 
 def _draft():
     return DraftOperation(
-        parcels=["P1"], products=[COPPER], dose_value=2, dose_unit="kg/ha", adapter="fake"
+        parcels=["P1"],
+        products=[COPPER],
+        dose_value=2,
+        dose_unit="kg/ha",
+        ts_start=NOW_LOCAL.replace(hour=5),
+        adapter="fake",
     )
 
 
@@ -766,85 +766,37 @@ def test_a_handler_that_loses_the_creation_race_answers_already_logged(
     assert result["out"].text == REPLY_ALREADY_LOGGED
 
 
-def _wait_for_race_lock(committed_session_factory):
-    with committed_session_factory() as session:
-        for _ in range(200):
-            blocked = session.scalar(
-                sql_text(
-                    "SELECT 1 FROM pg_stat_activity WHERE application_name = 'chat-race-A' "
-                    "AND wait_event_type = 'Lock' LIMIT 1"
-                )
-            )
-            if blocked:
-                return
-            time.sleep(0.02)
-    raise AssertionError("the second callback never reached the row lock")
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [("expired", "This draft expired"), ("superseded", "This draft changed since you opened it")],
+)
+def test_an_expired_or_superseded_draft_is_refused_in_the_chat_with_the_reason(
+    session_factory, session, settings, change, reason
+):
+    from datetime import UTC
 
+    from farmcore.apps.chat.handlers import DRAFT_MANIFESTS
+    from farmcore.core import drafts
 
-def _pending_log(committed_session_factory, settings):
-    with committed_session_factory() as session:
-        seed_farm(session, settings)
-    out = on_message(
-        deps(committed_session_factory, settings, fake(**_draft().model_dump())),
-        voice("copper 2 kg this morning", message_id=92),
-    )
-    with committed_session_factory() as session:
-        row = session.scalar(select(Log).order_by(Log.id.desc()).limit(1))
-        return row.id, out.buttons[0][1]
-
-
-def _tagged_factory(committed_session_factory):
-    def factory():
-        session = committed_session_factory()
-        session.execute(sql_text("SET application_name = 'chat-race-A'"))
-        return session
-
-    return factory
-
-
-def test_a_callback_confirm_race_answers_already_logged(committed_session_factory, settings):
-    log_id, _confirm = _pending_log(committed_session_factory, settings)
-    result = {}
-    blocker = committed_session_factory()
-    log = blocker.get(Log, log_id, with_for_update=True)
-    assert log.status == "pending"
-
-    def race():
-        result["out"] = on_callback(
-            deps(_tagged_factory(committed_session_factory), settings, fake()),
-            Callback(chat_id=CHAT, data=f"confirm:{log_id}"),
+    seed_farm(session, settings)
+    d = deps(session_factory, settings, fake())
+    echo = on_message(d, voice("copper + sulphur, 2 kg, this morning"))
+    [draft] = drafts_of(session)
+    if change == "expired":
+        draft.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    else:  # revised after the farmer saw the echo: its button names an older revision
+        drafts.revise(
+            session,
+            DRAFT_MANIFESTS,
+            farm_id=draft.farm_id,
+            draft_id=draft.id,
+            actor=draft.actor,
+            payload=draft.payload,
+            revision=1,
         )
+    session.commit()
 
-    thread = threading.Thread(target=race)
-    thread.start()
-    _wait_for_race_lock(committed_session_factory)
-    log.status = "done"
-    blocker.commit()
-    blocker.close()
-    thread.join(timeout=15)
-    assert not thread.is_alive()
-    assert result["out"].text == REPLY_ALREADY_LOGGED
+    out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
 
-
-def test_a_callback_cancel_race_answers_gone(committed_session_factory, settings):
-    log_id, _confirm = _pending_log(committed_session_factory, settings)
-    result = {}
-    blocker = committed_session_factory()
-    log = blocker.get(Log, log_id, with_for_update=True)
-    assert log.status == "pending"
-
-    def race():
-        result["out"] = on_callback(
-            deps(_tagged_factory(committed_session_factory), settings, fake()),
-            Callback(chat_id=CHAT, data=f"confirm:{log_id}"),
-        )
-
-    thread = threading.Thread(target=race)
-    thread.start()
-    _wait_for_race_lock(committed_session_factory)
-    blocker.delete(log)
-    blocker.commit()
-    blocker.close()
-    thread.join(timeout=15)
-    assert not thread.is_alive()
-    assert result["out"].text == REPLY_GONE
+    assert out.text.startswith(reason) and "nothing was recorded" in out.text
+    assert logs_of(session) == []

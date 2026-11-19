@@ -95,13 +95,6 @@ def test_yesterday_is_eight_the_day_before(word):
     )
 
 
-def test_no_time_word_uses_now_with_a_note():
-    draft = extract("Sprayed P1 with copper, 2 kg")
-
-    assert draft.ts_start == TEN_AM
-    assert "no time stated; using now" in draft.notes
-
-
 def test_comma_lists_aliases_and_litres():
     draft = extract("Sprayed P1, P5 and P10 with sulfur, 1,5 L/ha this morning")
 

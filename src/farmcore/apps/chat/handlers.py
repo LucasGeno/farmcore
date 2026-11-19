@@ -1,5 +1,7 @@
-"""Chat handlers: a message becomes a pending spray, irrigation or observation; a button
-confirms or cancels it.
+"""Chat handlers: a message becomes a draft spray, irrigation or observation (`core/drafts.py`,
+actor `chat:<id>`, or the signed-in member in the web panel); a button confirms or cancels it
+through the same draft service as `/drafts/<id>`. No pending log is ever committed, and an
+unfinished capture is the open draft that names what it still misses.
 
 Transport-free: `on_message(deps, Incoming) -> Outgoing`, `on_callback(deps, Callback) ->
 Outgoing`. The bot runtime maps Telegram updates to these DTOs and sends the replies.
@@ -10,11 +12,10 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from decimal import Decimal
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from farmcore.apps.chat import assistant, conversation, push, service
@@ -22,11 +23,13 @@ from farmcore.apps.chat.assistant import fallback, router
 from farmcore.apps.chat.audit import DbAuditSink, audit_ref
 from farmcore.apps.chat.dto import Callback, Incoming, Outgoing
 from farmcore.apps.chat.extractor import Extractor, RegexExtractor, get_extractor
-from farmcore.apps.chat.extractor.base import NOTE_TIME_CLAMPED, NOTE_TIME_MISSING
+from farmcore.apps.chat.extractor.base import NOTE_TIME_CLAMPED
 from farmcore.apps.operations import corrections, facts, spray_weather
+from farmcore.apps.operations import drafts as ops_drafts
 from farmcore.apps.operations.checks import summary as checks_summary
+from farmcore.apps.operations.manifest import MANIFEST as OPERATIONS
 from farmcore.apps.operations.register import preview_checks, register_rows
-from farmcore.core import jobs, logs
+from farmcore.core import drafts, jobs, logs
 from farmcore.core.access import (
     FarmNotSeeded,
     ScopedRepository,
@@ -35,9 +38,9 @@ from farmcore.core.access import (
 )
 from farmcore.core.clock import Clock, get_clock
 from farmcore.core.farm_location import time_zone_of
-from farmcore.core.logs import EnteredQuantity, QuantityInput, SourceInput
 from farmcore.core.manifest import Manifest
-from farmcore.core.models.canonical import DataGrant, Event, Farm, Log, LogSource
+from farmcore.core.models.canonical import AccessLog, DataGrant, Event, Farm, Log
+from farmcore.core.models.drafts import Draft
 from farmcore.core.urls import with_farm
 from farmcore.db import session_scope
 from farmcore.settings import Settings
@@ -71,6 +74,7 @@ REPLY_KEY_CONFLICT = (
 REPLY_UNKNOWN_BUTTON = "I did not understand that button."
 REPLY_NO_FARM = "The farm is not set up yet. Run `farmcore seed` first."
 REPLY_DEMO_CHANGED = "The demo changed while I was reading. Please send this spray again."
+REPLY_SEND_AGAIN = "Nothing was saved; please send it again."
 REPLY_DATED_LATER = (
     "This spray is dated after the current time (the clock was moved back), "
     "so nothing was logged. Please send it again."
@@ -92,11 +96,15 @@ CONFIRM_LINKS: tuple[tuple[str, str], ...] = (
     ("Open register", "/operations/register"),
 )
 
+# The extractor's operation type -> the Records app's draft kind (`operations.drafts`). Chat
+# requires Records, so its kinds are always there.
+KINDS = {"spray": "spray", "irrigate": "irrigation", "observation": "observation"}
+DRAFT_MANIFESTS = (OPERATIONS,)
+
 # The extractor's notes in plain words for the farmer; the raw notes stay in raw_payload.
 NOTE_FALLBACK = "fallback:"  # 06's FallbackExtractor: "fallback: <adapter> (<reason>)"
 PLAIN_NOTES = {
     NOTE_TIME_CLAMPED: "The time you said is later than now, so I used now.",
-    NOTE_TIME_MISSING: "No time was said, so I used now.",
 }
 PLAIN_FALLBACK = (
     "The main reader was not available, so I used the simple one. Please check the details."
@@ -110,25 +118,15 @@ class CaptureBinding:
     farm_id: int
     principal: object | None = None
     operator: bool = False
-    legacy_operator_web: bool = False
 
     @property
     def actor_key(self):
+        """The draft actor: the same principal `/drafts/<id>` reviews as."""
         return "operator" if self.operator else f"identity:{self.principal.identity_id}"
 
     @property
     def prefix(self):
         return f"web:farm:{self.farm_id}:{self.actor_key}:"
-
-    @property
-    def prefixes(self):
-        if self.operator and self.legacy_operator_web:
-            return (self.prefix, "web:farmer:")
-        return (self.prefix,)
-
-    @property
-    def state_key(self):
-        return f"web:farm:{self.farm_id}:{self.actor_key}"
 
 
 @dataclass(frozen=True)
@@ -157,54 +155,23 @@ def _plain_note(note: str) -> str:
 
 
 def _chat_key(chat_id: int, deps=None) -> str:
-    """Prefix of every `log_source.external_key` this chat writes (`tg:<chat>:<message>`; the
-    web assistant writes `web:farmer:<message>`)."""
+    """Prefix of every draft request key this chat writes (`tg:<chat>:<message>`; the web
+    assistant writes `web:farm:<farm>:<actor>:<message>`)."""
     if deps is not None and deps.capture_binding is not None:
         return deps.capture_binding.prefix
     return "web:farmer:" if chat_id == WEB_CHAT_ID else f"tg:{chat_id}:"
 
 
-def _state_key(deps, chat_id):
-    return deps.capture_binding.state_key if deps.capture_binding else chat_id
-
-
-def _from_chat(log: Log, chat_id: int, deps=None) -> bool:
-    binding = deps.capture_binding if deps is not None else None
-    prefixes = binding.prefixes if binding is not None else (_chat_key(chat_id),)
-    return any(s.external_key.startswith(prefixes) for s in log.sources)
-
-
-def _held_source(log: Log, external_key: str):
-    """The source written by this exact message, never another source of the same chat (a merged
-    spray holds one source per contributing message)."""
-    return next((s for s in log.sources if s.external_key == external_key), None)
-
-
-def _same_message(log: Log, external_key: str, transcript: str) -> bool:
-    """Whether the held source carries the same transcript as the current message.
-
-    The request key identifies one source: a different text under it is a conflict, never a
-    silent rewrite of the draft (or confirmed fact) the key already holds."""
-    source = _held_source(log, external_key)
-    stored = (source.raw_payload or {}).get("transcript") if source is not None else None
-    return stored is None or stored == transcript
-
-
-def _stored_notes(log: Log, external_key: str) -> list[str]:
-    source = _held_source(log, external_key)
-    notes = (source.raw_payload or {}).get("notes") if source is not None else None
-    return list(notes or [])
-
-
-def _echo(summary: str, log_id: int, notes: Sequence[str] = (), *, details="") -> Outgoing:
+def _echo(summary: str, draft: Draft, notes: Sequence[str] = (), *, details="") -> Outgoing:
     text = f"{summary} — confirm?"
     if notes:
         text += "\nNote: " + " ".join(dict.fromkeys(_plain_note(n) for n in notes))
     if details:
         text += "\n" + details
+    button = f"{draft.id}:{draft.revision}"
     return Outgoing(
         text=text,
-        buttons=[("✅ Confirm", f"{CONFIRM}:{log_id}"), ("❌ Cancel", f"{CANCEL}:{log_id}")],
+        buttons=[("✅ Confirm", f"{CONFIRM}:{button}"), ("❌ Cancel", f"{CANCEL}:{button}")],
     )
 
 
@@ -224,6 +191,37 @@ def _preview(repo, log, now, tz):
         lines.append("Checks unavailable; review the register.")
     lines.append("Preview only; checks run again after confirmation.")
     return "\n".join(lines)
+
+
+def _render(repo: ScopedRepository, draft: Draft, now: datetime, tz: str) -> tuple[str, str]:
+    """`(summary, preview)` of a complete draft, from its record staged in a savepoint that is
+    rolled back: nothing of it is committed, but the preview's reads stay in `access_log`."""
+    session = repo.session
+    before = session.scalar(select(func.max(AccessLog.id))) or 0
+    nested = session.begin_nested()
+    try:
+        log, _record, _held = ops_drafts.stage(session, draft, actor=draft.actor, now=now)
+        summary = service.log_summary(log, ZoneInfo(tz))
+        details = _preview(repo, log, now, tz)
+        reads = [
+            (a.actor, a.farm_id, a.grant_id, a.resource, a.scope, a.purpose)
+            for a in session.scalars(select(AccessLog).where(AccessLog.id > before))
+        ]
+    finally:
+        nested.rollback()
+    for actor, farm_id, grant_id, resource, scope, purpose in reads:
+        session.add(
+            AccessLog(
+                actor=actor,
+                farm_id=farm_id,
+                grant_id=grant_id,
+                resource=resource,
+                scope=scope,
+                purpose=purpose,
+            )
+        )
+    session.flush()
+    return summary, details
 
 
 def _repo(session: Session, deps: ChatDeps, chat_id: int) -> ScopedRepository:
@@ -268,8 +266,9 @@ def build_deps(
 
 
 def on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
-    """Draft a spray from a voice transcript or a text, check it, and keep it as a pending log
-    echoed with ✅ / ❌. A draft that cannot be logged gets a clarifying reply and no log."""
+    """Extract a spray, irrigation or observation from a voice transcript or a text and keep it
+    as a draft: a complete one is echoed with ✅ / ❌, an incomplete one stays an open draft
+    that names what is missing while the reply asks for it."""
     try:
         return _on_message(deps, incoming)
     except FarmNotSeeded:
@@ -289,39 +288,82 @@ def names_a_parcel(transcript: str, ctx: service.FarmContext) -> bool:
     return router.mentions(transcript, phrases)
 
 
+def _done_reply(kind: str) -> Outgoing:
+    return Outgoing(text=REPLY_ALREADY_LOGGED if kind == "spray" else REPLY_ALREADY_RECORDED)
+
+
+def _replayed(repo, draft: Draft, ref: str, transcript: str, now, tz) -> Outgoing:
+    """The answer to a message this draft already took (Telegram re-delivers unanswered ones):
+    never a second draft, and never a rewrite of the one the key holds."""
+    capture = draft.payload.get("capture") or {}
+    stored = (capture.get("messages") or {}).get(ref)
+    if stored is not None and stored != transcript:
+        return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
+    if draft.status == "confirmed":
+        return _done_reply(draft.kind)
+    problem = drafts.refusal(draft)
+    if draft.status != "open" or problem is not None:
+        return Outgoing(text=problem.reason if problem else REPLY_GONE_RECORD)
+    if draft.payload.get("missing"):
+        return Outgoing(text=capture.get("question") or REPLY_EMPTY)
+    summary, details = _render(repo, draft, now, tz)
+    return _echo(summary, draft, capture.get("notes") or (), details=details)
+
+
+def _payload(checked, missing, capture) -> dict:
+    """The draft payload: the checked record, or what is known plus the field still missing."""
+    if checked is None:
+        return {"missing": [missing], "capture": capture}
+    record = {
+        "parcel_ids": [p.id for p in checked.parcels],
+        "ts_start": checked.ts_start.isoformat(),
+        "capture": capture,
+    }
+    if isinstance(checked, service.CheckedSpray):
+        record["doses"] = [
+            {"product_id": product.id, "value": str(value), "unit": unit, "label": product.name}
+            for product, value, unit in checked.product_doses
+        ]
+    elif isinstance(checked, service.CheckedIrrigation):
+        fact = facts.IrrigationFact(
+            amount=facts.amount_text(checked.amount_value),
+            unit=checked.amount_unit,
+            basis=checked.basis,
+        )
+        record["fact"] = fact.model_dump(exclude_none=True)
+    else:
+        record["fact"] = facts.ObservationFact(text=checked.text).model_dump()
+    return record
+
+
 def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
     is_voice = incoming.transcript is not None
     transcript = ((incoming.transcript if is_voice else incoming.text) or "").strip()
     if not transcript:
         return Outgoing(text=REPLY_EMPTY)
+    actor = _actor(incoming.chat_id, deps)
     if transcript.strip().casefold() == "/confirm":
         with session_scope(deps.session_factory) as session:
             repo = _repo(session, deps, incoming.chat_id)
-            pending = [
-                log
-                for log in repo.list(Log, Log.status == "pending", scope="logs:write")
-                if _from_chat(log, incoming.chat_id, deps)
+            ready = [
+                d
+                for d in conversation.open_captures(session, repo.farm_id, actor)
+                if not d.payload.get("missing")
             ]
-            if len(pending) != 1:
+            if len(ready) != 1:
                 return Outgoing(
                     text=(
                         "No single draft to confirm. Use its Confirm button, "
                         "or /cancel and start again."
                     )
                 )
-            log_id = pending[0].id
-        return on_callback(deps, Callback(incoming.chat_id, f"{CONFIRM}:{log_id}"))
+            data = f"{CONFIRM}:{ready[0].id}:{ready[0].revision}"
+        return on_callback(deps, Callback(incoming.chat_id, data))
     if transcript.casefold().strip() in {"/cancel", "cancel", "start over"}:
         with session_scope(deps.session_factory) as session:
             repo = _repo(session, deps, incoming.chat_id)
-            now = deps.clock(session, deps.settings).now()
-            conversation.clear(session, repo.farm_id, _state_key(deps, incoming.chat_id))
-            pending = repo.list(Log, Log.status == "pending", scope="logs:write")
-            for log in pending:
-                if _from_chat(log, incoming.chat_id, deps):
-                    logs.cancel(
-                        session, log.id, _actor(incoming.chat_id, deps), now, source_app=SOURCE_APP
-                    )
+            for draft in conversation.open_captures(session, repo.farm_id, actor):
+                drafts.cancel(session, farm_id=repo.farm_id, draft_id=draft.id, actor=actor)
         return Outgoing(text=REPLY_CANCELLED)
     intent = router.intent(transcript)
     if intent == router.QUESTION:  # read-only tools; logs stay below
@@ -330,31 +372,19 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
     # Read, then close the session before the model call: no transaction waits on the network.
     with session_scope(deps.session_factory) as session:
         repo = _repo(session, deps, incoming.chat_id)
-        # Telegram re-delivers a message it thinks went unanswered: answer for the same log.
-        [seen, *_] = repo.list(
-            LogSource, LogSource.external_key == ref, scope="logs:write", limit=1
-        ) or [None]
-        if seen is not None:
-            if not _same_message(seen.log, seen.external_key, transcript):
-                return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
-            if seen.log.status != "pending":
-                return Outgoing(
-                    text=(
-                        REPLY_ALREADY_LOGGED if seen.log.type == "spray" else REPLY_ALREADY_RECORDED
-                    )
-                )
-            tz = ZoneInfo(time_zone_of(repo.session, repo.farm_id, deps.settings))
-            return _echo(
-                service.log_summary(seen.log, tz),
-                seen.log_id,
-                _stored_notes(seen.log, seen.external_key),
-                details=_preview(repo, seen.log, deps.clock(session, deps.settings).now(), str(tz)),
-            )
         now = deps.clock(session, deps.settings).now()
-        ctx = service.load_context(
-            repo, now, time_zone_of(repo.session, repo.farm_id, deps.settings)
+        tz = time_zone_of(repo.session, repo.farm_id, deps.settings)
+        seen = conversation.held(session, repo.farm_id, actor, ref)
+        if seen is not None:
+            return _replayed(repo, seen, ref, transcript, now, tz)
+        ctx = service.load_context(repo, now, tz)
+        open_draft = conversation.load(session, repo.farm_id, actor)
+        state = conversation.state(open_draft)
+        previous = (
+            (open_draft.id, open_draft.kind, open_draft.revision, open_draft.payload["capture"])
+            if open_draft is not None
+            else None
         )
-        state = conversation.load(session, repo.farm_id, _state_key(deps, incoming.chat_id), now)
         epoch = conversation.epoch(session)
         farm_id = repo.farm_id
         local_only = bool((session.get(Farm, farm_id).props or {}).get("no_model"))
@@ -371,121 +401,99 @@ def _on_message(deps: ChatDeps, incoming: Incoming) -> Outgoing:
         )
     with audit_ref(ref):
         extractor = RegexExtractor() if local_only else deps.extractor
-        draft = conversation.continue_draft(extractor.extract(request), state)
+        op = conversation.continue_draft(extractor.extract(request), state)
+    checked, missing, question = None, None, None
     try:
-        checked = service.check(draft, ctx)
+        checked = service.check(op, ctx)
     except service.Unclear as unclear:
+        question, missing = unclear.reply, unclear.missing
         history += [
             {"role": "user", "content": request.transcript},
             {"role": "assistant", "content": unclear.reply},
         ]
-        with session_scope(deps.session_factory) as session:
-            if not conversation.unchanged(session, farm_id, epoch):
-                return Outgoing(text=REPLY_DEMO_CHANGED)
-            _repo(session, deps, incoming.chat_id)
-            conversation.save(
-                session, farm_id, _state_key(deps, incoming.chat_id), now, draft, history
-            )
-        return Outgoing(text=unclear.reply)
+    kind = KINDS.get(op.type)
+    if kind is None or (checked is None and missing is None):
+        return Outgoing(text=question or REPLY_EMPTY)
+    messages = dict(previous[3]["messages"]) if previous else {}
+    messages[ref] = transcript
+    capture = {
+        "input": "voice" if is_voice else "text",
+        "transcript": request.transcript,
+        "adapter": op.adapter[:200],
+        "confidence": min(max(op.confidence, 0.0), 1.0),
+        "notes": list(checked.notes if checked is not None else op.notes)[:20],
+        "messages": dict(list(messages.items())[-20:]),
+        "operation": op.model_dump(mode="json"),
+        "history": history[-conversation.MAX_TURNS :],
+        "question": question,
+        "epoch": epoch,
+    }
+    payload = _payload(checked, missing, capture)
 
-    log_type, quantities, props = _record_fields(checked)
     with session_scope(deps.session_factory) as session:
         if not conversation.unchanged(session, farm_id, epoch):
             return Outgoing(text=REPLY_DEMO_CHANGED)
         repo = _repo(session, deps, incoming.chat_id)
-        log, held = logs.create_pending_once(
-            session,
-            farm_id=repo.farm_id,
-            type=log_type,
-            parcel_ids=[p.id for p in checked.parcels],
-            ts_start=checked.ts_start,
-            ts_end=None,
-            quantities=quantities,
-            source=SourceInput(
-                source_type="voice",
-                external_key=ref,
-                raw_payload={
-                    "transcript": transcript,
-                    # log_source.source_type has no `text` value (core_0002), so a typed
-                    # message is a `voice` source marked here.
-                    "input": "voice" if is_voice else "text",
-                    "adapter": draft.adapter,
-                    "notes": checked.notes,
-                },
-                confidence=draft.confidence,
-                precision_rank=logs.RANK_VOICE,
-            ),
-            actor=_actor(incoming.chat_id, deps),
-            occurred_at=now,
-            source_app=SOURCE_APP,
-        )
-        if held:
-            # A replay or a concurrent duplicate: never rewrite the draft or fact this key
-            # already holds. A different message under it is refused.
-            if not _same_message(log, ref, transcript):
-                return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
-            if log.status != "pending":
-                return Outgoing(
-                    text=REPLY_ALREADY_LOGGED if log.type == "spray" else REPLY_ALREADY_RECORDED
-                )
-            log_id = log.id
-            stored_notes = _stored_notes(log, ref)
-            summary = service.log_summary(log, ctx.tz)
-        else:
-            if props is not None:
-                log.props = props
-            log_id = log.id
-            stored_notes = checked.notes
-            summary = service.checked_summary(checked, ctx.tz)
-        details = _preview(repo, log, now, time_zone_of(repo.session, repo.farm_id, deps.settings))
-        conversation.clear(session, repo.farm_id, _state_key(deps, incoming.chat_id))
-
-    return _echo(summary, log_id, stored_notes, details=details)
+        try:
+            draft, created = _save(session, farm_id, actor, ref, kind, payload, previous)
+        except drafts.DraftConflict:
+            return Outgoing(text=REPLY_KEY_CONFLICT, status=409)
+        except drafts.DraftError as exc:
+            session.rollback()
+            return Outgoing(text=f"{exc.reason}\n{REPLY_SEND_AGAIN}")
+        if not created:  # a concurrent duplicate of this message already holds the draft
+            return _replayed(repo, draft, ref, transcript, now, tz)
+        if checked is None:
+            return Outgoing(text=question)
+        summary = service.checked_summary(checked, ctx.tz)
+        _summary, details = _render(repo, draft, now, tz)
+        return _echo(summary, draft, capture["notes"], details=details)
 
 
-def _record_fields(checked: service.Checked):
-    """(log type, quantities, validated app props) for a checked operation: a spray's product
-    rates, or an irrigation's amount as one entered quantity beside its props fact."""
-    if isinstance(checked, service.CheckedSpray):
-        return (
-            "spray",
-            [
-                QuantityInput(
-                    measure="rate",
-                    value=Decimal(str(value)),
-                    unit=unit,
-                    product_id=product.id,
-                    label=product.name,
-                )
-                for product, value, unit in checked.product_doses
-            ],
-            None,
-        )
-    if isinstance(checked, service.CheckedIrrigation):
-        fact = facts.IrrigationFact(
-            amount=facts.amount_text(checked.amount_value),
-            unit=checked.amount_unit,
-            basis=checked.basis,
-        )
-        amount = EnteredQuantity(checked.amount_value, checked.amount_unit)
-        return "irrigate", [amount], {facts.IRRIGATION: fact.model_dump(exclude_none=True)}
-    fact = facts.ObservationFact(text=checked.text)
-    return "observation", [], {facts.OBSERVATION: fact.model_dump()}
+def _save(session, farm_id, actor, ref, kind, payload, previous) -> tuple[Draft, bool]:
+    """Revise the clarification this message answers, or propose a new draft (cancelling a
+    clarification whose record type the message changed); `(draft, written now)`."""
+    if previous is not None:
+        draft_id, previous_kind, revision, _capture = previous
+        if previous_kind == kind:
+            draft = drafts.revise(
+                session,
+                DRAFT_MANIFESTS,
+                farm_id=farm_id,
+                draft_id=draft_id,
+                actor=actor,
+                payload=payload,
+                revision=revision,
+                ttl=conversation.TTL,
+            )
+            return draft, True
+        drafts.cancel(session, farm_id=farm_id, draft_id=draft_id, actor=actor)
+    draft, created = drafts.propose(
+        session,
+        DRAFT_MANIFESTS,
+        farm_id=farm_id,
+        actor=actor,
+        kind=kind,
+        payload=payload,
+        provenance={"source_type": "voice"},
+        request_key=ref,
+        ttl=conversation.TTL,
+    )
+    return draft, created
 
 
-def _later_merge_target(session: Session, pending: Log, now: datetime) -> Log | None:
-    """The done log `logs.confirm` would merge `pending` into, when it starts after `now`.
+def _later_merge_target(session: Session, draft: Draft, now: datetime) -> Log | None:
+    """The done spray a confirm would merge this draft into, when it starts after `now`.
 
     TODO(07): a `not_after` bound on `logs.confirm` would let this draft log on its own
     instead of waiting; until then confirming is refused rather than merged into the future.
     """
     target = logs._merge_target(
         session,
-        farm_id=pending.farm_id,
-        type=pending.type,
-        parcel_ids=[p.id for p in pending.parcels],
-        ts_start=pending.ts_start,
-        exclude_id=pending.id,
+        farm_id=draft.farm_id,
+        type="spray",
+        parcel_ids=draft.payload["parcel_ids"],
+        ts_start=datetime.fromisoformat(draft.payload["ts_start"]),
     )
     return target if target is not None and target.ts_start > now else None
 
@@ -495,93 +503,113 @@ def _parcel_names(log: Log) -> str:
 
 
 def on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
-    """`confirm:<id>` makes the pending log done (or merges a spray), commits, then re-runs
-    `advisor.evaluate` for a spray so the advice reflects it at once; an irrigation or
-    observation is confirmed without advice or stock work. `cancel:<id>` discards it."""
+    """`confirm:<draft>:<revision>` records the reviewed revision through `drafts.confirm` (the
+    same service as `/drafts/<id>`), commits, then re-runs `advisor.evaluate` for a spray so the
+    advice reflects it at once; an irrigation or observation is confirmed without advice or
+    stock work. `cancel:<draft>:<revision>` discards it."""
     try:
         return _on_callback(deps, callback)
     except FarmNotSeeded:
         return Outgoing(text=REPLY_NO_FARM)
 
 
+def _migrated_draft(session: Session, farm_id: int, actor: str, log_id: int) -> int | None:
+    """The draft the upgrade made from pending log `log_id` for this actor (`core_0011`)."""
+    return session.scalar(
+        select(Draft.id).where(
+            Draft.farm_id == farm_id,
+            Draft.actor == actor,
+            Draft.provenance["details"]["migrated_from_log"].as_integer() == log_id,
+        )
+    )
+
+
 def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
-    action, _, raw_id = callback.data.partition(":")
+    action, _, rest = callback.data.partition(":")
+    raw_id, _, raw_revision = rest.partition(":")
+    # A button names the draft and the revision the farmer saw. A button sent before the
+    # upgrade to drafts (`confirm:<log id>`) names the pending log its draft was migrated from.
+    legacy = raw_revision == ""
     if action not in (CONFIRM, CANCEL) or not raw_id.isdigit():
         return Outgoing(text=REPLY_UNKNOWN_BUTTON)
-    log_id = int(raw_id)
-    if not 1 <= log_id < 2**63:
+    if not legacy and not raw_revision.isdigit():
+        return Outgoing(text=REPLY_UNKNOWN_BUTTON)
+    draft_id, revision = int(raw_id), 1 if legacy else int(raw_revision)
+    if not 1 <= draft_id < 2**63 or not 1 <= revision < 2**31:
         return Outgoing(text=REPLY_GONE)
     actor = _actor(callback.chat_id, deps)
     with session_scope(deps.session_factory) as session:
         repo = _repo(session, deps, callback.chat_id)
         tz = ZoneInfo(time_zone_of(repo.session, repo.farm_id, deps.settings))
         now = deps.clock(session, deps.settings).now()
-        log = repo.get(Log, log_id, scope="logs:write")  # farm-scoped: another farm's is None
-        # Log ids are sequential: only the chat that sent the message may act on its draft.
-        if log is None:
+        if legacy:
+            draft_id = _migrated_draft(session, repo.farm_id, actor, draft_id)
+            if draft_id is None:
+                return Outgoing(text=REPLY_GONE)
+        try:  # only the chat (or member) that proposed it, on its farm, sees a draft
+            draft = drafts.get(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
+        except drafts.DraftNotFound:
             return Outgoing(text=REPLY_GONE)
-        if not _from_chat(log, callback.chat_id, deps):
-            return Outgoing(text=REPLY_GONE if log.type == "spray" else REPLY_GONE_RECORD)
-        is_spray = log.type == "spray"
-        if log.status != "pending":
-            return Outgoing(text=REPLY_ALREADY_LOGGED if is_spray else REPLY_ALREADY_RECORDED)
-        try:
-            if action == CANCEL:
-                logs.cancel(session, log_id, actor, now, source_app=SOURCE_APP)
-                return Outgoing(text=REPLY_CANCELLED)
-            # Replay safety (logs.py leaves clock bounds to callers): the clock may have been
-            # stepped back since the echo, past the draft or past a spray it would merge into.
-            if log.ts_start > now:
-                logs.cancel(session, log_id, actor, now, source_app=SOURCE_APP)
-                return Outgoing(text=REPLY_DATED_LATER if is_spray else REPLY_DATED_LATER_RECORD)
-            later = _later_merge_target(session, log, now) if is_spray else None
-            # Saved weather belongs to this draft's own receipt: its time and parcels, before a
-            # merge moves the source onto a log with another time and parcel union.
-            # A draft with no stated time got "now" (NOTE_TIME_MISSING): its weather time is
-            # unknown, never the replay hour.
-            receipts = (
-                [
-                    spray_weather.Receipt(
-                        s.id,
-                        None
-                        if NOTE_TIME_MISSING in (s.raw_payload or {}).get("notes", [])
-                        else log.ts_start,
-                        tuple(p.id for p in log.parcels),
-                    )
-                    for s in log.sources
-                ]
-                if is_spray
-                else []
-            )
-            if later is not None:
-                return Outgoing(
-                    text=(
-                        f"A spray on {_parcel_names(later)} is logged at "
-                        f"{later.ts_start.astimezone(tz):%d %b %H:%M}, later than the current "
-                        "time (the clock was moved back). Move the clock forward to confirm "
-                        "this one, or cancel it."
-                    ),
-                    buttons=[("❌ Cancel", f"{CANCEL}:{log_id}")],
-                )
-            log, merged = logs.confirm(session, log_id, actor, now, source_app=SOURCE_APP)
-        except LookupError:  # a concurrent cancel won the row lock
+        is_spray = draft.kind == "spray"
+        if draft.status == "confirmed":
+            return _done_reply(draft.kind)
+        if action == CANCEL:
+            try:
+                drafts.cancel(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
+            except drafts.DraftError as exc:
+                return Outgoing(text=exc.reason)
+            return Outgoing(text=REPLY_CANCELLED)
+        if draft.status == "cancelled":
             return Outgoing(text=REPLY_GONE if is_spray else REPLY_GONE_RECORD)
-        except ValueError:  # a concurrent confirm won the row lock
-            return Outgoing(text=REPLY_ALREADY_LOGGED if is_spray else REPLY_ALREADY_RECORDED)
+        problem = drafts.refusal(draft, revision)  # expired, or changed since this button
+        if problem is not None:
+            return Outgoing(text=problem.reason)
+        if draft.payload.get("missing"):
+            return Outgoing(text=(draft.payload.get("capture") or {}).get("question") or "")
+        # Replay safety (logs.py leaves clock bounds to callers): the clock may have been
+        # stepped back since the echo, past the draft or past a spray it would merge into.
+        if datetime.fromisoformat(draft.payload["ts_start"]) > now:
+            try:  # a concurrent confirm or cancel may have closed it meanwhile
+                drafts.cancel(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
+            except drafts.DraftClosed:
+                draft = drafts.get(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
+                if draft.status == "confirmed":
+                    return _done_reply(draft.kind)
+            return Outgoing(text=REPLY_DATED_LATER if is_spray else REPLY_DATED_LATER_RECORD)
+        later = _later_merge_target(session, draft, now) if is_spray else None
+        if later is not None:
+            return Outgoing(
+                text=(
+                    f"A spray on {_parcel_names(later)} is logged at "
+                    f"{later.ts_start.astimezone(tz):%d %b %H:%M}, later than the current "
+                    "time (the clock was moved back). Move the clock forward to confirm "
+                    "this one, or cancel it."
+                ),
+                buttons=[("❌ Cancel", f"{CANCEL}:{draft_id}:{revision}")],
+            )
+        try:
+            # A refused confirm rolls back to here: no pending log is ever committed.
+            with session.begin_nested():
+                draft, recorded = drafts.confirm(
+                    session,
+                    DRAFT_MANIFESTS,
+                    farm_id=repo.farm_id,
+                    draft_id=draft_id,
+                    actor=actor,
+                    revision=revision,
+                    now=now,
+                    services={ops_drafts.WEATHER_READER: deps.weather_reader},
+                )
+        except drafts.DraftError as exc:
+            return Outgoing(text=exc.reason)
+        if not recorded:  # a concurrent or retried confirm won: it recorded once
+            return _done_reply(draft.kind)
+        log = repo.get(Log, draft.result_id, scope="logs:write")
+        merged = any(s.external_key != f"draft:{draft.id}" for s in log.sources)
         saved_id = log.id
         farm_id = repo.farm_id
         grant_id = repo.grant.id
         if is_spray:
-            # Outside the race handlers, before this transaction commits: a capture error rolls
-            # the confirm back instead of reading as "already logged". Only receipts that kept.
-            kept = {s.id for s in log.sources}
-            spray_weather.capture(
-                repo,
-                [r for r in receipts if r.source_id in kept],
-                reader=deps.weather_reader,
-                data_now=now,
-                captured_at=datetime.now(UTC),
-            )
             lead = "✅ Added to the spray already logged" if merged else "✅ Logged"
             text = f"{lead}: {service.log_summary(log, tz)}."
             if not merged:

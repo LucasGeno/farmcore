@@ -2,7 +2,6 @@
 
 import itertools
 from datetime import UTC, datetime, timedelta
-from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
@@ -10,14 +9,28 @@ from sqlalchemy import select
 from farmcore.apps.chat.dto import Callback
 from farmcore.apps.chat.extractor import RegexExtractor
 from farmcore.apps.chat.handlers import on_callback, on_message
-from farmcore.core.models.canonical import Log, Product
+from farmcore.core.models.canonical import Farm, Log, Product
+from farmcore.core.models.drafts import Draft
 from tests.apps.chat.test_handlers import CHAT, COPPER, deps, seed_farm, voice
+
+
+def open_draft(session) -> Draft:
+    [draft] = session.scalars(
+        select(Draft).where(Draft.status == "open").execution_options(populate_existing=True)
+    )
+    return draft
+
+
+def doses(draft: Draft) -> list[tuple[str, float]]:
+    return sorted((d["label"], float(d["value"])) for d in draft.payload["doses"])
 
 
 def test_clarification_keeps_parcel_dose_and_time_across_recreated_dependencies(
     session_factory, session, settings
 ):
-    seed_farm(session, settings)
+    """The unfinished capture lives only as one open draft, revised on each turn; never in
+    `farm.props`."""
+    ids = seed_farm(session, settings)
 
     def send(text, message_id):
         # Recreate dependencies: history must survive a bot restart, rather than live in a dict.
@@ -27,6 +40,8 @@ def test_clarification_keeps_parcel_dose_and_time_across_recreated_dependencies(
 
     first = send("I sprayed this morning, 2 kg per hectare", 101)
     assert first.text.startswith("Which parcel")
+    asking = open_draft(session)
+    assert (asking.payload["missing"], asking.revision) == (["parcel"], 1)
     second = send("P5", 102)
     assert second.text.startswith("Which product")
     third = send("copper", 103)
@@ -34,10 +49,13 @@ def test_clarification_keeps_parcel_dose_and_time_across_recreated_dependencies(
     assert third.buttons, third.text
     assert "P5 Les Granges" in third.text
     assert "2 kg/ha" in third.text
-    [log] = list(session.scalars(select(Log)))
-    assert log.status == "pending"
-    assert [p.alias for p in log.parcels] == ["P5"]
-    assert [(q.label, float(q.value), q.unit) for q in log.quantities] == [(COPPER, 2, "kg/ha")]
+    assert list(session.scalars(select(Log))) == []
+    draft = open_draft(session)
+    assert (draft.id, draft.revision, draft.payload["missing"]) == (asking.id, 3, [])
+    assert draft.payload["parcel_ids"] == [ids["P5"]]
+    assert doses(draft) == [(COPPER, 2)]
+    farm = session.get(Farm, draft.farm_id, populate_existing=True)
+    assert "clarifications" not in (farm.props or {}).get("chat", {})
 
     on_callback(
         deps(session_factory, settings, RegexExtractor()),
@@ -58,8 +76,7 @@ def test_separate_rates_survive_a_missing_parcel_clarification(session_factory, 
     reply = on_message(d, voice("P5", 502))
 
     assert reply.buttons, reply.text
-    [log] = list(session.scalars(select(Log)))
-    assert sorted((q.label, float(q.value)) for q in log.quantities) == [(COPPER, 2), (SULPHUR, 1)]
+    assert doses(open_draft(session)) == [(COPPER, 2), (SULPHUR, 1)]
 
 
 def test_product_rate_and_label_warning_are_visible_before_confirmation(
@@ -74,8 +91,7 @@ def test_product_rate_and_label_warning_are_visible_before_confirmation(
 
     assert f"{COPPER}: 2 kg/ha" in reply.text
     assert "Warning: Copper dose 2 kg/ha, above the label max 1" in reply.text
-    [log] = list(session.scalars(select(Log)))
-    assert log.status == "pending"
+    assert list(session.scalars(select(Log))) == []
     assert reply.buttons[0][0] == "✅ Confirm"
 
     result = on_callback(d, Callback(chat_id=CHAT, data=reply.buttons[0][1]))
@@ -169,47 +185,47 @@ def test_reset_during_extraction_does_not_restore_old_input(session_factory, ses
 
 @pytest.mark.parametrize("parts", list(itertools.permutations(["P5", "copper", "2 kg/ha at 6"])))
 def test_information_can_arrive_in_any_order(session_factory, session, settings, parts):
-    seed_farm(session, settings)
+    ids = seed_farm(session, settings)
     d = deps(session_factory, settings, RegexExtractor())
     for message_id, text in enumerate(parts, 701):
         reply = on_message(d, voice(text, message_id))
     assert reply.buttons, reply.text
-    [log] = list(session.scalars(select(Log)))
-    assert [p.alias for p in log.parcels] == ["P5"]
-    assert [(q.label, float(q.value)) for q in log.quantities] == [(COPPER, 2)]
+    draft = open_draft(session)
+    assert draft.payload["parcel_ids"] == [ids["P5"]]
+    assert doses(draft) == [(COPPER, 2)]
 
 
 def test_clarifications_are_private_to_the_chat_and_expire(session_factory, session, settings):
     from dataclasses import replace
 
-    from farmcore.apps.chat import conversation
-
     seed_farm(session, settings)
     d = deps(session_factory, settings, RegexExtractor())
-    stamp = datetime(2026, 10, 17, 21, tzinfo=UTC)
-    with patch.object(conversation, "datetime", wraps=datetime) as clock:
-        clock.now.return_value = stamp
-        on_message(d, voice("P5 copper", 801))
-        other = on_message(d, replace(voice("2 kg/ha", 802), chat_id=123))
-        assert other.text.startswith("Which parcel")
-        clock.now.return_value = stamp + timedelta(minutes=16)
-        reply = on_message(d, voice("2 kg/ha", 803))
-        assert reply.text.startswith("Which parcel")
+    on_message(d, voice("P5 copper", 801))
+    other = on_message(d, replace(voice("2 kg/ha", 802), chat_id=123))
+    assert other.text.startswith("Which parcel")
+    asking = session.scalar(select(Draft).where(Draft.actor == f"chat:{CHAT}"))
+    # The chat's 15-minute clarification window is the draft's own expiry.
+    assert asking.expires_at - datetime.now(UTC) <= timedelta(minutes=15)
+    asking.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    session.commit()
+
+    reply = on_message(d, voice("2 kg/ha", 803))
+
+    assert reply.text.startswith("Which parcel")
     assert list(session.scalars(select(Log))) == []
 
 
 def test_correction_replaces_old_parcel_and_question_does_not_become_a_spray(
     session_factory, session, settings
 ):
-    seed_farm(session, settings)
+    ids = seed_farm(session, settings)
     d = deps(session_factory, settings, RegexExtractor())
     on_message(d, voice("P5 copper", 901))
     question = on_message(d, voice("Should I spray P6?", 902))
     assert not question.buttons
     reply = on_message(d, voice("Actually P6, 2 kg/ha at 6", 903))
     assert reply.buttons, reply.text
-    [log] = list(session.scalars(select(Log)))
-    assert [p.alias for p in log.parcels] == ["P6"]
+    assert open_draft(session).payload["parcel_ids"] == [ids["P6"]]
 
 
 def test_vertex_receives_only_bounded_unfinished_history_and_keeps_product_rates(
@@ -231,6 +247,7 @@ def test_vertex_receives_only_bounded_unfinished_history_and_keeps_product_rates
         draft = {"parcels": ["P5"], "products": [], "ts_start": None}
         if len(payloads) == 5:
             draft.update(
+                ts_start="2024-04-10T06:00",
                 products=[COPPER, SULPHUR],
                 product_doses=[
                     {"product": COPPER, "value": 2, "unit": "kg/ha"},
@@ -268,8 +285,7 @@ def test_missing_second_product_dose_is_asked_for_and_remembered(
     reply = on_message(d, voice("1 kg/ha", 1102))
 
     assert reply.buttons, reply.text
-    [log] = list(session.scalars(select(Log)))
-    assert sorted((q.label, float(q.value)) for q in log.quantities) == [(COPPER, 2), (SULPHUR, 1)]
+    assert doses(open_draft(session)) == [(COPPER, 2), (SULPHUR, 1)]
 
 
 def test_keyboard_confirmation_only_confirms_one_unambiguous_chat_owned_draft(

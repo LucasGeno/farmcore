@@ -8,7 +8,11 @@ record. "Draft" (not yet confirmed) is distinct from "planned" (planned work).
 - **Scope.** A draft is visible only on its farm, and only to the principal that proposed it; a
   draft an agent proposed (`token:<id>`) is reviewed by the owner who issued that token, stored on
   the draft at propose time (`reviewer_identity_id`; the token's grant must be on the draft's
-  farm). Anyone else gets `DraftNotFound` (a 404), so a numeric id alone grants nothing.
+  farm). A Telegram chat's draft (`chat:<id>`) is also reviewed on the web by the owners of the
+  farm the chat is linked to (`/start` links chats to the installation's farm, the draft's
+  farm): the operator, and any member whose owner membership is active, checked live at each
+  review so a revoked or disabled owner loses it at once.
+  Anyone else gets `DraftNotFound` (a 404), so a numeric id alone grants nothing.
 - **Agents only propose.** A `token:<id>` actor may read its own draft but never confirm, cancel
   or edit it (`DraftForbidden`): confirmation is the farmer's action in FarmCore.
 - **Confirm and cancel** run under the farm's operations lock (`logs.lock_farm`) and a row lock,
@@ -42,7 +46,7 @@ from farmcore.core.logs import lock_farm
 from farmcore.core.manifest import JobContext, Manifest, collect_draft_kinds, import_string
 from farmcore.core.models.canonical import DataGrant
 from farmcore.core.models.drafts import Draft
-from farmcore.core.models.identity import AccessToken
+from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIdentity
 
 # Product choice, `assumed` (open decision): an import or agent draft stays reviewable a week.
 DEFAULT_TTL = timedelta(days=7)
@@ -51,6 +55,8 @@ MAX_PAYLOAD_BYTES = 64_000
 # Provenance is copied onto the confirmed record's `log_source`; keep it a receipt, not a file.
 MAX_PROVENANCE_BYTES = 8_000
 TOKEN = "token"
+CHAT = "chat"
+OPERATOR = "operator"
 
 
 class DraftError(Exception):
@@ -205,9 +211,40 @@ def _token_issuer(session: Session, farm_id: int, actor: str) -> int | None:
 def reviewers(draft: Draft) -> set[str]:
     """The actors who may open `draft` (a token only reads; see `_load`)."""
     allowed = {draft.actor}
+    if draft.actor.partition(":")[0] == CHAT:
+        allowed.add(OPERATOR)
     if draft.reviewer_identity_id is not None:
         allowed.add(f"identity:{draft.reviewer_identity_id}")
     return allowed
+
+
+def _farm_owner(session: Session, farm_id: int, actor: str) -> bool:
+    """Whether `actor` is `identity:<id>` with an active owner membership on the farm (the
+    rule of `access.require_farm_owner`)."""
+    kind, _, raw_id = actor.partition(":")
+    if kind != "identity" or not raw_id.isdigit() or int(raw_id) >= 2**63:
+        return False
+    return (
+        session.scalar(
+            select(FarmMembership.id)
+            .join(LocalIdentity)
+            .where(
+                FarmMembership.farm_id == farm_id,
+                FarmMembership.identity_id == int(raw_id),
+                FarmMembership.role == "owner",
+                FarmMembership.revoked_at.is_(None),
+                LocalIdentity.disabled_at.is_(None),
+            )
+        )
+        is not None
+    )
+
+
+def may_review(session: Session, draft: Draft, actor: str) -> bool:
+    """Whether `actor` may open `draft`: a stored reviewer, or an owner of a chat draft's farm."""
+    if actor in reviewers(draft):
+        return True
+    return draft.actor.partition(":")[0] == CHAT and _farm_owner(session, draft.farm_id, actor)
 
 
 def _load(
@@ -223,7 +260,7 @@ def _load(
         lock_farm(session, farm_id)
         stmt = stmt.with_for_update()
     draft = session.scalar(stmt.execution_options(populate_existing=True))
-    if draft is None or actor not in reviewers(draft):
+    if draft is None or not may_review(session, draft, actor):
         raise DraftNotFound("Draft not found.")
     return draft
 
@@ -266,8 +303,10 @@ def revise(
     actor: str,
     payload: dict[str, Any],
     revision: int,
+    ttl: timedelta | None = None,
 ) -> Draft:
-    """Replace an open draft's payload (validated again) and bump its revision."""
+    """Replace an open draft's payload (validated again) and bump its revision; `ttl` also
+    restarts its expiry (a conversation's draft lives a while after its last turn)."""
     draft = _load(session, farm_id, draft_id, actor, lock=True)
     if draft.status != "open":
         raise DraftClosed("Only an open draft can be edited.")
@@ -276,6 +315,10 @@ def revise(
         raise problem
     draft.payload = _validated(session, manifests, farm_id, draft.kind, payload)
     draft.revision += 1
+    if ttl is not None:
+        if not timedelta(0) < ttl <= MAX_TTL:
+            raise DraftInvalid("A draft expires within 30 days.")
+        draft.expires_at = wall_now() + ttl
     session.flush()
     return draft
 
@@ -289,11 +332,13 @@ def confirm(
     actor: str,
     revision: int,
     now: datetime,
+    services: dict[str, Any] | None = None,
 ) -> tuple[Draft, bool]:
     """Record the draft through its kind's confirm service; returns `(draft, recorded_now)`.
 
     A draft already confirmed returns `(draft, False)` with its record unchanged, so a retried
-    or concurrent confirm never records twice. `now` is the farm clock, for the record."""
+    or concurrent confirm never records twice. `now` is the farm clock, for the record;
+    `services` (the process's composed readers, e.g. saved spray weather) go to the kind."""
     draft = _load(session, farm_id, draft_id, actor, lock=True)
     if draft.status == "confirmed":
         return draft, False
@@ -302,7 +347,7 @@ def confirm(
         raise problem
     service = import_string(_kind(manifests, draft.kind).confirm or "")
     try:
-        model, record_id = service(session, draft, actor=actor, now=now)
+        model, record_id = service(session, draft, actor=actor, now=now, services=services or {})
     except ValueError as exc:
         raise DraftInvalid(str(exc)) from exc
     draft.status = "confirmed"

@@ -29,6 +29,7 @@ from farmcore.apps.chat.transcribe import FakeTranscriber, Transcript
 from farmcore.core.clock import set_replay
 from farmcore.core.models.canonical import Farm, Log, Parcel, Product
 from farmcore.core.seed import ensure_default_farm
+from tests.apps.chat.test_handlers import drafts_of
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW_LOCAL = datetime(2024, 4, 10, 6, 0, tzinfo=PARIS)
@@ -181,7 +182,7 @@ def handle(coro) -> None:
     asyncio.run(coro)
 
 
-def pending_logs(session) -> list[Log]:
+def pending_logs(session) -> list[Log]:  # every log; a capture is a draft until ✅
     session.expire_all()
     return list(session.query(Log).order_by(Log.id))
 
@@ -194,13 +195,17 @@ def test_text_message_reaches_the_handler_and_the_echo_is_sent_with_buttons(
 
     handle(rt.on_text(text_update("P1 copper 2 kg this morning"), SimpleNamespace(bot=bot)))
 
-    [log] = pending_logs(session)
-    assert (log.status, [p.id for p in log.parcels]) == ("pending", [ids["P1"]])
+    assert pending_logs(session) == []
+    [draft] = drafts_of(session)
+    assert (draft.status, draft.payload["parcel_ids"]) == ("open", [ids["P1"]])
     [msg] = sender.sent
     assert msg.chat_id == CHAT
     assert msg.text.splitlines()[0].endswith("— confirm?")
     assert f"{COPPER}: 2 kg/ha" in msg.text
-    assert msg.buttons == [("✅ Confirm", f"confirm:{log.id}"), ("❌ Cancel", f"cancel:{log.id}")]
+    assert msg.buttons == [
+        ("✅ Confirm", f"confirm:{draft.id}:1"),
+        ("❌ Cancel", f"cancel:{draft.id}:1"),
+    ]
 
 
 def test_voice_note_is_transcribed_from_a_temp_file_that_is_then_deleted(
@@ -218,14 +223,14 @@ def test_voice_note_is_transcribed_from_a_temp_file_that_is_then_deleted(
     assert not path.exists()
     [(_, hints)] = transcriber.calls
     assert {"Le Plateau", "Les Granges", COPPER} <= set(hints)
-    [log] = pending_logs(session)
-    assert log.sources[0].raw_payload["transcript"] == said
+    [draft] = drafts_of(session)
+    assert draft.payload["capture"]["transcript"] == said
     [msg] = sender.sent
     first, *rest = msg.text.splitlines()
     assert said in first  # the transcript comes first
     assert rest[0].endswith("— confirm?")
     assert f"{COPPER}: 2 kg/ha" in msg.text
-    assert msg.buttons[0] == ("✅ Confirm", f"confirm:{log.id}")
+    assert msg.buttons[0] == ("✅ Confirm", f"confirm:{draft.id}:1")
 
 
 def test_voice_temp_file_is_deleted_when_transcription_fails(
@@ -354,8 +359,7 @@ def test_after_start_the_same_chat_is_heard(session_factory, session, settings, 
 
     assert sender.sent[-1].text.splitlines()[0].endswith("— confirm?")
     assert f"{COPPER}: 2 kg/ha" in sender.sent[-1].text
-    [log] = pending_logs(session)
-    assert log.status == "pending"
+    assert [d.status for d in drafts_of(session)] == ["open"]
 
 
 def test_text_before_the_farm_is_seeded_still_says_seed_first(

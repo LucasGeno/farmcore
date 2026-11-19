@@ -33,6 +33,7 @@ from tests.apps.chat.test_handlers import (
     SQUARE,
     count,
     deps,
+    drafts_of,
     events,
     fake,
     logs_of,
@@ -104,23 +105,24 @@ def test_irrigation_preview_and_confirm_keep_the_entered_amount_unit_and_basis(
 
     echo = on_message(d, voice("Irrigated P5 20 mm gross at 6", 11))
 
-    [log] = logs_of(session)
-    assert (log.type, log.status) == ("irrigate", "pending")
-    assert log.quantities == []
-    assert log.props == {"irrigation": {"amount": "20", "unit": "mm", "basis": "gross"}}
+    [draft] = drafts_of(session)
+    assert (draft.kind, draft.status, logs_of(session)) == ("irrigation", "open", [])
+    assert draft.payload["fact"] == {"amount": "20", "unit": "mm", "basis": "gross"}
     assert echo.text.splitlines()[0] == (
         "P5 Les Granges · irrigation 20 mm gross · 10 Apr 06:00 — confirm?"
     )
     assert "No spray stock is used and no advice is calculated for irrigation." in echo.text
     assert "Checks" not in echo.text
     assert echo.buttons == [
-        ("✅ Confirm", f"confirm:{log.id}"),
-        ("❌ Cancel", f"cancel:{log.id}"),
+        ("✅ Confirm", f"confirm:{draft.id}:1"),
+        ("❌ Cancel", f"cancel:{draft.id}:1"),
     ]
 
     out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
 
-    assert session.get(Log, log.id, populate_existing=True).status == "done"
+    [log] = logs_of(session)
+    assert (log.type, log.status, log.quantities) == ("irrigate", "done", [])
+    assert log.props == {"irrigation": {"amount": "20", "unit": "mm", "basis": "gross"}}
     assert out.text.startswith("✅ Logged: P5 Les Granges · irrigation 20 mm gross · 10 Apr 06:00.")
     assert "No spray stock was used and no advice was calculated." in out.text
     assert "Advice updated" not in out.text and "Checks" not in out.text
@@ -163,8 +165,8 @@ def test_irrigation_without_a_stated_basis_says_so_and_never_assumes_one(
 
     echo = on_message(d, voice("Irrigated P5 12 m3 at 6", 12))
 
-    [log] = logs_of(session)
-    assert log.props == {"irrigation": {"amount": "12", "unit": "m3"}}
+    [draft] = drafts_of(session)
+    assert draft.payload["fact"] == {"amount": "12", "unit": "m3", "basis": None}
     assert echo.text.splitlines()[0] == (
         "P5 Les Granges · irrigation 12 m3, basis not stated · 10 Apr 06:00 — confirm?"
     )
@@ -182,10 +184,8 @@ def test_observation_preview_and_confirm_keep_what_was_seen(session_factory, ses
 
     echo = on_message(d, voice(transcript, 13))
 
-    [log] = logs_of(session)
-    assert (log.type, log.status) == ("observation", "pending")
-    assert log.quantities == [] and count(session, TypedQuantity) == 0
-    assert log.props == {"observation": {"text": transcript}}
+    [draft] = drafts_of(session)
+    assert (draft.kind, draft.payload["fact"]) == ("observation", {"text": transcript})
     assert echo.text.splitlines()[0] == (
         f"P5 Les Granges · observation: {transcript} · 10 Apr 06:00 — confirm?"
     )
@@ -193,7 +193,9 @@ def test_observation_preview_and_confirm_keep_what_was_seen(session_factory, ses
 
     out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
 
-    assert session.get(Log, log.id, populate_existing=True).status == "done"
+    [log] = logs_of(session)
+    assert (log.status, log.props) == ("done", {"observation": {"text": transcript}})
+    assert log.quantities == [] and count(session, TypedQuantity) == 0
     assert out.text.startswith(f"✅ Logged: P5 Les Granges · observation: {transcript}")
     assert "Advice updated" not in out.text
 
@@ -277,7 +279,7 @@ def test_a_redelivered_irrigation_and_a_second_confirm_change_nothing(
     first = on_message(d, voice("Irrigated P1 20 mm gross at 6", 16))
     again = on_message(d, voice("Irrigated P1 20 mm gross at 6", 16))
 
-    assert count(session, Log) == 1
+    assert len(drafts_of(session)) == 1
     assert again.buttons == first.buttons
 
     on_callback(d, Callback(chat_id=CHAT, data=first.buttons[0][1]))
@@ -332,7 +334,7 @@ def test_an_irrigation_belongs_to_the_farm_bound_to_the_capture(session_factory,
     [log] = logs_of(session)
     assert log.farm_id == other.id and log.farm_id != farm_id
     assert [p.id for p in log.parcels] == [parcel.id]
-    assert log.sources[0].external_key.startswith(f"web:farm:{other.id}:")
+    assert drafts_of(session)[0].request_key.startswith(f"web:farm:{other.id}:")
 
 
 def test_an_irrigation_dated_after_the_clock_is_clamped_to_now(session_factory, session, settings):
@@ -350,9 +352,9 @@ def test_an_irrigation_dated_after_the_clock_is_clamped_to_now(session_factory, 
 
     out = on_message(d, Incoming(CHAT, "Irrigated P1 20 mm at 15", None, 20))
 
-    [log] = logs_of(session)
-    assert log.ts_start == NOW_LOCAL
-    assert "time clamped to now" in log.sources[0].raw_payload["notes"]
+    [draft] = drafts_of(session)
+    assert datetime.fromisoformat(draft.payload["ts_start"]) == NOW_LOCAL
+    assert "time clamped to now" in draft.payload["capture"]["notes"]
     assert "The time you said is later than now, so I used now." in out.text
 
 
@@ -373,8 +375,8 @@ def test_a_large_irrigation_amount_is_previewed_and_stored_exactly(
 
     echo = on_message(d, voice(f"Irrigated P5 {amount} L gross at 6", 23))
 
-    [log] = logs_of(session)
-    assert log.props == {"irrigation": {"amount": amount, "unit": "L", "basis": "gross"}}
+    [draft] = drafts_of(session)
+    assert draft.payload["fact"] == {"amount": amount, "unit": "L", "basis": "gross"}
     assert f"irrigation {amount} L gross" in echo.text
     out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
     assert f"irrigation {amount} L gross" in out.text
@@ -383,11 +385,12 @@ def test_a_large_irrigation_amount_is_previewed_and_stored_exactly(
 @pytest.mark.parametrize(
     ("text", "question"),
     [
+        ("P1 copper 2 kg/ha", "When did you spray?"),  # R4: a spray's date is never guessed
         ("Irrigated P1 20 mm gross", "When did you irrigate?"),
         ("Observed powdery mildew on P1", "When did you observe this?"),
     ],
 )
-def test_a_fact_without_a_date_asks_before_preview_and_then_logs(
+def test_a_record_without_a_date_asks_before_preview_and_then_logs(
     session_factory, session, settings, text, question
 ):
     seed_farm(session, settings)
@@ -402,6 +405,6 @@ def test_a_fact_without_a_date_asks_before_preview_and_then_logs(
     reply = on_message(d, voice("yesterday", 25))
 
     assert reply.buttons, reply.text
-    [log] = logs_of(session)
-    assert log.ts_start == NOW_LOCAL.replace(day=9, hour=8)
+    [draft] = drafts_of(session)
+    assert datetime.fromisoformat(draft.payload["ts_start"]) == NOW_LOCAL.replace(day=9, hour=8)
     assert reply.text.splitlines()[0].endswith("· 09 Apr 08:00 — confirm?")

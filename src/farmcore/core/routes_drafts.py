@@ -97,6 +97,9 @@ def confirm(
             actor=request_actor(request),
             revision=revision,
             now=now,
+            services={
+                "spray_weather_reader": getattr(request.app.state, "spray_weather_reader", None)
+            },
         )
     except drafts.DraftError as exc:
         if exc.status_code == 404:

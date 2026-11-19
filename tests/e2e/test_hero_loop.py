@@ -43,6 +43,7 @@ from farmcore.apps.operations import seed as ops_seed
 from farmcore.core import ext_ids, jobs
 from farmcore.core.access import default_farm
 from farmcore.core.models.canonical import Parcel, Product
+from farmcore.core.models.drafts import Draft
 from tests.apps.advisor import scenes
 from tests.apps.advisor.scenes import local
 
@@ -251,7 +252,8 @@ def run_to_confirmed_voice_log(d: Demo) -> int:
     # Test settings use a localhost base URL: the links ride in the text (no URL buttons).
     assert "Open map: http://localhost:8000/fields/" in reply
     assert "Open register: http://localhost:8000/operations/register" in reply
-    return int(confirm.removeprefix("confirm:"))
+    draft_id = int(confirm.split(":")[1])  # the button names the draft and its revision
+    return d.session.get(Draft, draft_id, populate_existing=True).result_id
 
 
 def test_hero_loop_scene_b_seed_10_april_voice_log_then_15_may_washed_off(demo) -> None:

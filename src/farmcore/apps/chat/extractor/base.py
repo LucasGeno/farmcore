@@ -47,13 +47,11 @@ SYSTEM_INSTRUCTION = (
 )
 
 OPERATION_TYPES = ("spray", "irrigate", "observation")
-FACT_TYPES = ("irrigate", "observation")
 DOSE_UNITS = ("kg/ha", "L/ha")
 # The units an irrigation amount may be entered in; never converted on the way in.
 IRRIGATION_UNITS = ("mm", "m3", "L")
 IRRIGATION_BASES = ("gross", "net")
 NOTE_TIME_CLAMPED = "time clamped to now"
-NOTE_TIME_MISSING = "no time stated; using now"
 
 
 class ParcelRef(BaseModel):
@@ -159,9 +157,8 @@ def fold(text: str) -> str:
 
 def finalize(draft: DraftOperation, req: ExtractRequest) -> DraftOperation:
     """Hold every adapter's draft to the seam: parcels are known aliases, products are exact
-    shortlist names (others dropped with a note) and `ts_start <= now_local`. A spray with no
-    stated time gets now with a note (as before); an irrigation or observation keeps `None`, so
-    the service asks for the date before any preview."""
+    shortlist names (others dropped with a note) and `ts_start <= now_local`. A record with no
+    stated time keeps `None`, so the service asks for the date before any preview."""
     notes = list(draft.notes)
 
     parcels_by_key: dict[str, str] = {}
@@ -186,21 +183,8 @@ def finalize(draft: DraftOperation, req: ExtractRequest) -> DraftOperation:
             products.append(name)
 
     ts_start = draft.ts_start
-    if ts_start is None:
-        if draft.type in FACT_TYPES:
-            # A fact is not previewed on an assumed date: `service.check` asks for it first.
-            return draft.model_copy(
-                update={
-                    "parcels": parcels,
-                    "products": products,
-                    "ts_start": None,
-                    "notes": notes,
-                    **fact_fields(draft),
-                }
-            )
-        ts_start = req.now_local
-        notes.append(NOTE_TIME_MISSING)
-    else:
+    # No record is previewed on an assumed date: `service.check` asks for a missing one (R4).
+    if ts_start is not None:
         if ts_start.tzinfo is None:
             ts_start = ts_start.replace(tzinfo=req.now_local.tzinfo)
         elif req.now_local.tzinfo is not None:

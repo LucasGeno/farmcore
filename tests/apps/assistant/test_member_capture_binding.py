@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from farmcore.apps.chat.handlers import ChatDeps
 from farmcore.core.models.canonical import Log, LogSource, Parcel
+from farmcore.core.models.drafts import Draft
 from farmcore.main import create_app
 from tests.apps.chat.test_handlers import fake, seed_farm
 from tests.core.test_member_sessions import _account, _login
@@ -68,7 +69,8 @@ def test_owners_cancel_and_confirm_only_their_own_drafts_and_a_double_confirm_lo
     with pooled_session_factory() as session:
         [saved] = session.scalars(select(Log)).all()  # alice's draft is gone, bob's is logged
         assert saved.status == "done" and saved.farm_id == farm_id
-        assert saved.sources[0].external_key.startswith(f"web:farm:{farm_id}:identity:{bob_id}:")
+        draft = session.scalar(select(Draft).where(Draft.result_id == saved.id))
+        assert draft.request_key.startswith(f"web:farm:{farm_id}:identity:{bob_id}:")
         assert len(session.scalars(select(Event).where(Event.kind == "log.confirmed")).all()) == 1
 
 
@@ -308,62 +310,6 @@ def test_capture_controls_appear_only_for_an_owner_on_the_selected_farm(
         assert f'data-confirm-url="/assistant/confirm?farm={selected}"' in page.text
 
 
-@pytest.mark.parametrize(
-    "claimant,via,claimed",
-    [
-        ("operator", "button", True),
-        ("operator", "message", True),
-        ("member", "button", False),
-        ("operator-on-other-farm", "button", False),
-    ],
-)
-def test_original_shared_web_draft_is_claimable_only_by_the_default_farm_operator(
-    settings, pooled_session_factory, claimant, via, claimed
-):
-    from farmcore.apps.chat.dto import Incoming
-    from farmcore.apps.chat.handlers import WEB_CHAT_ID, on_message
-    from farmcore.core.models.canonical import Farm
-
-    with pooled_session_factory() as session:
-        ids = seed_farm(session, settings)
-        farm_id = session.get(Parcel, ids["P1"]).farm_id
-    deps = ChatDeps(pooled_session_factory, fake(), settings)
-    old = on_message(
-        deps, Incoming(WEB_CHAT_ID, "I sprayed P1 copper 2 kg this morning", None, 123)
-    )
-    if claimant == "operator-on-other-farm":
-        with pooled_session_factory() as session:
-            other = Farm(name="Other farm")
-            session.add(other)
-            session.flush()
-            [pending] = session.scalars(select(Log)).all()
-            pending.farm_id = farm_id = other.id
-            session.commit()
-    app = create_app(settings, session_factory=pooled_session_factory)
-    app.state.assistant_chat_deps = deps
-    if claimant == "member":
-        _account(pooled_session_factory, login="alice", farm_id=farm_id)
-        browser = member_browser(app, "alice")
-    else:
-        token = settings.admin_token.get_secret_value()
-        browser = TestClient(app, base_url="https://testserver", headers={"X-Admin-Token": token})
-    with browser:
-        if via == "message":
-            reply = browser.post(
-                f"/assistant/message?farm={farm_id}",
-                data={"q": "/confirm", "request_key": uuid.uuid4().hex},
-            )
-        else:
-            action = old.buttons[0][1]
-            reply = browser.post(f"/assistant/confirm?farm={farm_id}", data={"action": action})
-        assert reply.status_code == 200, reply.text
-        assert reply.json()["kind"] == ("done" if claimed else "reply")
-    with pooled_session_factory() as session:
-        [draft] = session.scalars(select(Log)).all()
-        assert draft.status == ("done" if claimed else "pending") and draft.farm_id == farm_id
-        assert draft.sources[0].external_key == "web:farmer:123"
-
-
 def test_no_model_selected_farm_uses_local_capture_without_mutating_enabled_extractor(
     settings, pooled_session_factory, monkeypatch
 ):
@@ -498,7 +444,8 @@ def test_members_capture_irrigation_bound_to_their_farm_and_only_the_owner_confi
         [saved] = session.scalars(select(Log)).all()
         assert saved.farm_id == farm_id and (saved.type, saved.status) == ("irrigate", "done")
         assert saved.props == {"irrigation": {"amount": "20", "unit": "mm", "basis": "gross"}}
-        assert saved.sources[0].external_key.startswith(f"web:farm:{farm_id}:identity:{alice_id}:")
+        draft = session.scalar(select(Draft).where(Draft.result_id == saved.id))
+        assert draft.request_key.startswith(f"web:farm:{farm_id}:identity:{alice_id}:")
 
 
 def test_concurrent_irrigation_confirms_create_one_record_and_one_event(
@@ -595,9 +542,10 @@ def test_concurrent_captures_with_one_key_keep_one_draft(
     statuses = sorted(getattr(out, "status", 200) for _, out in results)
     assert statuses == expected
     with pooled_session_factory() as session:
-        [log] = session.scalars(select(Log)).all()
-        assert (log.type, log.status) == ("irrigate", "pending")
-        amount = log.props["irrigation"]["amount"]
+        assert session.scalars(select(Log)).all() == []
+        [draft] = session.scalars(select(Draft)).all()
+        assert (draft.kind, draft.status) == ("irrigation", "open")
+        amount = draft.payload["fact"]["amount"]
         assert amount in {"20", "30"}
     if expected == [200, 409]:
         winner = next(text for text, out in results if getattr(out, "status", 200) == 200)
