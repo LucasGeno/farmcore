@@ -106,6 +106,13 @@ call. Spray reports from the web panel use the same slot-filling workflow as Tel
 model extracts fields, code decides what is missing, previews the checks and requires an
 explicit confirm.
 
+Your own agent (Claude Desktop, Codex, a local model) can use the same tools over MCP:
+`farmcore mcp` serves them on stdio, as the agent token in `FARMCORE_TOKEN` (issued on
+Sharing). It offers the tools of the apps that are on now within the token's scopes (a
+`propose` tool also needs `drafts:propose`), checks arguments against each tool's JSON Schema,
+re-checks the token on every request and writes an `access_log` row per call (`mcp:<tool>`,
+actor `token:<id>`; the client's own name is never the actor). Details: `core/mcp.py`.
+
 ## Stack
 
 Python 3.12, FastAPI, SQLAlchemy 2 + GeoAlchemy2, Alembic, Pydantic, Jinja + HTMX + Tailwind,

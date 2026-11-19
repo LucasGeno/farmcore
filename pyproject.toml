@@ -26,6 +26,8 @@ dependencies = [
     "timezonefinder>=9.2.0",
     "procrastinate==3.10.0",
     "packaging>=24",
+    "mcp==2.3.0",
+    "jsonschema>=4.20",
 ]
 
 [project.urls]

@@ -114,6 +114,10 @@ enabled owner of the farm refuses the next call with one message for every cause
 loads tokens and revokes their grants, so a token revoked after a backup does not come back and
 the copy starts with no agent access; issue new tokens on the copy.
 Send tokens in a header, never in a URL.
+`farmcore mcp` (MCP over stdio for a local agent) reads the token from `FARMCORE_TOKEN` only,
+never a flag, and never prints or returns it. The agent's calls are limited to the token's farm
+and scopes, but the process itself connects to the database: run it only on the machine that
+runs FarmCore, with the runtime role's `DATABASE_URL`, never the owner's.
 
 ## Deployment checklist
 
