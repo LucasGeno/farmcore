@@ -447,7 +447,7 @@ def test_each_farms_digest_pins_its_own_links_and_preserves_query_fragment(
 def test_digest_lists_the_higher_priority_parcel_first_from_the_stored_advice(
     session_factory, session, bot_settings, sender
 ):
-    from farmcore.core.models.canonical import Advice
+    from farmcore.apps.advisor.advice import Advice
 
     ids = seed(session, bot_settings)
     now = NOW_LOCAL

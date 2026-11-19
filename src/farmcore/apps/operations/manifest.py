@@ -22,6 +22,7 @@ MANIFEST = Manifest(
     ),
     seed="farmcore.apps.operations.seed:seed",
     models=("farmcore.apps.operations.models",),
+    activity_products="farmcore.apps.operations.activity:products",
     # Shared reference data, like `catalog_item`: every scope may read a product's label facts.
     resource_scopes=(("crop_protection_item", tuple(sorted(SCOPES))),),
     demo_presets=(

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from farmcore.apps.advisor import priority as prio
 from farmcore.apps.advisor import service
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine.types import WASHED_OFF, floor_hour
 from farmcore.apps.advisor.routes import (
     REPLAY_FLAG,
@@ -24,7 +25,7 @@ from farmcore.apps.advisor.routes import (
     _no_window,
     plain_note,
 )
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.core.models.canonical import Parcel
 
 URGENCY = ("spray", "wait", "protected", service.NO_ADVICE)
 ACTIONS = ("spray", "wait")  # decisions whose groups the hero lists

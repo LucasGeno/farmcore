@@ -13,6 +13,7 @@ from decimal import Decimal
 
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine import AdvisorConfig
 from farmcore.apps.advisor.engine.config import REGION_DEFAULTS, SEASONS
 from farmcore.apps.advisor.engine.window import forecast_span
@@ -22,7 +23,7 @@ from farmcore.apps.stations.jobs import ingest_meteofrance
 from farmcore.apps.stations.seed import seed as stations_seed
 from farmcore.core import seed as core_seed
 from farmcore.core.manifest import JobContext
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.core.models.canonical import Parcel
 from tests.apps.stations.synth import write_csv
 
 # Replay now 10 Apr 2024 06:00 Europe/Paris = 04:00 UTC, after the 2024 FRI12 season gate (5 Apr).

@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.chat.assistant.context import tool_context
 from farmcore.apps.onboarding import geocode
 from farmcore.apps.operations import isoxml_demo
@@ -22,7 +23,7 @@ from farmcore.core import clock, logs
 from farmcore.core.access import ensure_owner_grant
 from farmcore.core.farm_location import locate
 from farmcore.core.identity import DUMMY_HASH, token_hash
-from farmcore.core.models.canonical import Advice, Asset, DataGrant, Farm, Log, Parcel
+from farmcore.core.models.canonical import Asset, DataGrant, Farm, Log, Parcel
 from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app

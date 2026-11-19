@@ -16,18 +16,20 @@ from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
-    Advice,
     Asset,
     Event,
     ExtId,
     Farm,
     Log,
     Observation,
-    Parcel,
 )
 from farmcore.core.models.kernel import ClockState
 from farmcore.core.timeline import post_event
 from farmcore.db import session_scope
+
+# Apps' demo-control counts (`Manifest.demo_counts`): owner app -> `module:attr` provider
+# `(session, farm, now) -> {label: count}`. Filled at discovery (`registry`).
+DEMO_COUNTS: dict[str, str] = {}
 
 
 def demo_farm(session, settings, farm_id=None):
@@ -48,8 +50,9 @@ def metadata(row):
     return dict((row.job_runs or {}).get("demo") or {}) if row else {}
 
 
-def snapshot(session, settings):
-    """Read-only: never use Repo (read auditing) or clock_row (lazy initialization)."""
+def snapshot(session, settings, apps):
+    """Read-only: never use Repo (read auditing) or clock_row (lazy initialization). `apps`:
+    names of the loaded, switched-on apps; only they contribute counts."""
     farm = demo_farm(session, settings)
     row = session.get(ClockState, 1)
     now = row.replay_now if row and row.mode == "replay" else datetime.now(UTC)
@@ -57,27 +60,10 @@ def snapshot(session, settings):
         now = settings.replay_start
         if now.tzinfo is None:
             now = now.replace(tzinfo=ZoneInfo(settings.display_tz))
-    total = session.scalar(
-        select(func.count()).select_from(Parcel).where(Parcel.farm_id == farm.id)
-    )
-    ranked = (
-        select(
-            Advice.decision,
-            func.row_number()
-            .over(
-                partition_by=Advice.parcel_id,
-                order_by=(Advice.evaluated_at.desc(), Advice.id.desc()),
-            )
-            .label("rank"),
-        )
-        .where(Advice.farm_id == farm.id, Advice.evaluated_at <= now)
-        .subquery()
-    )
-    latest = session.scalars(select(ranked.c.decision).where(ranked.c.rank == 1))
-    counts = dict.fromkeys(("spray", "wait", "protected", "none"), 0)
-    for decision in latest:
-        counts[decision] += 1
-    counts["not evaluated"] = total - sum(counts.values())
+    counts: dict[str, int] = {}
+    for owner, path in DEMO_COUNTS.items():  # loaded, switched-on apps' own counts
+        if owner in apps:
+            counts.update(import_string(path)(session, farm, now))
     chat = (farm.props or {}).get("chat") or {}
     meta = metadata(row)
     job_state = row.job_runs if row else {}
@@ -112,7 +98,8 @@ def _clear(session, farm, manifests=()):
     log_ids = list(session.scalars(select(Log.id).where(Log.farm_id == farm.id)))
     session.execute(delete(ExtId).where(ExtId.model == "log", ExtId.res_id.in_(log_ids)))
     session.execute(delete(Log).where(Log.farm_id == farm.id))  # child rows cascade
-    session.execute(delete(Advice).where(Advice.farm_id == farm.id))
+    # Stored advice projects its assessment (FK): by table name, as core imports no app model.
+    session.execute(text("DELETE FROM advice WHERE farm_id = :farm"), {"farm": farm.id})
     session.execute(delete(Assessment).where(Assessment.farm_id == farm.id))
     session.execute(
         delete(Event).where(

@@ -37,6 +37,7 @@ from tests.core.crop_protection_legacy import _dose, _log, _one, _product
 from tests.core.test_revamp_migrations import scratch_db_url  # noqa: F401
 
 BEFORE = "core_0017"
+MOVED_AT = "core_0018"  # the move; core_0019 then drops the frozen legacy tables
 # Rendered by the release before the move (`crop_protection_legacy` says how to regenerate it).
 BEFORE_RENDER = Path(__file__).parent / "snapshots" / "crop_protection_move_before.json"
 LEGACY = {  # what the frozen tables and the ids outside them hold, by content
@@ -93,7 +94,7 @@ def test_a_populated_upgrade_keeps_every_meaning_and_id(scratch_db_url):  # noqa
                 "Copper",
                 "Pending AMM",
             ]
-            assert db.execute(text(LEGACY["product"])).all() == legacy["product"]  # frozen
+            assert _one(db, "SELECT to_regclass('product')::text") is None  # core_0019
             assert _one(db, "SELECT catalog_item_id FROM inventory_stock") == item[ids["copper"]]
             assert _one(db, "SELECT catalog_item_id FROM planning_job") == item[ids["copper"]]
             assert _one(db, "SELECT model || ':' || res_id FROM ext_id") == (
@@ -215,7 +216,7 @@ def test_a_downgrade_refuses_new_or_changed_sprays_and_else_returns_every_row(
         with engine.begin() as db:
             ids = fixture.legacy(db)
             before = _capture(db)
-        command.upgrade(cfg, "head")
+        command.upgrade(cfg, MOVED_AT)
         with engine.begin() as db:
             moved = db.execute(text(MOVED_VIEW)).all()
             first = _one(db, "SELECT min(typed_quantity_id) FROM legacy_quantity_map")
@@ -256,6 +257,128 @@ def test_a_downgrade_refuses_new_or_changed_sprays_and_else_returns_every_row(
         with engine.begin() as db:
             assert _capture(db) == before
             assert _one(db, "SELECT count(*) FROM typed_quantity") == 0
+        command.upgrade(cfg, MOVED_AT)
+        with engine.begin() as db:
+            assert db.execute(text(MOVED_VIEW)).all() == moved
+    finally:
+        engine.dispose()
+
+
+SEQUENCES = (
+    "SELECT last_value, is_called FROM product_id_seq UNION ALL "
+    "SELECT last_value, is_called FROM quantity_id_seq"
+)
+CORRECTED = (  # a correction confirmed after the upgrade replaced a moved dose (receipt v2)
+    "INSERT INTO operation_correction (farm_id, original_log_id, live_log_id, request_key, "
+    "actor_key, actor_label, status, reason, base_fingerprint, before_snapshot, after_snapshot, "
+    "finalized_at, finalized_actor_key, finalized_actor_label) VALUES (:farm, :log, :log, 'k', "
+    "'owner', 'Owner', 'confirmed', 'typo', repeat('a', 64), CAST(:before AS jsonb), '{}', "
+    "now(), 'owner', 'Owner') RETURNING id"
+)
+
+
+def test_dropping_the_legacy_tables_downgrades_by_rebuilding_them_from_the_maps(
+    scratch_db_url,  # noqa: F811
+):
+    """core_0019's downgrade rebuilds `product` and `quantity` from the maps and the catalog
+    rows under their legacy ids, their id sequences as they were, so core_0018's downgrade
+    returns every legacy row. It returns every record intact or refuses, naming ids, never
+    advising a delete: an unmapped plant-protection item or measured dose, an item without crop
+    protection's attributes, and a spray whose moved dose a correction replaced since."""
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, BEFORE)
+    engine = create_engine(scratch_db_url)
+    try:
+        with engine.begin() as db:
+            ids = fixture.legacy(db)
+            before = _capture(db)
+            sequences = db.execute(text(SEQUENCES)).all()
+        command.upgrade(cfg, "head")
+        with engine.begin() as db:
+            moved = db.execute(text(MOVED_VIEW)).all()
+            item = _one(db, "INSERT INTO catalog_item(name) VALUES ('New') RETURNING id")
+            db.execute(
+                text(
+                    "INSERT INTO crop_protection_item(catalog_item_id,authorisation_no,"
+                    "active_substance) VALUES (:i,'X','x')"
+                ),
+                {"i": item},
+            )
+            # The correction: the moved copper dose (and its map entry) replaced by a new one.
+            first = _one(db, "SELECT min(typed_quantity_id) FROM legacy_quantity_map")
+            replaced = db.execute(
+                text("SELECT * FROM typed_quantity WHERE id = :t"), {"t": first}
+            ).one()
+            legacy_id = _one(
+                db,
+                "SELECT quantity_id FROM legacy_quantity_map WHERE typed_quantity_id = :t",
+                t=first,
+            )
+            db.execute(text("DELETE FROM typed_quantity WHERE id = :t"), {"t": first})
+            dose = _one(
+                db,
+                "INSERT INTO typed_quantity(log_id,entered_value,entered_unit,entered_measure) "
+                "VALUES (:log,1.5,'kg/ha','rate') RETURNING id",
+                log=ids["spray"],
+            )
+            receipt = json.dumps({"version": 2, "quantities": [{"id": first}]})
+            correction = _one(db, CORRECTED, farm=ids["farm"], log=ids["spray"], before=receipt)
+            pending = _one(
+                db,
+                "SELECT catalog_item_id FROM legacy_product_map WHERE product_id = :p",
+                p=ids["pending"],
+            )
+            attributes = db.execute(
+                text("SELECT * FROM advisor_product WHERE catalog_item_id = :i"), {"i": pending}
+            ).one()
+            db.execute(
+                text("DELETE FROM advisor_product WHERE catalog_item_id = :i"), {"i": pending}
+            )
+
+        with pytest.raises(RuntimeError) as refused:
+            command.downgrade(cfg, MOVED_AT)
+
+        message = str(refused.value)
+        for named in (
+            f"1 plant-protection item(s) without a legacy product id ({item})",
+            f"1 item(s) with a legacy product id but no crop protection type ({pending})",
+            f"1 measured typed quantit(y/ies) without a legacy quantity id ({dose})",
+            f"1 spray log(s) whose moved dose a correction replaced since ({ids['spray']})",
+            "restore the pre-upgrade backup to roll back records changed since",
+        ):
+            assert named in message
+        assert "remove them" not in message
+        with engine.begin() as db:  # the test, not an operator, puts the original state back
+            assert _one(db, "SELECT to_regclass('product')::text") is None
+            db.execute(text("DELETE FROM operation_correction WHERE id = :c"), {"c": correction})
+            db.execute(text("DELETE FROM typed_quantity WHERE id = :t"), {"t": dose})
+            db.execute(text("DELETE FROM catalog_item WHERE id = :i"), {"i": item})
+            db.execute(
+                text(
+                    "INSERT INTO typed_quantity (id, log_id, catalog_item_id, measure, value, "
+                    "unit, entered_value, entered_unit, label, provenance, entered_measure) "
+                    "VALUES (:id, :log_id, :catalog_item_id, :measure, :value, :unit, "
+                    ":entered_value, :entered_unit, :label, :provenance, :entered_measure)"
+                ),
+                replaced._asdict(),
+            )
+            db.execute(
+                text("INSERT INTO legacy_quantity_map VALUES (:q, :t)"),
+                {"q": legacy_id, "t": first},
+            )
+            db.execute(
+                text("INSERT INTO advisor_product VALUES (:i, :t, :g)"),
+                {"i": pending, "t": attributes.product_type, "g": attributes.targets},
+            )
+        command.downgrade(cfg, MOVED_AT)
+        with engine.begin() as db:
+            for table in ("product", "quantity"):
+                assert db.execute(text(LEGACY[table])).all() == before[table], table
+            assert db.execute(text(SEQUENCES)).all() == sequences
+        command.downgrade(cfg, BEFORE)  # core_0018's rules over the rebuilt tables
+        with engine.begin() as db:
+            assert _capture(db) == before
+            assert db.execute(text(SEQUENCES)).all() == sequences
         command.upgrade(cfg, "head")
         with engine.begin() as db:
             assert db.execute(text(MOVED_VIEW)).all() == moved

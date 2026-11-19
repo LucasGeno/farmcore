@@ -51,9 +51,10 @@ def test_activation_only_changes_future_assessments_and_later_opinion_is_explici
 
     from sqlalchemy import select
 
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.apps.advisor.job import evaluate
     from farmcore.core.manifest import JobContext
-    from farmcore.core.models.canonical import Advice, Parcel
+    from farmcore.core.models.canonical import Parcel
     from tests.apps.advisor.review_fixtures import complete_station
     from tests.apps.chat.test_handlers import seed_farm
     from tests.apps.stations.synth import correct

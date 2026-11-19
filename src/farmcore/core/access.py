@@ -8,10 +8,10 @@ A repository is bound to one farm, one grant, an actor and a purpose. Each read:
    `stations:read`, so a `logs:read` grant cannot read them by naming its own scope), else
    `ScopeDenied`; every farm table must be declared by core or by the owning app manifest —
    an undeclared resource is denied;
-3. filters rows to the farm: directly (`farm_id`), via `log` (quantity, log_source,
+3. filters rows to the farm: directly (`farm_id`), via `log` (typed_quantity, log_source,
    log_parcel), via `asset` (observation), via `data_grant` (access_token) or via
    `weather_receipt` (weather observations and forecasts); a weather station is the farm's own
-   or public (no owner); shared reference tables (product, source, catalog_item) are not
+   or public (no owner); shared reference tables (source, catalog_item) are not
    farm-owned; any other table has no farm path and is read only through `execute`;
    a grant or agent-token view (`grant_view`) reads only weather values and receipts whose
    receipt allows redistribution (the licence gate); a caller-built statement labelled as, or
@@ -55,8 +55,6 @@ from farmcore.core.models.canonical import (
     LogParcel,
     LogSource,
     Observation,
-    Product,
-    Quantity,
     Source,
 )
 from farmcore.core.models.catalog import CatalogItem, LegacyQuantityMap, TypedQuantity
@@ -105,7 +103,6 @@ DEMO_SOURCE = "farmcore-demo"
 
 # Rows owned by a farm through a parent: model -> (fk column, parent model).
 _VIA_PARENT: dict[type[Base], tuple[Any, type[Base]]] = {
-    Quantity: (Quantity.log_id, Log),
     TypedQuantity: (TypedQuantity.log_id, Log),
     LogSource: (LogSource.log_id, Log),
     LogParcel: (LogParcel.log_id, Log),
@@ -123,7 +120,7 @@ _OWNED_OR_PUBLIC: dict[type[Base], Any] = {WeatherStation: WeatherStation.owner_
 # Catalog items are public reference data (E-Phy imports) and records keep their own facts
 # (a fertiliser's composition lives on the record). If farms ever write catalog items, drop
 # CatalogItem from here and from RESOURCE_SCOPES' `_ANY`, and scope it to its farm.
-_SHARED: frozenset[type[Base]] = frozenset({Product, Source, CatalogItem})
+_SHARED: frozenset[type[Base]] = frozenset({Source, CatalogItem})
 
 _ANY = SCOPES
 _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
@@ -132,10 +129,9 @@ _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
 RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "access_log": frozenset({"audit:read"}),
     "access_token": frozenset({"audit:read"}),
-    "advice": frozenset({"advice:read"}),
     "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
-    "catalog_item": _ANY,  # shared reference (a fertiliser's name), like `product`
+    "catalog_item": _ANY,  # shared reference (a fertiliser's or a spray product's name)
     # The assessment envelope (`core/assessments.py`). Crop protection is its only kind today;
     # a per-kind read scope comes with the neutral core contract.
     "assessment": frozenset({"advice:read"}),
@@ -176,9 +172,6 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "planning_operator": frozenset({"planning:read", "planning:write"}),
     "planning_resource_window": frozenset({"planning:read", "planning:write"}),
     "planning_job_assignment": frozenset({"planning:read", "planning:write"}),
-    # Frozen by core_0018 (kept for its rollback; no runtime reader).
-    "product": _ANY,
-    "quantity": _LOG_READS,
     # core_0018's frozen maps: legacy ids kept in historic JSON and published ids resolve here.
     "legacy_product_map": _ANY,
     "legacy_quantity_map": _LOG_READS,

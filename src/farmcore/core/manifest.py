@@ -499,6 +499,10 @@ class Manifest:
     resource_scopes: tuple[tuple[str, tuple[str, ...]], ...] = ()  # (table, allowed scopes)
     demo_presets: tuple[str, ...] = ()  # module:attr paths to core.demo.Preset objects
     demo_reset: tuple[str, ...] = ()  # module:attr (session, farm) hooks run by every demo reset
+    # Contributions core renders without importing the app (filled at discovery, `registry`):
+    activity_products: str | None = None  # (repo, log_ids) -> {log id: ["copper 2 kg/ha"]}
+    demo_counts: str | None = None  # (session, farm, now) -> {label: count} on demo control
+    query_values: tuple[tuple[str, tuple[str, ...]], ...] = ()  # (query key, allowed values)
     tools: tuple[Any, ...] = ()  # read-only assistant tools
     # Farmer-first experience (F1/F3): the app grid, search and Record sheet read these.
     icon: str = ""  # a core icon name, or an app-shipped SVG path

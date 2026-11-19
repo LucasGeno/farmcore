@@ -10,11 +10,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import event, func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.forecast import sources, store
 from farmcore.apps.forecast.models import ForecastAvailability
 from farmcore.core import clock, ext_ids
 from farmcore.core.access import FARM_COOKIE, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Farm, Parcel
+from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.models.kernel import AppModule, ClockState
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.forecast.conftest import FIXTURE

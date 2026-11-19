@@ -8,10 +8,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.job import evaluate
 from farmcore.core.logs import lock_farm
 from farmcore.core.manifest import JobContext
-from farmcore.core.models.canonical import Advice, Farm, Parcel
+from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.main import create_app
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.chat.test_handlers import SQUARE

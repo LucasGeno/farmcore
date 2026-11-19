@@ -14,10 +14,11 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.forecast import sources, store
-from farmcore.core import clock, registry
+from farmcore.core import access, clock, registry
 from farmcore.core.access import FARM_COOKIE
-from farmcore.core.models.canonical import Advice, DataGrant, Log
+from farmcore.core.models.canonical import DataGrant, Log
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
 from tests.apps.forecast.conftest import FIXTURE
@@ -56,7 +57,7 @@ def bundle_client(settings, session_factory, monkeypatch):
 
 
 def test_a_bundle_without_crop_protection_navigates_and_says_what_is_unavailable(
-    bundle_client, session, settings
+    bundle_client, session, settings, monkeypatch
 ):
     # Bugs prevented: a page of a non-crop app 500s (or renders "nothing to do") because it
     # reaches the advisor that is not in the bundle; forecast receipts become unreadable.
@@ -116,6 +117,15 @@ def test_a_bundle_without_crop_protection_navigates_and_says_what_is_unavailable
     shared = bundle_client.get(f"/share/as/{grant.id}/advice.json")
     assert shared.status_code == 409
     assert "crop protection is not installed" in shared.json()["detail"]
+    # As in a process that never loaded crop protection: its `advice` scope is undeclared.
+    monkeypatch.setattr(
+        access,
+        "RESOURCE_SCOPES",
+        {k: v for k, v in access.RESOURCE_SCOPES.items() if k != "advice"},
+    )
+    undeclared = bundle_client.get(f"/share/as/{grant.id}/advice.json")
+    assert undeclared.status_code == 409
+    assert "crop protection is not installed" in undeclared.json()["detail"]
 
     weather = bundle_client.get("/forecast/home-weather")
     assert weather.status_code == 200

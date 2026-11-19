@@ -277,8 +277,8 @@ def test_tour_hides_configured_telegram_logging_actions(
 ):
     from datetime import UTC, datetime, timedelta
 
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.core.clock import set_replay
-    from farmcore.core.models.canonical import Advice
     from farmcore.core.seed import ensure_default_farm
     from tests.apps.share.conftest import make_parcel
 

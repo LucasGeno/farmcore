@@ -14,7 +14,8 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import func, select
 
-from farmcore.core.models.canonical import Advice, Event, Farm, Log
+from farmcore.apps.advisor.advice import Advice
+from farmcore.core.models.canonical import Event, Farm, Log
 from farmcore.main import create_app
 
 TOKEN = "qa-admin"

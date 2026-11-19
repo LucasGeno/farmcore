@@ -25,8 +25,9 @@ registers it.
 
 `/share/ngsi-ld.json` (owner) and `/share/as/{grant}/ngsi-ld.json` (grantee).
 
-- **v1** (default; deprecated since 2026-11-19 for one release, Sunset date set by the contract
-  step that drops the legacy tables). `AgriParcelOperation` entity ids are
+- **v1** (default; deprecated since 2026-11-19 for one release; `Sunset: Fri, 19 Feb 2027
+  23:59:59 GMT`, provisional until the maintainer confirms it; a release after that day
+  removes v1 and makes `?v=2` the default). `AgriParcelOperation` entity ids are
   `urn:ngsi-ld:AgriParcelOperation:farmcore-<log>-<parcel>-<dose>` and `hasAgriProductType` is
   `urn:ngsi-ld:AgriProductType:farmcore-<product>`. For a dose and product recorded before
   `core_0018`, `<dose>` and `<product>` are the ids published since the first export (read

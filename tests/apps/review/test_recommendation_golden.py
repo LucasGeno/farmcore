@@ -10,8 +10,9 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice, Event, Farm
+from farmcore.core.models.canonical import Event, Farm
 from farmcore.main import create_app
 from tests.apps.review.test_recommendation_review import (
     NOW,

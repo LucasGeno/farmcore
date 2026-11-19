@@ -760,8 +760,8 @@ def _history_context(request: Request, repo: Repo, parcel: Parcel, season: str |
 @router.get("/parcels/{parcel_id}/assessments/{advice_id}.json")
 def saved_assessment(parcel_id: int, advice_id: int, request: Request, repo: Repo):
     """Exact saved assessment evidence for assigned members; never current-view projection."""
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.apps.review.routes import authorized_review
-    from farmcore.core.models.canonical import Advice
 
     authorized_review(request, repo)
     parcel = _parcel(repo, parcel_id)

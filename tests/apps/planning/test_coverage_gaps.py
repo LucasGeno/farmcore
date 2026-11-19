@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import delete
 from sqlalchemy.exc import IntegrityError
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs
 from farmcore.apps.forecast import sources, store
 from farmcore.apps.planning import engine, offers, resources, service
@@ -22,7 +23,6 @@ from farmcore.apps.planning.models import (
     PlanningResourceWindow,
 )
 from farmcore.core.access import DataGrant, ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice
 from tests.apps.planning.conftest import NOW, job_payload
 
 FIXTURE = Path(__file__).parents[1] / "forecast" / "fixtures" / "forecast-runs.json"

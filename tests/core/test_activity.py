@@ -285,7 +285,7 @@ def test_kinds_of_apps_that_are_not_loaded_are_hidden(
 
 
 def test_doses_keep_their_decimals() -> None:
-    from farmcore.core.activity import _dose
+    from farmcore.apps.operations.activity import _dose
 
     values = [Decimal("2.0"), Decimal("1.05"), Decimal("0.050"), Decimal("12")]
     assert [_dose(v) for v in values] == ["2", "1.05", "0.05", "12"]
@@ -293,7 +293,7 @@ def test_doses_keep_their_decimals() -> None:
 
 def test_activity_does_not_expose_private_advisor_check_notes(farm, session, client):
     """A review is owner/advisor material: generic activity (logs:read) never lists it."""
-    from farmcore.core.models.canonical import Advice
+    from farmcore.apps.advisor.advice import Advice
 
     parcel = session.query(Parcel).filter_by(farm_id=farm.id, alias="P1").one()
     row = Advice(

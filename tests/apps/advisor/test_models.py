@@ -1,7 +1,7 @@
 """Disease views project stored reasons; they never run or duplicate the decision rules."""
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.models import MODELS, project
-from farmcore.core.models.canonical import Advice
 
 
 def reason(rule, verdict, **inputs):

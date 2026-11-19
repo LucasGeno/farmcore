@@ -9,9 +9,10 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from sqlalchemy import select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core.access import ensure_owner_grant
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice, Farm, Log
+from farmcore.core.models.canonical import Farm, Log
 from farmcore.core.models.kernel import AppModule, ClockState
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.advisor.review_fixtures import complete_station

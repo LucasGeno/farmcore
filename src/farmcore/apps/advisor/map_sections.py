@@ -27,6 +27,7 @@ from fastapi import APIRouter, Path, Request
 from fastapi.responses import HTMLResponse
 
 from farmcore.apps.advisor import service
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine.types import DATA_GAP
 from farmcore.apps.advisor.presenter import HOME_PATH, ParcelRow, _day, _when, parcel_row
 from farmcore.apps.advisor.routes import (
@@ -38,7 +39,7 @@ from farmcore.apps.advisor.routes import (
 )
 from farmcore.apps.fields.seed import alias_number
 from farmcore.core.access import Repo
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.core.models.canonical import Parcel
 from farmcore.core.navigation import map_read_url, resolved_url, workspace_parent
 from farmcore.web import render
 

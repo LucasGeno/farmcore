@@ -8,8 +8,9 @@ from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice, Farm
+from farmcore.core.models.canonical import Farm
 from farmcore.main import create_app
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.share.conftest import make_parcel
@@ -254,7 +255,7 @@ def test_review_is_bound_to_this_farm_and_never_reveals_a_foreign_request(
 def test_a_future_or_unknown_assessment_cannot_be_reviewed(committed_session_factory, settings):
     farm_id, _, advice_id = _farm_with_assessment(committed_session_factory)
     with committed_session_factory.begin() as session:
-        from farmcore.core.models.canonical import Advice
+        from farmcore.apps.advisor.advice import Advice
 
         row = session.get(Advice, advice_id)
         future = Advice(
@@ -427,8 +428,8 @@ def test_a_review_never_follows_a_newer_assessment(committed_session_factory, se
         assert _answer(advisor, farm_id, request_id, "First answer").status_code == 201
         later = datetime(2024, 4, 11, 4, tzinfo=UTC)
         with committed_session_factory.begin() as session:
+            from farmcore.apps.advisor.advice import Advice
             from farmcore.core.clock import set_replay
-            from farmcore.core.models.canonical import Advice
 
             newer = Advice(
                 farm_id=farm_id,
@@ -694,10 +695,11 @@ def test_http_review_response_after_events_are_deleted_is_404(committed_session_
 
     from sqlalchemy import delete, select, text
 
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.apps.review import recommendations
     from farmcore.core.access import ScopedRepository, ensure_owner_grant
     from farmcore.core.clock import set_replay
-    from farmcore.core.models.canonical import Advice, Event, Farm
+    from farmcore.core.models.canonical import Event, Farm
     from tests.apps.share.conftest import make_parcel
 
     with committed_session_factory() as session:

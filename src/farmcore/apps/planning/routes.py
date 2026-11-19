@@ -26,11 +26,11 @@ from pydantic import (
 )
 
 from farmcore.apps.advisor import service as advice_service
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.planning import service
 from farmcore.apps.planning.models import PlanningJob
 from farmcore.core.access import Repo, require_farm_member, require_farm_owner
 from farmcore.core.clock import get_clock, parse_local
-from farmcore.core.models.canonical import Advice
 from farmcore.web import render
 
 router = APIRouter()

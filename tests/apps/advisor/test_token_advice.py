@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import select
 
 from farmcore.apps.advisor import tools
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core import mcp as farm_mcp
 from farmcore.core import registry
 from farmcore.core.access import (
@@ -31,7 +32,7 @@ from farmcore.core.access import (
 )
 from farmcore.core.clock import clock_row
 from farmcore.core.identity import hash_password
-from farmcore.core.models.canonical import AccessLog, Advice, Asset, DataGrant, Farm, Parcel
+from farmcore.core.models.canonical import AccessLog, Asset, DataGrant, Farm, Parcel
 from farmcore.core.models.identity import FarmMembership, LocalIdentity
 from farmcore.core.models.weather import WeatherReceipt
 from farmcore.core.tools import ToolContext

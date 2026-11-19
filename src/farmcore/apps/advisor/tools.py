@@ -12,9 +12,9 @@ from datetime import datetime
 from typing import Any
 
 from farmcore.apps.advisor import service
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.fields import tools as fields_tools
 from farmcore.core.model_spec import VALIDATION_LEVELS, validation_words
-from farmcore.core.models.canonical import Advice
 from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = service.SCOPE

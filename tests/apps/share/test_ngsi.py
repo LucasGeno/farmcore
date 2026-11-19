@@ -291,6 +291,7 @@ def test_ngsi_v1_keeps_its_published_legacy_ids_and_v2_names_catalog_rows(
     assert default.headers["FarmCore-Representation"] == "ngsi-ld; v=1"
     assert default.headers["Deprecation"].startswith("@")
     assert 'rel="deprecation"' in default.headers["Link"]
+    assert default.headers["Sunset"] == "Fri, 19 Feb 2027 23:59:59 GMT"
     assert admin.get("/share/ngsi-ld.json?v=1").json() == default.json()
     assert refs(default) == {("9001", "77"), (f"tq{sulphur.id}", f"ci{sulphur.catalog_item_id}")}
     assert v2.headers["FarmCore-Representation"] == "ngsi-ld; v=2"

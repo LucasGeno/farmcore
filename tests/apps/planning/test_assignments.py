@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.operations.seed import ensure_products
 from farmcore.apps.planning.models import (
     PlanningJob,
@@ -19,7 +20,7 @@ from farmcore.apps.planning.models import (
 )
 from farmcore.core.access import ensure_owner_grant
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Advice, Farm
+from farmcore.core.models.canonical import Farm
 from farmcore.main import create_app
 from tests.apps.planning.conftest import NOW, job_payload
 from tests.apps.share.conftest import make_parcel

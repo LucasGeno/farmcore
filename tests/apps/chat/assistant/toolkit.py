@@ -5,8 +5,9 @@ from __future__ import annotations
 
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.chat.assistant.context import PURPOSE, tool_context
-from farmcore.core.models.canonical import AccessLog, Advice, Event, Log, LogSource
+from farmcore.core.models.canonical import AccessLog, Event, Log, LogSource
 from tests.apps.advisor.scenes import local
 
 CHAT = 4242  # synthetic Telegram chat id

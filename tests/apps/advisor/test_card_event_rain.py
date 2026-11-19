@@ -14,10 +14,11 @@ import pytest
 from sqlalchemy import select
 
 from farmcore.apps.advisor import service
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.engine import Advice as EngineAdvice
 from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs
 from farmcore.apps.advisor.engine.types import RuleResult
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.core.models.canonical import Parcel
 from tests.apps.advisor import scenes
 
 manifests, seeded, step = scenes.manifests, scenes.seeded, scenes.step

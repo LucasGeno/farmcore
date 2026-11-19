@@ -10,11 +10,12 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.chat.dto import Incoming
 from farmcore.apps.chat.extractor import RegexExtractor
 from farmcore.apps.chat.handlers import ChatDeps, on_message
 from farmcore.core import jobs
-from farmcore.core.models.canonical import AccessLog, Advice, Parcel
+from farmcore.core.models.canonical import AccessLog, Parcel
 from farmcore.core.models.drafts import Draft
 from farmcore.core.models.kernel import AppModule
 from tests.apps.advisor import scenes

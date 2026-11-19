@@ -78,16 +78,21 @@ STATUS_DONE = "finished"
 MEDIA_TYPE = "application/ld+json"
 # v1, as published since the first export: an entity id ends with the dose's legacy quantity id
 # and `hasAgriProductType` names the legacy product id, both resolved through core_0018's frozen
-# maps; a dose or item written since has none and takes its v2 ref. Deprecated for one release
-# (the contract step sets its Sunset). v2: catalog-native refs everywhere, `tq<typed quantity
-# id>` and `ci<catalog item id>`, a namespace no v1 id uses.
+# maps; a dose or item written since has none and takes its v2 ref. Deprecated for one release:
+# served until its Sunset (provisional, pending the maintainer's confirmation). v2:
+# catalog-native refs everywhere, `tq<typed quantity id>` and `ci<catalog item id>`, a namespace
+# no v1 id uses.
 V1_DEPRECATED = date(2026, 11, 19)
+V1_SUNSET = date(2027, 2, 19)
 REPRESENTATION = representations.register(
     representations.Representation(
         "ngsi-ld",
         (
             representations.Version(
-                1, deprecated=V1_DEPRECATED, note="legacy product and quantity ids"
+                1,
+                deprecated=V1_DEPRECATED,
+                sunset=V1_SUNSET,
+                note="legacy product and quantity ids",
             ),
             representations.Version(2),
         ),

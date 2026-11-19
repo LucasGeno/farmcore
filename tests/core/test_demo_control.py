@@ -46,6 +46,8 @@ def test_demo_page_is_read_only_and_admin_only(demo_client, connection):
     assert page.status_code == 200
     assert "Demo controls" in page.text and "Demo start" in page.text
     assert 'href="/demo/"' in page.text
+    # Crop protection contributes its counts (`Manifest.demo_counts`); core names no decision.
+    assert "Not evaluated" in page.text and "Protected" in page.text
     assert not any(re.match(r"\s*(INSERT|UPDATE|DELETE)\b", s, re.I) for s in statements)
     demo_client.cookies.clear()
     assert demo_client.get("/demo/").status_code == 403
@@ -86,9 +88,10 @@ def test_confirmed_reset_is_scoped_preserves_binding_and_reseeds_idempotently(
 
     from sqlalchemy import func, select
 
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.core.access import default_farm, ensure_owner_grant
     from farmcore.core.clock import get_clock
-    from farmcore.core.models.canonical import AccessLog, Advice, Event, ExtId, Farm, Log, LogSource
+    from farmcore.core.models.canonical import AccessLog, Event, ExtId, Farm, Log, LogSource
 
     farm = default_farm(session, settings)
     farm.props = {"chat": {"telegram_chat_ids": [12345], "push_cursor": 42}, "keep": "yes"}
@@ -501,6 +504,7 @@ def test_reset_then_legacy_step_revisits_spray_day_without_touching_other_farm(
 ):
     from sqlalchemy import select, text
 
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.apps.chat import push
     from farmcore.apps.chat.telegram import FakeTelegramSender
     from farmcore.apps.operations import seed as ops_seed
@@ -508,7 +512,7 @@ def test_reset_then_legacy_step_revisits_spray_day_without_touching_other_farm(
     from farmcore.core import seed as core_seed
     from farmcore.core.access import default_farm, ensure_owner_grant
     from farmcore.core.commands.seed import run_seeds
-    from farmcore.core.models.canonical import Advice, Asset, Farm
+    from farmcore.core.models.canonical import Asset, Farm
     from farmcore.core.models.kernel import ClockState
     from tests.apps.advisor.scenes import local
 
@@ -622,3 +626,17 @@ def test_reset_then_legacy_step_revisits_spray_day_without_touching_other_farm(
                 )
     finally:
         push.set_sender(None)
+
+
+def test_a_switched_off_app_contributes_no_demo_counts(demo_client, session):
+    """`Manifest.demo_counts` comes only from loaded, switched-on apps: with crop protection
+    switched off, demo control shows no advice decision counts."""
+    from farmcore.core.models.kernel import AppModule
+
+    session.get(AppModule, "advisor").state = "uninstalled"
+    session.commit()
+
+    page = demo_client.get("/demo/")
+
+    assert page.status_code == 200 and "Demo controls" in page.text
+    assert "Not evaluated" not in page.text and "Protected" not in page.text

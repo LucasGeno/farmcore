@@ -764,6 +764,10 @@ def grantee_audit(request: Request, repo: GrantRepo) -> JSONResponse:
 @router.get("/as/{grant_id}/advice.json")
 def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
     try:
+        # Without crop protection its `advice` resource is undeclared, so the scope check would
+        # say "not shared" to a grant that does share advice: say it is not installed instead.
+        if not app_is_on(request, "advisor") and "advice:read" in (repo.grant.scopes or ()):
+            raise HTTPException(409, ADVICE_UNAVAILABLE)
         repo.check("advice:read", "advice")
         if not app_is_on(request, "advisor"):
             # Guard before the service imports the optional crop-protection package.

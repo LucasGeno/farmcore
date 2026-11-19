@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.core import access, registry
 from farmcore.core.access import (
     FarmNotSeeded,
@@ -28,7 +29,6 @@ from farmcore.core.access import (
 from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
-    Advice,
     Asset,
     DataGrant,
     Event,

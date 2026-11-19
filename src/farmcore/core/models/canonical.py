@@ -39,14 +39,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from farmcore.core.models.base import Base
 
 ASSET_KINDS = ("station", "sprayer", "regional")
-PRODUCT_TYPES = ("contact", "penetrant")
-PRODUCT_TARGETS = ("downy", "powdery")
 LOG_TYPES = ("spray", "fertilise", "irrigate", "harvest", "observation")
 LOG_STATUSES = ("pending", "done")
-QUANTITY_MEASURES = ("rate", "volume", "area")
 # `manual`: typed by a farmer (Record sheet); `agent`: proposed by an external agent (core_0010).
 LOG_SOURCE_TYPES = ("voice", "seed", "isoxml", "file", "planning", "manual", "agent")
-ADVICE_DECISIONS = ("spray", "wait", "protected", "none")
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -162,29 +158,6 @@ class Asset(Base):
     props: Mapped[dict[str, Any]] = _props()
 
 
-class Product(Base):
-    """Frozen by core_0018 (moved to `catalog_item` and its extensions); kept for its rollback."""
-
-    __tablename__ = "product"
-    __table_args__ = (
-        CheckConstraint(_in("product_type", PRODUCT_TYPES), name="product_type"),
-        CheckConstraint(
-            "targets <@ ARRAY[" + ", ".join(repr(t) for t in PRODUCT_TARGETS) + "]::text[]",
-            name="targets",
-        ),
-    )
-
-    id: Mapped[int] = _pk()
-    name: Mapped[str] = mapped_column(Text)
-    authorisation_no: Mapped[str] = mapped_column(Text)
-    active_substance: Mapped[str] = mapped_column(Text)
-    product_type: Mapped[str] = mapped_column(Text)
-    targets: Mapped[list[str]] = mapped_column(
-        ARRAY(Text), server_default=text("'{}'::text[]"), default=list
-    )
-    props: Mapped[dict[str, Any]] = _props()
-
-
 class LogParcel(Base):
     __tablename__ = "log_parcel"
 
@@ -234,21 +207,6 @@ class Log(Base):
     sources: Mapped[list[LogSource]] = relationship(
         back_populates="log", cascade="all, delete-orphan", passive_deletes=True
     )
-
-
-class Quantity(Base):
-    """Frozen by core_0018 (moved to `typed_quantity`); kept for its rollback."""
-
-    __tablename__ = "quantity"
-    __table_args__ = (CheckConstraint(_in("measure", QUANTITY_MEASURES), name="measure"),)
-
-    id: Mapped[int] = _pk()
-    log_id: Mapped[int] = _fk("log.id", ondelete="CASCADE")
-    product_id: Mapped[int | None] = _fk("product.id", nullable=True)
-    measure: Mapped[str] = mapped_column(Text)
-    value: Mapped[Decimal] = mapped_column(Numeric)
-    unit: Mapped[str] = mapped_column(Text)
-    label: Mapped[str | None] = mapped_column(Text)
 
 
 class Observation(Base):
@@ -335,51 +293,6 @@ class AccessLog(Base):
     resource: Mapped[str] = mapped_column(Text)
     scope: Mapped[str] = mapped_column(Text)
     purpose: Mapped[str] = mapped_column(Text)
-
-
-class Advice(Base):
-    __tablename__ = "advice"
-    __table_args__ = (
-        CheckConstraint(_in("decision", ADVICE_DECISIONS), name="decision"),
-        # Target of farm-scoped composite foreign keys (planning_0001).
-        UniqueConstraint("id", "farm_id"),
-        # The envelope this row projects (core_0012): same farm, parcel and evaluation time.
-        UniqueConstraint("assessment_id"),
-        ForeignKeyConstraint(
-            ("assessment_id", "farm_id", "parcel_id", "evaluated_at"),
-            (
-                "assessment.id",
-                "assessment.farm_id",
-                "assessment.parcel_id",
-                "assessment.evaluated_at",
-            ),
-        ),
-    )
-
-    id: Mapped[int] = _pk()
-    farm_id: Mapped[int] = _fk("farm.id")
-    parcel_id: Mapped[int] = _fk("parcel.id")
-    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    decision: Mapped[str] = mapped_column(Text)
-    reasons: Mapped[list[Any]] = _jsonb_list()
-    next_window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    next_window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    protected_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    products: Mapped[list[Any]] = _jsonb_list()
-    props: Mapped[dict[str, Any]] = _props()
-    created_at: Mapped[datetime] = _now()
-    # Crop protection's typed result and its evidence (`core/assessments.py`); None on rows
-    # saved before core_0012, whose evidence stays in `props`.
-    assessment_id: Mapped[int | None] = mapped_column(BigInteger)
-    assessment: Mapped[Any] = relationship(
-        "Assessment",
-        primaryjoin="Advice.assessment_id == Assessment.id",
-        foreign_keys=[assessment_id],
-        lazy="raise",
-    )
-
-
-Index("ix_advice_parcel_id_evaluated_at", Advice.parcel_id, Advice.evaluated_at.desc())
 
 
 class Event(Base):

@@ -13,11 +13,12 @@ from pathlib import Path
 import pytest
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.fields.seed import seed
 from farmcore.core import ext_ids
 from farmcore.core import seed as core_seed
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import AccessLog, Advice, Log, Parcel
+from farmcore.core.models.canonical import AccessLog, Log, Parcel
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.fields.conftest import SYNTHETIC
 

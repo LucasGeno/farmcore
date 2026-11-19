@@ -15,12 +15,13 @@ from sqlalchemy import create_engine, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.assessment import KIND as SPRAY
 from farmcore.core import assessments
 from farmcore.core.commands.migrate import alembic_config
 from farmcore.core.manifest import AssessmentKind, Manifest, collect_assessment_kinds
 from farmcore.core.models.assessment import Assessment
-from farmcore.core.models.canonical import Advice, Farm
+from farmcore.core.models.canonical import Farm
 from tests.apps.operations.conftest import make_parcel
 
 NOW = datetime(2024, 4, 10, 4, tzinfo=UTC)

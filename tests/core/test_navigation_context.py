@@ -332,3 +332,20 @@ def test_plan_reading_origin_retains_selected_day_and_day_anchor(client, farms):
             f"/advisor/parcels/{mine.id}", params={"farm": first.id, "return_to": invalid}
         ).text
         assert invalid not in links(body) and "All advice" in body
+
+
+def test_a_query_value_no_app_declares_is_never_offered_back(client, farms, monkeypatch):
+    """Core knows no `model` value of its own (`Manifest.query_values`): with none declared,
+    the advisor origin's `?model=` is refused like any unknown value."""
+    from farmcore.core import navigation
+
+    first, _, mine, _ = farms
+    monkeypatch.setattr(navigation, "QUERY_VALUES", {})
+
+    response = client.get(
+        f"/advisor/parcels/{mine.id}",
+        params={"farm": first.id, "return_to": "/advisor/?model=powdery"},
+    )
+
+    assert response.status_code == 200
+    assert "Back to Crop protection" not in response.text

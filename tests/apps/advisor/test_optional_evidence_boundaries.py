@@ -10,7 +10,8 @@ import html
 
 import pytest
 
-from farmcore.core.models.canonical import Advice, Parcel
+from farmcore.apps.advisor.advice import Advice
+from farmcore.core.models.canonical import Parcel
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.test_card_plain import by_id
 from tests.apps.chat.test_handlers import NOW_LOCAL, seed_farm

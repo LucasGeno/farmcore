@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from farmcore.core.models.canonical import Advice
+from farmcore.apps.advisor.advice import Advice
 
 
 @dataclass(frozen=True)

@@ -345,7 +345,8 @@ def test_postcommit_advice_runs_once_for_selected_farm_only(
 ):
     """On a pooled engine whose lock waits give up after 1 s: an advisor run that waited on the
     request's farm lock would fail (or hang the installation) instead of writing advice."""
-    from farmcore.core.models.canonical import Advice, Farm
+    from farmcore.apps.advisor.advice import Advice
+    from farmcore.core.models.canonical import Farm
     from tests.apps.chat.test_handlers import SQUARE
     from tests.apps.operations.test_spray_weather_capture import add_station, hours
 
@@ -391,7 +392,8 @@ def test_real_constraint_failure_rolls_back_canonical_audit_and_postcommit(
 ):
     from sqlalchemy import text
 
-    from farmcore.core.models.canonical import Advice, Event
+    from farmcore.apps.advisor.advice import Advice
+    from farmcore.core.models.canonical import Event
     from farmcore.core.models.corrections import OperationCorrection
     from tests.apps.operations.test_spray_weather_capture import add_station, hours
 

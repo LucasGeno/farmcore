@@ -6,10 +6,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.operations.seed import ensure_products
 from farmcore.apps.review.models import ParameterVersion
-from farmcore.core.models.canonical import Advice, Farm
+from farmcore.core.models.canonical import Farm
 from farmcore.core.models.identity import FarmMembership
 from farmcore.main import create_app
 from tests.apps.share.conftest import make_parcel
@@ -126,8 +127,9 @@ def test_assigned_members_review_with_csrf_but_operation_authority_stays_owner(
 
 
 def test_demo_and_anonymous_cannot_read_review_or_exact_private_evidence(client, session, settings):
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.core.access import ensure_owner_grant
-    from farmcore.core.models.canonical import Advice, Farm
+    from farmcore.core.models.canonical import Farm
     from tests.apps.share.conftest import make_parcel
 
     farm = Farm(name="Private reviewed farm", props={"region": "FRI12"})

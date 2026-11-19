@@ -311,7 +311,8 @@ def test_advisor_and_foreign_owner_cannot_administer_grants(
 def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_provenance(
     recipient_browser, bound_grant, session, demo, other_farm
 ):
-    from farmcore.core.models.canonical import Advice, Asset, Parcel
+    from farmcore.apps.advisor.advice import Advice
+    from farmcore.core.models.canonical import Asset, Parcel
     from tests.apps.share.synth import NOW
 
     session.add(Asset(farm_id=demo.farm.id, kind="station", name="Synthetic station"))
@@ -408,9 +409,10 @@ def test_owner_can_choose_advice_only_preset_and_recipient_opens_it(
 def test_scoped_grant_repository_denies_unlisted_app_resources_and_private_audit(
     session, bound_grant
 ):
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.apps.share.service import grant_repo
     from farmcore.core.access import ScopeDenied
-    from farmcore.core.models.canonical import Advice, LlmAudit
+    from farmcore.core.models.canonical import LlmAudit
     from farmcore.core.models.kernel import AppModule
 
     bound_grant.scopes = ["advice:read"]
@@ -860,7 +862,7 @@ def test_inactive_grant_json_denial_is_constant_without_private_metadata(
 def test_active_register_consent_does_not_authorize_advice_json(
     recipient_browser, bound_grant, session, demo, spray
 ):
-    from farmcore.core.models.canonical import Advice
+    from farmcore.apps.advisor.advice import Advice
     from tests.apps.share.synth import NOW
 
     private_marker = "unshared-stored-advice-private-payload"
@@ -895,8 +897,9 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
     from zoneinfo import ZoneInfo
 
     from farmcore.apps.advisor import tools
+    from farmcore.apps.advisor.advice import Advice
     from farmcore.apps.share.service import grant_repo
-    from farmcore.core.models.canonical import Advice, Asset
+    from farmcore.core.models.canonical import Asset
     from farmcore.core.tools import ToolContext
     from farmcore.core.weather.contract import Fetched, Licence, Request
     from farmcore.core.weather.store import record_receipt

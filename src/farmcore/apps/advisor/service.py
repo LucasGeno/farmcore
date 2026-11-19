@@ -30,6 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from farmcore.apps.advisor import priority
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.assessment import KIND as SPRAY_KIND
 from farmcore.apps.advisor.catalog import AdvisorProduct
 from farmcore.apps.advisor.engine import Advice as EngineAdvice
@@ -44,14 +45,7 @@ from farmcore.core import assessments
 from farmcore.core.access import ScopeDenied, ScopedRepository
 from farmcore.core.model_spec import validation_json
 from farmcore.core.models.assessment import Assessment
-from farmcore.core.models.canonical import (
-    Advice,
-    Asset,
-    Farm,
-    Log,
-    LogParcel,
-    LogSource,
-)
+from farmcore.core.models.canonical import Asset, Farm, Log, LogParcel, LogSource
 from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from farmcore.core.models.weather import WeatherReceipt
 

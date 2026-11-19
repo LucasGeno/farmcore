@@ -19,6 +19,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.exc import IntegrityError
 
 from farmcore.apps.advisor import service as advice_service
+from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.fields.seed import alias_number
 from farmcore.apps.forecast import availability
 from farmcore.apps.operations import production, spray_items, spray_weather
@@ -35,7 +36,7 @@ from farmcore.apps.planning.models import (
 from farmcore.apps.review.models import ParameterVersion
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Advice, Farm, Log, LogSource, Parcel
+from farmcore.core.models.canonical import Farm, Log, LogSource, Parcel
 
 SCOPE = "planning:read"
 WRITE = "planning:write"
