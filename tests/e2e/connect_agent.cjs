@@ -17,11 +17,16 @@ const [base, login, password] = process.argv.slice(2);
     await page.fill('input[name="purpose"]', "my own agent");
     await Promise.all([page.waitForNavigation(), page.click('button:has-text("Create token")')]);
     const token = await page.inputValue("[data-token-value]");
-    await page.click('[data-snippet="Codex"] [data-copy-snippet]');
-    await page.waitForFunction(() => document.querySelector('[data-snippet="Codex"] [data-copied]').textContent === "Copied");
-    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    const copy = async (key) => {
+      const box = `[data-snippet="${key}"]`;
+      await page.click(`${box} [data-copy-snippet]`);
+      await page.waitForFunction((sel) => document.querySelector(sel + " [data-copied]").textContent === "Copied", box);
+      return page.evaluate(() => navigator.clipboard.readText());
+    };
+    const env = await copy("codex-env");
+    const toml = await copy("codex-toml");
     if (process.env.CONNECT_SHOT) await page.screenshot({ path: process.env.CONNECT_SHOT, fullPage: true });
-    console.log(JSON.stringify({ token, clipboard }));
+    console.log(JSON.stringify({ token, env, toml }));
   } finally {
     await browser.close();
   }

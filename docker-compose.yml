@@ -33,6 +33,10 @@ x-farmcore: &farmcore
     DEMO_MODE: ${DEMO_MODE:-false}
     DEMO_FARM_IDS: "${DEMO_FARM_IDS:-[]}"
     PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
+    # Read by the Connect your agent page (and `farmcore mcp --http`, which Compose does not run).
+    MCP_HTTP_ENABLED: ${MCP_HTTP_ENABLED:-false}
+    MCP_HTTP_HOST: ${MCP_HTTP_HOST:-127.0.0.1}
+    MCP_HTTP_PORT: ${MCP_HTTP_PORT:-8001}
     DISPLAY_TZ: ${DISPLAY_TZ:-Europe/Paris}
     CLOCK_MODE: ${CLOCK_MODE:-replay}
     REPLAY_START: ${REPLAY_START:-}

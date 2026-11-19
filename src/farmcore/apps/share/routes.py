@@ -313,6 +313,7 @@ def _connect_page(
         local_only=connect.is_loopback(url),
         probe=status,
         snippets=connect.snippets(url),
+        operator=operator_authenticated(request),
         token_placeholder=connect.TOKEN_PLACEHOLDER,
         farm_id=repo.farm_id,
         token_scopes=scope_items(sorted(TOKEN_SCOPES)),

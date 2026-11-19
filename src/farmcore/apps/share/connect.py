@@ -15,6 +15,8 @@ gateway answers (`core/mcp_http.py`). It never carries a token and is bounded to
 from __future__ import annotations
 
 import ipaddress
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as DeadlineExceeded
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlsplit
@@ -23,11 +25,11 @@ import httpx
 
 from farmcore.settings import Settings
 
-PROBE_TIMEOUT = 2.0  # seconds, connect and read each; the page must not hang on a dead URL
+PROBE_DEADLINE = 2.0  # seconds in all, DNS included: the page must not hang on a dead URL
 TOKEN_PLACEHOLDER = "<your-token>"  # the page swaps in the once-shown token, client-side
 MCP_PATH = "/mcp"
 
-State = Literal["off", "up", "down", "unexpected"]
+State = Literal["off", "up", "down", "unexpected", "host"]
 
 
 @dataclass(frozen=True)
@@ -39,6 +41,7 @@ class Reachability:
 @dataclass(frozen=True)
 class Snippet:
     client: str
+    key: str
     where: str  # the file to edit
     text: str
     operator_only: bool = False
@@ -66,17 +69,27 @@ def mcp_url(settings: Settings) -> str:
     return f"http://{host}:{settings.mcp_http_port}{MCP_PATH}"
 
 
+def _post(url: str, transport: httpx.BaseTransport | None) -> httpx.Response:
+    timeout = httpx.Timeout(1.0, pool=0.2)  # per step; `probe` bounds the total
+    with httpx.Client(timeout=timeout, follow_redirects=False, transport=transport) as client:
+        return client.post(url, json={})
+
+
 def probe(url: str, transport: httpx.BaseTransport | None = None) -> Reachability:
     """Ask the MCP URL for nothing, without a token: "up" only for the 401 + `WWW-Authenticate`
-    challenge of FarmCore's gateway."""
+    challenge of FarmCore's gateway; 421 is that gateway refusing the Host header."""
     public = not is_loopback(url)
+    # httpx's timeouts are per step and skip DNS, so a worker carries the real deadline. It is
+    # abandoned on expiry: its own per-step timeouts end it shortly after.
+    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        with httpx.Client(
-            timeout=PROBE_TIMEOUT, follow_redirects=False, transport=transport
-        ) as client:
-            response = client.post(url, json={})
-    except httpx.HTTPError:
+        response = pool.submit(_post, url, transport).result(timeout=PROBE_DEADLINE)
+    except (httpx.HTTPError, DeadlineExceeded):
         return Reachability("down", public)
+    finally:
+        pool.shutdown(wait=False)
+    if response.status_code == 421:
+        return Reachability("host", public)
     ok = response.status_code == 401 and "www-authenticate" in response.headers
     return Reachability("up" if ok else "unexpected", public)
 
@@ -88,7 +101,7 @@ def reachability(settings: Settings, transport: httpx.BaseTransport | None = Non
     return probe(url, transport)
 
 
-def snippets(url: str) -> tuple[Snippet, Snippet]:
+def snippets(url: str) -> tuple[Snippet, Snippet, Snippet]:
     desktop = (
         '{\n  "mcpServers": {\n    "farmcore": {\n      "command": "docker",\n'
         '      "args": ["compose", "-f", "/path/to/farmcore/docker-compose.yml",\n'
@@ -96,11 +109,16 @@ def snippets(url: str) -> tuple[Snippet, Snippet]:
         f'      "env": {{ "FARMCORE_TOKEN": "{TOKEN_PLACEHOLDER}" }}\n'
         "    }\n  }\n}"
     )
-    codex = (
-        f'export FARMCORE_TOKEN="{TOKEN_PLACEHOLDER}"\n\n'
-        f'[mcp_servers.farmcore]\nurl = "{url}"\nbearer_token_env_var = "FARMCORE_TOKEN"'
-    )
+    codex_env = f'export FARMCORE_TOKEN="{TOKEN_PLACEHOLDER}"'
+    codex_toml = f'[mcp_servers.farmcore]\nurl = "{url}"\nbearer_token_env_var = "FARMCORE_TOKEN"'
     return (
-        Snippet("Claude Desktop", "claude_desktop_config.json", desktop, operator_only=True),
-        Snippet("Codex", "~/.codex/config.toml (the export goes in your shell profile)", codex),
+        Snippet(
+            "Claude Desktop",
+            "desktop",
+            "claude_desktop_config.json",
+            desktop,
+            operator_only=True,
+        ),
+        Snippet("Codex", "codex-env", "your shell profile (~/.zshrc or ~/.bashrc)", codex_env),
+        Snippet("Codex", "codex-toml", "~/.codex/config.toml (no token in this file)", codex_toml),
     )

@@ -4,6 +4,10 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- Sharing gains a "Connect your agent" page (`/share/connect`): the MCP URL, token creation, and
+  copy-paste setup for Codex (and Claude Desktop over stdio, shown to the operator only). The
+  Expert view probes the URL without a token and says whether it is up, and whether it is
+  loopback-only (a tunnel or hosting is needed).
 - `farmcore mcp --http` serves the farm's tools to remote agents over MCP Streamable HTTP at
   `/mcp`, with the agent tokens issued on Sharing as bearer tokens. Off unless
   `MCP_HTTP_ENABLED=true`; loopback unless `MCP_HTTP_HOST` is set; Origin and Host allowlists,

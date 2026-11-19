@@ -13,6 +13,7 @@
   <p role="status" data-reachability="{{ probe.state }}" class="mt-2 max-w-prose text-sm font-semibold">
     {% if probe.state == 'up' %}Up: the address answered and asked for a token.
     {% elif probe.state == 'off' %}Off: the remote agent server is not switched on.
+    {% elif probe.state == 'host' %}The agent server answers, but this host name is not in <code>MCP_HTTP_ALLOWED_HOSTS</code>.
     {% elif probe.state == 'unexpected' %}Something answers at this address, but it is not the FarmCore agent server.
     {% else %}Down: nothing answered within 2 seconds.{% endif %}
   </p>
@@ -57,13 +58,17 @@
 
 <section class="mt-6 min-w-0 border-t border-line pt-6" aria-labelledby="connect-setup">
   <h2 id="connect-setup" class="text-lg font-semibold">3. Setup</h2>
-  {% for s in snippets %}
-  <div class="mt-4 min-w-0" data-snippet="{{ s.client }}">
+  {% set seen = namespace(client='') %}
+  {% for s in snippets if operator or not s.operator_only %}
+  <div class="mt-4 min-w-0" data-snippet="{{ s.key }}">
+    {% if s.client != seen.client %}
     <h3 class="font-semibold">{{ s.client }}{% if s.operator_only %} <span class="text-sm font-normal text-muted">· operator only</span>{% endif %}</h3>
     {% if s.operator_only %}
-    <p class="mt-1 max-w-prose text-sm text-muted">This runs on the machine that hosts FarmCore, started by the operator with <code>docker compose exec</code>, so the database address stays inside the container. Never copy a database address into a client config, and never give this setup to anyone who is not the operator: they get the remote address above and a token. For a host you reach over ssh, use <code>ssh &lt;host&gt; docker compose ... exec -T -e FARMCORE_TOKEN app farmcore mcp</code> as the command, and never put the token on a command line.</p>
+    <p class="mt-1 max-w-prose text-sm text-muted">This runs on the machine that hosts FarmCore, started by the operator with <code>docker compose exec</code>, so the database address stays inside the container. Never copy a database address into a client config. For a host you reach over ssh, use <code>ssh &lt;host&gt; docker compose ... exec -T -e FARMCORE_TOKEN app farmcore mcp</code> as the command: ssh forwards the token only if the client sets <code>SendEnv FARMCORE_TOKEN</code> and the host sets <code>AcceptEnv FARMCORE_TOKEN</code>, and the token never goes on a command line (see SECURITY.md).</p>
     {% else %}
-    <p class="mt-1 max-w-prose text-sm text-muted">Codex calls the address above over https with the token in a header. The token goes in the environment variable, never in the address.</p>
+    <p class="mt-1 max-w-prose text-sm text-muted">Codex calls the address above over https with the token in a header. The token lives in an environment variable, never in the config file or the address. Two steps:</p>
+    {% endif %}
+    {% set seen.client = s.client %}
     {% endif %}
     <p class="mt-1 text-sm text-muted">{{ s.where }}</p>
     <pre data-snippet-text class="mt-2 overflow-x-auto rounded-lg bg-surface p-3 font-mono text-xs">{{ s.text }}</pre>

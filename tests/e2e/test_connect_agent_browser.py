@@ -1,5 +1,6 @@
 """Browser journey: an owner creates an agent token on "Connect your agent" and copies the Codex
-snippet, which holds the once-shown token (inserted client-side) and the MCP URL.
+snippets: the shell line holds the once-shown token (inserted client-side), the config holds
+the MCP URL and no token.
 
 Needs `node` and the `playwright` package (resolved through `PLAYWRIGHT_NODE_PATH`, e.g. a
 `node_modules` directory) and a Chromium; skips without them. The reachability states are covered
@@ -24,11 +25,13 @@ from farmcore.core.models.identity import FarmMembership, LocalIdentity
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
 
+pytestmark = pytest.mark.slow  # a real browser: ~10 s, over the 5 s budget
+
 SCRIPT = Path(__file__).with_name("connect_agent.cjs")
 PASSWORD = "synthetic-browser-owner-password"  # gauntlet:allow-secret synthetic credential
 
 
-def test_owner_creates_a_token_and_copies_the_codex_snippet(
+def test_owner_creates_a_token_and_copies_the_two_codex_snippets(
     settings, committed_session_factory, free_tcp_port
 ):
     node = shutil.which("node")
@@ -62,5 +65,8 @@ def test_owner_creates_a_token_and_copies_the_codex_snippet(
     assert done.returncode == 0, done.stderr
     seen = json.loads(done.stdout.strip().splitlines()[-1])
     assert seen["token"].startswith("fc_pat_")
-    assert f'export FARMCORE_TOKEN="{seen["token"]}"' in seen["clipboard"]
-    assert connect.mcp_url(settings) in seen["clipboard"]
+    # The shell line carries the token; the TOML names the variable and holds no secret.
+    assert seen["env"] == f'export FARMCORE_TOKEN="{seen["token"]}"'
+    assert connect.mcp_url(settings) in seen["toml"]
+    assert 'bearer_token_env_var = "FARMCORE_TOKEN"' in seen["toml"]
+    assert seen["token"] not in seen["toml"]
