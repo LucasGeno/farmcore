@@ -165,6 +165,7 @@
     {% endif %}
 
     <p class="mt-4 text-sm"><a href="{{ farm_url('/today/') }}" class="inline-flex min-h-[44px] items-center underline">Skip for now</a></p>
+    {% if start %}<p class="mt-1 text-sm"><a href="{{ farm_url('/onboarding/crops') }}" class="inline-flex min-h-[44px] items-center font-semibold underline">Next: choose your crops</a></p>{% endif %}
   </div>
 </section>
 <script src="/static/onboarding/location.js"></script>
