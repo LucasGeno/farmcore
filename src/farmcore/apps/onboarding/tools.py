@@ -12,13 +12,14 @@ instructions.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import timedelta
 from typing import Any
 from uuid import uuid4
 
 from shapely import get_num_coordinates
 from shapely.geometry import shape
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from farmcore.apps.onboarding import registries
 from farmcore.apps.onboarding.importers import parsers, service
@@ -26,12 +27,12 @@ from farmcore.core import drafts
 from farmcore.core.farm_location import farm_location
 from farmcore.core.models.canonical import AccessLog, Farm, Parcel
 from farmcore.core.models.drafts import Draft
-from farmcore.core.models.identity import AccessToken
 from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = "drafts:propose"
 FIELDS_SCOPE = "fields:read"
 REVIEW_PATH = "/drafts/{id}"
+MAX_GEOJSON_BYTES = 2_000_000  # Assumed input budget, before geometry repair/intersections.
 
 
 def _propose(ctx: ToolContext, kind: str, payload: dict[str, Any]) -> Draft:
@@ -100,6 +101,11 @@ def propose_parcels(ctx: ToolContext, geojson: Any) -> ToolResult:
     features = geojson.get("features")
     if not isinstance(features, list) or not 1 <= len(features) <= parsers.MAX_PARCELS:
         raise drafts.DraftInvalid("Send between 1 and 200 parcel boundaries.")
+    size = 0
+    for chunk in json.JSONEncoder().iterencode(geojson):
+        size += len(chunk)  # ensure_ascii=True: encoded characters are bytes.
+        if size > MAX_GEOJSON_BYTES:
+            raise drafts.DraftInvalid("GeoJSON input is too large (maximum 2 MB).")
     items = []
     try:
         for index, feature in enumerate(features, 1):
@@ -107,7 +113,14 @@ def propose_parcels(ctx: ToolContext, geojson: Any) -> ToolResult:
                 raise ValueError("Each feature needs a polygon geometry.")
             props = dict(feature.get("properties") or {})
             # Review notices and registry metadata are authored by the server only.
-            for field in ("messages", "attribution", "licence", "year", "retrieved_at"):
+            for field in (
+                "messages",
+                "attribution",
+                "licence",
+                "year",
+                "retrieved_at",
+                "source_ref",
+            ):
                 props.pop(field, None)
             props["source_scope"] = "agent"
             geometry = shape(feature["geometry"])
@@ -116,7 +129,7 @@ def propose_parcels(ctx: ToolContext, geojson: Any) -> ToolResult:
             items.append(parsers.normalise(geometry, props, index))
         payload = service.validate(ctx.repo.session, ctx.repo.farm_id, {"parcels": items})
     except ValueError as exc:
-        raise drafts.DraftInvalid(str(exc)) from exc
+        raise drafts.DraftInvalid(drafts.validation_reason(exc)) from exc
     existing = list(
         ctx.repo.session.scalars(select(Parcel).where(Parcel.farm_id == ctx.repo.farm_id))
     )
@@ -157,7 +170,7 @@ def list_import_candidates(ctx: ToolContext, bbox: str) -> ToolResult:
             else []
         )
     except ValueError as exc:
-        raise drafts.DraftInvalid(str(exc)) from exc
+        raise drafts.DraftInvalid(drafts.validation_reason(exc)) from exc
     candidates = [
         {
             "name": row["name"],
@@ -179,17 +192,22 @@ def list_import_candidates(ctx: ToolContext, bbox: str) -> ToolResult:
 def _registry_budget(ctx: ToolContext) -> None:
     """Assumed product policy: six lookup attempts per token per rolling minute.
 
-    The MCP audit includes this call and failed lookups. Serialize on the token row so
-    concurrent transports/processes share the budget; no in-memory reset on reconnect.
+    The MCP audit includes this call and failed lookups. A namespaced advisory lock
+    shares the budget across transports/processes; no in-memory reset on reconnect.
     The bounded connector holds this lock for at most its eight-second deadline.
     """
     actor = ctx.repo.actor
     prefix, _, token_id = actor.partition(":")
     if prefix != "token" or not token_id.isdigit():
         raise drafts.DraftInvalid("Registry lookups require an agent token.")
+    # Separate from the token row used by last_used_at; a hash collision only
+    # serializes unrelated lookups, never shares their audit counts.
     ctx.repo.session.execute(
-        select(AccessToken.id).where(AccessToken.id == int(token_id)).with_for_update()
-    ).one()
+        text(
+            "SELECT pg_advisory_xact_lock(hashtext('farmcore.registry-budget'), hashtext(:actor))"
+        ),
+        {"actor": actor},
+    )
     attempts = ctx.repo.session.scalar(
         select(func.count())
         .select_from(AccessLog)

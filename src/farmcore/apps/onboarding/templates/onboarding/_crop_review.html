@@ -1,3 +1,8 @@
 <h2 class="text-lg font-semibold">Proposed crops</h2>
-<p>Season starts {{ draft.payload.starts_on }}. Parcels with a covering season keep their existing crop.</p>
-<ul>{% for parcel, crop in choices %}<li>{{ parcel.name }}: {{ crop.name }}</li>{% endfor %}</ul>
+{% if problem %}<p role="alert">{{ problem }}</p>{% else %}
+<p>Season starts {{ draft.payload.starts_on }}.</p>
+<ul>{% for row in choices %}<li>{{ row.parcel.name }}: {{ row.crop.name }}.
+{% if row.covering %}Covered: keeps {{ row.covering.crop_name or 'existing crop' }}. Nothing new will be recorded for this parcel.
+{% elif row.future_overlap %}<span role="alert">Overlaps a future crop season; review its dates before confirming.</span>
+{% else %}A new crop season will be recorded.{% endif %}</li>{% endfor %}</ul>
+{% endif %}

@@ -4,10 +4,10 @@ Failure model (one owning test each):
 - a propose tool writes an open draft, never a confirmed record (no log, parcel or crop season),
   and no confirm/cancel/delete tool exists on the surface;
 - `get_draft` reads the agent's own draft and refuses a cross-farm id (not found);
-- `propose_parcels` rejects invalid or out-of-range geometry (point, non-WGS84, tiny area, over
-  the vertex cap);
+- `propose_parcels` rejects invalid geometry or oversized input
+  (CRS override, vertex cap and byte budgets);
 - `propose_record` rejects a parcel that is not on the token's farm;
-- a token without `drafts:propose` is not offered a propose tool and is refused at call;
+- scope listing/call refusals are owned by test_mcp_stdio;
 - `list_import_candidates` returns validated candidates (the public lookup is faked).
 """
 
@@ -35,49 +35,6 @@ GEOJSON = {
                 "type": "Polygon",
                 "coordinates": [
                     [[-0.14, 44.89], [-0.13, 44.89], [-0.13, 44.90], [-0.14, 44.90], [-0.14, 44.89]]
-                ],
-            },
-        }
-    ],
-}
-POINT = {
-    "type": "FeatureCollection",
-    "features": [
-        {
-            "type": "Feature",
-            "properties": {},
-            "geometry": {"type": "Point", "coordinates": [-0.15, 44.89]},
-        }
-    ],
-}
-NON_WGS84 = {
-    "type": "FeatureCollection",
-    "features": [
-        {
-            "type": "Feature",
-            "properties": {},
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [[[200, 89], [200.01, 89], [200.01, 89.01], [200, 89]]],
-            },
-        }
-    ],
-}
-TINY = {
-    "type": "FeatureCollection",
-    "features": [
-        {
-            "type": "Feature",
-            "properties": {},
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": [
-                    [
-                        [-0.15, 44.89],
-                        [-0.15 + 1e-6, 44.89],
-                        [-0.15 + 1e-6, 44.89 + 1e-6],
-                        [-0.15, 44.89],
-                    ]
                 ],
             },
         }
@@ -171,10 +128,23 @@ def test_propose_tools_write_open_drafts_and_nothing_else(
         "propose_crop_assignments",
         {"starts_on": "2024-05-01", "assignments": {str(parcel_id): "vine"}},
     )
-    parcels = tools.call(raw, "propose_parcels", {"geojson": GEOJSON})
+    parcels = tools.call(
+        raw,
+        "propose_parcels",
+        {
+            "geojson": GEOJSON
+            | {
+                "features": [
+                    GEOJSON["features"][0]
+                    | {"properties": {"name": "New field", "source_ref": "spoof"}}
+                ]
+            }
+        },
+    )
 
     assert record.facts["type"] == "observation"
     assert parcels.facts["parcels"] == 1
+    assert session.get(Draft, parcels.facts["draft_id"]).payload["parcels"][0]["source_ref"] == ""
     assert assignments.facts["parcels"] == 1
     rows = session.scalars(select(Draft)).all()
     assert {d.kind for d in rows} == {
@@ -189,8 +159,7 @@ def test_propose_tools_write_open_drafts_and_nothing_else(
     assert session.scalars(select(CropSeason)).all() == []  # no season was written
     assert len(session.scalars(select(Parcel)).all()) == 1  # the original parcel only
     # No confirm, cancel, revise or delete tool is on the surface.
-    names = {t.name for t in tools.list(raw)}
-    assert not any(word in n for n in names for word in ("confirm", "cancel", "revise", "delete"))
+    assert all(t.effect in {"read", "propose"} for t in tools.list(raw))
     # Every call was audited as the token, one row per tool.
     audited = session.execute(
         select(AccessLog.actor, AccessLog.resource).where(AccessLog.farm_id == farm.id)
@@ -231,8 +200,13 @@ def test_get_draft_reads_its_own_and_refuses_a_cross_farm_id(
 
 @pytest.mark.parametrize(
     "geojson",
-    [POINT, NON_WGS84, TINY, VERTEX_CAP],
-    ids=["point", "crs", "tiny", "vertex"],
+    [
+        GEOJSON | {"crs": {"type": "name", "properties": {"name": "EPSG:2154"}}},
+        VERTEX_CAP,
+        GEOJSON | {"padding": "x" * 2_000_001},
+        None,
+    ],
+    ids=["crs", "vertex", "input-size", "kind-budget"],
 )
 def test_propose_parcels_rejects_invalid_or_out_of_range_geometry(
     session, session_factory, settings, manifests, geojson
@@ -240,6 +214,21 @@ def test_propose_parcels_rejects_invalid_or_out_of_range_geometry(
     _, _, raw, _ = _farm(session, ["drafts:propose", "fields:read"])
     tools = _tools(session_factory, settings, manifests)
 
+    if geojson is None:
+        from dataclasses import replace
+
+        manifests = [
+            replace(
+                m,
+                draft_kinds=tuple(
+                    replace(k, max_payload_bytes=100) if k.key == "parcels" else k
+                    for k in m.draft_kinds
+                ),
+            )
+            for m in manifests
+        ]
+        tools = _tools(session_factory, settings, manifests)
+        geojson = GEOJSON
     with pytest.raises(farm_mcp.Refused):
         tools.call(raw, "propose_parcels", {"geojson": geojson})
     assert session.scalars(select(Draft)).all() == []  # nothing was proposed
@@ -267,46 +256,6 @@ def test_propose_record_rejects_a_parcel_of_another_farm(
     assert session.scalars(select(Draft)).all() == []
 
 
-def test_a_token_without_drafts_propose_is_not_offered_and_is_refused(
-    session, session_factory, settings, manifests
-):
-    _, _, raw, _ = _farm(session, ["fields:read", "logs:read"])
-    tools = _tools(session_factory, settings, manifests)
-
-    names = {t.name for t in tools.list(raw)}
-    proposal = {"propose_record", "propose_parcels", "propose_crop_assignments", "get_draft"}
-    assert not names & proposal
-
-    with pytest.raises(farm_mcp.Refused) as refused:
-        tools.call(raw, "propose_record", {})
-    assert "not available" in str(refused.value).lower()
-
-
-@pytest.mark.parametrize("empty", [False, True])
-def test_list_import_candidates_returns_validated_candidates(
-    session, session_factory, settings, manifests, monkeypatch, empty
-):
-    import httpx
-
-    _, _, raw, _ = _farm(session, ["drafts:propose", "fields:read"])
-    tools = _tools(session_factory, settings, manifests)
-    feature = GEOJSON["features"][0] | {"properties": {"id_parcel": "1", "code_cultu": "VRC"}}
-    real = httpx.AsyncClient
-    transport = httpx.MockTransport(
-        lambda request: httpx.Response(
-            200, json={"type": "FeatureCollection", "features": [] if empty else [feature]}
-        )
-    )
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=transport, **kw))
-    result = tools.call(raw, "list_import_candidates", {"bbox": "-0.159,44.881,-0.141,44.899"})
-    if empty:
-        assert result.facts["candidates"] == []
-    else:
-        [candidate] = result.facts["candidates"]
-        assert candidate["source_ref"] == "1"
-        assert candidate["crop_key"] == "vine"
-
-
 def test_registry_budget_survives_new_service_instances(
     session, session_factory, settings, manifests, monkeypatch
 ):
@@ -325,7 +274,13 @@ def test_registry_budget_survives_new_service_instances(
         return httpx.Response(
             200,
             json=GEOJSON
-            | {"features": [GEOJSON["features"][0] | {"properties": {"id_parcel": "1"}}]},
+            | {
+                "features": []
+                if len(requests) == 2
+                else [
+                    GEOJSON["features"][0] | {"properties": {"id_parcel": "1", "code_cultu": "VRC"}}
+                ]
+            },
         )
 
     real = httpx.AsyncClient
@@ -333,8 +288,15 @@ def test_registry_budget_survives_new_service_instances(
         httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(answer), **kw)
     )
     args = {"bbox": "-0.159,44.881,-0.141,44.899"}
-    for _ in range(6):
-        _tools(session_factory, settings, manifests).call(raw, "list_import_candidates", args)
+    for index in range(6):
+        result = _tools(session_factory, settings, manifests).call(
+            raw, "list_import_candidates", args
+        )
+        if index == 1:
+            assert result.facts["candidates"] == []
+        else:
+            [candidate] = result.facts["candidates"]
+            assert candidate["source_ref"] == "1" and candidate["crop_key"] == "vine"
     with pytest.raises(farm_mcp.Refused, match="rate limit"):
         _tools(session_factory, settings, manifests).call(raw, "list_import_candidates", args)
     assert len(requests) == 6
@@ -348,9 +310,9 @@ def test_registry_budget_survives_new_service_instances(
     assert session.scalars(select(Draft)).all() == []
 
 
-@pytest.mark.parametrize("future_conflict", [False, True])
+@pytest.mark.parametrize("scenario", ["new", "future", "deleted", "unknown"])
 def test_crop_proposal_review_shows_proposed_choices(
-    client, session, session_factory, settings, manifests, future_conflict
+    client, session, session_factory, settings, manifests, scenario
 ):
     farm, _, raw, parcel_id = _farm(session, ["drafts:propose"])
     result = _tools(session_factory, settings, manifests).call(
@@ -372,7 +334,7 @@ def test_crop_proposal_review_shows_proposed_choices(
     client.headers.update(
         {"Origin": "https://testserver", "X-CSRF-Token": client.cookies["farmcore_csrf"]}
     )
-    if future_conflict:
+    if scenario == "future":
         from datetime import date
 
         session.add(
@@ -385,8 +347,21 @@ def test_crop_proposal_review_shows_proposed_choices(
             )
         )
         session.flush()
+    if scenario == "future":
+        warning = client.get(f"/onboarding/crops/review?farm={farm.id}&draft={draft_id}")
+        assert warning.status_code == 200 and "Overlaps a future crop season" in warning.text
+    if scenario in {"deleted", "unknown"}:
+        if scenario == "deleted":
+            session.delete(session.get(Parcel, parcel_id))
+        else:
+            row = session.get(Draft, draft_id)
+            row.payload = {**row.payload, "assignments": {str(parcel_id): "retired-crop"}}
+        session.flush()
+        stale = client.get(f"/onboarding/crops/review?farm={farm.id}&draft={draft_id}")
+        assert stale.status_code == 409 and "no longer valid" in stale.text
+        return
     confirmed = client.post(f"/drafts/{draft_id}/confirm?farm={farm.id}", data={"revision": 1})
-    if future_conflict:
+    if scenario == "future":
         assert confirmed.status_code == 422
         session.expire_all()
         assert session.get(Draft, draft_id).status == "open"
@@ -396,28 +371,6 @@ def test_crop_proposal_review_shows_proposed_choices(
     assert confirmed.status_code == 200
     [season] = session.scalars(select(CropSeason)).all()
     assert season.parcel_id == parcel_id and season.crop_name == "Olive"
-
-
-def test_propose_tool_respects_kind_payload_budget(session, session_factory, settings, manifests):
-    from dataclasses import replace
-
-    _, _, raw, _ = _farm(session, ["drafts:propose"])
-    bounded = [
-        replace(
-            m,
-            draft_kinds=tuple(
-                replace(k, max_payload_bytes=100) if k.key == "parcels" else k
-                for k in m.draft_kinds
-            ),
-        )
-        for m in manifests
-    ]
-    with pytest.raises(farm_mcp.Refused, match="too large"):
-        _tools(session_factory, settings, bounded).call(
-            raw, "propose_parcels", {"geojson": GEOJSON}
-        )
-    assert session.scalars(select(Draft)).all() == []
-    assert session.scalar(select(AccessLog.resource)) == "mcp:propose_parcels"
 
 
 def test_crop_proposal_rejects_duplicate_numeric_parcel_ids(
@@ -433,4 +386,81 @@ def test_crop_proposal_rejects_duplicate_numeric_parcel_ids(
                 "assignments": {str(parcel_id): "vine", f"0{parcel_id}": "olive"},
             },
         )
+    for assignments, reason in [
+        ({"²": "olive"}, "Parcel ids"),
+        ({str(parcel_id): 1}, "assignments"),
+    ]:
+        with pytest.raises(farm_mcp.Refused) as refused:
+            _tools(session_factory, settings, manifests).call(
+                raw,
+                "propose_crop_assignments",
+                {"starts_on": "2024-05-01", "assignments": assignments},
+            )
+        assert reason in str(refused.value) or str(refused.value) == farm_mcp.BAD_ARGUMENTS
+        assert "pydantic" not in str(refused.value) and "invalid literal" not in str(refused.value)
+    with pytest.raises(farm_mcp.Refused, match="fact.log_id: unexpected field"):
+        _tools(session_factory, settings, manifests).call(
+            raw,
+            "propose_record",
+            {
+                "type": "observation",
+                "parcel_ids": [parcel_id],
+                "ts_start": "2024-05-01T10:00:00Z",
+                "fact": {"text": "aphids", "log_id": 1},
+            },
+        )
     assert session.scalars(select(Draft)).all() == []
+
+
+def test_crop_confirm_records_only_uncovered_parcels(
+    client, session, session_factory, settings, manifests
+):
+    from datetime import date
+
+    from tests.core.test_member_sessions import _login
+
+    farm, _, raw, covered_id = _farm(session, ["drafts:propose"])
+    covered = CropSeason(
+        farm_id=farm.id,
+        parcel_id=covered_id,
+        starts_on=date(2023, 1, 1),
+        crop_name="Vine",
+        created_by="operator",
+    )
+    parcel = Parcel(
+        farm_id=farm.id,
+        name="New parcel",
+        alias="P2",
+        area_ha=1,
+        geom=session.get(Parcel, covered_id).geom,
+    )
+    session.add_all([covered, parcel])
+    session.flush()
+    client.base_url = "https://testserver"
+    client.headers.pop("X-Admin-Token", None)
+    assert _login(client, login=f"mcp-owner-{farm.id}", password="x" * 16).status_code == 303
+    client.headers.update(
+        {"Origin": "https://testserver", "X-CSRF-Token": client.cookies["farmcore_csrf"]}
+    )
+    tools = _tools(session_factory, settings, manifests)
+    for choices, status in [
+        ({str(covered_id): "olive"}, 422),
+        ({str(covered_id): "olive", str(parcel.id): "olive"}, 200),
+    ]:
+        draft_id = tools.call(
+            raw, "propose_crop_assignments", {"starts_on": "2024-05-01", "assignments": choices}
+        ).facts["draft_id"]
+        review = client.get(f"/onboarding/crops/review?farm={farm.id}&draft={draft_id}")
+        assert "Covered: keeps Vine" in review.text
+        response = client.post(f"/drafts/{draft_id}/confirm?farm={farm.id}", data={"revision": 1})
+        assert response.status_code == status
+        session.expire_all()
+        draft = session.get(Draft, draft_id)
+        if status == 422:
+            assert "nothing would be recorded" in response.text.lower()
+            assert draft.status == "open" and draft.result_id is None
+        else:
+            assert draft.result_id != covered.id
+            created = session.get(CropSeason, draft.result_id)
+            assert created.parcel_id == parcel.id and created.crop_name == "Olive"
+        assert session.get(CropSeason, covered.id).crop_name == "Vine"

@@ -173,8 +173,7 @@ class FarmTools:
             except ScopeDenied:
                 error = OUT_OF_SCOPE
             except DraftError as exc:
-                # A propose tool's plain reason ("not found", "too large", "invalid geometry"):
-                # curated words, never internals, so it is safe to show the client.
+                # Draft validators shorten field errors before they reach this boundary.
                 error = str(exc)
             except Exception as exc:
                 logger.warning("mcp tool %s failed (%s)", tool.name, type(exc).__name__)

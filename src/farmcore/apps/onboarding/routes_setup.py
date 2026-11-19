@@ -19,12 +19,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from farmcore.apps.onboarding import bundles, crops
-from farmcore.core import registry
+from farmcore.apps.onboarding import drafts as crop_drafts
+from farmcore.core import drafts, registry
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.farm_location import time_zone_of
 from farmcore.core.manifest import Manifest
 from farmcore.core.routes_clock import require_admin
+from farmcore.core.routes_drafts import load
 from farmcore.db import get_session
 from farmcore.web import context_url, is_admin, render
 
@@ -217,14 +219,19 @@ def choose_bundle(key: str, request: Request, session: Session = Depends(get_ses
 
 @router.get("/crops/review", dependencies=[Depends(require_farm_owner)])
 def review_crops(request: Request, repo: Repo, draft: int):
-    from farmcore.core.models.canonical import Parcel
-    from farmcore.core.routes_drafts import load
-
     row = load(request, repo, draft)
     if row.kind != "crop-assignments":
         raise HTTPException(404, "Crop draft not found.")
-    choices = [
-        (repo.session.get(Parcel, int(parcel_id)), crops.CROPS[key])
-        for parcel_id, key in row.payload["assignments"].items()
-    ]
+    try:
+        choices = crop_drafts.review_choices(repo, row.payload)
+    except ValueError as exc:
+        response = render(
+            request,
+            "onboarding/_crop_review.html",
+            draft=row,
+            problem="This crop proposal is no longer valid. " + drafts.validation_reason(exc),
+            choices=[],
+        )
+        response.status_code = 409
+        return response
     return render(request, "onboarding/_crop_review.html", draft=row, choices=choices)
