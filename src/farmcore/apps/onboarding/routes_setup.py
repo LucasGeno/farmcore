@@ -123,6 +123,7 @@ def _ordered(request: Request) -> list[Manifest]:
 def _bundle_cards(session: Session, request: Request, query: str) -> list[dict[str, Any]]:
     ordered = _ordered(request)
     states = registry.read_states(session, ordered)
+    loaded = {manifest.name for manifest in request.app.state.manifests}
     cards: list[dict[str, Any]] = []
     for bundle in bundles.BUNDLES:
         targets = registry.bundle_targets(ordered, bundle.apps)
@@ -146,6 +147,9 @@ def _bundle_cards(session: Session, request: Request, query: str) -> list[dict[s
                 "icon": bundle.icon,
                 "apps": titles,
                 "status": status,
+                "restart": [
+                    manifest.display_name for manifest in targets if manifest.name not in loaded
+                ],
             }
         )
     return cards
@@ -184,6 +188,14 @@ def bundles_page(
         found = bundles.bundle(enabled)
         if found is not None:
             notice = f"{found.title} apps are on."
+            loaded = {manifest.name for manifest in request.app.state.manifests}
+            restart = [
+                manifest.display_name
+                for manifest in registry.bundle_targets(_ordered(request), found.apps)
+                if manifest.name not in loaded
+            ]
+            if restart:
+                notice += f" {registry.join_names(restart)} load at next start."
     return _bundles_page(request, session, query=query, notice=notice)
 
 

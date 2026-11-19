@@ -27,6 +27,7 @@
       <h2 class="text-[18px] font-semibold text-ink">{{ card.title }}</h2>
       <p class="mt-1 text-[14px] text-muted">{{ card.summary }}</p>
       <p class="mt-2 text-[13px] text-muted">Includes {{ card.apps | join(", ") }}.</p>
+      {% if card.restart %}<p class="mt-1 text-[13px] text-wait">{{ card.restart | join(", ") }} load at next start.</p>{% endif %}
     </div>
     <div class="mt-auto flex flex-wrap items-center gap-3">
       {% if card.status == "on" %}

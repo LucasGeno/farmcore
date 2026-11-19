@@ -15,6 +15,11 @@ Sources
 - EPPO codes: EPPO Global Database (https://gd.eppo.int). `None` means the code does not
   name a species, so the season keeps an unknown EPPO code rather than inventing one.
 
+A code maps only when it names a crop or a crop group FarmCore itself names (grassland, fruit
+trees, citrus, nuts, vegetables). Generic land-use codes (SIGPAC "TA" arable land) and
+associations ("VO" vine-olive, "FV" nuts-vine) stay unknown: they do not say which crop the
+parcel carries. FR and ES follow the same rule.
+
 Crops become `crop_season` rows through the fields app's season service: a new season is
 appended, an overlapping one is left untouched, and earlier seasons are never rewritten.
 """
@@ -50,7 +55,7 @@ CROPS: dict[str, Crop] = {
         Crop("soft-wheat", "Soft wheat", "TRZAX"),
         Crop("durum-wheat", "Durum wheat", "TRZDU"),
         Crop("barley", "Barley", "HORVX"),
-        Crop("grain-maize", "Grain maize", "ZEAMX"),
+        Crop("maize", "Maize", "ZEAMX"),
         Crop("rapeseed", "Rapeseed", "BRSNN"),
         Crop("sunflower", "Sunflower", "HELAN"),
         Crop("rice", "Rice", "ORYSA"),
@@ -77,9 +82,9 @@ CODE_PROP: dict[str, tuple[str, str]] = {
     "ES": ("uso_sigpac", "SIGPAC use code"),
 }
 
-# Registry code -> FarmCore crop key. Only codes that name the crop are here: generic codes
-# ("VRG" orchard, SIGPAC "TA" arable land) and associations ("VO" vine-olive, "FV" nuts-vine)
-# stay unknown because they do not say which crop the parcel carries.
+# Registry code -> FarmCore crop key. A code maps when it names a crop or a group crop FarmCore
+# names; generic land-use codes ("TA" arable land) and associations ("VO" vine-olive) stay
+# unknown because they do not say which crop the parcel carries. FR and ES follow one rule.
 CROSSWALK: dict[str, dict[str, str]] = {
     "FR": {
         "BTH": "soft-wheat",  # blé tendre d'hiver
@@ -88,7 +93,7 @@ CROSSWALK: dict[str, dict[str, str]] = {
         "BDP": "durum-wheat",  # blé dur de printemps
         "ORH": "barley",  # orge d'hiver
         "ORP": "barley",  # orge de printemps
-        "MIS": "grain-maize",  # maïs (hors maïs doux)
+        "MIS": "maize",  # maïs (hors maïs doux); RPG has no separate silage code
         "CZH": "rapeseed",  # colza d'hiver
         "CZP": "rapeseed",  # colza de printemps
         "TRN": "sunflower",  # tournesol
@@ -100,6 +105,8 @@ CROSSWALK: dict[str, dict[str, str]] = {
         "PTC": "potato",  # pomme de terre
         "LUZ": "alfalfa",  # luzerne
         "SOJ": "soybean",  # soja
+        "VRG": "fruit-trees",  # verger (generic orchard group)
+        "AGR": "citrus",  # agrume (generic citrus group)
         "NOX": "walnut",  # noix
         "NOS": "hazelnut",  # noisette
         "PVT": "peach",  # pêche
@@ -125,7 +132,7 @@ REGIONAL_CROPS: dict[str, tuple[str, ...]] = {
     "FR": (
         "vine",
         "soft-wheat",
-        "grain-maize",
+        "maize",
         "barley",
         "rapeseed",
         "sunflower",
