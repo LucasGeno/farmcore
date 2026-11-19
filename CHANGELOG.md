@@ -34,7 +34,6 @@ Notable changes for operators and app authors. Newest first.
 - Register checks (`register.json` and the register page) keep their keys: a product recorded
   before the move is still named by its legacy id; a product added since by `ci<catalog item
   id>`. A stocked plant-protection product is never offered as a fertiliser.
-
 - Every agronomic model declares a `ModelSpec` (`core/model_spec.py`): method and citation,
   EPPO codes, BBCH window, inputs, sourced parameters, validation level and provenance. App
   authors: `AssessmentKind.models` is now required. A loaded kind that names no `ModelSpec`, or

@@ -126,8 +126,8 @@ def _preflight(bind: sa.Connection) -> None:
     blockers = [_named(what, ids, fix) for what, sql, fix in checks if (ids := _ids(bind, sql))]
     if blockers:
         raise MigrationRefused(
-            "core_0018 refused, nothing was changed: " + "; ".join(blockers) + ". Fix these "
-            "rows (back up first) and run migrate again."
+            "core_0018 refused, nothing was changed: " + "; ".join(blockers) + "; fix these "
+            "rows (back up first) and run migrate again"
         )
 
 
@@ -417,7 +417,26 @@ def _refusals(bind: sa.Connection) -> list[str]:
     for what, sql in counts.items():
         n = bind.execute(sa.text(sql)).scalar_one()
         if n:
-            out.append(f"{n} {what}")
+            out.append(f"{n} {what}: no legacy row to return to; back them up and remove them")
+    # A record of another type corrected since the upgrade: its moved legacy amount and its new
+    # entered one would both return, and the next upgrade's preflight would refuse the record.
+    corrected = _ids(
+        bind,
+        "SELECT l.id FROM log l WHERE l.type <> 'spray' "
+        "AND EXISTS (SELECT 1 FROM typed_quantity t JOIN legacy_quantity_map m "
+        "ON m.typed_quantity_id = t.id WHERE t.log_id = l.id) "
+        "AND EXISTS (SELECT 1 FROM typed_quantity t WHERE t.log_id = l.id "
+        "AND t.entered_measure IS NULL) ORDER BY l.id",
+    )
+    if corrected:
+        out.append(
+            _named(
+                "record(s) other than a spray corrected since the upgrade, holding a moved "
+                "legacy amount beside an entered one",
+                corrected,
+                "keep one amount per record (remove the legacy or the entered amount)",
+            )
+        )
     return out
 
 
@@ -426,8 +445,7 @@ def downgrade() -> None:
     refusals = _refusals(bind)
     if refusals:
         raise MigrationRefused(
-            "core_0018 downgrade refused, nothing was changed: " + "; ".join(refusals) + ". "
-            "They have no legacy row to return to; back them up and remove them first."
+            "core_0018 downgrade refused, nothing was changed: " + "; ".join(refusals)
         )
     op.execute(
         "CREATE VIEW legacy_catalog_item AS "

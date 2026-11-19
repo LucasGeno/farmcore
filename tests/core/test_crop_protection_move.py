@@ -196,7 +196,7 @@ def test_migrate_lists_every_preflight_blocker_and_changes_nothing(
             f"the schema is still at {BEFORE}",
         ):
             assert blocker in result.output
-        assert "Secret label" not in result.output
+        assert "Secret label" not in result.output and ".;" not in result.output
         with engine.begin() as db:
             assert _one(db, "SELECT version_num FROM alembic_version") == BEFORE
             assert _one(db, "SELECT to_regclass('legacy_product_map')::text") is None
@@ -229,15 +229,26 @@ def test_a_downgrade_refuses_new_or_changed_sprays_and_else_returns_every_row(
                 ),
                 {"log": ids["spray"]},
             )
+            db.execute(  # a pre-#92 fertilise record corrected since: its entered amount added
+                text(
+                    "INSERT INTO typed_quantity(log_id,entered_value,entered_unit) "
+                    "VALUES (:log,180,'kg')"
+                ),
+                {"log": ids["compost"]},
+            )
 
         with pytest.raises(RuntimeError) as refused:
             command.downgrade(cfg, BEFORE)
 
         assert "1 spray dose(s)" in str(refused.value)
         assert "1 moved dose(s) changed" in str(refused.value)
+        assert (
+            "1 record(s) other than a spray corrected since the upgrade, holding a moved legacy "
+            f"amount beside an entered one ({ids['compost']})"
+        ) in str(refused.value)
         with engine.begin() as db:
             assert _one(db, "SELECT version_num FROM alembic_version") == "core_0018"
-            db.execute(text("DELETE FROM typed_quantity WHERE entered_value = 1"))
+            db.execute(text("DELETE FROM typed_quantity WHERE entered_value IN (1, 180)"))
             db.execute(
                 text("UPDATE typed_quantity SET entered_value = 800 WHERE id = :t"), {"t": first}
             )
