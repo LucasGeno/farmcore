@@ -1,13 +1,14 @@
 """Public CAP claims: recorded provider HTTP, then the normal parcel draft seam."""
 
 import json
+import re
 from pathlib import Path
 
 import httpx
 import pytest
 from sqlalchemy import select
 
-from farmcore.core.models.canonical import ExtId, Parcel, Source
+from farmcore.core.models.canonical import CropSeason, ExtId, Parcel, Source
 from farmcore.core.models.drafts import Draft
 from farmcore.core.seed import ensure_default_farm
 
@@ -84,6 +85,8 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
     assert item["source_ref"] == reference and item["crop_code"] == code
     assert item["licence"] == licence and item["attribution"]
     assert item["year"] == (2024 if country == "FR" else None)
+    assert item["crop_key"] == ("grassland" if country == "FR" else "")
+    assert item["crop_name"] == ("Grassland" if country == "FR" else "")
     review = client.get(f"/onboarding/import/review?draft={draft.id}")
     assert licence in review.text
     if country == "ES":
@@ -98,6 +101,31 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
     )
     session.expire_all()
     parcel = session.scalar(select(Parcel).where(Parcel.farm_id == farm.id))
+    # Registry claims use the same owner-reviewed, dated season assignment as file imports.
+    assert not session.scalars(select(CropSeason).where(CropSeason.parcel_id == parcel.id)).all()
+    crop_page = client.get("/onboarding/crops")
+    crop_row = re.search(rf'<tr data-parcel="{parcel.id}".*?</tr>', crop_page.text, re.S)
+    assert crop_row is not None
+    if country == "FR":
+        assert 'data-crop="grassland"' in crop_row.group()
+        assigned = client.post(
+            "/onboarding/crops/assign",
+            data={
+                "starts_on": "2024-03-01",
+                "parcel": str(parcel.id),
+                f"crop_{parcel.id}": "grassland",
+            },
+            follow_redirects=False,
+        )
+        assert assigned.status_code == 303
+        season = session.scalar(select(CropSeason).where(CropSeason.parcel_id == parcel.id))
+        assert (season.crop_name, season.crop_eppo) == ("Grassland", None)
+    else:
+        assert 'data-crop=""' in crop_row.group()
+        assert 'data-unknown-code="1"' in crop_row.group()
+        assert not session.scalars(
+            select(CropSeason).where(CropSeason.parcel_id == parcel.id)
+        ).all()
     assert parcel.iacs_id == reference
     source_scope = "ign-rpg-2024" if country == "FR" else "sigpac-current"
     ext = session.scalar(select(ExtId).where(ExtId.res_id == parcel.id, ExtId.model == "parcel"))

@@ -68,7 +68,7 @@
         inputs.set(feature.id, input);
         input.addEventListener("change", function () { change(feature.id, input.checked); });
         label.append(input, document.createTextNode(" " + feature.properties.name + " · " +
-          feature.properties.area_ha.toFixed(2) + " ha · " + (feature.properties.crop_code || "Unknown crop")));
+          feature.properties.area_ha.toFixed(2) + " ha · " + (feature.properties.crop_code || "No crop code") + " · " + (feature.properties.crop_name || "Unknown crop")));
         options.append(label);
       });
       status.textContent = data.message || "Tap your parcels or select their checkboxes.";

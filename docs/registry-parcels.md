@@ -47,3 +47,16 @@ proxies must currently use file import. `Accept-Encoding: identity` asks for
 uncompressed responses; unexpected compression is refused before decoding. Each
 response has a 2 MB cap and the lookup has an eight-second total network deadline.
 Failures, invalid geometry and oversized windows offer file import.
+
+## Crop seasons
+
+File and registry drafts use the same `crops.crosswalk` to show the known crop
+alongside its unchanged public code. The mapping is recomputed during validation,
+not accepted from the browser. After parcel confirmation, the owner's Crops step
+uses those same retained codes to prefill choices, asks for a season start date,
+and appends crop seasons through the existing assignment service. It never invents
+a season date from a registry retrieval timestamp or rewrites a covering season.
+
+Unknown codes remain unknown. In particular, SIGPAC's numeric declared-product
+codes are not SIGPAC alphabetic use codes: a numeric code absent from the merged
+crosswalk is retained without guessing an equivalent use or species.

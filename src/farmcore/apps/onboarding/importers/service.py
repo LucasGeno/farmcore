@@ -12,6 +12,7 @@ from shapely import get_num_coordinates
 from shapely.geometry import MultiPolygon, box, shape
 from sqlalchemy import select
 
+from farmcore.apps.onboarding import crops
 from farmcore.apps.onboarding.importers.parsers import MAX_PARCELS, MAX_VERTICES, normalise
 from farmcore.core import ext_ids
 from farmcore.core.models.canonical import ExtId, Farm, Parcel
@@ -21,6 +22,8 @@ class ParcelInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(max_length=200)
     crop_code: str = Field(default="", max_length=200)
+    crop_key: str = Field(default="", max_length=100)
+    crop_name: str = Field(default="", max_length=200)
     source_ref: str = Field(default="", max_length=200)
     source_scope: str = Field(default="", max_length=255)
     attribution: str = Field(default="", max_length=255)
@@ -65,11 +68,13 @@ def validate(session, farm_id, payload):
             raise ValueError("A boundary exceeds the vertex limit.")
         if not any(b.covers(shape(item["geometry"])) for b in boxes):
             raise ValueError("Boundary is outside the farm country bounding box; check the CRS.")
-    return {
-        "parcels": [
-            normalise(shape(p["geometry"]), p, i) for i, p in enumerate(payload["parcels"], 1)
-        ]
-    }
+    items = [normalise(shape(p["geometry"]), p, i) for i, p in enumerate(payload["parcels"], 1)]
+    for item in items:
+        # Derived afresh for both file and registry drafts; never trust a proposed crop label.
+        crop = crops.crosswalk(country, item["crop_code"])
+        item["crop_key"] = crop.key if crop else ""
+        item["crop_name"] = crop.name if crop else ""
+    return {"parcels": items}
 
 
 def matching(rows, item):
