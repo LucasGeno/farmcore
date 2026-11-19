@@ -233,7 +233,7 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(session, sett
 
     from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, Spray
     from farmcore.apps.advisor.engine import evaluate as engine_evaluate
-    from farmcore.apps.advisor.service import saved_config
+    from farmcore.apps.advisor.service import saved_config, saved_evidence
     from farmcore.core.access import repo_for_job
     from farmcore.core.models.canonical import Log, Product, Quantity
     from tests.apps.advisor.review_fixtures import complete_station
@@ -266,10 +266,9 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(session, sett
     # a later station correction must not change the saved evidence
     correct(session, station, rainy_at, "rr1_mm", 0.0)
 
-    snapshot = row.props["input_snapshot"]
-    config, verification = saved_config(
-        repo_for_job(session, parcel.farm_id, "advisor.evaluate"), row
-    )
+    repo = repo_for_job(session, parcel.farm_id, "advisor.evaluate")
+    snapshot = saved_evidence(repo, row)["input_snapshot"]
+    config, verification = saved_config(repo, row)
     assert verification == "verified"
 
     def value(v):

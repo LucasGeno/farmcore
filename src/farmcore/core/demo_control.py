@@ -12,6 +12,7 @@ from farmcore.core.access import FarmNotSeeded, default_farm
 from farmcore.core.clock import clock_row, get_clock, set_replay
 from farmcore.core.demo import Preset
 from farmcore.core.manifest import import_string
+from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
@@ -112,6 +113,7 @@ def _clear(session, farm, manifests=()):
     session.execute(delete(ExtId).where(ExtId.model == "log", ExtId.res_id.in_(log_ids)))
     session.execute(delete(Log).where(Log.farm_id == farm.id))  # child rows cascade
     session.execute(delete(Advice).where(Advice.farm_id == farm.id))
+    session.execute(delete(Assessment).where(Assessment.farm_id == farm.id))
     session.execute(
         delete(Event).where(
             Event.farm_id == farm.id,
