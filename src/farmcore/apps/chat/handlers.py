@@ -24,7 +24,7 @@ from farmcore.apps.chat.audit import DbAuditSink, audit_ref
 from farmcore.apps.chat.dto import Callback, Incoming, Outgoing
 from farmcore.apps.chat.extractor import Extractor, RegexExtractor, get_extractor
 from farmcore.apps.chat.extractor.base import NOTE_TIME_CLAMPED
-from farmcore.apps.operations import corrections, facts, spray_weather
+from farmcore.apps.operations import corrections, facts, spray_items, spray_weather
 from farmcore.apps.operations import drafts as ops_drafts
 from farmcore.apps.operations.checks import summary as checks_summary
 from farmcore.apps.operations.manifest import MANIFEST as OPERATIONS
@@ -679,9 +679,9 @@ def _duplicate_note(repo: ScopedRepository, log: Log, tz: ZoneInfo) -> str:
     dropped = events[0].payload["dropped_products"]
     names = list(
         dict.fromkeys(
-            q.product.active_substance if q.product else (q.label or "product")
-            for q in target.quantities
-            if (q.product_id if q.product_id is not None else q.label) in dropped
+            item.active_substance if item else (q.label or "product")
+            for q, item in spray_items.named_doses_of_log(target)
+            if (q.item_id if q.item_id is not None else q.label) in dropped
         )
     )
     if not names:

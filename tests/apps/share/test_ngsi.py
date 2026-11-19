@@ -258,3 +258,32 @@ def test_a_labelled_quantity_without_products_entry_keeps_its_label(
     check_entity(e)
     assert e["quantity"] == 1
     assert e["description"].startswith("Unmatched product")
+
+
+def test_ngsi_v1_keeps_its_published_ids_and_refuses_an_unknown_version(
+    admin, session, demo, spray
+) -> None:
+    """v1 is a frozen contract (`core/representations.py`): its entity ids name the dose and its
+    product URNs the product, whatever table later holds them; a version nobody serves is a 400,
+    never a silent v1."""
+    log = spray(doses=(("copper-contact", "2", "kg/ha"), ("sulphur-wettable", "3", "kg/ha")))
+    session.refresh(log)
+    doses = {q.id: q.product_id for q in log.quantities}
+
+    default = admin.get("/share/ngsi-ld.json")
+    pinned = admin.get("/share/ngsi-ld.json?v=1")
+    unknown = admin.get("/share/ngsi-ld.json?v=2")
+
+    assert default.headers["FarmCore-Representation"] == "ngsi-ld; v=1"
+    assert "Deprecation" not in default.headers
+    assert pinned.json() == default.json()
+    ops = [e for e in default.json() if e["type"] == "AgriParcelOperation"]
+    assert len(ops) == 2 * len(demo.parcels)
+    for e in ops:
+        log_id, parcel_id, quantity_id = e["id"].removeprefix(ENTITY_PREFIX).split("-")
+        assert (int(log_id), int(parcel_id)) in {(log.id, p.id) for p in demo.parcels}
+        assert e["hasAgriProductType"] == (
+            f"urn:ngsi-ld:AgriProductType:farmcore-{doses[int(quantity_id)]}"
+        )
+    assert unknown.status_code == 400
+    assert "served versions: 1" in unknown.text

@@ -16,10 +16,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import distinct_on
 
+from farmcore.apps.advisor import products as advisor_products
 from farmcore.apps.advisor import service as advice_service
 from farmcore.apps.advisor.engine import AdvisorConfig
 from farmcore.apps.forecast import availability as farm_availability
 from farmcore.apps.forecast import store
+from farmcore.apps.operations import spray_items
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.apps.planning import engine, resources
 from farmcore.apps.planning.models import (
     PlanningJob,
@@ -29,7 +32,7 @@ from farmcore.apps.planning.models import (
     PlanningOperator,
 )
 from farmcore.core.access import ScopeDenied, ScopedRepository
-from farmcore.core.models.canonical import Advice, Farm, Parcel, Product
+from farmcore.core.models.canonical import Advice, Farm, Parcel
 
 SCOPE = "planning:read"
 HORIZON_HOURS = 72
@@ -92,8 +95,10 @@ def _area(parcels: list[Parcel]) -> Decimal:
     return sum((parcel.area_ha for parcel in parcels), Decimal("0"))
 
 
-def _sulphur(product) -> bool:
-    targets = getattr(product, "targets", None) or []
+def _sulphur(repo: ScopedRepository, product: SprayItem | None) -> bool:
+    """Whether the product targets powdery mildew (crop protection's attribute of the item)."""
+    item_id = product.id if product is not None else None
+    targets = advisor_products.targets(repo, item_id, scope="logs:read")
     return any("powdery" in str(target) for target in targets)
 
 
@@ -382,7 +387,7 @@ def _states(
     area = _area(parcels)
     machine_row = _assigned(assigned, "machine")
     operator_row = _assigned(assigned, "operator")
-    weather = _weather(forecast, span, sulphur=_sulphur(product))
+    weather = _weather(forecast, span, sulphur=_sulphur(repo, product))
     if machine_row is None:
         machine_state = engine.State(
             "unknown", "no machine is booked; availability and capacity are unknown."
@@ -439,7 +444,7 @@ def _job_offers(
         other_end = other.scheduled_start + timedelta(minutes=other.duration_minutes)
         if not (target.start < other_end and other.scheduled_start < target.end):
             continue
-        product = repo.get(Product, other.product_id, scope="logs:read")
+        product = spray_items.item(repo, other.product_id, scope="logs:read")
         result, _, _, _, _ = _states(
             repo,
             other,
@@ -519,7 +524,7 @@ def job_assessment(
             operator_row,
             capacity,
             area,
-            sulphur=_sulphur(product),
+            sulphur=_sulphur(repo, product),
             busy_days=busy_days,
         )
     return {

@@ -31,7 +31,7 @@ from farmcore.apps.chat.handlers import ChatDeps
 from farmcore.apps.chat.manifest import MANIFEST as CHAT_MANIFEST
 from farmcore.apps.chat.telegram import TelegramSender
 from farmcore.apps.chat.transcribe import Transcriber
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import spray_items
 from farmcore.core.access import (
     FarmNotSeeded,
     ScopedRepository,
@@ -228,7 +228,7 @@ class BotRuntime:
             with session_scope(self.deps.session_factory) as session:
                 repo = _repo(session, self.deps, chat_id)
                 parcels = repo.list(Parcel, scope="fields:read", order_by=Parcel.id)
-                products = products_for_farm(repo, scope="logs:write")
+                products = spray_items.items_for_farm(repo, scope="logs:write")
                 return [p.name for p in parcels] + [p.name for p in products]
         except FarmNotSeeded:
             return []

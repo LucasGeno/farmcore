@@ -28,13 +28,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from farmcore.apps.operations import facts, spray_weather
+from farmcore.apps.operations import facts, spray_items, spray_weather
 from farmcore.apps.operations.corrections import Dose
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.drafts import wall_now
 from farmcore.core.logs import QuantityInput, SourceInput
-from farmcore.core.models.canonical import Farm, Parcel, Product
+from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.models.drafts import Draft
 
 logger = logging.getLogger(__name__)
@@ -157,8 +157,7 @@ def _checked(session: Session, farm_id: int, kind: str, payload: dict) -> _Recor
         raise ValueError("Some parcels are not on this farm.")
     if isinstance(record, SprayDraft):
         products = {d.product_id for d in record.doses}
-        known = set(session.scalars(select(Product.id).where(Product.id.in_(products))))
-        if known != products:
+        if spray_items.known_item_ids(session, products) != products:
             raise ValueError("Some products are unknown.")
     return record
 

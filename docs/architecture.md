@@ -32,6 +32,9 @@ database, a small core and installable apps, in the style of Odoo.
 - **Canonical model**, farmOS-shaped: `farm`, `parcel` (PostGIS polygon + validated `props`
   JSONB), `asset`, `log` + `quantity` + `product`, `observation`, `advice`, `event`.
   Apps extend it with 1:1 side tables or `props`, never by injecting columns at runtime.
+  Spray products and doses are read through one seam: `operations.spray_items` (record facts)
+  and `advisor.products` (contact/penetrant, targets). Published JSON shapes are versioned:
+  [API compatibility](api-compatibility.md).
 - **Provenance.** `ext_id(source, key)` makes re-imports idempotent; `log_source` lets one spray
   carry several sources (voice + machine file). An incoming spray merges with a log of the same
   farm whose parcels overlap and whose start is within 12 h, keeping the more precise values.

@@ -8,10 +8,12 @@ replayed "this morning" lands on the replay day.
 
 from __future__ import annotations
 
+import importlib.util
 import re
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from farmcore.apps.chat.extractor import (
@@ -27,8 +29,7 @@ from farmcore.apps.chat.extractor.base import (
     NOTE_TIME_CLAMPED,
     fold,
 )
-from farmcore.apps.operations import facts
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import facts, spray_items
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.canonical import Log, Parcel
 
@@ -97,13 +98,30 @@ def _alias_key(alias: str) -> tuple[int, str]:
     return (int(m.group(1)), alias) if m else (10**9, alias)
 
 
+def _crop_protection_refs(repo: ScopedRepository, ids: list[int]) -> dict[int, Any]:
+    """Each item's contact/penetrant type and targets, which crop protection owns; none when it
+    is not installed (the extractor then knows names and substances only)."""
+    if importlib.util.find_spec("farmcore.apps.advisor") is None:
+        return {}
+    from farmcore.apps.advisor.products import product_refs
+
+    return product_refs(repo, ids, scope="logs:write")
+
+
 def load_context(repo: ScopedRepository, now_utc: datetime, tz: str) -> FarmContext:
     parcels = sorted(repo.list(Parcel, scope="fields:read"), key=lambda p: _alias_key(p.alias))
-    products = products_for_farm(repo, scope="logs:write")
+    products = spray_items.items_for_farm(repo, scope="logs:write")
+    refs = _crop_protection_refs(repo, [p.id for p in products])
     return FarmContext(
         parcels=[ParcelInfo(p.id, p.alias, p.name) for p in parcels],
         products=[
-            ProductInfo(p.id, p.name, p.active_substance, p.product_type, tuple(p.targets))
+            ProductInfo(
+                p.id,
+                p.name,
+                p.active_substance,
+                refs[p.id].product_type if p.id in refs else "",
+                tuple(refs[p.id].targets) if p.id in refs else (),
+            )
             for p in products
         ],
         now_utc=now_utc,
@@ -409,11 +427,11 @@ def log_summary(log: Log, tz: ZoneInfo) -> str:
             detail = observation_detail(fact.text) if fact is not None else "observation"
         parcels = [ParcelInfo(p.id, p.alias, p.name) for p in log.parcels]
         return _fact_line(parcels, detail, log.ts_start, tz)
-    rates = [q for q in log.quantities if q.measure == "rate"]
-    doses = list(dict.fromkeys(f"{q.value.normalize():f} {q.unit}" for q in rates))
+    rates = [(q, item) for q, item in spray_items.named_doses_of_log(log) if q.rate]
+    doses = list(dict.fromkeys(f"{q.value.normalize():f} {q.unit}" for q, _ in rates))
     return _summary(
         sorted(((p.alias, p.name) for p in log.parcels), key=lambda a: _alias_key(a[0])),
-        [q.product.active_substance if q.product else (q.label or "?") for q in rates],
+        [item.active_substance if item else (q.label or "?") for q, item in rates],
         " / ".join(doses) or "no dose",
         log.ts_start,
         tz,

@@ -21,7 +21,7 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import HTMLResponse
 
-from farmcore.apps.operations import checks, register
+from farmcore.apps.operations import checks, register, spray_items
 from farmcore.apps.operations.parcel_facts import (
     COPPER,
     NOT_COPPER,
@@ -31,8 +31,9 @@ from farmcore.apps.operations.parcel_facts import (
     parcel_facts,
 )
 from farmcore.apps.operations.routes import PARCEL_SCOPE, _by_spray, _now
+from farmcore.apps.operations.spray_items import SprayDose, SprayItem
 from farmcore.core.access import Repo, ScopedRepository
-from farmcore.core.models.canonical import Log, LogParcel, Parcel, Product, Quantity
+from farmcore.core.models.canonical import Log, LogParcel, Parcel
 from farmcore.core.navigation import map_read_url, resolved_url, workspace_parent
 from farmcore.web import render
 
@@ -71,7 +72,7 @@ def farm_section(request: Request, repo: Repo) -> HTMLResponse:
 
 
 def _product_line(
-    q: Quantity | None, product: Product | None, entry: dict[str, Any] | None
+    q: SprayDose | None, product: SprayItem | None, entry: dict[str, Any] | None
 ) -> ProductLine:
     """One register product cell with its copper identity (`checks._known_copper`)."""
     cells = register._product_cells(q, product, entry)
@@ -134,19 +135,9 @@ def _spray_logs(repo: ScopedRepository, parcel_id: int, now: datetime, tz: str) 
         linked[lp.log_id].append(parcels.get(lp.parcel_id, lp.parcel_id))
     # F1 before any product: only a log linking this parcel alone has its quantities read.
     own_ids = [lg.id for lg in spray_logs if len(linked[lg.id]) == 1]
-    quantities = (
-        repo.list(Quantity, Quantity.log_id.in_(own_ids), scope=SCOPE, order_by=Quantity.id)
-        if own_ids
-        else []
-    )
-    quantities_of: dict[int, list[Quantity]] = defaultdict(list)
-    for q in quantities:
-        quantities_of[q.log_id].append(q)
-    product_ids = {q.product_id for q in quantities if q.product_id is not None}
-    products = (
-        {p.id: p for p in repo.list(Product, Product.id.in_(product_ids), scope=SCOPE)}
-        if product_ids
-        else {}
+    quantities_of = spray_items.doses_for_logs(repo, own_ids, scope=SCOPE)
+    products = spray_items.items_by_id(
+        repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=SCOPE
     )
     zone = ZoneInfo(tz)
     out = []
@@ -157,7 +148,7 @@ def _spray_logs(repo: ScopedRepository, parcel_id: int, now: datetime, tz: str) 
         hidden = ["another parcel" for p in linked[lg.id] if not isinstance(p, Parcel)]
         items = (
             [
-                _product_line(q, products.get(q.product_id) if q and q.product_id else None, e)
+                _product_line(q, products.get(q.item_id) if q and q.item_id else None, e)
                 for q, e in register._product_items(lg, quantities_of[lg.id])
             ]
             if lg.id in own_ids

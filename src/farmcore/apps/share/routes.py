@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from farmcore.apps.operations import register
 from farmcore.apps.share import config, connect, ngsi, service
+from farmcore.core import representations
 from farmcore.core.access import (
     OWNER,
     TOKEN_SCOPES,
@@ -51,6 +52,7 @@ from farmcore.core.models.canonical import (
 )
 from farmcore.core.models.identity import AccessToken, LocalIdentity
 from farmcore.core.models.weather import WeatherObservation
+from farmcore.core.representations import Representation, Version, negotiate, stamp
 from farmcore.core.routes_clock import require_admin
 from farmcore.core.weather import attribution
 from farmcore.db import get_session
@@ -441,8 +443,9 @@ def create_token(
     return page
 
 
-def _ld_json(entities: list[dict[str, Any]]) -> JSONResponse:
-    return JSONResponse(entities, media_type=ngsi.MEDIA_TYPE)
+def _ld_json(entities: list[dict[str, Any]], version: Version) -> JSONResponse:
+    response = JSONResponse(entities, media_type=ngsi.MEDIA_TYPE)
+    return stamp(response, ngsi.REPRESENTATION.name, version)
 
 
 @router.get("/register.csv")
@@ -480,8 +483,11 @@ def export_ngsi(
 ) -> JSONResponse:
     """The selected farm's done sprays as `AgriParcelOperation` entities (`register:read`);
     `season` / `parcel` narrow them (D4)."""
+    version = negotiate(request, ngsi.REPRESENTATION.name)
     since, until, before, parcel_id = _window(request, repo, season, parcel)
-    return _ld_json(ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id))
+    return _ld_json(
+        ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id), version
+    )
 
 
 @router.post("/grants/{grant_id}/revoke", dependencies=[Depends(require_farm_owner)])
@@ -597,6 +603,8 @@ def _audit(request: Request, repo: ScopedRepository, limit: int) -> list[dict[st
 
 
 ADVICE_UNAVAILABLE = "Unavailable: crop protection is not installed, so advice cannot be read."
+# The grantee's advice.json: v1 is the shape of #121 (one current row per parcel, redacted).
+ADVICE = representations.register(Representation("advice", (Version(1),), default=1))
 
 # What a denied grantee read says, per resource (plain words, no data).
 NOT_SHARED: dict[str, str] = {
@@ -718,9 +726,12 @@ def grantee_register(
 def grantee_ngsi(
     request: Request, repo: GrantRepo, season: Season = None, parcel: ParcelId = None
 ) -> JSONResponse:
+    version = negotiate(request, ngsi.REPRESENTATION.name)
     try:
         since, until, before, parcel_id = _window(request, repo, season, parcel)
-        return _ld_json(ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id))
+        return _ld_json(
+            ngsi.export(repo, until, since=since, before=before, parcel_id=parcel_id), version
+        )
     except ScopeDenied as exc:
         raise _denied("register") from exc
 
@@ -744,6 +755,7 @@ def grantee_audit(request: Request, repo: GrantRepo) -> JSONResponse:
 
 @router.get("/as/{grant_id}/advice.json")
 def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
+    version = negotiate(request, ADVICE.name)
     try:
         repo.check("advice:read", "advice")
         if not app_is_on(request, "advisor"):
@@ -753,9 +765,10 @@ def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
     except ScopeDenied as exc:
         raise HTTPException(403, "Not shared: this grant does not include advice.") from exc
     current_inputs = "not_loaded" if "stations:read" in repo.grant.scopes else "not_authorized"
-    return JSONResponse(
+    response = JSONResponse(
         [
             {**service.shared_advice(row), "current_inputs_status": current_inputs}
             for row in rows.values()
         ]
     )
+    return stamp(response, ADVICE.name, version)

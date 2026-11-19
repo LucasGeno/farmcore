@@ -21,11 +21,11 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from farmcore.apps.operations import spray_weather
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import spray_items, spray_weather
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Log, LogSource, Parcel, Product
+from farmcore.core.models.canonical import Log, LogSource, Parcel
 
 SCOPE = "logs:write"
 PARCEL_SCOPE = "fields:read"  # parcel names and aliases belong to the fields app
@@ -296,7 +296,7 @@ def _parcel_map(repo: ScopedRepository, tasks: list[TaskRecord]) -> dict[str, Pa
     return out
 
 
-def _product(products: list[Product], name: str | None) -> Product | None:
+def _product(products: list[SprayItem], name: str | None) -> SprayItem | None:
     """The shortlist product for a TaskData product name: exact name, then active substance."""
     if not name:
         return None
@@ -309,7 +309,7 @@ def _product(products: list[Product], name: str | None) -> Product | None:
     return matches[0] if len(matches) == 1 else None
 
 
-def _quantities(products: list[Product], task: TaskRecord) -> list[logs.QuantityInput]:
+def _quantities(products: list[SprayItem], task: TaskRecord) -> list[logs.QuantityInput]:
     out = []
     for dose in task.products:
         product = _product(products, dose.name)
@@ -362,7 +362,7 @@ def import_taskdata(
     logs.lock_farm(repo.session, repo.farm_id)
     parcels = _parcel_map(repo, tasks)
     _check_clock(tasks, now, tz)
-    products = products_for_farm(repo, scope=SCOPE, order_by=Product.id)
+    products = spray_items.items_for_farm(repo, scope=SCOPE, by_id=True)
     digest = hashlib.sha256(data).hexdigest()[:12]
     out = []
     for task in tasks:

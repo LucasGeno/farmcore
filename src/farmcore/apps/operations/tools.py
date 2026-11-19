@@ -17,7 +17,9 @@ from typing import Any
 from sqlalchemy import select
 
 from farmcore.apps.fields import tools as fields_tools
-from farmcore.core.models.canonical import Log, LogParcel, LogSource, Product, Quantity
+from farmcore.apps.operations import spray_items
+from farmcore.apps.operations.spray_items import SprayDose, SprayItem
+from farmcore.core.models.canonical import Log, LogParcel, LogSource
 from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = "logs:read"
@@ -112,17 +114,8 @@ def last_spray(ctx: ToolContext, parcel: str = "") -> ToolResult:
         )
         return ToolResult(facts={"parcel": label, "date": None}, text=text, links=links)
 
-    rates = repo.list(
-        Quantity,
-        Quantity.log_id == log.id,
-        Quantity.measure == "rate",
-        scope=SCOPE,
-        order_by=Quantity.id,
-    )
-    ids = [q.product_id for q in rates if q.product_id is not None]
-    products = {
-        p.id: p for p in (repo.list(Product, Product.id.in_(ids), scope=SCOPE) if ids else [])
-    }
+    rates = spray_items.doses_for_logs(repo, [log.id], scope=SCOPE, rates_only=True)[log.id]
+    products = spray_items.items_by_id(repo, [q.item_id for q in rates], scope=SCOPE)
     sources = repo.list(LogSource, LogSource.log_id == log.id, scope=SCOPE, order_by=LogSource.id)
 
     # One item per (product, unit), each with its own dose: a tank mix of copper 1.94 + sulphur
@@ -131,7 +124,7 @@ def last_spray(ctx: ToolContext, parcel: str = "") -> ToolResult:
     named: list[dict[str, Any]] = []
     by_key: dict[tuple[str, str | None, str], dict[str, Any]] = {}
     for q in rates:
-        p = products.get(q.product_id) if q.product_id is not None else None
+        p = products.get(q.item_id) if q.item_id is not None else None
         name = p.name if p else (q.label or "?")
         substance = p.active_substance if p is not None else None
         key = (name, substance, q.unit)
@@ -202,28 +195,17 @@ def recent_sprays(ctx: ToolContext) -> ToolResult:
     farm_parcels = fields_tools.parcels(repo)
     by_id = {p.id: p for p in farm_parcels}
     order = {p.id: n for n, p in enumerate(farm_parcels)}
-    rates = repo.list(
-        Quantity,
-        Quantity.log_id.in_(ids),
-        Quantity.measure == "rate",
-        scope=SCOPE,
-        order_by=Quantity.id,
+    rates_of = spray_items.doses_for_logs(repo, ids, scope=SCOPE, rates_only=True)
+    products = spray_items.items_by_id(
+        repo, [q.item_id for qs in rates_of.values() for q in qs], scope=SCOPE
     )
-    product_ids = [q.product_id for q in rates if q.product_id is not None]
-    products = {
-        p.id: p
-        for p in (
-            repo.list(Product, Product.id.in_(product_ids), scope=SCOPE) if product_ids else []
-        )
-    }
     sprays = []
     for log in done:
         ids_here = sorted((i for i in links_of.get(log.id, []) if i in by_id), key=order.get)
         aliases = [by_id[i] for i in ids_here]
         names = [
             f"{_product_name(products, q)} {_dose(float(q.value))} {q.unit}"
-            for q in rates
-            if q.log_id == log.id
+            for q in rates_of.get(log.id, [])
         ]
         sprays.append(
             {
@@ -250,6 +232,6 @@ def recent_sprays(ctx: ToolContext) -> ToolResult:
     return ToolResult(facts, "\n".join(lines), links)
 
 
-def _product_name(products: dict[int, Product], q: Quantity) -> str:
-    product = products.get(q.product_id) if q.product_id is not None else None
+def _product_name(products: dict[int, SprayItem], q: SprayDose) -> str:
+    product = products.get(q.item_id) if q.item_id is not None else None
     return product.name if product is not None else (q.label or "?")

@@ -58,10 +58,13 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Any
 
+from farmcore.apps.operations import spray_items
 from farmcore.apps.operations.register import parcel_aliases, parcel_intervals, parcel_key
+from farmcore.apps.operations.spray_items import SprayDose, SprayItem
 from farmcore.apps.share import config
+from farmcore.core import representations
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Log, LogParcel, Parcel, Product, Quantity
+from farmcore.core.models.canonical import Log, LogParcel, Parcel
 
 SCOPE = "register:read"
 ENTITY_TYPE = "AgriParcelOperation"
@@ -69,6 +72,11 @@ PARCEL_TYPE = "AgriParcel"
 IACS_APPLICATION = "iacs-lpis"  # the parcel's IACS/LPIS reference (`parcel.iacs_id`)
 STATUS_DONE = "finished"
 MEDIA_TYPE = "application/ld+json"
+# v1: entity ids carry the dose's id and `hasAgriProductType` the item's (`quantity_ref`,
+# `product_ref`), as published since the first export.
+REPRESENTATION = representations.register(
+    representations.Representation("ngsi-ld", (representations.Version(1),), default=1)
+)
 
 
 def urn(kind: str, *parts: int) -> str:
@@ -82,26 +90,37 @@ def iso_z(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _number(q: Quantity) -> int | float:
+def _number(q: SprayDose) -> int | float:
     value = float(q.value)
     return int(value) if value.is_integer() else value
 
 
-ProductItem = tuple[Quantity | None, dict[str, Any] | None]
+ProductItem = tuple[SprayDose | None, dict[str, Any] | None]
 
 
-def _product_items(log: Log, quantities: list[Quantity]) -> list[ProductItem]:
+def _product_items(log: Log, quantities: list[SprayDose]) -> list[ProductItem]:
     """(quantity, props entry) per product: product or labelled quantities, then
     `props.products` entries no quantity covers; `[(None, None)]` when there are none."""
     entries: dict[str, Any] = (log.props or {}).get("products") or {}
     items: list[ProductItem] = [
         (q, entries.get(q.label) if q.label is not None else None)
         for q in quantities
-        if q.product_id is not None or q.label
+        if q.item_id is not None or q.label
     ]
     covered = {q.label for q, _ in items if q is not None}
     items += [(None, entries[key]) for key in sorted(entries) if key not in covered]
     return items or [(None, None)]
+
+
+def quantity_ref(q: SprayDose) -> int:
+    """The dose's id in v1 entity ids (`ngsi-ld` v1, `core/representations.py`): published,
+    so it must keep naming the same dose when doses move tables."""
+    return q.id
+
+
+def product_ref(product: SprayItem) -> int:
+    """The item's id in v1 `AgriProductType` URNs; published, like `quantity_ref`."""
+    return product.id
 
 
 def _entry_text(entry: dict[str, Any]) -> str | None:
@@ -113,7 +132,7 @@ def _entry_text(entry: dict[str, Any]) -> str | None:
 
 
 def _description(
-    log: Log, q: Quantity | None, product: Product | None, entry: dict[str, Any] | None
+    log: Log, q: SprayDose | None, product: SprayItem | None, entry: dict[str, Any] | None
 ) -> str:
     if product is not None:
         text = (
@@ -133,8 +152,8 @@ def _description(
 def _entity(
     log: Log,
     parcel: Parcel,
-    q: Quantity | None,
-    product: Product | None,
+    q: SprayDose | None,
+    product: SprayItem | None,
     entry: dict[str, Any] | None,
     suffix: tuple[int, ...],
     interval: tuple[datetime, datetime | None],
@@ -155,7 +174,7 @@ def _entity(
     if ended:
         e["endedAt"] = ended
     if product is not None:
-        e["hasAgriProductType"] = urn("AgriProductType", product.id)
+        e["hasAgriProductType"] = urn("AgriProductType", product_ref(product))
     e["description"] = _description(log, q, product, entry)
     if q is not None:
         e["quantity"] = _number(q)
@@ -196,19 +215,13 @@ def operations(
         p.id: p
         for p in repo.list(Parcel, Parcel.id.in_({link.parcel_id for link in links}), scope=SCOPE)
     }
-    quantities = repo.list(Quantity, Quantity.log_id.in_(ids), scope=SCOPE, order_by=Quantity.id)
-    product_ids = {q.product_id for q in quantities if q.product_id is not None}
-    products = (
-        {p.id: p for p in repo.list(Product, Product.id.in_(product_ids), scope=SCOPE)}
-        if product_ids
-        else {}
+    quantities_of = spray_items.doses_for_logs(repo, ids, scope=SCOPE)
+    products = spray_items.items_by_id(
+        repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=SCOPE
     )
     parcels_of: dict[int, list[Parcel]] = defaultdict(list)
     for link in links:
         parcels_of[link.log_id].append(parcels[link.parcel_id])
-    quantities_of: dict[int, list[Quantity]] = defaultdict(list)
-    for q in quantities:
-        quantities_of[q.log_id].append(q)
 
     intervals = parcel_intervals(repo, done, parcels_of)
     out = []
@@ -219,7 +232,7 @@ def operations(
         n = 0
         for q, entry in items:
             if q is not None:
-                suffixes.append((q.id,))
+                suffixes.append((quantity_ref(q),))
             elif entry is not None:
                 n += 1
                 suffixes.append((0, n))
@@ -229,7 +242,7 @@ def operations(
             if parcel_id is not None and parcel.id != parcel_id:
                 continue
             for (q, entry), suffix in zip(items, suffixes, strict=True):
-                product = products.get(q.product_id) if q and q.product_id else None
+                product = products.get(q.item_id) if q and q.item_id else None
                 out.append(
                     _entity(log, parcel, q, product, entry, suffix, intervals[log.id, parcel.id])
                 )
