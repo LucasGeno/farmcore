@@ -440,3 +440,55 @@ def switch(
         row.state = state
     session.flush()
     return None
+
+
+class _BundleRefused(Exception):
+    def __init__(self, refusal: SwitchRefusal) -> None:
+        self.refusal = refusal
+
+
+def bundle_targets(ordered: list[Manifest], names: Sequence[str]) -> list[Manifest]:
+    """`names` plus their dependencies, in load order. Unknown names are ignored here: a bundle
+    is a static mapping, so `switch_bundle` refuses one instead of silently dropping it."""
+    by_name = {m.name: m for m in ordered}
+    wanted: set[str] = set()
+    pending = [name for name in names if name in by_name]
+    while pending:
+        name = pending.pop()
+        if name in wanted:
+            continue
+        wanted.add(name)
+        pending.extend(d for d in by_name[name].depends if d in by_name)
+    return [m for m in ordered if m.name in wanted]
+
+
+def switch_bundle(
+    session: Session,
+    ordered: list[Manifest],
+    states: dict[str, str],
+    names: Sequence[str],
+) -> tuple[list[Manifest], SwitchRefusal | None]:
+    """Switch on `names` and their dependencies atomically; on refusal nothing is written.
+
+    The dry run runs inside a savepoint, so an app whose settings refuse the switch rolls back
+    the apps enabled before it in the same bundle. Returns the bundle's apps in load order and
+    the refusal (None on success); callers commit the session themselves.
+    """
+    by_name = {m.name: m for m in ordered}
+    missing = [name for name in names if name not in by_name]
+    if missing:
+        return [], SwitchRefusal(f"Unknown app: {', '.join(missing)}.")
+    targets = bundle_targets(ordered, names)
+    working = dict(states)
+    try:
+        with session.begin_nested():
+            for manifest in targets:
+                if working.get(manifest.name, INSTALLED) == INSTALLED:
+                    continue
+                refusal = switch(session, ordered, working, manifest, INSTALLED)
+                if refusal is not None:
+                    raise _BundleRefused(refusal)
+                working[manifest.name] = INSTALLED
+    except _BundleRefused as exc:
+        return targets, exc.refusal
+    return targets, None

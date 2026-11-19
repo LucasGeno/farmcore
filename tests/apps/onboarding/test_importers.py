@@ -333,3 +333,61 @@ def test_review_deduplicates_file_and_warns_on_redrawn_overlap(session, settings
         point[0] += 100
     with pytest.raises(ValueError, match="country"):
         service.validate(session, farm.id, {"parcels": [shifted]})
+
+
+def test_imported_crop_codes_feed_reviewed_seasons_and_unknowns_stay_unset(
+    client, session, settings
+):
+    import copy
+    import json
+    import re
+
+    from farmcore.core.models.canonical import CropSeason
+
+    farm = setup_farm(session, settings)
+    doc = json.loads((FIXTURES / "parcel.geojson").read_bytes())
+    unknown = copy.deepcopy(doc["features"][0])
+    unknown["properties"] = {"name": "Unknown field", "crop_code": "ZZZ"}
+    for point in unknown["geometry"]["coordinates"][0]:
+        point[0] += 0.01
+    doc["features"].append(unknown)
+    assert upload(client, data=json.dumps(doc).encode()).status_code == 303
+    draft = session.scalar(select(Draft).where(Draft.farm_id == farm.id))
+    assert (
+        client.post(
+            f"/drafts/{draft.id}/confirm", data={"revision": 1}, follow_redirects=False
+        ).status_code
+        == 303
+    )
+
+    page = client.get("/onboarding/crops")
+    assert page.status_code == 200
+    parcels = session.scalars(select(Parcel).where(Parcel.farm_id == farm.id)).all()
+    choices = {}
+    for parcel in parcels:
+        row = re.search(rf'<tr\b[^>]*data-parcel="{parcel.id}"[^>]*>', page.text)
+        assert row is not None
+        crop = re.search(r'data-crop="([^"]*)"', row.group())
+        assert crop is not None
+        if parcel.name == "North field":
+            assert crop.group(1) == "soft-wheat"
+            choices[f"crop_{parcel.id}"] = crop.group(1)
+        else:
+            assert parcel.name == "Unknown field"
+            assert crop.group(1) == ""
+            assert 'data-unknown-code="ZZZ"' in row.group()
+    assert len(parcels) == 2
+    assert (
+        client.post(
+            "/onboarding/crops/assign",
+            data={"starts_on": "2024-03-01", "parcel": [str(p.id) for p in parcels], **choices},
+            follow_redirects=False,
+        ).status_code
+        == 303
+    )
+    session.expire_all()
+    seasons = session.scalars(select(CropSeason).where(CropSeason.farm_id == farm.id)).all()
+    known = next(p for p in parcels if p.name == "North field")
+    assert [(s.parcel_id, s.crop_name, s.crop_eppo) for s in seasons] == [
+        (known.id, "Soft wheat", "TRZAX")
+    ]

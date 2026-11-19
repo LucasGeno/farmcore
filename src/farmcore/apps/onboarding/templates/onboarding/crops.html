@@ -1,0 +1,109 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% from "core/_icons.html" import icon %}
+{% block title %}Crops · farmcore{% endblock %}
+{% block content %}
+{{ page_header("Crops", "Check what each parcel's registry code says, then save the crop season. Nothing is guessed.") }}
+
+{% if notice %}<p role="status" class="mb-5 rounded-xl bg-protected-soft px-4 py-3 text-[15px] text-protected">{{ notice }}</p>{% endif %}
+{% if error %}<p role="alert" class="mb-5 rounded-xl border border-spray/30 bg-spray-soft px-4 py-3 text-[15px] text-spray">{{ error }}</p>{% endif %}
+
+{% if not country %}
+<p class="mb-5 flex items-start gap-2 rounded-xl border border-wait/30 bg-wait-soft px-4 py-3 text-[15px] text-wait">
+  {{ icon("info", "mt-0.5 h-4 w-4") }}
+  <span>Set the farm's country first, so the right registry codes and common crops are offered. <a href="{{ farm_url('/onboarding/location') }}" class="underline">Set the location</a>.</span>
+</p>
+{% endif %}
+
+{% if unknown %}
+<section class="mb-8" aria-labelledby="unknown-heading">
+  <h2 id="unknown-heading" class="text-xs font-semibold uppercase tracking-widest text-muted">Unknown crop codes</h2>
+  <p class="mt-2 max-w-[70ch] text-[15px] text-muted">These parcels carry a code FarmCore does not map yet. They stay unknown; choose a crop yourself below or leave them for later.</p>
+  <ul class="mt-3 flex flex-wrap gap-2" aria-label="Parcels with unknown crop codes">
+    {% for row in unknown %}
+    <li data-unknown-code="{{ row.code }}" class="rounded-full bg-stone-100 px-3 py-1 text-[13px] text-stone-700">
+      <span class="font-semibold">{{ row.parcel.alias }}</span> · {{ row.code_label }} <code class="font-mono">{{ row.code }}</code>
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
+
+{% if rows %}
+{% if is_farm_owner %}
+<form method="post" action="{{ farm_url('/onboarding/crops/assign') }}">
+  {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+  <label class="block max-w-xs text-sm font-semibold">Season starts
+    <input type="date" name="starts_on" value="{{ start }}" required class="mt-1 min-h-[44px] w-full rounded-lg border border-line bg-ground px-3 font-normal">
+  </label>
+
+  <div class="mt-5 overflow-x-auto">
+    <table class="w-full border-collapse text-left text-[15px]">
+      <thead class="text-xs uppercase tracking-widest text-muted">
+        <tr>
+          <th class="border-b border-line py-2 pr-4 font-semibold">Parcel</th>
+          <th class="border-b border-line py-2 pr-4 font-semibold">Registry code</th>
+          <th class="border-b border-line py-2 font-semibold">Crop</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr data-parcel="{{ row.parcel.id }}" data-crop="{{ row.crop.key if row.crop else '' }}" data-unknown-code="{{ row.unknown_code }}" class="border-b border-line align-top">
+          <td class="py-3 pr-4">
+            <label class="flex min-h-[44px] items-start gap-3">
+              <input type="checkbox" name="parcel" value="{{ row.parcel.id }}" class="mt-1 h-5 w-5" {% if row.selected %}checked{% endif %}>
+              <span>
+                <span class="font-semibold">{{ row.parcel.alias }}</span>
+                <span class="block text-[14px] text-muted">{{ row.parcel.name }}</span>
+              </span>
+            </label>
+          </td>
+          <td class="py-3 pr-4">
+            {% if row.code %}<code class="font-mono text-[14px]">{{ row.code }}</code>
+            {% else %}<span class="text-muted">—</span>{% endif %}
+          </td>
+          <td class="py-3">
+            {% if row.season %}
+            <p class="mb-1 text-[14px] text-muted">Already has a crop on this date: {{ row.season.crop_name or row.season.crop_eppo or "unknown" }}. It is kept.</p>
+            {% elif row.unknown_code %}
+            <p class="mb-1 text-[14px] text-wait">Unknown code: not pre-filled.</p>
+            {% endif %}
+            <select name="crop_{{ row.parcel.id }}" aria-label="Crop for {{ row.parcel.alias }}" class="min-h-[44px] w-full max-w-xs rounded-lg border border-line bg-ground px-3">
+              <option value="">Not set</option>
+              {% if regional_crops %}
+              <optgroup label="Common crops in this region">
+                {% for crop in regional_crops %}
+                <option value="{{ crop.key }}" {% if row.crop and row.crop.key == crop.key %}selected{% endif %}>{{ crop.name }}</option>
+                {% endfor %}
+              </optgroup>
+              {% endif %}
+              <optgroup label="Other crops">
+                {% for crop in other_crops %}
+                <option value="{{ crop.key }}" {% if row.crop and row.crop.key == crop.key %}selected{% endif %}>{{ crop.name }}</option>
+                {% endfor %}
+              </optgroup>
+            </select>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="mt-5 flex flex-wrap items-center gap-3">
+    <button type="submit" class="inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 font-semibold text-white">Save crops</button>
+    <a href="{{ farm_url('/onboarding/bundles') }}" class="inline-flex min-h-[44px] items-center px-2 font-semibold underline">Next: choose apps</a>
+  </div>
+</form>
+{% else %}
+<p class="text-[15px] text-muted">Only the farm owner can save crops.</p>
+{% endif %}
+{% else %}
+<p class="rounded-xl border border-dashed border-line p-6 text-[15px] text-muted">No parcels yet. Import or claim parcels first, then come back to set their crops.</p>
+{% endif %}
+
+<section class="mt-10" aria-labelledby="animals-heading" data-animals="coming-later">
+  <h2 id="animals-heading" class="text-xs font-semibold uppercase tracking-widest text-muted">Animals</h2>
+  <p class="mt-2 max-w-[70ch] text-[15px] text-muted">Coming later. No animal data is recorded yet.</p>
+</section>
+{% endblock %}

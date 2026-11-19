@@ -1,0 +1,61 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% from "core/_icons.html" import icon %}
+{% block title %}App bundles · farmcore{% endblock %}
+{% block content %}
+{{ page_header("Choose your apps", "Pick what kind of farm this is. You can change every app later on the Apps page.") }}
+
+{% if notice %}<p role="status" class="mb-5 rounded-xl bg-protected-soft px-4 py-3 text-[15px] text-protected">{{ notice }}</p>{% endif %}
+{% if error %}<p role="alert" class="mb-5 rounded-xl border border-spray/30 bg-spray-soft px-4 py-3 text-[15px] text-spray">{{ error }}</p>{% endif %}
+
+<form method="get" action="{{ farm_url('/onboarding/bundles') }}" role="search" class="mb-6 flex max-w-xl gap-2">
+  <label class="sr-only" for="bundle-search">Search bundles and apps</label>
+  <input id="bundle-search" type="search" name="q" value="{{ q }}" placeholder="Search bundles and apps" class="min-h-[44px] w-full rounded-lg border border-line bg-ground px-3">
+  <button type="submit" class="inline-flex min-h-[44px] items-center rounded-lg border border-line px-4 font-semibold">Search</button>
+</form>
+
+{% if not admin %}
+<p class="mb-5 text-[15px] text-muted">Only the installation admin can switch apps on. Ask the admin, or change apps one by one on the <a href="{{ farm_url('/apps') }}" class="underline">Apps page</a>.</p>
+{% endif %}
+
+{% if cards %}
+<div class="grid grid-cols-1 gap-x-8 gap-y-8 sm:grid-cols-2 xl:grid-cols-3" aria-label="App bundles">
+  {% for card in cards %}
+  <article data-bundle="{{ card.key }}" data-status="{{ card.status }}" class="flex flex-col gap-3">
+    <span class="flex h-12 w-12 items-center justify-center rounded-xl bg-brand-50 text-brand-700">{{ icon(card.icon, "h-6 w-6") }}</span>
+    <div>
+      <h2 class="text-[18px] font-semibold text-ink">{{ card.title }}</h2>
+      <p class="mt-1 text-[14px] text-muted">{{ card.summary }}</p>
+      <p class="mt-2 text-[13px] text-muted">Includes {{ card.apps | join(", ") }}.</p>
+      {% if card.restart %}<p class="mt-1 text-[13px] text-wait">{{ card.restart | join(", ") }} load at next start.</p>{% endif %}
+    </div>
+    <div class="mt-auto flex flex-wrap items-center gap-3">
+      {% if card.status == "on" %}
+      <span class="rounded-full bg-protected-soft px-2.5 py-1 text-[13px] font-semibold text-protected">On</span>
+      {% elif card.status == "partial" %}
+      <span class="rounded-full bg-wait-soft px-2.5 py-1 text-[13px] font-semibold text-wait">Partly on</span>
+      {% else %}
+      <span class="rounded-full bg-stone-100 px-2.5 py-1 text-[13px] font-semibold text-stone-700">Off</span>
+      {% endif %}
+      {% if admin and card.status != "on" %}
+      <form method="post" action="{{ farm_url('/onboarding/bundles/' ~ card.key) }}">
+        {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+        <button type="submit" class="inline-flex min-h-[44px] items-center rounded-lg bg-brand-900 px-4 font-semibold text-white">Use this bundle</button>
+      </form>
+      {% endif %}
+    </div>
+  </article>
+  {% endfor %}
+</div>
+{% else %}
+<p class="rounded-xl border border-dashed border-line p-6 text-[15px] text-muted">No bundle matches “{{ q }}”.</p>
+{% endif %}
+
+<article class="mt-10 max-w-xl" data-animals="coming-later" aria-disabled="true">
+  <span class="flex h-12 w-12 items-center justify-center rounded-xl bg-stone-100 text-stone-600">{{ icon("none", "h-6 w-6") }}</span>
+  <h2 class="mt-3 text-[18px] font-semibold text-ink">Animals</h2>
+  <p class="mt-1 text-[14px] text-muted">Coming later. No animal data is recorded yet.</p>
+</article>
+
+<p class="mt-8 text-[15px]"><a href="{{ farm_url('/apps') }}" class="inline-flex min-h-[44px] items-center underline">Change individual apps</a></p>
+{% endblock %}
