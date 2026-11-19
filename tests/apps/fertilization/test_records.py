@@ -134,8 +134,11 @@ def test_a_proposal_is_refused_with_its_reason(session, settings, case, kind, pa
         payload = application(case, parcel_ids=[other.A])
     else:
         payload = application(case, **payload)
-    with pytest.raises(drafts.DraftInvalid, match=reason):
+    with pytest.raises(drafts.DraftInvalid, match=reason) as refused:
         propose(session, case, payload, kind=kind)
+    assert all(
+        word not in str(refused.value) for word in ("sacks", "FertilizationDraft", "https://")
+    )
 
 
 def test_the_season_is_the_one_covering_the_farm_local_day(session, case):

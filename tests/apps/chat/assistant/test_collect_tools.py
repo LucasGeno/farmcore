@@ -61,7 +61,7 @@ def test_call_tool_imports_func_and_passes_the_context_and_arguments() -> None:
     assert result == ToolResult(facts={"parcel": "P1"}, text="ctx P1")
 
 
-def test_the_real_apps_declare_eight_tools_in_load_order() -> None:
+def test_the_real_apps_declare_tools_in_load_order() -> None:
     # Each app declares them in its manifest's `tools=`, read through the registry.
     from farmcore.core import registry
 
@@ -69,8 +69,13 @@ def test_the_real_apps_declare_eight_tools_in_load_order() -> None:
 
     assert names == [
         "fields_list_parcels",
+        "propose_parcels",
+        "propose_crop_assignments",
+        "list_import_candidates",
         "operations_last_spray",
         "operations_recent_sprays",
+        "propose_record",
+        "get_draft",
         "fertilization_season",
         "stations_weather",
         "advisor_today",

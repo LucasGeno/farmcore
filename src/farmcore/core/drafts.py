@@ -128,6 +128,13 @@ def validation_reason(error: ValueError) -> str:
     """Short validation feedback without model names, input echoes or library URLs."""
     if isinstance(error, ValidationError):
         issue = error.errors(include_url=False, include_input=False)[0]
+        # These two codes wrap an exception from our validator, not a Pydantic
+        # type/shape diagnostic. Keep the authored guidance, not Pydantic's msg
+        # (which adds prefixes); validators must not interpolate rejected values.
+        if issue["type"] in {"value_error", "assertion_error"}:
+            cause = issue.get("ctx", {}).get("error")
+            if isinstance(cause, (ValueError, AssertionError)):
+                return str(cause) or "draft: invalid value."
         field = ".".join(str(part) for part in issue["loc"])[:80] or "draft"
         reason = {"extra_forbidden": "unexpected field", "missing": "required field"}.get(
             issue["type"], "invalid value"

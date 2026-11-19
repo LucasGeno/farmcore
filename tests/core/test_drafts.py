@@ -407,3 +407,28 @@ def test_a_chat_draft_is_reviewed_by_an_active_owner_of_its_farm(
     else:
         with pytest.raises(drafts.DraftNotFound):
             drafts.confirm(session, MANIFESTS, **confirm, now=NOW_LOCAL)
+
+
+@pytest.mark.parametrize(
+    "issue, expected",
+    [
+        (
+            {"type": "value_error", "ctx": {"error": ValueError("Supply a timezone.")}},
+            "Supply a timezone.",
+        ),
+        (
+            {"type": "assertion_error", "ctx": {"error": AssertionError("Choose a crop.")}},
+            "Choose a crop.",
+        ),
+        ({"type": "missing"}, "amount: required field."),
+        ({"type": "extra_forbidden"}, "amount: unexpected field."),
+        ({"type": "int_parsing"}, "amount: invalid value."),
+    ],
+)
+def test_validation_reasons_preserve_domain_guidance_without_pydantic_details(issue, expected):
+    from pydantic import ValidationError
+
+    error = ValidationError.from_exception_data(
+        "PrivateInputModel", [{**issue, "loc": ("amount",), "input": "PRIVATE_INPUT"}]
+    )
+    assert drafts.validation_reason(error) == expected
