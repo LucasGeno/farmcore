@@ -44,7 +44,7 @@ from farmcore.apps.chat.dto import Callback, Incoming, Outgoing
 from farmcore.apps.chat.transcribe import WhisperTranscriber
 from farmcore.apps.fields.tools import mentioned_parcel, parcels
 from farmcore.apps.forecast import availability
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import spray_items
 from farmcore.core.access import Repo, ScopedRepository, has_farm_membership, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.farm_location import farm_zone
@@ -578,7 +578,7 @@ def _hints(repo: ScopedRepository) -> list[str]:
         private_member=repo.private_member,
     )
     hints = [p.name for p in parcels(scoped)] + [
-        p.name for p in products_for_farm(scoped, scope="fields:read")
+        p.name for p in spray_items.items_for_farm(scoped, scope="fields:read")
     ]
     _end_request_transaction(repo)
     return hints

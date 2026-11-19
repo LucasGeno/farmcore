@@ -20,11 +20,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from farmcore.apps.fields.seed import alias_number
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import spray_items
 from farmcore.apps.operations.map_sections import _spray_logs
 from farmcore.apps.operations.parcel_facts import Copper, copper_this_year
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Farm, Parcel, Product
+from farmcore.core.models.canonical import Farm, Parcel
 
 CONVENTIONAL = "conventional"
 ORGANIC = "organic"
@@ -56,7 +57,7 @@ def mode(farm: Farm | None) -> str:
 
 @dataclass(frozen=True)
 class Offer:
-    product: Product
+    product: SprayItem
     source: str | None  # the organic source, if any
     url: str | None
 
@@ -68,11 +69,11 @@ class CopperRow:
     copper: Copper | None  # None: no copper claim either way (unidentified products only)
 
 
-def offers(products: list[Product], current: str) -> tuple[list[Offer], list[Offer]]:
+def offers(products: list[SprayItem], current: str) -> tuple[list[Offer], list[Offer]]:
     """(offered, withheld) for the mode: organic withholds every product without a source."""
     rows = []
     for p in products:
-        organic = (p.props or {}).get("organic") or {}
+        organic = p.props.get("organic") or {}
         rows.append(Offer(p, organic.get("source") or None, organic.get("url") or None))
     if current != ORGANIC:
         return rows, []
@@ -95,7 +96,7 @@ def copper_rows(repo: ScopedRepository, now: datetime, tz: str) -> list[CopperRo
 def view(repo: ScopedRepository, now: datetime, tz: str) -> dict:
     farm = repo.get(Farm, repo.farm_id, scope=SCOPE)
     current = mode(farm)
-    offered, withheld = offers(products_for_farm(repo, scope=SCOPE), current)
+    offered, withheld = offers(spray_items.items_for_farm(repo, scope=SCOPE), current)
     return {
         "mode": current,
         "offered": offered,

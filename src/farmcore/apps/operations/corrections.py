@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import spray_items
 from farmcore.core import logs
 from farmcore.core.identity import principal_for
 from farmcore.core.models.canonical import Log, Parcel, Quantity
@@ -249,7 +249,8 @@ def _after(repo, before, changes, *, replay=False):
                 else:
                     if not replay:
                         if eligible is None:
-                            eligible = {p.id for p in products_for_farm(repo, scope="logs:write")}
+                            shortlist = spray_items.items_for_farm(repo, scope="logs:write")
+                            eligible = {p.id for p in shortlist}
                         if dose.product_id not in eligible:
                             raise HTTPException(422, "Product not found.")
                     validate_new_dose(dose.value)  # before fixed notation or persisted intent

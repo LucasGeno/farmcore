@@ -21,8 +21,8 @@ from sqlalchemy.exc import IntegrityError
 from farmcore.apps.advisor import service as advice_service
 from farmcore.apps.fields.seed import alias_number
 from farmcore.apps.forecast import availability
-from farmcore.apps.operations import production, spray_weather
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import production, spray_items, spray_weather
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.apps.planning import offers, resources
 from farmcore.apps.planning.models import (
     PlanningJob,
@@ -35,7 +35,7 @@ from farmcore.apps.planning.models import (
 from farmcore.apps.review.models import ParameterVersion
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Advice, Farm, Log, LogSource, Parcel, Product
+from farmcore.core.models.canonical import Advice, Farm, Log, LogSource, Parcel
 
 SCOPE = "planning:read"
 WRITE = "planning:write"
@@ -118,18 +118,18 @@ def _version(repo: ScopedRepository, advice_row: Advice) -> tuple[int | None, st
     return version_id, status
 
 
-def _offered(repo: ScopedRepository) -> list[Product]:
+def _offered(repo: ScopedRepository) -> list[SprayItem]:
     farm = repo.get(Farm, repo.farm_id, scope="logs:read")
-    products = products_for_farm(repo, scope="logs:read")
+    products = spray_items.items_for_farm(repo, scope="logs:read")
     offered, _ = production.offers(products, production.mode(farm))
     return [offer.product for offer in offered]
 
 
-def _product(repo: ScopedRepository, product_id: int) -> Product:
+def _product(repo: ScopedRepository, product_id: int) -> SprayItem:
     if not 0 < product_id < 2**63:
         raise JobError("Choose a product from this farm's shortlist.")
     farm = repo.get(Farm, repo.farm_id, scope="logs:read")
-    products = products_for_farm(repo, scope="logs:read")
+    products = spray_items.items_for_farm(repo, scope="logs:read")
     offered, _ = production.offers(products, production.mode(farm))
     for offer in offered:
         if offer.product.id == product_id:
@@ -760,7 +760,7 @@ def _clock_text(value: datetime, tz: str) -> str:
 def _difference_lines(
     job: PlanningJob,
     planned_parcels: list[Parcel],
-    planned_product: Product | None,
+    planned_product: SprayItem | None,
     actual_start: datetime,
     duration_minutes: int,
     parcels: list[Parcel],
@@ -822,7 +822,7 @@ def completion_preview(
         notes=notes,
     )
     planned_parcels = _job_parcels(repo, job.id)
-    planned_product = repo.get(Product, job.product_id, scope="logs:read")
+    planned_product = spray_items.item(repo, job.product_id, scope="logs:read")
     end = actual_start + timedelta(minutes=duration_minutes)
     state = _state(repo, actual_start, tz)
     advice_row = repo.get(Advice, job.assessment_id, scope="advice:read")
@@ -1083,7 +1083,7 @@ def job_json(
     forecast: offers.Forecast | None = None,
 ) -> dict[str, object]:
     advice_row = repo.get(Advice, job.assessment_id, scope="advice:read")
-    product = repo.get(Product, job.product_id, scope="logs:read")
+    product = spray_items.item(repo, job.product_id, scope="logs:read")
     parcels = _job_parcels(repo, job.id)
     assigned = _assigned_rows(repo, job.id)
     saved_assignments = []

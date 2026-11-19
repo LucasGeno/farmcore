@@ -1,11 +1,11 @@
 """Stock rows of the selected farm: purchased, used this season (computed), on hand, low stock.
 
 `stock_rows(repo, now, tz)` reads this season's `inventory_stock` rows (season = local calendar
-year of `now`) for products on the farm's shortlist (`operations.catalogue.products_for_farm`; an
+year of `now`) for products on the farm's shortlist (`operations.spray_items.items_for_farm`; an
 explicit empty shortlist, as on the Spanish demo farm, shows no stock), then sums, per product,
 the doses of the farm's *done* spray logs started between 1 Jan local and `now`.
 
-Doses are read in the neutral shape: `legacy_typed_quantity` (spray product rates with their
+Doses are read in the neutral shape (`spray_items.standard_doses`: spray product rates with their
 standard measure, value and unit), keyed on the spray's product, never on a measure, so an
 irrigation's entered volume (`typed_quantity`, no product) never consumes a liquid stock.
 `core.units` converts them in `Decimal` with the log's area as the only factor:
@@ -36,15 +36,16 @@ from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import Row, select
+from sqlalchemy import select
 
 from farmcore.apps.inventory.models import InventoryStock
-from farmcore.apps.operations.catalogue import products_for_farm
+from farmcore.apps.operations import spray_items
+from farmcore.apps.operations.spray_items import SprayItem, StandardDose
 from farmcore.core import units
 from farmcore.core.access import ScopedRepository
 from farmcore.core.logs import FACTORS
-from farmcore.core.models.canonical import Log, LogParcel, Parcel, Product
-from farmcore.core.models.catalog import CatalogItem, TypedQuantity, legacy_typed_quantity
+from farmcore.core.models.canonical import Log, LogParcel, Parcel
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 
 LOGS_SCOPE = "logs:read"
 FIELDS_SCOPE = "fields:read"
@@ -54,7 +55,7 @@ RATES = frozenset(m for m in units.STANDARD_UNITS if m.endswith("_rate"))
 @dataclass(frozen=True)
 class StockRow:
     stock: InventoryStock
-    product: Product
+    product: SprayItem
     purchased: Decimal
     used: Decimal | None  # None: a spray of this product is in a unit that does not convert
     on_hand: Decimal | None
@@ -72,7 +73,7 @@ def season_start(now: datetime, tz: str) -> tuple[int, datetime]:
     return local.year, local.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
 
-def amount_used(dose: Row, area_ha: Decimal, stock_unit: str) -> Decimal | None:
+def amount_used(dose: StandardDose, area_ha: Decimal, stock_unit: str) -> Decimal | None:
     """The amount of a per-hectare dose over `area_ha` in `stock_unit`, or None when no known
     factor converts it exactly."""
     try:
@@ -90,7 +91,7 @@ def amount_used(dose: Row, area_ha: Decimal, stock_unit: str) -> Decimal | None:
 
 def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockRow]:
     season, start = season_start(now, tz)
-    products = {p.id: p for p in products_for_farm(repo, scope=LOGS_SCOPE)}
+    products = {p.id: p for p in spray_items.items_for_farm(repo, scope=LOGS_SCOPE)}
     if not products:
         return []
     stocks = repo.list(
@@ -111,31 +112,16 @@ def stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[StockR
         scope=LOGS_SCOPE,
     )
     log_ids = [log.id for log in logs]
-    view = legacy_typed_quantity.c
-    doses = (
-        repo.session.execute(
-            select(
-                view.log_id,
-                view.product_id,
-                view.measure,
-                view.value,
-                view.unit,
-                view.entered_value,
-                view.entered_unit,
-            ).where(view.log_id.in_(log_ids), view.product_id.in_([s.product_id for s in stocks]))
-        ).all()
-        if log_ids
-        else []
-    )
+    doses = spray_items.standard_doses(repo, log_ids, [s.product_id for s in stocks])
     area = _log_areas(repo, {d.log_id for d in doses})
-    by_product: dict[int, list[Row]] = defaultdict(list)
+    by_product: dict[int, list[StandardDose]] = defaultdict(list)
     for d in doses:
-        by_product[d.product_id].append(d)
+        by_product[d.item_id].append(d)
 
     rows = []
     for s in stocks:
         total, bad = Decimal(0), set()
-        per_log: dict[int, list[Row]] = defaultdict(list)
+        per_log: dict[int, list[StandardDose]] = defaultdict(list)
         for d in by_product[s.product_id]:
             per_log[d.log_id].append(d)
         sprays = set(per_log)

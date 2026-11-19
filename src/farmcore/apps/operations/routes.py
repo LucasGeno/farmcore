@@ -47,11 +47,19 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 
-from farmcore.apps.operations import bbch, checks, corrections, facts, isoxml, register
+from farmcore.apps.operations import (
+    bbch,
+    checks,
+    corrections,
+    facts,
+    isoxml,
+    register,
+    spray_items,
+)
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.farm_location import time_zone_of
-from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel, Product
+from farmcore.core.models.canonical import Event, Farm, Log, LogParcel, LogSource, Parcel
 from farmcore.core.navigation import return_destination
 from farmcore.web import context_url, render
 
@@ -497,7 +505,6 @@ def _correction_context(request, repo, log_id):
 
     from sqlalchemy import or_
 
-    from farmcore.apps.operations.catalogue import products_for_farm
     from farmcore.core.models.corrections import OperationCorrection
 
     corrections.target_id(log_id)
@@ -516,14 +523,14 @@ def _correction_context(request, repo, log_id):
     )
     if (log is None or log.type != "spray" or log.status != "done") and not history:
         raise HTTPException(404, "Confirmed spray not found.")
-    products = products_for_farm(repo, scope="logs:read")
+    products = spray_items.items_for_farm(repo, scope="logs:read")
     historical_ids = (
-        {q.product_id for q in log.quantities if q.product_id is not None} if log else set()
+        {q.item_id for q in spray_items.doses_of_log(log) if q.item_id is not None}
+        if log
+        else set()
     )
     historical_ids -= {p.id for p in products}
-    historical_products = {
-        p.id: p for p in repo.list(Product, Product.id.in_(historical_ids), scope="logs:read")
-    }
+    historical_products = spray_items.items_by_id(repo, historical_ids, scope="logs:read")
     return {
         "log_id": log_id,
         "record": corrections.visible(corrections.snapshot(log)) if log is not None else None,
@@ -563,7 +570,7 @@ def correction_receipt(correction_id: int, request: Request, repo: Repo):
         correction=corrections.view(item),
         can_finalize=item.status == "pending" and item.actor_key == _correction_actor(request),
         parcel_names={p.id: f"{p.alias} {p.name}" for p in repo.list(Parcel, scope="fields:read")},
-        product_names={p.id: p.name for p in repo.list(Product, scope="logs:read")},
+        product_names={p.id: p.name for p in spray_items.all_items(repo, scope="logs:read")},
     )
 
 
@@ -653,10 +660,10 @@ def draft_review(request: Request, repo: Repo, draft: Annotated[int, Query(ge=1,
     }
     doses = getattr(record, "doses", [])
     products = {
-        p.id: p.name
-        for p in repo.list(
-            Product, Product.id.in_([d.product_id for d in doses]), scope="logs:read"
-        )
+        i: p.name
+        for i, p in spray_items.items_by_id(
+            repo, [d.product_id for d in doses], scope="logs:read"
+        ).items()
     }
     return render(
         request,

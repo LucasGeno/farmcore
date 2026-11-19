@@ -16,10 +16,12 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import distinct_on
 
+from farmcore.apps.advisor import products as advisor_products
 from farmcore.apps.advisor import service as advice_service
 from farmcore.apps.advisor.engine import AdvisorConfig
 from farmcore.apps.forecast import availability as farm_availability
 from farmcore.apps.forecast import store
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.apps.planning import engine, resources
 from farmcore.apps.planning.models import (
     PlanningJob,
@@ -29,7 +31,7 @@ from farmcore.apps.planning.models import (
     PlanningOperator,
 )
 from farmcore.core.access import ScopeDenied, ScopedRepository
-from farmcore.core.models.canonical import Advice, Farm, Parcel, Product
+from farmcore.core.models.canonical import Advice, Farm, Parcel
 
 SCOPE = "planning:read"
 HORIZON_HOURS = 72
@@ -92,9 +94,14 @@ def _area(parcels: list[Parcel]) -> Decimal:
     return sum((parcel.area_ha for parcel in parcels), Decimal("0"))
 
 
-def _sulphur(product) -> bool:
-    targets = getattr(product, "targets", None) or []
+def _powdery(targets) -> bool:
     return any("powdery" in str(target) for target in targets)
+
+
+def _sulphur(repo: ScopedRepository, product: SprayItem | None) -> bool:
+    """Whether the product targets powdery mildew (crop protection's attribute of the item)."""
+    item_id = product.id if product is not None else None
+    return _powdery(advisor_products.targets(repo, item_id, scope="logs:read"))
 
 
 def _state_json(state: engine.State | None) -> dict[str, str] | None:
@@ -366,7 +373,7 @@ def _states(
     tz: str,
     assigned: list[dict[str, object]],
     parcels: list[Parcel],
-    product,
+    sulphur: bool,
     forecast: Forecast,
     busy_days: set[date],
 ) -> tuple[
@@ -382,7 +389,7 @@ def _states(
     area = _area(parcels)
     machine_row = _assigned(assigned, "machine")
     operator_row = _assigned(assigned, "operator")
-    weather = _weather(forecast, span, sulphur=_sulphur(product))
+    weather = _weather(forecast, span, sulphur=sulphur)
     if machine_row is None:
         machine_state = engine.State(
             "unknown", "no machine is booked; availability and capacity are unknown."
@@ -433,13 +440,19 @@ def _job_offers(
         jobs = repo.list(PlanningJob, PlanningJob.status == "planned", scope=SCOPE)
     except ScopeDenied:
         return []
-    for other in jobs:
-        if other.id == job.id:
-            continue
-        other_end = other.scheduled_start + timedelta(minutes=other.duration_minutes)
-        if not (target.start < other_end and other.scheduled_start < target.end):
-            continue
-        product = repo.get(Product, other.product_id, scope="logs:read")
+    overlapping = [
+        other
+        for other in jobs
+        if other.id != job.id
+        and target.start < other.scheduled_start + timedelta(minutes=other.duration_minutes)
+        and other.scheduled_start < target.end
+    ]
+    # One read for every overlapping job's product, not one per job.
+    refs = advisor_products.product_refs(
+        repo, {other.product_id for other in overlapping}, scope="logs:read"
+    )
+    for other in overlapping:
+        ref = refs.get(other.product_id)
         result, _, _, _, _ = _states(
             repo,
             other,
@@ -447,7 +460,7 @@ def _job_offers(
             tz=tz,
             assigned=_assigned_for(repo, other.id),
             parcels=_job_parcels(repo, other.id),
-            product=product,
+            sulphur=_powdery(ref.targets if ref else ()),
             forecast=forecast,
             busy_days=busy_days,
         )
@@ -479,6 +492,7 @@ def job_assessment(
 ) -> dict[str, object]:
     forecast = forecast or forecast_context(repo, now, tz)
     busy_days = _busy_days(repo, now, tz)
+    sulphur = _sulphur(repo, product)  # once per job
     result, span, area, machine_row, capacity = _states(
         repo,
         job,
@@ -486,7 +500,7 @@ def job_assessment(
         tz=tz,
         assigned=assigned,
         parcels=parcels,
-        product=product,
+        sulphur=sulphur,
         forecast=forecast,
         busy_days=busy_days,
     )
@@ -519,7 +533,7 @@ def job_assessment(
             operator_row,
             capacity,
             area,
-            sulphur=_sulphur(product),
+            sulphur=sulphur,
             busy_days=busy_days,
         )
     return {

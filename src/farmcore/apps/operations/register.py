@@ -59,17 +59,10 @@ from sqlalchemy import select
 
 from farmcore.apps.operations import bbch as bbch_config
 from farmcore.apps.operations import checks as label_checks
-from farmcore.apps.operations import spray_weather
+from farmcore.apps.operations import spray_items, spray_weather
+from farmcore.apps.operations.spray_items import SprayDose, SprayItem
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import (
-    ExtId,
-    Log,
-    LogParcel,
-    LogSource,
-    Parcel,
-    Product,
-    Quantity,
-)
+from farmcore.core.models.canonical import ExtId, Log, LogParcel, LogSource, Parcel
 
 SCOPE = "register:read"
 DEFAULT_EPPO = "VITVI"  # grapevine, Vitis vinifera (EPPO code)
@@ -137,7 +130,7 @@ def _bbch(
 
 
 def _product_cells(
-    q: Quantity | None, product: Product | None, entry: dict[str, Any] | None
+    q: SprayDose | None, product: SprayItem | None, entry: dict[str, Any] | None
 ) -> dict[str, Any]:
     entry = entry or {}
     if product:
@@ -148,23 +141,23 @@ def _product_cells(
     return {
         "product_name": name or "",
         "authorisation_no": product.authorisation_no if product else "",
-        "authorisation_placeholder": bool(product and (product.props or {}).get("placeholder")),
+        "authorisation_placeholder": bool(product and product.placeholder),
         "active_substance": substance or "",
         "dose": str(q.value) if q else "",
         "dose_unit": q.unit if q else "",
     }
 
 
-ProductItem = tuple[Quantity | None, dict[str, Any] | None]
+ProductItem = tuple[SprayDose | None, dict[str, Any] | None]
 
 
-def _product_items(log: Log, quantities: list[Quantity]) -> list[ProductItem]:
+def _product_items(log: Log, quantities: list[SprayDose]) -> list[ProductItem]:
     """Product rates, including unmatched labelled rates, then props-only products."""
     entries: dict[str, Any] = (log.props or {}).get("products") or {}
     items: list[ProductItem] = [
         (q, entries.get(q.label) if q.label is not None else None)
         for q in quantities
-        if q.measure == "rate" and (q.product_id is not None or (q.label and q.label.strip()))
+        if q.rate and (q.item_id is not None or (q.label and q.label.strip()))
     ]
     covered = {q.label for q, _ in items if q is not None}
     items += [(None, entry) for key, entry in entries.items() if key not in covered]
@@ -177,22 +170,15 @@ def product_summaries(
     """Each log's products as the register cards read them (`product_name`, `dose`,
     `dose_unit`, the register's own cells), one per product name; a log with no named product
     gets an empty list. For the recent records and timelines, read under the caller's scope."""
-    ids = [log.id for log in logs]
-    quantities_of: dict[int, list[Quantity]] = defaultdict(list)
-    if ids:
-        for q in repo.list(Quantity, Quantity.log_id.in_(ids), scope=scope, order_by=Quantity.id):
-            quantities_of[q.log_id].append(q)
-    product_ids = {q.product_id for qs in quantities_of.values() for q in qs if q.product_id}
-    products = (
-        {p.id: p for p in repo.list(Product, Product.id.in_(product_ids), scope=scope)}
-        if product_ids
-        else {}
+    quantities_of = spray_items.doses_for_logs(repo, [log.id for log in logs], scope=scope)
+    products = spray_items.items_by_id(
+        repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=scope
     )
     out: dict[int, list[dict[str, Any]]] = {}
     for log in logs:
         named: dict[str, dict[str, Any]] = {}
         for q, entry in _product_items(log, quantities_of[log.id]):
-            product = products.get(q.product_id) if q and q.product_id else None
+            product = products.get(q.item_id) if q and q.item_id else None
             cells = _product_cells(q, product, entry)
             if cells["product_name"]:
                 named.setdefault(cells["product_name"], cells)
@@ -205,8 +191,8 @@ def product_summaries(
 def _applications(
     spray_logs: list[Log],
     parcels_of: dict[int, list[Parcel]],
-    quantities_of: dict[int, list[Quantity]],
-    products: dict[int, Product],
+    quantities_of: dict[int, list[SprayDose]],
+    products: dict[int, SprayItem],
     zone: ZoneInfo,
 ) -> list[label_checks.Application]:
     """One application per log × parcel × known product, for the checks."""
@@ -214,9 +200,9 @@ def _applications(
     for log in spray_logs:
         day = log.ts_start.astimezone(zone).date()
         for q in quantities_of[log.id]:
-            if q.measure != "rate":
+            if not q.rate:
                 continue
-            product = products.get(q.product_id) if q.product_id is not None else None
+            product = products.get(q.item_id) if q.item_id is not None else None
             if product is None:
                 continue
             label = label_checks.Label.from_props(product.props)
@@ -251,15 +237,13 @@ def preview_checks(repo: ScopedRepository, pending: Log, now: datetime, *, tz: s
     ids = [log.id for log in spray_logs]
     links = repo.list(LogParcel, LogParcel.log_id.in_(ids), scope=SCOPE)
     parcels = {p.id: p for p in repo.list(Parcel, scope=SCOPE)}
-    quantities = repo.list(Quantity, Quantity.log_id.in_(ids), scope=SCOPE)
-    product_ids = {q.product_id for q in quantities if q.product_id is not None}
-    products = {p.id: p for p in repo.list(Product, Product.id.in_(product_ids), scope=SCOPE)}
+    quantities_of = spray_items.doses_for_logs(repo, ids, scope=SCOPE)
+    products = spray_items.items_by_id(
+        repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=SCOPE
+    )
     parcels_of = defaultdict(list)
-    quantities_of = defaultdict(list)
     for link in links:
         parcels_of[link.log_id].append(parcels[link.parcel_id])
-    for q in quantities:
-        quantities_of[q.log_id].append(q)
     apps = _applications(spray_logs, parcels_of, quantities_of, products, ZoneInfo(tz))
     return [check.as_dict() for check in label_checks.spray_checks(pending.id, apps)]
 
@@ -434,22 +418,14 @@ def register_rows(
         p.id: p
         for p in repo.list(Parcel, Parcel.id.in_({link.parcel_id for link in links}), scope=SCOPE)
     }
-    quantities = repo.list(
-        Quantity, Quantity.log_id.in_(log_ids), scope=SCOPE, order_by=Quantity.id
-    )
-    product_ids = {q.product_id for q in quantities if q.product_id is not None}
-    products = (
-        {p.id: p for p in repo.list(Product, Product.id.in_(product_ids), scope=SCOPE)}
-        if product_ids
-        else {}
+    quantities_of = spray_items.doses_for_logs(repo, log_ids, scope=SCOPE)
+    products = spray_items.items_by_id(
+        repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=SCOPE
     )
 
     parcels_of: dict[int, list[Parcel]] = defaultdict(list)
     for link in links:
         parcels_of[link.log_id].append(parcels[link.parcel_id])
-    quantities_of: dict[int, list[Quantity]] = defaultdict(list)
-    for q in quantities:
-        quantities_of[q.log_id].append(q)
 
     zone = ZoneInfo(tz)
     checks_of: dict[int, list[label_checks.Check]] = (
@@ -480,7 +456,7 @@ def register_rows(
                 log, local.date(), crop_eppo, configured=props.get("bbch_config", True)
             )
             for q, entry in items:
-                product = products.get(q.product_id) if q and q.product_id else None
+                product = products.get(q.item_id) if q and q.item_id else None
                 cells = {
                     **_product_cells(q, product, entry),
                     "date": local.strftime("%Y-%m-%d"),

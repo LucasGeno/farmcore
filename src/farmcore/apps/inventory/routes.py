@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from farmcore.apps.inventory import service
 from farmcore.apps.inventory.models import InventoryStock
+from farmcore.apps.operations import spray_items
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.errors import wants_html
@@ -52,7 +53,7 @@ def _page(
     settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
     farm = repo.get(Farm, repo.farm_id, scope=service.LOGS_SCOPE)
-    catalogue = (farm.props or {}).get("product_ids") != [] if farm else False
+    catalogue = not spray_items.offers_none(farm)
     season, _ = service.season_start(now, settings.display_tz)
     return render(
         request,

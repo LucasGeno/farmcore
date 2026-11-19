@@ -19,8 +19,8 @@ highest value; the detail names that parcel when the parcels differ):
 - `phi`: "Harvest not before <date>": the spray day plus the longest pre-harvest interval of its
   products (info).
 
-Label values come from `Product.props` (`Label.from_props`; the operations seed writes them from
-each product's E-Phy page). A missing value skips its check, never guesses.
+Label values come from a spray item's props (`SprayItem.props`, `Label.from_props`; the seed
+writes them from each product's E-Phy page). A missing value skips its check, never guesses.
 """
 
 from __future__ import annotations

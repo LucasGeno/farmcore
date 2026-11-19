@@ -258,3 +258,52 @@ def test_a_labelled_quantity_without_products_entry_keeps_its_label(
     check_entity(e)
     assert e["quantity"] == 1
     assert e["description"].startswith("Unmatched product")
+
+
+def test_ngsi_v1_keeps_its_published_ids(admin, session, demo, spray) -> None:
+    """v1 is a frozen contract (`core/representations.py`): its entity ids name the dose and its
+    product URNs the product, whatever table later holds them."""
+    log = spray(doses=(("copper-contact", "2", "kg/ha"), ("sulphur-wettable", "3", "kg/ha")))
+    session.refresh(log)
+    doses = {q.id: q.product_id for q in log.quantities}
+
+    default = admin.get("/share/ngsi-ld.json")
+    pinned = admin.get("/share/ngsi-ld.json?v=1")
+
+    assert default.headers["FarmCore-Representation"] == "ngsi-ld; v=1"
+    assert "Deprecation" not in default.headers
+    assert pinned.json() == default.json()
+    ops = [e for e in default.json() if e["type"] == "AgriParcelOperation"]
+    assert len(ops) == 2 * len(demo.parcels)
+    for e in ops:
+        log_id, parcel_id, quantity_id = e["id"].removeprefix(ENTITY_PREFIX).split("-")
+        assert (int(log_id), int(parcel_id)) in {(log.id, p.id) for p in demo.parcels}
+        assert e["hasAgriProductType"] == (
+            f"urn:ngsi-ld:AgriProductType:farmcore-{doses[int(quantity_id)]}"
+        )
+
+
+def test_an_unserved_ngsi_version_is_a_400_after_authorisation(
+    admin, grantee_client, session, owner_repo, demo, spray, grantee_identity
+) -> None:
+    """A version nobody serves, or a malformed one (too long for int(), a non-ASCII digit), is
+    a 400 listing the served versions, never a silent v1 or a 500; a grant that may not read the
+    export gets its 403 first, whatever version it asks for."""
+    spray()
+    grant = service.create_grant(
+        owner_repo,
+        recipient_identity_id=grantee_identity.id,
+        grantee="Advice reviewer",
+        preset="advice",
+        purpose="spray advice",
+        valid_to=datetime.now(UTC) + timedelta(days=30),
+        tz="Europe/Paris",
+    )
+    session.commit()
+
+    for raw in ("2", "9" * 5000, "\u0661", "01", ""):
+        unknown = admin.get("/share/ngsi-ld.json", params={"v": raw})
+        assert unknown.status_code == 400, raw[:8]
+        assert "served versions: 1" in unknown.text
+    denied = grantee_client.get(f"/share/as/{grant.id}/ngsi-ld.json", params={"v": "9"})
+    assert denied.status_code == 403

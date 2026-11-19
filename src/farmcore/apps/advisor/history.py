@@ -28,16 +28,9 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, literal_column, select
 from sqlalchemy.dialects.postgresql import JSONB
 
+from farmcore.apps.operations import spray_items
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import (
-    Advice,
-    Event,
-    Log,
-    LogParcel,
-    LogSource,
-    Product,
-    Quantity,
-)
+from farmcore.core.models.canonical import Advice, Event, Log, LogParcel, LogSource
 
 LOGS_SCOPE = "logs:read"
 ADVICE_SCOPE = "advice:read"
@@ -181,16 +174,16 @@ def _sprays(repo, parcel_id, start, end) -> list[SprayItem]:
     )
     if not logs:
         return []
-    stmt = (
-        select(Quantity, Product.name)
-        .outerjoin(Product, Product.id == Quantity.product_id)
-        .where(Quantity.log_id.in_([log.id for log in logs]))
-        .order_by(Quantity.id)
+    quantities_of = spray_items.doses_for_logs(repo, [log.id for log in logs], scope=LOGS_SCOPE)
+    items = spray_items.items_by_id(
+        repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=LOGS_SCOPE
     )
     doses: dict[int, list[str]] = {}
-    for q, product in repo.execute(stmt, scope=LOGS_SCOPE, resource="quantity"):
-        name = product or q.label or "Unnamed product"
-        doses.setdefault(q.log_id, []).append(f"{name} {_num(q.value)} {q.unit}")
+    for log_id, qs in quantities_of.items():
+        for q in qs:
+            item = items.get(q.item_id) if q.item_id is not None else None
+            name = (item.name if item else None) or q.label or "Unnamed product"
+            doses.setdefault(log_id, []).append(f"{name} {_num(q.value)} {q.unit}")
     return [SprayItem(log.ts_start, tuple(doses.get(log.id, ())), log.notes or "") for log in logs]
 
 
