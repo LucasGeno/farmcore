@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -43,6 +44,7 @@ from farmcore.core.access import TokenRejected, authenticate_token, ensure_owner
 from farmcore.core.identity import hash_password
 from farmcore.core.models.canonical import Farm
 from farmcore.core.models.identity import FarmMembership, LocalIdentity, OAuthCode, OAuthToken
+from farmcore.core.oauth import clients
 from farmcore.core.oauth import service as oauth
 from farmcore.main import create_app
 from farmcore.settings import OAuthClient
@@ -215,11 +217,17 @@ def _accepted(session, raw: str, audience: str | None = RESOURCE) -> bool:
     return True
 
 
-def test_a_request_naming_no_scope_does_not_ask_for_advice_read(oauth_settings):
+def _no_fetch(url: str):
+    raise AssertionError(f"an operator-listed client is never fetched: {url}")
+
+
+def test_a_request_naming_no_scope_does_not_ask_for_advice_read(oauth_settings, session):
     # An owner must choose to let an agent read stored advice; the default never includes it.
     params = {k: v for k, v in _request().items() if k != "scope"}
 
-    asked = oauth.parse_request(oauth_settings, params)
+    asked = oauth.parse_request(
+        oauth_settings, params, partial(clients.resolve, session, oauth_settings, _no_fetch)
+    )
 
     assert "advice:read" not in asked.scopes
     assert "fields:read" in asked.scopes
