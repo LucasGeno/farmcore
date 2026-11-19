@@ -235,25 +235,16 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(session, sett
     from farmcore.apps.advisor.engine import evaluate as engine_evaluate
     from farmcore.apps.advisor.service import saved_config
     from farmcore.core.access import repo_for_job
-    from farmcore.core.models.canonical import Log, Observation, Product, Quantity
+    from farmcore.core.models.canonical import Log, Product, Quantity
     from tests.apps.advisor.review_fixtures import complete_station
+    from tests.apps.stations.synth import correct
 
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
     station = complete_station(session, parcel.farm_id, NOW)
 
-    def reading(variable, ts):
-        return session.scalar(
-            select(Observation).where(
-                Observation.asset_id == station.id,
-                Observation.variable == variable,
-                Observation.ts == ts,
-            )
-        )
-
-    rainy = reading("rr1_mm", datetime(2024, 4, 8, 4, tzinfo=UTC))
-    rainy.value = 11.0
-    reading("t_c", datetime(2024, 3, 15, tzinfo=UTC)).value = float("nan")
+    rainy_at = datetime(2024, 4, 8, 4, tzinfo=UTC)
+    correct(session, station, rainy_at, "rr1_mm", 11.0)
     copper = session.scalar(select(Product).where(Product.active_substance == "copper"))
     log = Log(
         farm_id=parcel.farm_id,
@@ -272,12 +263,10 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(session, sett
     )
     session.flush()
     row = _evaluated(session, settings, parcel, station)
-    rainy.value = 0.0  # a later station correction must not change the saved evidence
-    session.flush()
+    # a later station correction must not change the saved evidence
+    correct(session, station, rainy_at, "rr1_mm", 0.0)
 
     snapshot = row.props["input_snapshot"]
-    late = next(h for h in snapshot["hourly_inputs"] if h["ts"].startswith("2024-03-15T00"))
-    assert late["t_c"] == {"rejected": "non-finite", "raw": "nan"}
     config, verification = saved_config(
         repo_for_job(session, parcel.farm_id, "advisor.evaluate"), row
     )

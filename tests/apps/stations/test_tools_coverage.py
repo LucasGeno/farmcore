@@ -12,9 +12,10 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from farmcore.apps.stations import tools
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.chat.assistant.toolkit import ctx_at, keys
+from tests.apps.stations.synth import observe
 
 PARIS = ZoneInfo("Europe/Paris")
 UTC = ZoneInfo("UTC")
@@ -36,8 +37,7 @@ def station(session, settings) -> Asset:
 
 
 def add(session, station, rows) -> None:
-    for ts, variable, value in rows:
-        session.add(Observation(asset_id=station.id, ts=ts, variable=variable, value=value))
+    observe(session, station, rows)
     session.commit()
 
 

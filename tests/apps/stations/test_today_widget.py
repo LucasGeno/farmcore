@@ -12,7 +12,8 @@ from sqlalchemy import select
 
 from farmcore.core import seed as core_seed
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
+from tests.apps.stations.synth import observe
 
 NOW = datetime(2024, 4, 10, 4, 0, tzinfo=UTC)  # Wed 10 Apr 2024 06:00 Europe/Paris
 
@@ -23,17 +24,15 @@ def _station(session) -> Asset:
 
 def _hours(session, station: Asset, hours: dict[int, tuple]) -> None:
     """hours: offset from NOW -> (rr1_mm, t_c, rh_pct, ff_kmh); None = no reading."""
-    for offset, values in hours.items():
-        for variable, value in zip(("rr1_mm", "t_c", "rh_pct", "ff_kmh"), values, strict=True):
-            if value is not None:
-                session.add(
-                    Observation(
-                        asset_id=station.id,
-                        ts=NOW + timedelta(hours=offset),
-                        variable=variable,
-                        value=value,
-                    )
-                )
+    observe(
+        session,
+        station,
+        [
+            (NOW + timedelta(hours=offset), variable, value)
+            for offset, values in hours.items()
+            for variable, value in zip(("rr1_mm", "t_c", "rh_pct", "ff_kmh"), values, strict=True)
+        ],
+    )
     session.flush()
 
 

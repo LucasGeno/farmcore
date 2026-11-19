@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from farmcore.apps.stations import tools
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.chat.assistant.toolkit import ctx_at
+from tests.apps.stations.synth import observe
 
 PARIS = ZoneInfo("Europe/Paris")
 
@@ -28,8 +29,7 @@ def test_rain_at_midnight_belongs_to_the_day_before(session, settings) -> None:
         (day + timedelta(days=1), "rr1_mm", 5.0),  # 23:00–00:00 on 11 Apr
         (day + timedelta(days=1), "t_c", -3.0),  # the 00:00 reading of 12 Apr
     ]
-    for ts, variable, value in rows:
-        session.add(Observation(asset_id=station.id, ts=ts, variable=variable, value=value))
+    observe(session, station, rows)
     session.commit()
 
     facts = tools.weather(ctx_at(session, settings, "2024-04-10 06:00"), day="2024-04-11").facts

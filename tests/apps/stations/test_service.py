@@ -9,7 +9,8 @@ from sqlalchemy import select
 
 from farmcore.apps.stations.service import load_hourly, station_for_farm
 from farmcore.core.access import ScopeDenied, ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import AccessLog, DataGrant, Farm, Observation
+from farmcore.core.models.canonical import AccessLog, Asset, DataGrant, Farm
+from tests.apps.stations.synth import observe
 
 T0 = datetime(2024, 4, 10, 4, 0, tzinfo=UTC)
 
@@ -20,13 +21,11 @@ def _repo(session) -> ScopedRepository:
 
 
 def _add(session, asset_id: int, hour: int, **values: float) -> None:
-    for variable, value in values.items():
-        session.add(
-            Observation(
-                asset_id=asset_id, ts=T0 + timedelta(hours=hour), variable=variable, value=value
-            )
-        )
-    session.flush()
+    observe(
+        session,
+        session.get(Asset, asset_id),
+        [(T0 + timedelta(hours=hour), variable, value) for variable, value in values.items()],
+    )
 
 
 def test_load_hourly_pivots_in_time_order_with_none_for_missing(session, seeded):
@@ -57,7 +56,7 @@ def test_service_reads_are_scoped_and_logged(session, seeded):
     rows = list(session.scalars(select(AccessLog).order_by(AccessLog.id)))
     assert [(r.resource, r.scope) for r in rows] == [
         ("asset", "stations:read"),
-        ("observation", "stations:read"),
+        ("weather_observation", "stations:read"),
     ]
 
 

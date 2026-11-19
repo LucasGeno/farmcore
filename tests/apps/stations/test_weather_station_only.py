@@ -13,10 +13,11 @@ from sqlalchemy import select, text
 
 from farmcore.apps.stations import tools
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Asset, Observation
+from farmcore.core.models.canonical import Asset
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.advisor import scenes
 from tests.apps.chat.assistant.toolkit import ctx_at
+from tests.apps.stations.synth import observe
 
 pytestmark = pytest.mark.data
 
@@ -34,10 +35,20 @@ def add_regional(session, settings) -> Asset:
     session.add(regional)
     session.flush()
     start = datetime(2024, 4, 11, tzinfo=PARIS)
-    for h in range(24):
-        ts = start + timedelta(hours=h)
-        for variable, value in (("rr1_mm", 9.0), ("t_c", 40.0), ("ff_kmh", 120.0), ("rh_pct", 5)):
-            session.add(Observation(asset_id=regional.id, ts=ts, variable=variable, value=value))
+    observe(
+        session,
+        regional,
+        [
+            (start + timedelta(hours=h), variable, value)
+            for h in range(24)
+            for variable, value in (
+                ("rr1_mm", 9.0),
+                ("t_c", 40.0),
+                ("ff_kmh", 120.0),
+                ("rh_pct", 5),
+            )
+        ],
+    )
     session.commit()
     return regional
 

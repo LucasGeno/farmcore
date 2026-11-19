@@ -1,9 +1,9 @@
 """Weather provider contract and the normalised weather schema (expand step, core_0008).
 
 Failure modes owned here (one test each):
-- Golden: adding the normalised schema, or mirroring legacy weather into it, changes what the
-  stations, forecast, advisor or replay consumers produce. Frozen in
-  `snapshots/weather_golden.json` before any schema change.
+- Golden: reading weather from the normalised schema (the station and Open-Meteo providers
+  write it; the consumers read it) changes what the stations, forecast, advisor or replay
+  consumers produce. Frozen in `snapshots/weather_golden.json` before any schema change.
 - Licence: a receipt without a licence (or stating `Unknown` in another case) is stored as
   redistributable, or a raw SQL writer can mark unknown-licence data redistributable.
 - Credential: a provider credential named in `auth_schema()`, or URL user credentials, is stored
@@ -12,8 +12,8 @@ Failure modes owned here (one test each):
   than its CF variable's unit; a legacy float gains binary noise when mirrored.
 - Evidence and ownership: a re-fetch replaces a held observation or its receipt, or makes a
   farm-owned station public.
-- Registry: a second provider under a taken name silently replaces the first, or an object
-  missing a contract method registers.
+- Registry: a second provider under a taken name silently replaces the first, an object
+  missing a contract method registers, or an installation offers a disabled app's provider.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from hashlib import sha256
 from pathlib import Path
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from farmcore.apps.forecast import store as forecast_store
@@ -34,9 +34,8 @@ from farmcore.apps.forecast.models import ForecastRun
 from farmcore.apps.forecast.models import ForecastValue as LegacyForecastValue
 from farmcore.apps.forecast.normalised import mirror_run
 from farmcore.apps.stations import service as stations
-from farmcore.apps.stations.normalised import mirror_station
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Advice, Asset, Event, Farm, Parcel
+from farmcore.core.models.canonical import Advice, Event, Farm, Observation, Parcel
 from farmcore.core.models.weather import (
     WeatherForecast,
     WeatherObservation,
@@ -56,7 +55,7 @@ from farmcore.core.weather.contract import (
     Station,
     TimeRange,
 )
-from farmcore.core.weather.registry import ProviderError, Registry
+from farmcore.core.weather.registry import ProviderError, Registry, installed
 from farmcore.core.weather.store import CredentialInRequest, WeatherValueError, receive
 from farmcore.core.weather.variables import VARIABLES
 from tests.apps.advisor import scenes
@@ -178,18 +177,17 @@ def _digests(semantics: dict) -> dict:
 
 
 @pytest.mark.data
-def test_golden_outputs_unchanged_with_legacy_weather_mirrored_into_new_schema(
+def test_golden_outputs_unchanged_when_consumers_read_only_the_normalised_schema(
     session, settings, seeded, step, tmp_path
 ):
     seeded()
     step("2024-05-14 06:00")
     step(NOW)
-    # Mirror the station and the two latest forecast runs into the normalised schema.
-    for station in session.scalars(select(Asset).where(Asset.kind == "station")):
-        mirror_station(session, station, scenes.local(NOW))
-    for run in session.scalars(select(ForecastRun).order_by(ForecastRun.issued_at.desc()).limit(2)):
-        mirror_run(session, run)
-    assert session.scalar(select(func.count()).select_from(WeatherReceipt)) == 3
+    # The replay advice already read the station through the provider's rows; drop the legacy
+    # weather values so the remaining reads can only come from the normalised schema too.
+    assert _count(session, WeatherObservation) and _count(session, WeatherForecast)
+    session.execute(delete(Observation))
+    session.execute(delete(LegacyForecastValue))
 
     semantics = _semantics(session, settings)
     actual, golden = _digests(semantics), json.loads(GOLDEN.read_text())
@@ -341,6 +339,17 @@ def test_registry_refuses_a_taken_name_and_an_object_missing_a_method():
         Registry().register(no_auth())
     assert registry.get("fake-network") is first
     assert list(registry) == [first]
+
+
+def test_an_installation_offers_the_weather_providers_of_its_enabled_apps(settings):
+    from farmcore.apps.forecast.manifest import MANIFEST as forecast
+    from farmcore.apps.stations.manifest import MANIFEST as stations
+
+    assert [p.name for p in installed([stations, forecast], settings)] == [
+        "meteofrance",
+        "open-meteo",
+    ]
+    assert [p.name for p in installed([stations], settings)] == ["meteofrance"]
 
 
 def test_frozen_weather_variable_rows_match_the_cf_variables(session):

@@ -1,9 +1,13 @@
 """Write imported runs; read the run a clock time may see.
 
-`import_runs` (the CLI) inserts each run once (key: farm, source, issue time) with its values.
+`import_runs` (the CLI) inserts each run once (key: farm, source, issue time) with its values,
+and links it (`props[RECEIPT]`) to its normalised weather receipt: the one the live provider
+already stored, or a mirror of the run (`normalised.mirror_run`).
 `latest_run(repo, now)` is the only read: the latest run with `available_at <= now` (the run
 users could read by then), as advisor `HourlyObs` rows, so a replay at 9 Apr 06:00 never sees a
-run that was not out yet; a run whose last hour is before `now` counts as none.
+run that was not out yet; a run whose last hour is before `now` counts as none. Its values come
+from the linked receipt's `weather_forecast` rows; a run stored before the provider port (no
+link) is read from `forecast_value` until the contract step backfills it.
 """
 
 from __future__ import annotations
@@ -14,15 +18,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.advisor.engine import HourlyObs
+from farmcore.apps.forecast import normalised
 from farmcore.apps.forecast.models import ForecastRun, ForecastValue
 from farmcore.apps.forecast.sources import Run
 from farmcore.core.access import ScopedRepository
+from farmcore.core.models.weather import WeatherForecast
+from farmcore.core.weather.variables import VARIABLES as CF
 
 SCOPE = "stations:read"
+RECEIPT = "weather_receipt"  # forecast_run.props: the id of the run's normalised receipt
 GUSTS = "fx_kmh"  # not an `HourlyObs` field: no advisor rule reads gusts
 
 
@@ -66,11 +74,17 @@ def import_runs(session: Session, farm_id: int, runs: Iterable[Run]) -> dict[str
         )
         session.add(row)
         session.flush()
-        session.add_all(
-            ForecastValue(farm_id=farm_id, run_id=row.id, ts=ts, variable=variable, value=value)
-            for ts, variable, value in run.values
-        )
-        session.flush()
+        if run.values:
+            session.execute(
+                insert(ForecastValue),
+                [
+                    {"farm_id": farm_id, "run_id": row.id, "ts": ts, "variable": v, "value": x}
+                    for ts, v, x in run.values
+                ],
+            )
+        if RECEIPT not in row.props:
+            row.props = {**row.props, RECEIPT: normalised.mirror_run(session, row).id}
+            session.flush()
         counts["runs"] += 1
         counts["values"] += len(run.values)
     return counts
@@ -92,23 +106,17 @@ def latest_run(repo: ScopedRepository, now: datetime) -> StoredRun | None:
     if not runs:
         return None
     run = runs[0]
-    last = repo.list(
-        ForecastValue,
-        ForecastValue.run_id == run.id,
-        scope=SCOPE,
-        order_by=ForecastValue.ts.desc(),
-        limit=1,
-    )
-    if not last or last[0].ts < now:
+    values = _values(repo, run)
+    if not values or max(ts for ts, _, _ in values) < now:
         return None  # a stale run (the last import ended before now) is no forecast
     by_ts: dict[datetime, dict[str, float]] = defaultdict(dict)
     gusts: dict[datetime, float] = {}
-    for v in repo.list(ForecastValue, ForecastValue.run_id == run.id, scope=SCOPE):
-        if v.variable == GUSTS:
-            gusts[v.ts] = v.value
+    for ts, variable, value in values:
+        if variable == GUSTS:
+            gusts[ts] = value
         else:
-            by_ts[v.ts][v.variable] = v.value
-    props = run.props or {}
+            by_ts[ts][variable] = value
+    props = {k: v for k, v in (run.props or {}).items() if k != RECEIPT}
     return StoredRun(
         source=run.source,
         issued_at=run.issued_at,
@@ -119,6 +127,26 @@ def latest_run(repo: ScopedRepository, now: datetime) -> StoredRun | None:
         gusts=gusts,
         props=props,
     )
+
+
+def _values(repo: ScopedRepository, run: ForecastRun) -> list[tuple[datetime, str, float]]:
+    """(ts, station variable, value) of `run`: its normalised receipt's member-0 values, or the
+    legacy rows of a run stored before the provider port."""
+    receipt = (run.props or {}).get(RECEIPT)
+    if receipt is None:
+        return [
+            (v.ts, v.variable, v.value)
+            for v in repo.list(ForecastValue, ForecastValue.run_id == run.id, scope=SCOPE)
+        ]
+    return [
+        (v.valid_time, CF[v.variable].legacy_name, float(v.value))
+        for v in repo.list(
+            WeatherForecast,
+            WeatherForecast.receipt_id == receipt,
+            WeatherForecast.member == 0,
+            scope=SCOPE,
+        )
+    ]
 
 
 def freshness(repo: ScopedRepository, now: datetime) -> dict:

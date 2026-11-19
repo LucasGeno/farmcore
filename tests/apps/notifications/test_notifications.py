@@ -12,6 +12,7 @@ from tests.apps.advisor import scenes
 from tests.apps.advisor.review_fixtures import complete_station
 from tests.apps.advisor.scenes import local
 from tests.apps.share.conftest import make_parcel
+from tests.apps.stations.synth import observe
 
 manifests, seeded = scenes.manifests, scenes.seeded
 NOW = local("2024-04-10 06:00")
@@ -75,17 +76,16 @@ def test_bell_names_limited_parcels_while_the_farm_is_available(client, session,
 
 
 def test_station_health_is_replay_bounded_and_archive_is_information(client, session, settings):
-    from farmcore.core.models.canonical import Asset, Observation
+    from farmcore.core.models.canonical import Asset
 
     farm = ensure_default_farm(session, settings)
     station = Asset(farm_id=farm.id, kind="station", name="Synthetic station", props={})
     session.add(station)
     session.flush()
-    session.add_all(
-        [
-            Observation(asset_id=station.id, ts=NOW - timedelta(hours=3), variable="t_c", value=15),
-            Observation(asset_id=station.id, ts=NOW + timedelta(hours=1), variable="t_c", value=16),
-        ]
+    observe(
+        session,
+        station,
+        [(NOW - timedelta(hours=3), "t_c", 15), (NOW + timedelta(hours=1), "t_c", 16)],
     )
     set_replay(session, NOW, settings)
     session.commit()

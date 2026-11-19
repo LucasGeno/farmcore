@@ -11,7 +11,8 @@ from sqlalchemy import select
 from farmcore.apps.stations.service import station_for_farm
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import AccessLog, Asset, Farm, Observation
+from farmcore.core.models.canonical import AccessLog, Asset, Farm
+from tests.apps.stations.synth import observe
 
 NOW = datetime(2024, 4, 10, 4, 0, tzinfo=UTC)  # 10 Apr 2024 06:00 Europe/Paris
 
@@ -30,13 +31,7 @@ def _logged(session) -> list[tuple[str, str]]:
 
 def _observe(session, station: Asset, *hours: int) -> None:
     """One synthetic temperature reading at each `NOW + hours`."""
-    for h in hours:
-        session.add(
-            Observation(
-                asset_id=station.id, ts=NOW + timedelta(hours=h), variable="t_c", value=10.0
-            )
-        )
-    session.flush()
+    observe(session, station, [(NOW + timedelta(hours=h), "t_c", 10.0) for h in hours])
 
 
 def _chart(html: str) -> dict:
@@ -71,22 +66,14 @@ def test_station_page_charts_now_minus_72h_to_plus_72h(client, session, seeded):
     seeded()
     station = _station(session)
     set_replay(session, NOW)
-    for hours, variable, value in [
+    rows = [
         (-73, "t_c", 1.0),  # before the window
         (-72, "rr1_mm", 2.5),
         (0, "t_c", 11.0),
         (72, "rh_pct", 97.0),
         (73, "t_c", 5.0),  # after the window
-    ]:
-        session.add(
-            Observation(
-                asset_id=station.id,
-                ts=NOW + timedelta(hours=hours),
-                variable=variable,
-                value=value,
-            )
-        )
-    session.flush()
+    ]
+    observe(session, station, [(NOW + timedelta(hours=h), v, x) for h, v, x in rows])
 
     resp = client.get(f"/stations/{station.id}")
 
@@ -106,7 +93,7 @@ def test_station_page_charts_now_minus_72h_to_plus_72h(client, session, seeded):
     assert chart["rr1_mm"][1] is None and chart["t_c"][0] is None
     assert 1.0 not in chart["t_c"] and 5.0 not in chart["t_c"]
     assert ("asset", "stations:read") in _logged(session)
-    assert ("observation", "stations:read") in _logged(session)
+    assert ("weather_observation", "stations:read") in _logged(session)
 
 
 def test_health_never_shows_a_latest_hour_ahead_of_the_replay_clock(client, session, seeded):

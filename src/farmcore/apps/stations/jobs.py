@@ -2,7 +2,9 @@
 
 Each run stores the CSV rows with `ts <= ctx.now + 73 h` (`INGEST_HORIZON`: the 72 h replay
 forecast plus the hour the advisor window's rain lookahead reads past it) that are newer than the
-latest stored observation (so a re-run adds nothing and a later step adds only newer hours), then
+latest observation the farm holds in the normalised schema (so a re-run adds nothing, a later step
+adds only newer hours, and an installation that held only legacy rows fills the normalised schema
+on its next run), through `provider.store_hours` (legacy rows and the normalised schema). It then
 writes the health into the station's `props`: `last_ts`, `rows` (stored observations),
 `nulls_skipped` (null cells up to `last_ts`), `last_run` (clock time) and `file`. The health counts
 only rows with `ts <= ctx.now + 73 h`, so stepping the clock back never shows hours stored by a
@@ -21,7 +23,7 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from farmcore.apps.stations import connector, service
+from farmcore.apps.stations import connector, provider, service
 from farmcore.core.access import FarmNotSeeded, default_farm, repo_for_job
 from farmcore.core.manifest import JobContext
 from farmcore.core.models.canonical import Observation
@@ -73,9 +75,9 @@ def ingest_meteofrance(ctx: JobContext) -> None:
         ctx.session.flush()
         return
     hours = connector.read_hours(path)
-    latest = stored(func.max(Observation.ts), bounded=False)
+    latest = service.latest_reading(repo, station.id)
     new = [h for h in hours if h.ts <= until and (latest is None or h.ts > latest)]
-    connector.upsert(ctx.session, station.id, connector.observations(new))
+    provider.store_hours(ctx.session, station, new, ctx.now)
 
     last_ts = stored(func.max(Observation.ts))
     nulls = sum(

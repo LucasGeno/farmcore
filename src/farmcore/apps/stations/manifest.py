@@ -45,5 +45,6 @@ MANIFEST = Manifest(
         MapLayer("weather", "Weather", "/stations/layer.geojson", "points", 20, False, "station"),
     ),
     tools=TOOLS,
+    weather_providers=("farmcore.apps.stations.provider:provider",),
     maturity="alpha",
 )

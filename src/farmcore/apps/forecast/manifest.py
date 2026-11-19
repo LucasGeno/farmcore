@@ -25,6 +25,7 @@ MANIFEST = Manifest(
             task="farmcore.apps.forecast.jobs:fetch_farm",
         ),
     ),
+    weather_providers=("farmcore.apps.forecast.provider:provider",),
     seed="farmcore.apps.forecast.seed:seed",
     demo_reset=("farmcore.apps.forecast.availability:reset",),
     widgets=(

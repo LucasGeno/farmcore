@@ -53,23 +53,16 @@ def test_activation_only_changes_future_assessments_and_later_opinion_is_explici
 
     from farmcore.apps.advisor.job import evaluate
     from farmcore.core.manifest import JobContext
-    from farmcore.core.models.canonical import Advice, Observation, Parcel
+    from farmcore.core.models.canonical import Advice, Parcel
     from tests.apps.advisor.review_fixtures import complete_station
     from tests.apps.chat.test_handlers import seed_farm
+    from tests.apps.stations.synth import correct
 
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
     now = datetime(2024, 4, 10, 4, tzinfo=UTC)
     station = complete_station(session, parcel.farm_id, now)
-    rainy = session.scalar(
-        select(Observation).where(
-            Observation.asset_id == station.id,
-            Observation.variable == "rr1_mm",
-            Observation.ts == datetime(2024, 4, 9, 4, tzinfo=UTC),
-        )
-    )
-    rainy.value = 11.0
-    session.flush()
+    correct(session, station, datetime(2024, 4, 9, 4, tzinfo=UTC), "rr1_mm", 11.0)
     evaluate(JobContext(session, now, settings, (parcel.farm_id,)))
     previous = session.scalar(
         select(Advice).where(Advice.parcel_id == parcel.id).order_by(Advice.id.desc())

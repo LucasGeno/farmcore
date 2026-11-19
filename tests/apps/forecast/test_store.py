@@ -5,7 +5,11 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy import delete, select
+
 from farmcore.apps.forecast import sources, store
+from farmcore.apps.forecast.models import ForecastRun
+from farmcore.core.models.weather import WeatherForecast
 from tests.apps.forecast.conftest import FIXTURE
 
 HOURS = 7 * 24  # each fixture run
@@ -98,3 +102,18 @@ def test_a_run_that_ends_before_now_counts_as_no_run(session, farm, repo):
 
     assert store.latest_run(repo, _utc(15, 23)) is not None  # the 9 Apr run's last hour
     assert store.latest_run(repo, _utc(16, 1)) is None
+
+
+def test_a_run_stored_before_the_provider_port_still_reads_its_values(session, farm, repo):
+    # Imported before forecast runs were linked to a normalised receipt: the legacy values are
+    # the forecast until the contract step backfills them.
+    store.import_runs(session, farm.id, sources.FileSource(FIXTURE).runs())
+    for run in session.scalars(select(ForecastRun)):
+        run.props = {k: v for k, v in run.props.items() if k != store.RECEIPT}
+    session.execute(delete(WeatherForecast))
+    session.flush()
+
+    run = store.latest_run(repo, _utc(9))
+
+    assert run is not None and len(run.series) == HOURS
+    assert store.RECEIPT not in run.props
