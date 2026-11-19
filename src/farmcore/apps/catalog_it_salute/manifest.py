@@ -12,8 +12,7 @@ from farmcore.core.manifest import JobSpec, Manifest
 MANIFEST = Manifest(
     name="catalog_it_salute",
     version="0.1.0",
-    summary="Italy's register of plant-protection products authorised by the Ministero della "
-    "Salute.",
+    summary="Italy's plant-protection product register (Ministero della Salute).",
     depends=("catalog_eu_pesticides",),
     jobs=(
         JobSpec(
