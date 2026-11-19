@@ -311,6 +311,36 @@ The `weather_meteofrance` app fetches live hourly observations of a farm's Mét�
   and a 429 waits its `Retry-After`, within the run's three-minute deadline.
 - **Licence.** Licence Ouverte / Etalab 2.0, attributed to Météo-France on every receipt.
 
+## ERA5 history through Copernicus (optional)
+
+The `weather_era5` app fills the season's missing history (from 1 January, for crop models'
+hydrothermal time) for a farm's pin from [ERA5](https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries),
+in live clock mode only. It avoids Open-Meteo's non-commercial historical API.
+
+- **Account.** Create a free [Copernicus CDS](https://cds.climate.copernicus.eu) account, accept
+  the dataset's licence on its download page, and set `CDSAPI_KEY` (the key on your profile
+  page; `CDSAPI_URL` defaults to `https://cds.climate.copernicus.eu/api`). The key is sent only
+  to that host as `PRIVATE-TOKEN`, never logged, stored in a receipt or shown; startup refuses
+  a key with an `http` URL. Without it the job does nothing.
+- **What it does.** Once a day it orders the whole days the farm lacks, up to the newest day
+  ERA5 serves (assumed 10 days back), for the ERA5 grid point nearest the pin (0.25 degrees),
+  in orders of at most 92 days. The CDS queues orders, and one can wait for a long time: a run
+  waits a few minutes, keeps the order id in the farm's `era5_backfill` health and collects it
+  the next day instead of ordering again (an order older than a day is ordered anew).
+- **Model data.** Hours are stored under a `copernicus-era5` grid-point station, never a
+  station asset, and their receipt says `endpoint_kind: model-reanalysis`. Temperature, wind
+  and precipitation come from ERA5; humidity is derived from temperature and dew point
+  (Magnus formula, Alduchov and Eskridge 1996). The newest days are ERA5T and the final ERA5
+  overwrites them about two months later; the first receipt is kept.
+- **Known limits.** The grid point is shared by every farm in the same 0.25 degree cell, so a
+  second farm sees the first farm's hours as held. The CSV column names were not verifiable
+  without an account and are assumed from the CDS short names (`t2m`, `d2m`, `u10`, `v10`,
+  `tp`).
+- **Licence.** CC BY 4.0. Every receipt carries the Copernicus notice: "Generated using
+  Copernicus Climate Change Service information. Contains modified Copernicus Climate Change
+  Service information (ERA5, ECMWF); neither the European Commission nor ECMWF is responsible
+  for any use of this information."
+
 ## Backups and restore
 
 A backup is one file, a **bundle**: a `pg_dump` of the installation database (custom format,

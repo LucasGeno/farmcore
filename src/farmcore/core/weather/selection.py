@@ -175,7 +175,7 @@ def select(
         notes.append("No forecast provider is installed for this country")
     if not backfill:
         notes.append(
-            "No backfill provider is installed (ERA5 through Copernicus comes later); "
+            "No backfill provider is installed (turn on the ERA5 app and set CDSAPI_KEY); "
             "history is limited to the stations' own records"
         )
     return Selection(
