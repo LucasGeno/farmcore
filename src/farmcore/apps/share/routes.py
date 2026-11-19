@@ -596,6 +596,8 @@ def _audit(request: Request, repo: ScopedRepository, limit: int) -> list[dict[st
     ]
 
 
+ADVICE_UNAVAILABLE = "Unavailable: crop protection is not installed, so advice cannot be read."
+
 # What a denied grantee read says, per resource (plain words, no data).
 NOT_SHARED: dict[str, str] = {
     "register": "Not shared: this grant does not include the spray register.",
@@ -674,7 +676,13 @@ def grantee_page(request: Request, repo: GrantRepo) -> HTMLResponse:
         rows=[[row[name] for name, _label in GRANTEE_COLUMNS] for row in rows or []],
         probes=probes,
         advice_reason=(
-            service.current_advice(repo, now, tz)[1] if "advice:read" in repo.grant.scopes else None
+            (
+                service.current_advice(repo, now, tz)[1]
+                if app_is_on(request, "advisor")
+                else ADVICE_UNAVAILABLE
+            )
+            if "advice:read" in repo.grant.scopes
+            else None
         ),
         weather=(
             _weather_sources(repo)
@@ -737,14 +745,13 @@ def grantee_audit(request: Request, repo: GrantRepo) -> JSONResponse:
 @router.get("/as/{grant_id}/advice.json")
 def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
     try:
+        repo.check("advice:read", "advice")
+        if not app_is_on(request, "advisor"):
+            # Guard before the service imports the optional crop-protection package.
+            raise HTTPException(409, ADVICE_UNAVAILABLE)
         rows, _ = service.current_advice(repo, _clock_now(request, repo), _tz(request, repo))
     except ScopeDenied as exc:
         raise HTTPException(403, "Not shared: this grant does not include advice.") from exc
-    if not app_is_on(request, "advisor"):
-        # Shared advice is crop protection's output: without it, say so, never an empty list.
-        raise HTTPException(
-            409, "Unavailable: crop protection is not installed, so advice cannot be read."
-        )
     current_inputs = "not_loaded" if "stations:read" in repo.grant.scopes else "not_authorized"
     return JSONResponse(
         [
