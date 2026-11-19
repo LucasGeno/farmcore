@@ -368,6 +368,7 @@ def shared_advice(row) -> dict[str, Any]:
     )
     data = {key: stored[key] for key in allowed}
     props = row.props or {}
+    data["attribution"] = props.get("attribution", [])
     data["assessment_status"] = props.get("assessment_status")
     version = props.get("config_version")
     data["config_version"] = None
@@ -387,3 +388,13 @@ def shared_advice(row) -> dict[str, Any]:
             }
         data["config_version"] = safe
     return data
+
+
+def current_advice(repo: ScopedRepository, now: datetime, tz: str):
+    """The same current, licence-gated projection used by advisor MCP tools."""
+    from farmcore.apps.advisor import service as advisor
+
+    repo.check("advice:read", "advice")
+    availability = advisor.current_availability(repo, now, tz)
+    rows = advisor.latest_advice(repo, now, tz=tz, availability=availability)
+    return rows, availability[1]

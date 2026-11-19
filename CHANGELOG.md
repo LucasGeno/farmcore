@@ -10,6 +10,13 @@ Notable changes for operators and app authors. Newest first.
   redirect URIs may change port, as Claude Code and Codex need. The consent page marks names
   agents gave themselves as self-reported and says each scope in plain words.
   `MCP_OAUTH_CLIENTS` stays optional. Migration `core_0016`.
+- Grantee `advice.json` now returns current, licence-gated advice per parcel, instead of up to
+  50 stored evaluations. Grant/token headlines show the decision (or withholding reason), with
+  derived-source credits in a separate `attribution` list. Weather inputs, reason notes and
+  incubation percentages are null for grants/tokens; withheld projections drop derived props.
+  Sharing's register CSV link now uses `/share/register.csv` and omits saved weather because
+  snapshots lack receipt licence provenance. Owner advice and register exports are unchanged.
+
 - Agent tokens and OAuth connections that hold `advice:read` can now read the farm's stored spray
   advice through the advisor tools (it was a no-op before). Existing ones start doing so on
   upgrade: review Sharing and remove `advice:read` from any you do not want to read advice. A

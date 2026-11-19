@@ -60,6 +60,7 @@ class Licence:
     identifier: str | None
     attribution: str | None
     redistribution: bool
+    derived_attribution: str | None = None  # wording for assessments; falls back to attribution
 
 
 @dataclass(frozen=True)

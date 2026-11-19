@@ -2,6 +2,7 @@
 non-empty (CSV, JSON, NGSI-LD), through the existing preset scene functions."""
 
 import json
+import re
 
 import pytest
 
@@ -30,7 +31,10 @@ def test_presets_with_sprays_leave_register_csv_json_and_ngsi_non_empty(
 ):
     _stage(session, settings, manifests, seeded, step, key)
 
-    csv = client.get("/operations/register.csv")
+    page = client.get("/share/")
+    assert page.status_code == 200
+    link = re.search(r'href="([^"]*/share/register.csv[^"]*)"', page.text).group(1)
+    csv = client.get(link.replace("&amp;", "&"))
     assert csv.status_code == 200
     lines = [line for line in csv.text.splitlines() if line.strip()]
     assert len(lines) > 1, "register CSV has a header only"
@@ -47,6 +51,3 @@ def test_presets_with_sprays_leave_register_csv_json_and_ngsi_non_empty(
     assert operations, (
         f"NGSI-LD has no operation entities: {sorted({str(e.get('type')) for e in entities})}"
     )
-
-    page = client.get("/share/")
-    assert page.status_code == 200 and "/operations/register.csv" in page.text

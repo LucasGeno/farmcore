@@ -44,7 +44,6 @@ from farmcore.core.errors import wants_html
 from farmcore.core.farm_location import farm_time_zone
 from farmcore.core.identity import canonical_login, principal_for
 from farmcore.core.models.canonical import (
-    Advice,
     DataGrant,
     Farm,
     LlmAudit,
@@ -446,6 +445,35 @@ def _ld_json(entities: list[dict[str, Any]]) -> JSONResponse:
     return JSONResponse(entities, media_type=ngsi.MEDIA_TYPE)
 
 
+@router.get("/register.csv")
+def export_register(
+    request: Request, repo: Repo, season: Season = None, parcel: ParcelId = None
+) -> Response:
+    """A third-party copy: legacy saved weather has no receipt licence provenance."""
+    tz = _tz(request, repo)
+    since, until, before, parcel_id = _window(request, repo, season, parcel)
+    rows = register.register_rows(
+        repo,
+        until,
+        tz=tz,
+        checks=True,
+        weather=False,
+        since=since,
+        before=before,
+        parcel_id=parcel_id,
+    )
+    chosen = repo.get(Parcel, parcel_id, scope="register:read") if parcel_id else None
+    name = register.export_filename("spray-register", "csv", season, chosen)
+    return Response(
+        register.to_csv(rows, tz=tz),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{name}"',
+            "X-Weather-Omitted": "Saved weather omitted: receipt licence provenance unavailable",
+        },
+    )
+
+
 @router.get("/ngsi-ld.json")
 def export_ngsi(
     request: Request, repo: Repo, season: Season = None, parcel: ParcelId = None
@@ -568,6 +596,8 @@ def _audit(request: Request, repo: ScopedRepository, limit: int) -> list[dict[st
     ]
 
 
+ADVICE_UNAVAILABLE = "Unavailable: crop protection is not installed, so advice cannot be read."
+
 # What a denied grantee read says, per resource (plain words, no data).
 NOT_SHARED: dict[str, str] = {
     "register": "Not shared: this grant does not include the spray register.",
@@ -645,6 +675,15 @@ def grantee_page(request: Request, repo: GrantRepo) -> HTMLResponse:
         register_denied=NOT_SHARED["register"],
         rows=[[row[name] for name, _label in GRANTEE_COLUMNS] for row in rows or []],
         probes=probes,
+        advice_reason=(
+            (
+                service.current_advice(repo, now, tz)[1]
+                if app_is_on(request, "advisor")
+                else ADVICE_UNAVAILABLE
+            )
+            if "advice:read" in repo.grant.scopes
+            else None
+        ),
         weather=(
             _weather_sources(repo)
             if any(p["key"] == "stations" and p["shared"] for p in probes)
@@ -706,21 +745,17 @@ def grantee_audit(request: Request, repo: GrantRepo) -> JSONResponse:
 @router.get("/as/{grant_id}/advice.json")
 def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
     try:
-        rows = repo.list(
-            Advice,
-            Advice.evaluated_at <= _clock_now(request, repo),
-            scope="advice:read",
-            order_by=(Advice.evaluated_at.desc(), Advice.id.desc()),
-            limit=50,
-        )
+        repo.check("advice:read", "advice")
+        if not app_is_on(request, "advisor"):
+            # Guard before the service imports the optional crop-protection package.
+            raise HTTPException(409, ADVICE_UNAVAILABLE)
+        rows, _ = service.current_advice(repo, _clock_now(request, repo), _tz(request, repo))
     except ScopeDenied as exc:
         raise HTTPException(403, "Not shared: this grant does not include advice.") from exc
-    if not app_is_on(request, "advisor"):
-        # Shared advice is crop protection's output: without it, say so, never an empty list.
-        raise HTTPException(
-            409, "Unavailable: crop protection is not installed, so advice cannot be read."
-        )
     current_inputs = "not_loaded" if "stations:read" in repo.grant.scopes else "not_authorized"
     return JSONResponse(
-        [{**service.shared_advice(row), "current_inputs_status": current_inputs} for row in rows]
+        [
+            {**service.shared_advice(row), "current_inputs_status": current_inputs}
+            for row in rows.values()
+        ]
     )

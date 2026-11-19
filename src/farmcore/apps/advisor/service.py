@@ -124,8 +124,8 @@ def _grant_reason(repo: ScopedRepository) -> str | None:
 
 def redact_inputs(repo: ScopedRepository, value: Any) -> Any:
     """`value`, a raw weather input of an advice row (`mm_since_spray`, a reason's `inputs`),
-    as a grant or token view may show it: None. The owner's view is unchanged. Used by the
-    advisor tools; the share `advice.json` does not use it yet (weather-providers 14)."""
+    as a grant or token view may show it: None. The owner's view is unchanged.
+    Used by advisor tools and shared advice."""
     return None if repo.grant_view else value
 
 
@@ -269,13 +269,46 @@ def latest_advice(
     ).mappings()
     result = {row["parcel_id"]: Advice(**row) for row in rows}
     status, reason = availability or current_availability(repo, now, tz)
+    if repo.grant_view:
+        # Rebuild free-text headlines from the decision, so they cannot carry raw
+        # weather. Attribution is farm-wide until evaluations record receipt lineage.
+        sources = repo.session.execute(
+            select(
+                WeatherReceipt.provider,
+                WeatherReceipt.request["derived_attribution"].as_string(),
+                WeatherReceipt.attribution,
+            )
+            .where(WeatherReceipt.farm_id == repo.farm_id, WeatherReceipt.redistribution.is_(True))
+            .distinct()
+            .order_by(WeatherReceipt.provider, WeatherReceipt.attribution)
+        ).all()
+        credits = list(
+            dict.fromkeys(derived or credit for _, derived, credit in sources if derived or credit)
+        )
+        for a in result.values():
+            a.props = {
+                **(a.props or {}),
+                "headline": "No action" if a.decision == "none" else a.decision.capitalize(),
+                "attribution": credits,
+                "mm_since_spray": redact_inputs(repo, (a.props or {}).get("mm_since_spray")),
+                "incubation_pct": redact_inputs(repo, (a.props or {}).get("incubation_pct")),
+            }
+            a.reasons = [
+                {**r, "inputs": redact_inputs(repo, r.get("inputs")), "note": None}
+                for r in a.reasons
+            ]
     if reason:
         # Transient read projection: saved historical evidence is never modified.
         projected = {}
         for pid, a in result.items():
             props = a.props or {}
             # An observed positive risk remains informative under partial coverage.
-            positive = status == "limited" and a.decision in ("spray", "wait")
+            positive = (
+                not repo.grant_view and status == "limited" and a.decision in ("spray", "wait")
+            )
+            if repo.grant_view:
+                # Withholding removes all derived props, including future additions.
+                props = {}
             view = {c.name: getattr(a, c.name) for c in Advice.__table__.columns}
             view.update(
                 props={

@@ -45,9 +45,10 @@
 
 {% if 'advice:read' in grant.scopes|map(attribute='scope')|list %}
 <section class="mt-6 rounded-lg border border-line bg-surface p-4">
-  <h2 class="text-lg font-semibold">Stored advice</h2>
-  <p class="mt-2 text-sm text-muted">Current inputs are not authorized by advice consent alone. Stored evaluations do not assert field accuracy.</p>
-  <a href="/share/as/{{ grant.id }}/advice.json" class="mt-2 flex min-h-[44px] items-center font-semibold text-brand-700 underline">Download stored advice JSON</a>
+  <h2 class="text-lg font-semibold">Current advice</h2>
+  {% if advice_reason %}<p>{{ advice_reason }}</p>{% endif %}
+  <p class="mt-2 text-sm text-muted">Latest evaluation per parcel, withheld when stale or unavailable or when weather licences prevent sharing. Weather inputs are redacted. Evaluations do not assert field accuracy.</p>
+  <a href="/share/as/{{ grant.id }}/advice.json" class="mt-2 flex min-h-[44px] items-center font-semibold text-brand-700 underline">Download current advice JSON</a>
 </section>
 {% endif %}
 {% if probes %}

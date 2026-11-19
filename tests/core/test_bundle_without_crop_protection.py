@@ -109,6 +109,10 @@ def test_a_bundle_without_crop_protection_navigates_and_says_what_is_unavailable
     [feature] = geojson.json()["features"]
     assert (feature["properties"]["decision"], feature["properties"]["advised"]) == ("none", False)
 
+    page = bundle_client.get(f"/share/as/{grant.id}/")
+    assert page.status_code == 200
+    assert "crop protection is not installed" in page.text
+
     shared = bundle_client.get(f"/share/as/{grant.id}/advice.json")
     assert shared.status_code == 409
     assert "crop protection is not installed" in shared.json()["detail"]
