@@ -70,6 +70,7 @@ class Capabilities:
     forecast: bool
     variables: frozenset[str]  # CF standard names
     countries: frozenset[str] | None = None  # ISO 3166-1 alpha-2; None: anywhere
+    backfill: bool = False  # gridded history for any point (ERA5): joined as the farm's backfill
 
 
 @dataclass(frozen=True)

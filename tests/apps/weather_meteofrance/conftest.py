@@ -1,5 +1,5 @@
-"""The Météo-France portal, faked from recorded response shapes: token, DPObs hourly and the
-DPClim hourly order. No network."""
+"""The Météo-France portal, faked from recorded response shapes: token, the DPObs station list,
+DPObs hourly and the DPClim hourly order. No network."""
 
 from __future__ import annotations
 
@@ -50,6 +50,8 @@ class Portal:
         if self.expired:
             self.expired -= 1
             return httpx.Response(401)
+        if path == "/public/DPObs/v2/liste-stations":
+            return httpx.Response(200, text=(FIXTURES / "dpobs-liste-stations.csv").read_text())
         if path == "/public/DPObs/v2/station/horaire":
             rows = json.loads((FIXTURES / "dpobs-station-horaire-33394002.json").read_text())
             rows[0]["validity_time"] = params["date"]
