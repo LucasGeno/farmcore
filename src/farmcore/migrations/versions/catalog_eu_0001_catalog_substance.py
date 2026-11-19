@@ -9,7 +9,7 @@ substance_key)`). Additive: the neutral `catalog_item` table comes from core_000
 import fingerprint `catalog_import` from catalog_fr_0001.
 
 Revision ID: catalog_eu_0001
-Revises: core_0014
+Revises: core_0015
 Create Date: 2026-11-19
 """
 
@@ -20,7 +20,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision: str = "catalog_eu_0001"
-down_revision: str | None = "core_0014"
+down_revision: str | None = "core_0015"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -9,7 +9,7 @@ tests (tests never download). Regenerate only when the upstream format drifts:
   the same dataset the EU Pesticides Database search uses. No API key. Retrieved 2026-11-19.
 - **Licence:** Commission re-use, Decision 2011/833/EU — CC BY 4.0. Cite « European Commission,
   EU Pesticides Database (DG SANTE) ».
-- **Contents:** five substances — Glyphosate (approved), Buprofezin (approved), Sulphur
+- **Contents:** six substances — Glyphosate (approved), Buprofezin (approved), Sulphur
   (approved, no CAS), Warfarin (aka coumaphene) (not approved) and Aluminium potassium sulphate
-  dodecahydrate (pending) — with the source's repeated rows (one per national authorisation)
+  dodecahydrate (pending), plus Boscalid (formerly nicobifen) — with the source's repeated rows (one per national authorisation)
   left in place, so the importer's exact-duplicate collapse is exercised.

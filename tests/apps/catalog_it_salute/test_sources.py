@@ -43,6 +43,9 @@ def test_dash_is_empty_and_extra_fields_are_mapped():
         "attivita": "DISERBANTE",
         "contenuto_per_100g_di_prodotto": "50.0 g",
         "data_decorrenza_revoca": "07/04/1990",
+        "data_decreto_revoca": "06/04/1990",
+        "data_registrazione": "01/01/1980",
+        "motivo_della revoca": "Rinuncia",
     }
 
     parsed = sources.parse(json.dumps([record]).encode())
@@ -52,6 +55,9 @@ def test_dash_is_empty_and_extra_fields_are_mapped():
     assert row.props["hazard"] == ""
     assert row.props["concentration"] == "50.0 g"
     assert row.props["revocation_effective_date"] == "1990-04-07"
+    assert row.props["revocation_decree_date"] == "1990-04-06"
+    assert row.props["registration_date"] == "1980-01-01"
+    assert row.props["revocation_reason"] == "Rinuncia"
 
 
 _VALID_RECORD = {

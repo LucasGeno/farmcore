@@ -38,10 +38,6 @@ def test_import_maps_substances_and_records_provenance(session, eu):
     assert imported.product_count == 6
     assert imported.use_count == 0
 
-
-def test_import_writes_aliases(session, eu):
-    service.import_substances(session, path=eu)
-
     alias_map = {
         a.alias_key: a.substance_key for a in session.scalars(select(CatalogSubstanceAlias))
     }

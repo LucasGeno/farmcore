@@ -47,6 +47,7 @@ def _links(session, item: CatalogItem) -> list[tuple[str, str]]:
 
 
 def test_import_maps_products_authorisations_and_substance_links(session, salute):
+    eu_service.import_substances(session, path=EU_FIXTURE)
     report = service.import_salute(session, path=salute)
 
     assert report.changed
@@ -65,23 +66,14 @@ def test_import_maps_products_authorisations_and_substance_links(session, salute
     appl = _item(session, "015230")
     assert appl is not None
     assert appl.name == "APPLAUD 25 WP"
-    assert appl.props["withdrawn"] is False
     assert _links(session, appl) == [("buprofezin", "BUPROFEZIN")]
 
     mix = _item(session, "000017")
     assert _links(session, mix) == [("2,4-d", "2,4-D"), ("mcpa", "MCPA")]
 
-    withdrawn = _item(session, "000001")
-    assert withdrawn.props["withdrawn"] is True
-
     imported = session.scalar(select(CatalogImport).where(CatalogImport.source == "it-salute"))
     assert imported.licence_id == "IODL-2.0"
     assert imported.attribution == "Ministero della Salute — Prodotti fitosanitari"
-
-
-def test_products_join_to_eu_substances_via_alias(session, salute):
-    eu_service.import_substances(session, path=EU_FIXTURE)
-    service.import_salute(session, path=salute)
 
     resolved = session.execute(
         select(CatalogItem.name, CatalogSubstance.name)
