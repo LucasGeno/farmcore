@@ -166,7 +166,7 @@ def test_register_cards_show_each_spray_checks_with_an_icon_and_a_word(
     [card] = _card_checks(page.text)
     copper = products["copper-contact"].id
     assert card[0] == ("copper", "ok", "OK Copper 0.4 of 4 kg Cu/ha this year")
-    assert (f"applications:{copper}", "ok", "OK 1 of 5 copper applications this season") in card
+    assert (f"applications:ci{copper}", "ok", "OK 1 of 5 copper applications this season") in card
     assert card[-1] == ("phi", "info", "Note Harvest not before 13 Apr")
     lines = re.findall(r"<li data-check=[^>]*>.*?</li>", page.text, re.S)
     assert all("<svg" in line for line in lines)  # colour is never alone

@@ -4,6 +4,37 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- Spray products and doses move onto the catalog tables (migration `core_0018`): each product
+  becomes a `catalog_item` with operations' `crop_protection_item` (label facts) and crop
+  protection's `advisor_product` (contact/penetrant, targets); each dose a `typed_quantity` that
+  keeps what was entered (`entered_measure`). `product` and `quantity` are kept, frozen (the
+  runtime role can no longer write them), for the rollback; `legacy_product_map` and
+  `legacy_quantity_map` resolve ids kept in older JSON. Operators: run `farmcore migrate` on a
+  copy of the database first. It refuses, changing nothing and listing every row by id, when a
+  product name is blank or over 200 characters, a dose is NaN or infinite or has a blank unit or
+  unknown measure, a product's type or targets are outside contact/penetrant and downy/powdery,
+  a farm's shortlist is not a list of whole-number ids, an extension row already exists, or a
+  record other than a spray would hold more than one amount (a pre-#92 legacy quantity beside
+  another or beside its entered amount). Fix those rows and run it again. Downgrading below it
+  is refused while a spray recorded, changed or removed since the upgrade (or a product, stock
+  row, planning job or shortlist entry naming a new product) has no legacy row to return to.
+  `farmcore migrate` and `farmcore upgrade` now print a migration's refusal in full (ids and
+  counts, no row values).
+- NGSI-LD export: v1 (the default) is deprecated since 2026-11-19 and sends `Deprecation`
+  (RFC 9745) and a `Link` to `docs/api-compatibility.md`; its ids are unchanged. Ask for `?v=2`
+  for catalog-native ids (`tq<id>`, `ci<id>`). The Sunset date comes with the release that drops
+  the legacy tables.
+- `drafts:propose` spray proposals: `doses[].product_id` (v1, a legacy product id) is deprecated;
+  send `catalog_item_id`. A v1 id is resolved through the frozen map and never guessed; the MCP
+  `propose_record` result flags it (`facts.input_deprecated`).
+- Assessment evidence saved from now on carries `evidence_version: 2` (doses as typed quantities
+  with their catalog item and extensions); stored evidence is returned as it was saved.
+- A NaN or infinite spray dose is now refused when it is written (every capture path already
+  refused one).
+- Register checks (`register.json` and the register page) keep their keys: a product recorded
+  before the move is still named by its legacy id; a product added since by `ci<catalog item
+  id>`. A stocked plant-protection product is never offered as a fertiliser.
+
 - Every agronomic model declares a `ModelSpec` (`core/model_spec.py`): method and citation,
   EPPO codes, BBCH window, inputs, sourced parameters, validation level and provenance. App
   authors: `AssessmentKind.models` is now required. A loaded kind that names no `ModelSpec`, or

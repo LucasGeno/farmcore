@@ -76,7 +76,11 @@ def irrigation(log: Log) -> IrrigationFact | None:
     (details unavailable)."""
     session = object_session(log)
     entered = (
-        session.scalars(select(TypedQuantity).where(TypedQuantity.log_id == log.id).limit(2)).all()
+        session.scalars(
+            select(TypedQuantity)
+            .where(TypedQuantity.log_id == log.id, TypedQuantity.entered_measure.is_(None))
+            .limit(2)
+        ).all()
         if session is not None
         else []
     )
@@ -96,7 +100,11 @@ def record_irrigation(session: Session, log: Log, fact: IrrigationFact) -> None:
     """Write an irrigation's amount to both copies, its entered quantity and `props`, replacing
     what it had: inside a savepoint, so a failure leaves neither changed."""
     with session.begin_nested():
-        session.execute(delete(TypedQuantity).where(TypedQuantity.log_id == log.id))
+        session.execute(
+            delete(TypedQuantity).where(
+                TypedQuantity.log_id == log.id, TypedQuantity.entered_measure.is_(None)
+            )
+        )
         enter_quantity(session, log_id=log.id, value=Decimal(fact.amount), unit=fact.unit)
         log.props = {**(log.props or {}), IRRIGATION: fact.model_dump(exclude_none=True)}
 

@@ -15,22 +15,30 @@ Failure modes owned here:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from alembic import command
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
+from typer.testing import CliRunner
 
 from farmcore.apps.advisor import products as advisor_products
 from farmcore.apps.operations import drafts as operation_drafts
 from farmcore.apps.operations import spray_items
 from farmcore.apps.share import ngsi
+from farmcore.cli import cli
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
+from farmcore.core.commands import migrate as migrate_command
 from farmcore.core.commands.migrate import alembic_config
 from farmcore.core.models.canonical import Farm
-from tests.core.test_revamp_migrations import farm, planned_job, scratch_db_url  # noqa: F401
+from tests.core import crop_protection_legacy as fixture
+from tests.core.crop_protection_legacy import _dose, _log, _one, _product
+from tests.core.test_revamp_migrations import scratch_db_url  # noqa: F401
 
 BEFORE = "core_0017"
+# Rendered by the release before the move (`crop_protection_legacy` says how to regenerate it).
+BEFORE_RENDER = Path(__file__).parent / "snapshots" / "crop_protection_move_before.json"
 LEGACY = {  # what the frozen tables and the ids outside them hold, by content
     "product": "SELECT id, name, authorisation_no, active_substance, product_type, targets, "
     "props::text FROM product ORDER BY id",
@@ -54,125 +62,6 @@ MOVED_VIEW = (
 )
 
 
-def _one(db, sql, **params):
-    return db.execute(text(sql), params).scalar_one()
-
-
-def _log(db, farm_id, parcel, type="spray"):
-    log = _one(
-        db,
-        "INSERT INTO log(farm_id,type,status,name,ts_start) VALUES "
-        "(:farm,:type,'done','x','2024-04-10T05:00:00+00:00') RETURNING id",
-        farm=farm_id,
-        type=type,
-    )
-    db.execute(
-        text("INSERT INTO log_parcel(log_id,parcel_id) VALUES (:log,:parcel)"),
-        {"log": log, "parcel": parcel},
-    )
-    return log
-
-
-def _product(db, name, substance, type_, targets, props):
-    return _one(
-        db,
-        "INSERT INTO product(name,authorisation_no,active_substance,product_type,targets,props) "
-        "VALUES (:name,:amm,:substance,:type,:targets,CAST(:props AS jsonb)) RETURNING id",
-        name=name,
-        amm=f"AMM-{name}",
-        substance=substance,
-        type=type_,
-        targets=targets,
-        props=json.dumps(props),
-    )
-
-
-def _dose(db, log, product, measure, value, unit, label):
-    return _one(
-        db,
-        "INSERT INTO quantity(log_id,product_id,measure,value,unit,label) "
-        "VALUES (:log,:product,:measure,CAST(:value AS numeric),:unit,:label) RETURNING id",
-        log=log,
-        product=product,
-        measure=measure,
-        value=value,
-        unit=unit,
-        label=label,
-    )
-
-
-def _legacy(db) -> dict[str, int]:
-    """A core_0017 farm with every place a product or dose id lives. Two E-Phy catalog items
-    come first, so the legacy product ids collide with catalog item ids."""
-    for name in ("EPHY ONE", "EPHY TWO"):
-        _one(db, "INSERT INTO catalog_item(name) VALUES (:n) RETURNING id", n=name)
-    farm_id = farm(db)
-    parcel = _one(
-        db,
-        "INSERT INTO parcel(farm_id,name,alias,area_ha,geom) VALUES (:farm,'P','P1',2,"
-        "ST_Multi(ST_GeomFromText('POLYGON((0 0,0 1,1 1,0 0))',4326))) RETURNING id",
-        farm=farm_id,
-    )
-    copper = _product(
-        db,
-        "Copper",
-        "copper",
-        "contact",
-        ["downy"],
-        {"placeholder": False, "label_max_dose_kg_ha": "3.75", "organic": {"source": "x"}},
-    )
-    pending = _product(
-        db, "Pending AMM", "sulphur", "penetrant", ["powdery"], {"placeholder": True}
-    )
-    spray = _log(db, farm_id, parcel)
-    _dose(db, spray, copper, "rate", "800", "g/ha", "Copper")
-    _dose(db, spray, pending, "rate", "2", "L/ha", "Pending AMM")
-    _dose(db, spray, None, "rate", "3", "bottles/ha", "Mystery")
-    _dose(db, spray, copper, "volume", "200", "L", "Tank")
-    db.execute(
-        text(
-            "INSERT INTO inventory_stock(farm_id,product_id,season,unit,purchased) "
-            "VALUES (:farm,:product,2024,'kg',20)"
-        ),
-        {"farm": farm_id, "product": copper},
-    )
-    advice = _one(
-        db,
-        "INSERT INTO advice(farm_id,parcel_id,evaluated_at,decision) "
-        "VALUES (:farm,:parcel,now(),'spray') RETURNING id",
-        farm=farm_id,
-        parcel=parcel,
-    )
-    planned_job(db, farm_id, advice, copper)
-    db.execute(
-        text("UPDATE farm SET props = CAST(:p AS jsonb) WHERE id = :f"),
-        {"f": farm_id, "p": json.dumps({"product_ids": [pending, copper]})},
-    )
-    db.execute(text("INSERT INTO source(code,name,kind,licence) VALUES ('demo','d','seed','x')"))
-    db.execute(
-        text("INSERT INTO ext_id(source,key,model,res_id) VALUES ('demo','copper','product',:p)"),
-        {"p": copper},
-    )
-    db.execute(
-        text(
-            "INSERT INTO draft(farm_id,actor,kind,request_key,payload,provenance,expires_at) "
-            "VALUES (:farm,'agent','spray','k',CAST(:payload AS jsonb),'{}',now() + interval "
-            "'1 day')"
-        ),
-        {
-            "farm": farm_id,
-            "payload": json.dumps(
-                {
-                    "parcel_ids": [parcel],
-                    "ts_start": "2024-04-10T05:00:00+00:00",
-                    "doses": [{"product_id": copper, "value": "2", "unit": "kg/ha"}],
-                }
-            ),
-        },
-    )
-    return {"farm": farm_id, "copper": copper, "pending": pending, "spray": spray}
-
-
 def _capture(db) -> dict[str, list]:
     return {name: db.execute(text(sql)).all() for name, sql in LEGACY.items() if name != "view"}
 
@@ -183,7 +72,7 @@ def test_a_populated_upgrade_keeps_every_meaning_and_id(scratch_db_url):  # noqa
     engine = create_engine(scratch_db_url)
     try:
         with engine.begin() as db:
-            ids = _legacy(db)
+            ids = fixture.legacy(db)
             view = db.execute(text(LEGACY["view"])).all()
             legacy = _capture(db)
         command.upgrade(cfg, "head")
@@ -211,6 +100,10 @@ def test_a_populated_upgrade_keeps_every_meaning_and_id(scratch_db_url):  # noqa
                 f"catalog_item:{item[ids['copper']]}"
             )
         with Session(engine) as session:
+            # What the pages render, byte for byte as the release before the move rendered it
+            # from the same rows: register.json (check keys too), the fertilisers offered, the
+            # fertilization rows, each record's fact and products.
+            assert fixture.render(session, ids["farm"]) == json.loads(BEFORE_RENDER.read_text())
             farm_row = session.get(Farm, ids["farm"])
             assert farm_row.props == {
                 "catalog_item_ids": [item[ids["pending"]], item[ids["copper"]]]
@@ -233,10 +126,14 @@ def test_a_populated_upgrade_keeps_every_meaning_and_id(scratch_db_url):  # noqa
             }
             doses = spray_items.doses_for_logs(repo, [ids["spray"]], scope="logs:read")
             assert [(d.measure, str(d.value), d.unit, d.label) for d in doses[ids["spray"]]] == [
-                (q.measure, q.value, q.unit, q.label) for q in legacy["quantity"]
+                (q.measure, q.value, q.unit, q.label)
+                for q in legacy["quantity"]
+                if q.log_id == ids["spray"]
             ]
             published = ngsi.refs(repo, doses[ids["spray"]], version=1)
-            assert sorted(published.quantities.values()) == [q.id for q in legacy["quantity"]]
+            assert sorted(published.quantities.values()) == [
+                q.id for q in legacy["quantity"] if q.log_id == ids["spray"]
+            ]
             assert published.products == {v: k for k, v in item.items()}
             [draft] = session.execute(text("SELECT payload FROM draft")).scalars().all()
             record = operation_drafts.validate_spray(session, farm_row.id, draft)
@@ -245,40 +142,61 @@ def test_a_populated_upgrade_keeps_every_meaning_and_id(scratch_db_url):  # noqa
         engine.dispose()
 
 
-def test_the_preflight_lists_every_blocker_and_changes_nothing(scratch_db_url):  # noqa: F811
+def test_migrate_lists_every_preflight_blocker_and_changes_nothing(
+    scratch_db_url,  # noqa: F811
+    settings,
+    monkeypatch,
+):
+    """`farmcore migrate` prints every row the preflight refuses (ids, never row values), and
+    the database is left exactly as it was."""
     cfg = alembic_config(scratch_db_url)
     command.upgrade(cfg, BEFORE)
     engine = create_engine(scratch_db_url)
     try:
         with engine.begin() as db:
-            ids = _legacy(db)
+            ids = fixture.legacy(db)
             blank = _product(db, " ", "x", "contact", [], {})
             nan = _dose(db, ids["spray"], blank, "rate", "NaN", "kg/ha", None)
+            infinite = _dose(db, ids["spray"], None, "rate", "Infinity", "kg/ha", None)
             unitless = _dose(db, ids["spray"], None, "rate", "1", " ", None)
             parcel = _one(db, "SELECT parcel_id FROM log_parcel LIMIT 1")
-            water = _log(db, ids["farm"], parcel, type="irrigate")
-            _dose(db, water, None, "volume", "20", "m3", None)  # before #92, beside the entered
-            db.execute(
-                text(
-                    "INSERT INTO typed_quantity(log_id,entered_value,entered_unit) "
-                    "VALUES (:log,20,'m3')"
-                ),
-                {"log": water},
+            twice = []  # before #92: a legacy quantity beside the entered amount
+            for type_, value, unit in (("irrigate", "20", "m3"), ("fertilise", "300", "kg/ha")):
+                log = _log(db, ids["farm"], parcel, type=type_)
+                _dose(db, log, None, "rate", value, unit, "Secret label")
+                db.execute(
+                    text(
+                        "INSERT INTO typed_quantity(log_id,entered_value,entered_unit) "
+                        "VALUES (:log,100,'kg')"
+                    ),
+                    {"log": log},
+                )
+                twice.append(log)
+            fractional = _one(
+                db,
+                "INSERT INTO farm(name,props) VALUES ('B','{\"product_ids\": [1.0]}') RETURNING id",
             )
             before = _capture(db)
+        monkeypatch.setattr(
+            migrate_command,
+            "get_settings",
+            lambda: settings.model_copy(update={"database_url": scratch_db_url}),
+        )
 
-        with pytest.raises(RuntimeError) as refused:
-            command.upgrade(cfg, "head")
+        result = CliRunner().invoke(cli, ["migrate"])
 
-        message = str(refused.value)
+        assert result.exit_code == 1
         for blocker in (
             f"1 product(s) with a blank name or one over 200 characters ({blank})",
-            f"1 quantit(y/ies) with a NaN value ({nan})",
+            f"2 quantit(y/ies) with a NaN or infinite value ({nan}, {infinite})",
             f"1 quantit(y/ies) with a blank unit ({unitless})",
-            "1 irrigation(s) that would hold more than one amount (a legacy quantity beside the "
-            f"entered one) ({water})",
+            f"1 farm(s) whose product shortlist is not a list of whole-number ids ({fractional})",
+            "2 record(s) other than a spray that would hold more than one amount (a legacy "
+            f"quantity beside another or beside the entered one) ({twice[0]}, {twice[1]})",
+            f"the schema is still at {BEFORE}",
         ):
-            assert blocker in message
+            assert blocker in result.output
+        assert "Secret label" not in result.output
         with engine.begin() as db:
             assert _one(db, "SELECT version_num FROM alembic_version") == BEFORE
             assert _one(db, "SELECT to_regclass('legacy_product_map')::text") is None
@@ -295,7 +213,7 @@ def test_a_downgrade_refuses_new_or_changed_sprays_and_else_returns_every_row(
     engine = create_engine(scratch_db_url)
     try:
         with engine.begin() as db:
-            ids = _legacy(db)
+            ids = fixture.legacy(db)
             before = _capture(db)
         command.upgrade(cfg, "head")
         with engine.begin() as db:

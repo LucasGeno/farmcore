@@ -37,7 +37,6 @@ from farmcore.core.models.catalog import CatalogItem, LegacyProductMap, TypedQua
 # item. core_0018 renamed it from `product_ids`, so a reader of the old id space finds nothing.
 SHORTLIST_KEY = "catalog_item_ids"
 RESOURCE = "crop_protection_item"
-SPRAY = "spray"
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,10 +46,19 @@ class SprayItem:
     authorisation_no: str
     active_substance: str
     props: Mapping[str, Any] = field(default_factory=dict, compare=False)
+    # The legacy product id core_0018 moved it from (its frozen map); None for a newer item.
+    legacy_id: int | None = field(default=None, compare=False)
 
     @property
     def placeholder(self) -> bool:
         return bool(self.props.get("placeholder"))
+
+    @property
+    def ref(self) -> int | str:
+        """The item's published ref, stable across the move: its legacy product id when it has
+        one, else `ci<catalog item id>` (a namespace no legacy id uses). Register check keys and
+        NGSI-LD v1 use it."""
+        return self.legacy_id if self.legacy_id is not None else f"ci{self.id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,13 +76,18 @@ class SprayDose:
         return self.measure == "rate"
 
 
-_ITEMS = select(
-    CatalogItem.id,
-    CatalogItem.name,
-    CropProtectionItem.authorisation_no,
-    CropProtectionItem.active_substance,
-    CropProtectionItem.props,
-).join(CropProtectionItem, CropProtectionItem.catalog_item_id == CatalogItem.id)
+_ITEMS = (
+    select(
+        CatalogItem.id,
+        CatalogItem.name,
+        CropProtectionItem.authorisation_no,
+        CropProtectionItem.active_substance,
+        CropProtectionItem.props,
+        LegacyProductMap.product_id.label("legacy_id"),
+    )
+    .join(CropProtectionItem, CropProtectionItem.catalog_item_id == CatalogItem.id)
+    .outerjoin(LegacyProductMap, LegacyProductMap.catalog_item_id == CatalogItem.id)
+)
 
 
 def _item(row: Any) -> SprayItem:
@@ -84,6 +97,7 @@ def _item(row: Any) -> SprayItem:
         authorisation_no=row.authorisation_no,
         active_substance=row.active_substance,
         props=dict(row.props or {}),
+        legacy_id=row.legacy_id,
     )
 
 
@@ -172,14 +186,14 @@ def legacy_item_ids(session: Session, product_ids: Collection[int]) -> dict[int,
 def doses_for_logs(
     repo: ScopedRepository, log_ids: Collection[int], *, scope: str, rates_only: bool = False
 ) -> dict[int, list[SprayDose]]:
-    """Each spray log's doses in entry order (an absent log, or one of another record type, has
-    none: another record's amounts are not doses)."""
+    """Each log's doses in entry order (an absent log has none). A dose is a row entered with a
+    measure: a spray's, or a legacy quantity core_0018 moved from an older record of another
+    type; another record's own entered amount (no measure) is never a dose."""
     out: dict[int, list[SprayDose]] = defaultdict(list)
     if not log_ids:
         return out
     where = [
         TypedQuantity.log_id.in_(list(log_ids)),
-        TypedQuantity.log.has(Log.type == SPRAY),
         TypedQuantity.entered_measure.is_not(None),
     ]
     if rates_only:

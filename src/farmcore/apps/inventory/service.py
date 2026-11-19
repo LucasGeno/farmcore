@@ -233,7 +233,13 @@ def item_stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[I
             resource="catalog_item",
         ).all()
     )
-    typed = repo.list(TypedQuantity, TypedQuantity.catalog_item_id.in_(item_ids), scope=LOGS_SCOPE)
+    # Records' entered amounts; a legacy quantity core_0018 moved (it has a measure) is not one.
+    typed = repo.list(
+        TypedQuantity,
+        TypedQuantity.catalog_item_id.in_(item_ids),
+        TypedQuantity.entered_measure.is_(None),
+        scope=LOGS_SCOPE,
+    )
     logs = {
         log.id: log
         for log in repo.list(

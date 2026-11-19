@@ -28,6 +28,7 @@ from sqlalchemy.exc import DBAPIError
 
 from farmcore import __version__
 from farmcore.core import startup
+from farmcore.core.migration_refusal import MigrationRefused
 from farmcore.core.startup import (
     INSTALLATION_SETTING,
     MIGRATION_LOCK,
@@ -540,7 +541,10 @@ def _mark(conn: Connection, value: str | None) -> None:
 
 
 def _failure(exc: Exception) -> str:
-    """The server's message for a failed migration, never its SQL or parameters."""
+    """The server's message for a failed migration, never its SQL or parameters; a migration's
+    own refusal (ids and counts, no row values) as it is."""
+    if isinstance(exc, MigrationRefused):
+        return str(exc)
     orig = getattr(exc, "orig", None)
     detail = getattr(getattr(orig, "diag", None), "message_primary", None)
     return detail or type(orig or exc).__name__

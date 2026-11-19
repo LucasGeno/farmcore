@@ -406,6 +406,56 @@ def test_a_bundle_from_an_older_schema_is_restored_and_upgraded_to_this_release(
     assert dbs.query(target, joined) == [("Old farm", "Copper")]
 
 
+MOVED = (  # core_0018's result, by content (generated timestamps left out)
+    "SELECT id, name FROM catalog_item ORDER BY id",
+    "SELECT catalog_item_id, authorisation_no, active_substance, props::text "
+    "FROM crop_protection_item ORDER BY 1",
+    "SELECT * FROM advisor_product ORDER BY 1",
+    "SELECT * FROM legacy_product_map ORDER BY 1",
+    "SELECT * FROM legacy_quantity_map ORDER BY 1",
+    "SELECT id, log_id, catalog_item_id, measure, value::text, unit, entered_value::text, "
+    "entered_unit, label, entered_measure FROM typed_quantity ORDER BY id",
+    "SELECT id, catalog_item_id FROM inventory_stock ORDER BY id",
+    "SELECT id, catalog_item_id FROM planning_job ORDER BY id",
+    "SELECT id, props::text FROM farm ORDER BY id",
+    "SELECT id, payload::text FROM draft ORDER BY id",
+)
+
+
+def test_a_bundle_from_before_the_spray_move_restores_like_an_in_place_upgrade(
+    dbs, owner_key, tmp_path
+):
+    """A core_0017 bundle with spray products, doses and every id kept outside them, restored
+    by this release and moved by core_0018, equals the same database upgraded in place."""
+    from alembic import command
+    from sqlalchemy import create_engine
+
+    from farmcore.core.commands.migrate import alembic_config
+    from tests.core.crop_protection_legacy import legacy
+
+    key, recipient = owner_key
+    old = dbs.create()
+    env = dbs.installation(old)
+    command.upgrade(alembic_config(env["DATABASE_URL"]), "core_0017")
+    dbs.on_server(f"ALTER DATABASE \"{old}\" SET farmcore.installation_id = '{uuid.uuid4()}'")
+    engine = create_engine(env["DATABASE_URL"])
+    try:
+        with engine.begin() as db:
+            legacy(db)
+    finally:
+        engine.dispose()
+    bundle = backup(env, recipient, tmp_path / "before-move.age")
+    target = dbs.create()
+
+    result = restore(bundle, key, dbs.installation(target))
+    command.upgrade(alembic_config(env["DATABASE_URL"]), "head")
+
+    assert result.exit_code == 0, result.output
+    assert dbs.query(target, "SELECT version_num FROM alembic_version") == [(HEAD,)]
+    for sql in MOVED:
+        assert dbs.query(target, sql) == dbs.query(old, sql), sql
+
+
 # --- F6, F7: refused before anything is loaded --------------------------------------------------
 
 

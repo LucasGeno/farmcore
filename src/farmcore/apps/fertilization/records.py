@@ -212,14 +212,12 @@ def _checked(session: Session, farm_id: int, payload: dict) -> FertilizationDraf
 
 
 def offered_items(farm_id: int):
-    """Catalog items a fertilization may name: not a crop-protection product, or one this farm
-    keeps a stock row of (`select(CatalogItem.id, CatalogItem.name)`)."""
+    """Catalog items a fertilization may name: never a plant-protection product (operations'
+    `crop_protection_item`), stocked or not, so a fertiliser record never consumes a pesticide's
+    stock (`select(CatalogItem.id, CatalogItem.name)`). `farm_id` is kept for callers."""
     return select(CatalogItem.id, CatalogItem.name).where(
         ~select(CropProtectionItem.catalog_item_id)
         .where(CropProtectionItem.catalog_item_id == CatalogItem.id)
-        .exists()
-        | select(InventoryStock.id)
-        .where(InventoryStock.catalog_item_id == CatalogItem.id, InventoryStock.farm_id == farm_id)
         .exists()
     )
 
@@ -415,7 +413,9 @@ def log_quantity(log: Log) -> TypedQuantity | None:
     from sqlalchemy.orm import object_session
 
     return object_session(log).scalar(
-        select(TypedQuantity).where(TypedQuantity.log_id == log.id).order_by(TypedQuantity.id)
+        select(TypedQuantity)
+        .where(TypedQuantity.log_id == log.id, TypedQuantity.entered_measure.is_(None))
+        .order_by(TypedQuantity.id)
     )
 
 
@@ -500,7 +500,11 @@ def confirm_correction(
     log.ts_start = record.ts_start
     log.name = record.fertiliser.name
     log.props = _props(session, draft.farm_id, record)
-    session.execute(delete(TypedQuantity).where(TypedQuantity.log_id == log.id))
+    session.execute(
+        delete(TypedQuantity).where(
+            TypedQuantity.log_id == log.id, TypedQuantity.entered_measure.is_(None)
+        )
+    )
     q = _quantity(record)
     enter_quantity(
         session,

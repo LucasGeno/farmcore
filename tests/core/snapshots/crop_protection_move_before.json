@@ -1,0 +1,56 @@
+{
+  "fertilization_rows": [
+    [
+      "x",
+      "",
+      null
+    ]
+  ],
+  "offered_fertilisers": [
+    "EPHY ONE",
+    "EPHY TWO"
+  ],
+  "record_facts": [
+    [
+      "spray",
+      null
+    ],
+    [
+      "fertilise",
+      null
+    ],
+    [
+      "irrigate",
+      "Irrigation (details unavailable)"
+    ]
+  ],
+  "record_products": {
+    "1": [
+      {
+        "dose": "800",
+        "dose_unit": "g/ha",
+        "product_name": "Copper"
+      },
+      {
+        "dose": "2",
+        "dose_unit": "L/ha",
+        "product_name": "Pending AMM"
+      },
+      {
+        "dose": "3",
+        "dose_unit": "bottles/ha",
+        "product_name": "Mystery"
+      }
+    ],
+    "2": [
+      {
+        "dose": "200",
+        "dose_unit": "kg/ha",
+        "product_name": "Compost"
+      }
+    ],
+    "3": []
+  },
+  "register_json": "[{\"product_name\": \"Copper\", \"authorisation_no\": \"AMM-Copper\", \"authorisation_placeholder\": false, \"active_substance\": \"copper\", \"date\": \"2024-04-10\", \"start_time\": \"07:00\", \"dose\": \"800\", \"dose_unit\": \"g/ha\", \"iacs_parcel_id\": \"\", \"parcel_alias\": \"P1\", \"area_treated_ha\": \"2\", \"crop_name\": \"\", \"crop_eppo\": \"VITVI\", \"bbch\": 13, \"bbch_source\": \"config\", \"log_id\": 1, \"checks\": [{\"key\": \"copper\", \"status\": \"warn\", \"label\": \"Copper at least 0 kg Cu/ha this year (incomplete)\", \"detail\": \"A copper dose or composition is unknown, or its rate cannot be converted to kg/ha; the known total is a lower bound. 28 kg Cu/ha over 7 years is the legal cap (Reg. (EU) 2018/1981).\"}, {\"key\": \"dose:1\", \"status\": \"ok\", \"label\": \"Copper dose 0.8 kg/ha, label max 3.75\", \"detail\": \"Copper: at most 3.75 kg/ha per application on the label (E-Phy).\"}], \"saved_weather\": [], \"parcel_aliases\": []}, {\"product_name\": \"Pending AMM\", \"authorisation_no\": \"AMM-Pending AMM\", \"authorisation_placeholder\": true, \"active_substance\": \"sulphur\", \"date\": \"2024-04-10\", \"start_time\": \"07:00\", \"dose\": \"2\", \"dose_unit\": \"L/ha\", \"iacs_parcel_id\": \"\", \"parcel_alias\": \"P1\", \"area_treated_ha\": \"2\", \"crop_name\": \"\", \"crop_eppo\": \"VITVI\", \"bbch\": 13, \"bbch_source\": \"config\", \"log_id\": 1, \"checks\": [{\"key\": \"copper\", \"status\": \"warn\", \"label\": \"Copper at least 0 kg Cu/ha this year (incomplete)\", \"detail\": \"A copper dose or composition is unknown, or its rate cannot be converted to kg/ha; the known total is a lower bound. 28 kg Cu/ha over 7 years is the legal cap (Reg. (EU) 2018/1981).\"}, {\"key\": \"dose:1\", \"status\": \"ok\", \"label\": \"Copper dose 0.8 kg/ha, label max 3.75\", \"detail\": \"Copper: at most 3.75 kg/ha per application on the label (E-Phy).\"}], \"saved_weather\": [], \"parcel_aliases\": []}, {\"product_name\": \"Mystery\", \"authorisation_no\": \"\", \"authorisation_placeholder\": false, \"active_substance\": \"\", \"date\": \"2024-04-10\", \"start_time\": \"07:00\", \"dose\": \"3\", \"dose_unit\": \"bottles/ha\", \"iacs_parcel_id\": \"\", \"parcel_alias\": \"P1\", \"area_treated_ha\": \"2\", \"crop_name\": \"\", \"crop_eppo\": \"VITVI\", \"bbch\": 13, \"bbch_source\": \"config\", \"log_id\": 1, \"checks\": [{\"key\": \"copper\", \"status\": \"warn\", \"label\": \"Copper at least 0 kg Cu/ha this year (incomplete)\", \"detail\": \"A copper dose or composition is unknown, or its rate cannot be converted to kg/ha; the known total is a lower bound. 28 kg Cu/ha over 7 years is the legal cap (Reg. (EU) 2018/1981).\"}, {\"key\": \"dose:1\", \"status\": \"ok\", \"label\": \"Copper dose 0.8 kg/ha, label max 3.75\", \"detail\": \"Copper: at most 3.75 kg/ha per application on the label (E-Phy).\"}], \"saved_weather\": [], \"parcel_aliases\": []}]"
+}
+

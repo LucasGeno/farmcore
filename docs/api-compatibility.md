@@ -33,7 +33,9 @@ registers it.
   through its frozen maps); one recorded since has none and takes its v2 ref.
 - **v2** (`?v=2`): catalog-native refs everywhere: `<dose>` is `tq<typed quantity id>` and
   `<product>` is `ci<catalog item id>`, a namespace no v1 id uses. Description, quantity and
-  every other property are the same as v1.
+  every other property are the same as v1. These ids are not stable across a rollback: if an
+  operator downgrades below `core_0018` and upgrades again, the moved rows get new catalog ids
+  (v1's legacy ids stay the same).
 
 ### `advice` (shared advice)
 
@@ -53,7 +55,8 @@ registers it.
 - **v1** (deprecated since 2026-11-19): a dose naming `product_id`, a legacy product id, is
   still accepted: it is resolved once through `core_0018`'s frozen map and stored as v2. An id
   the map does not hold, or a dose naming both keys, is refused (never guessed). New clients
-  send v2.
+  send v2. The agent tools carry no HTTP headers per call, so the MCP `propose_record` result
+  says it instead: `facts.input_deprecated` (`since`, `note`, `link`) and a note in its text.
 
 ## Stored evidence
 
@@ -65,9 +68,14 @@ advisor_product}`; a snapshot saved before has no `evidence_version` and holds
 
 ## Unchanged and not versioned
 
-These carry no product or dose id; frozen fixtures pin them, so the move cannot change them:
+These carry no dose id, and no product id that the move changes; fixtures pin them, so the move
+cannot change them:
 
-- the spray register (`register.csv`, `register.json`, owner, `/share` and grantee);
+- the spray register (`register.csv`, `register.json`, owner, `/share` and grantee). A
+  `register.json` check key names its product (`dose:<product>`, `applications:<product>`,
+  `interval:<product>`) by the same ref as NGSI-LD v1: the legacy product id for a product
+  recorded before `core_0018`, `ci<catalog item id>` for one added since. Its bytes are pinned
+  against the release before the move (`tests/core/test_crop_protection_move.py`);
 - the assistant and MCP tool facts (`operations_last_spray`, `operations_recent_sprays`,
   `advisor_parcel_status`);
 - `kpis.json`.
@@ -75,4 +83,6 @@ These carry no product or dose id; frozen fixtures pin them, so the move cannot 
 ## Internal, changed in lockstep
 
 Same-origin forms and pages (planning jobs, spray corrections, inventory) change with the code
-that renders them and are not versioned.
+that renders them and are not versioned. Their option values became catalog item ids with
+`core_0018`. A planning completion retried with the same request key after the upgrade is a
+409 ("Request key already used"): its fingerprint covers the product id, which changed.

@@ -93,11 +93,13 @@ def season_rows(
             Parcel, Parcel.id.in_({link.parcel_id for link in links}), scope=FIELDS_SCOPE
         )
     }
+    # The record's entered amount; a legacy quantity core_0018 moved (it has a measure) is not.
     typed = {
         t.log_id: t
         for t in repo.list(
             TypedQuantity,
             TypedQuantity.log_id.in_(ids),
+            TypedQuantity.entered_measure.is_(None),
             scope=LOGS_SCOPE,
             order_by=TypedQuantity.id,
         )

@@ -39,6 +39,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
+from farmcore.core.migration_refusal import MigrationRefused
+
 revision: str = "core_0018"
 down_revision: str | None = "core_0017"
 branch_labels: str | Sequence[str] | None = None
@@ -81,8 +83,9 @@ def _preflight(bind: sa.Connection) -> None:
             "correct them",
         ),
         (
-            "quantit(y/ies) with a NaN value",
-            "SELECT id FROM quantity WHERE value = 'NaN'::numeric ORDER BY id",
+            "quantit(y/ies) with a NaN or infinite value",
+            "SELECT id FROM quantity WHERE value IN ('NaN'::numeric, 'Infinity'::numeric, "
+            "'-Infinity'::numeric) ORDER BY id",
             "enter the dose again or remove it",
         ),
         (
@@ -104,24 +107,25 @@ def _preflight(bind: sa.Connection) -> None:
             "remove them",
         ),
         (
-            "farm(s) whose product shortlist is not a list of ids",
+            "farm(s) whose product shortlist is not a list of whole-number ids",
             "SELECT id FROM farm WHERE props ? 'product_ids' AND (jsonb_typeof(props -> "
             "'product_ids') <> 'array' OR EXISTS (SELECT 1 FROM jsonb_array_elements(props -> "
-            "'product_ids') e WHERE jsonb_typeof(e) <> 'number')) ORDER BY id",
+            "'product_ids') e WHERE jsonb_typeof(e) <> 'number' "
+            "OR e::text !~ '^[0-9]{1,18}$')) ORDER BY id",
             "correct the farm's product_ids",
         ),
         (
-            "irrigation(s) that would hold more than one amount (a legacy quantity beside the "
-            "entered one)",
-            "SELECT l.id FROM log l WHERE l.type = 'irrigate' AND "
+            "record(s) other than a spray that would hold more than one amount (a legacy "
+            "quantity beside another or beside the entered one)",
+            "SELECT l.id FROM log l WHERE l.type <> 'spray' AND "
             "(SELECT count(*) FROM quantity q WHERE q.log_id = l.id) "
             "+ (SELECT count(*) FROM typed_quantity t WHERE t.log_id = l.id) > 1 ORDER BY l.id",
-            "keep one amount per irrigation (remove the extra quantity rows)",
+            "keep one amount per record (remove the extra quantity rows)",
         ),
     ]
     blockers = [_named(what, ids, fix) for what, sql, fix in checks if (ids := _ids(bind, sql))]
     if blockers:
-        raise RuntimeError(
+        raise MigrationRefused(
             "core_0018 refused, nothing was changed: " + "; ".join(blockers) + ". Fix these "
             "rows (back up first) and run migrate again."
         )
@@ -348,7 +352,7 @@ def _post_check(bind: sa.Connection) -> None:
     if drift:
         problems.append(f"{len(drift)} record dose total(s) differ")
     if problems:
-        raise RuntimeError(
+        raise MigrationRefused(
             "core_0018 post-check failed, nothing was changed: " + "; ".join(problems)
         )
 
@@ -421,7 +425,7 @@ def downgrade() -> None:
     bind = op.get_bind()
     refusals = _refusals(bind)
     if refusals:
-        raise RuntimeError(
+        raise MigrationRefused(
             "core_0018 downgrade refused, nothing was changed: " + "; ".join(refusals) + ". "
             "They have no legacy row to return to; back them up and remove them first."
         )

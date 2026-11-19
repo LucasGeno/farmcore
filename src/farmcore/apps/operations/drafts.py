@@ -24,7 +24,7 @@ its own station weather there (`spray_weather`), whichever path confirmed it.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from farmcore.apps.operations import facts, spray_items, spray_weather
 from farmcore.apps.operations.corrections import Dose
-from farmcore.core import logs
+from farmcore.core import logs, representations
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.drafts import wall_now
 from farmcore.core.logs import QuantityInput, SourceInput
@@ -151,15 +151,37 @@ MODELS: dict[str, type[_Record]] = {
 }
 
 
+# The spray proposal's input versions (`docs/api-compatibility.md`): v1 names a dose's product by
+# its legacy `product_id`, deprecated since core_0018; v2 by `catalog_item_id`.
+V1_KEY = "product_id"
+SPRAY_INPUT = representations.register(
+    representations.Representation(
+        "spray-draft-input",
+        (
+            representations.Version(
+                1, deprecated=date(2026, 11, 19), note="doses[].product_id; send catalog_item_id"
+            ),
+            representations.Version(2),
+        ),
+        default=2,
+    )
+)
+
+
+def input_version(payload: dict) -> representations.Version:
+    """Which spray input version a proposal is written in (v1: a dose names `product_id`)."""
+    doses = payload.get("doses")
+    v1 = isinstance(doses, list) and any(isinstance(d, dict) and V1_KEY in d for d in doses)
+    return SPRAY_INPUT.by_number[1 if v1 else 2]
+
+
 def input_v2(session: Session, payload: dict) -> dict:
     """A spray proposal in the stored (v2) shape: v1 doses (`product_id`, a legacy product id)
     become `catalog_item_id` through the frozen map; v2 doses pass unchanged. A dose naming both,
     or a legacy id the map does not hold, raises."""
-    doses = payload.get("doses")
-    if not isinstance(doses, list) or not any(
-        isinstance(d, dict) and "product_id" in d for d in doses
-    ):
+    if input_version(payload).number == 2:
         return payload
+    doses = payload["doses"]
     if any(isinstance(d, dict) and "catalog_item_id" in d for d in doses):
         raise ValueError("Name each product by catalog_item_id only (v2).")
     legacy = {d["product_id"] for d in doses if isinstance(d.get("product_id"), int)}

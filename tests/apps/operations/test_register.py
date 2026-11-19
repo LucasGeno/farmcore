@@ -190,10 +190,10 @@ def test_rows_with_checks_carry_the_spray_checks_and_the_csv_says_them_in_words(
     copper, sulphur = products["copper-contact"].id, products["sulphur-wettable"].id
     assert got == {
         "copper": ("ok", "Copper 0.4 of 4 kg Cu/ha this year"),
-        f"applications:{copper}": ("ok", "1 of 5 copper applications this season"),
-        f"applications:{sulphur}": ("ok", "1 of 8 sulphur applications this season"),
-        f"dose:{copper}": ("ok", "Copper dose 2 kg/ha, label max 3.75"),
-        f"dose:{sulphur}": ("ok", "Sulphur dose 3 kg/ha, label max 12.5"),
+        f"applications:ci{copper}": ("ok", "1 of 5 copper applications this season"),
+        f"applications:ci{sulphur}": ("ok", "1 of 8 sulphur applications this season"),
+        f"dose:ci{copper}": ("ok", "Copper dose 2 kg/ha, label max 3.75"),
+        f"dose:ci{sulphur}": ("ok", "Sulphur dose 3 kg/ha, label max 12.5"),
         "phi": ("info", "Harvest not before 13 Apr"),
     }
     first = next(csv.DictReader(io.StringIO(register.to_csv(rows, tz="Europe/Paris"))))
@@ -266,12 +266,12 @@ def test_checks_count_earlier_confirmed_sprays_only(session, demo):
         "warn",
         "Copper 4.4 of 4 kg Cu/ha this year",
     )
-    assert got[f"applications:{products['copper-contact'].id}"]["label"] == (
+    assert got[f"applications:ci{products['copper-contact'].id}"]["label"] == (
         "3 of 5 copper applications this season"
     )
     over = next(r for r in rows if r["log_id"] != third.id and r["date"] == "2024-04-01")
     assert {c["key"]: c["status"] for c in over["checks"]}[
-        f"dose:{products['copper-contact'].id}"
+        f"dose:ci{products['copper-contact'].id}"
     ] == "warn"  # 10 kg/ha is above 3.75
 
 
@@ -346,14 +346,14 @@ def test_register_checks_combine_same_product_rates_only(session, demo, second_u
     session.flush()
     rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
     found = {c["key"]: c for c in rows[0]["checks"]}
-    dose = found[f"dose:{products['copper-contact'].id}"]
+    dose = found[f"dose:ci{products['copper-contact'].id}"]
     assert dose["status"] == "warn"
     if second_unit == "l/ha":
         assert "incomplete" in dose["label"] and "at least 2" in dose["label"]
     else:
         assert dose["label"] == "Copper dose 4 kg/ha, above the label max 3.75"
         assert found["copper"]["label"] == "Copper 0.8 of 4 kg Cu/ha this year"
-    assert found[f"applications:{products['copper-contact'].id}"]["label"].startswith("1 of 5")
+    assert found[f"applications:ci{products['copper-contact'].id}"]["label"].startswith("1 of 5")
 
 
 def test_only_labelled_rates_are_products_without_catalogue_or_props(session, demo):
@@ -401,11 +401,13 @@ def test_register_interval_reaches_december_without_counting_it_in_january(sessi
     january = next(r for r in rows if r["date"] == "2024-01-02")
     found = {c["key"]: c for c in january["checks"]}
     assert (
-        found[f"interval:{pajo.id}"]["label"]
+        found[f"interval:ci{pajo.id}"]["label"]
         == "4 days since the last cymoxanil spray, label min 7"
     )
-    assert found[f"interval:{pajo.id}"]["status"] == "warn"
-    assert found[f"applications:{pajo.id}"]["label"] == "1 of 2 cymoxanil applications this season"
+    assert found[f"interval:ci{pajo.id}"]["status"] == "warn"
+    assert (
+        found[f"applications:ci{pajo.id}"]["label"] == "1 of 2 cymoxanil applications this season"
+    )
 
 
 def test_register_warns_for_known_copper_identity_without_composition(session, demo):
