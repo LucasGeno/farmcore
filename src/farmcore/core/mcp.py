@@ -1,10 +1,11 @@
-"""The farm's tools for a local agent over MCP (`farmcore mcp`, stdio).
+"""The farm's tools for an agent over MCP: `farmcore mcp` (stdio) and `--http` (`mcp_http`).
 
-- **Identity.** An agent token (`access.authenticate_token`) from `FARMCORE_TOKEN`, the
-  environment only: never a flag, never logged, never in an MCP error or result. Every list and
-  call authenticates it afresh, so revoking or expiring the grant refuses the next request of a
-  running server. The audit actor is `token:<id>`; the name the MCP client sends about itself is
-  untrusted and only logged (stderr) as data.
+- **Identity.** An agent token (`access.authenticate_token`): from `FARMCORE_TOKEN` on stdio,
+  the environment only, or from each HTTP request's `Authorization` header. Never a flag, never
+  logged, never in an MCP error or result. Every list and call authenticates the request's
+  token afresh, so revoking or expiring the grant refuses the next request of a running server.
+  The audit actor is `token:<id>`; the name the MCP client sends about itself is untrusted and
+  only logged (stderr) as data.
 - **Tools** (`offered`): the tools of the apps that are on now (`registry.live_active`, read on
   every request, so a switched-off app's tools vanish from the list and are refused at call
   time without a restart), limited to the token's scopes. A `propose` tool also needs
@@ -20,7 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from typing import Any
 
 import anyio
@@ -95,24 +96,24 @@ def _jsonable(value: Any) -> Any:
 
 
 class FarmTools:
-    """The token's farm tools, read live on every request. Synchronous: the server runs it in a
-    worker thread."""
+    """The farm tools of the token each request carries, read live on every request.
+    Synchronous: the server runs it in a worker thread."""
 
     def __init__(
         self,
         session_factory: sessionmaker[Session],
         settings: Settings,
         manifests: Sequence[Manifest],
-        token: str,
     ) -> None:
         self._session_factory = session_factory
         self._settings = settings
         self._manifests = list(manifests)
-        self._token = token
 
-    def _authenticate(self, session: Session, tool: str | None = None) -> ScopedRepository:
+    def _authenticate(
+        self, session: Session, token: str, tool: str | None = None
+    ) -> ScopedRepository:
         try:
-            return authenticate_token(session, self._token)
+            return authenticate_token(session, token)
         except TokenRejected as exc:
             _log_refusal(tool, "a rejected token", "token rejected")
             raise Refused(str(exc)) from None
@@ -121,15 +122,17 @@ class FarmTools:
         on = registry.live_active(session, self._manifests)
         return offered(collect_tools(on), repo.grant.scopes or ())
 
-    def list(self) -> list[ToolSpec]:
+    def list(self, token: str) -> list[ToolSpec]:
         with session_scope(self._session_factory) as session:
-            return self._tools(session, self._authenticate(session))
+            return self._tools(session, self._authenticate(session, token))
 
-    def call(self, name: str, args: Mapping[str, Any], client: str | None = None) -> ToolResult:
-        """Run tool `name` as the token; `Refused` when it is not offered, the arguments do not
+    def call(
+        self, token: str, name: str, args: Mapping[str, Any], client: str | None = None
+    ) -> ToolResult:
+        """Run tool `name` as `token`; `Refused` when it is not offered, the arguments do not
         match, or it fails."""
         with session_scope(self._session_factory) as session:
-            repo = self._authenticate(session, name)
+            repo = self._authenticate(session, token, name)
             tool = next((t for t in self._tools(session, repo) if t.name == name), None)
             if tool is None:
                 _log_refusal(name, repo.actor, "not offered to this token")
@@ -181,10 +184,12 @@ def _client_name(ctx: Any) -> str | None:
     return params.client_info.name if params is not None else None
 
 
-def server(tools: FarmTools) -> Server:
+def server(tools: FarmTools, token_of: Callable[[Any], str]) -> Server:
+    """The MCP server over `tools`, as the token `token_of(ctx)` gives for each request."""
+
     async def list_tools(ctx: Any, params: Any) -> types.ListToolsResult:
         try:
-            specs = await anyio.to_thread.run_sync(tools.list)
+            specs = await anyio.to_thread.run_sync(tools.list, token_of(ctx))
         except Refused as exc:
             raise MCPError(types.INVALID_REQUEST, str(exc)) from None
         except Exception as exc:
@@ -206,7 +211,7 @@ def server(tools: FarmTools) -> Server:
         args = params.arguments or {}
         try:
             result = await anyio.to_thread.run_sync(
-                tools.call, params.name, args, _client_name(ctx)
+                tools.call, token_of(ctx), params.name, args, _client_name(ctx)
             )
         except Refused as exc:
             message = str(exc)
@@ -228,7 +233,7 @@ def server(tools: FarmTools) -> Server:
     )
 
 
-async def serve_stdio(tools: FarmTools) -> None:
-    app = server(tools)
+async def serve_stdio(tools: FarmTools, token: str) -> None:
+    app = server(tools, lambda ctx: token)
     async with stdio_server() as (read, write):
         await app.run(read, write, app.create_initialization_options())

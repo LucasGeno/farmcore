@@ -104,14 +104,14 @@ def test_a_switched_off_module_loses_its_tools_without_a_restart(
     session, session_factory, settings, manifests
 ):
     _farm, _id, raw = _token(session, ["fields:read", "logs:read"])
-    tools = farm_mcp.FarmTools(session_factory, settings, manifests, raw)
-    assert "fertilization_season" in {t.name for t in tools.list()}
+    tools = farm_mcp.FarmTools(session_factory, settings, manifests)
+    assert "fertilization_season" in {t.name for t in tools.list(raw)}
 
     _switch_off(session, "fertilization")
 
-    assert "fertilization_season" not in {t.name for t in tools.list()}
+    assert "fertilization_season" not in {t.name for t in tools.list(raw)}
     with pytest.raises(farm_mcp.Refused):
-        tools.call("fertilization_season", {})
+        tools.call(raw, "fertilization_season", {})
 
 
 @pytest.mark.parametrize(
@@ -123,10 +123,10 @@ def test_arguments_outside_the_schema_are_refused_before_the_tool_runs(
     session, session_factory, settings, manifests, args
 ):
     _farm, token_id, raw = _token(session, ["fields:read", "logs:read"])
-    tools = farm_mcp.FarmTools(session_factory, settings, manifests, raw)
+    tools = farm_mcp.FarmTools(session_factory, settings, manifests)
 
     with pytest.raises(farm_mcp.Refused):
-        tools.call("operations_last_spray", args)
+        tools.call(raw, "operations_last_spray", args)
     assert (
         session.scalars(select(AccessLog).where(AccessLog.actor == f"token:{token_id}")).all() == []
     )
@@ -137,10 +137,10 @@ def test_a_tool_reading_beyond_the_token_fails_closed_and_the_call_is_still_audi
 ):
     # The last-spray tool is a `logs:read` tool, but resolving the parcel reads `fields:read`.
     farm, token_id, raw = _token(session, ["logs:read"])
-    tools = farm_mcp.FarmTools(session_factory, settings, manifests, raw)
+    tools = farm_mcp.FarmTools(session_factory, settings, manifests)
 
     with pytest.raises(farm_mcp.Refused) as refused:
-        tools.call("operations_last_spray", {"parcel": "P1"})
+        tools.call(raw, "operations_last_spray", {"parcel": "P1"})
 
     assert "Bel-Air" not in str(refused.value)
     calls = session.scalars(
@@ -159,9 +159,9 @@ def test_advice_is_withheld_from_a_token_as_on_every_web_surface(
 ):
     # A token cannot read the advisor's inputs, so the advisor page shows it no decision.
     _farm, _id, raw = _token(session, ["advice:read", "fields:read"])
-    tools = farm_mcp.FarmTools(session_factory, settings, manifests, raw)
+    tools = farm_mcp.FarmTools(session_factory, settings, manifests)
 
-    result = tools.call(tool, args)
+    result = tools.call(raw, tool, args)
 
     assert set(result.facts) == {"unavailable"}
     assert result.text.startswith("Assessment limited")

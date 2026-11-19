@@ -43,7 +43,7 @@ def _check_http_url(v: str) -> str:
     return v
 
 
-def _is_loopback(host: str) -> bool:
+def is_loopback(host: str) -> bool:
     if host == "localhost":
         return True
     try:
@@ -137,6 +137,27 @@ class Settings(BaseSettings):
     openai_compatible_api_key: SecretStr | None = None
     openai_compatible_model: str = ""
     whisper_model: str = "small"
+    # `farmcore mcp --http`: the farm's tools for remote agents over MCP Streamable HTTP at
+    # /mcp, with agent tokens (issued on Sharing). Off unless turned on; loopback unless a host
+    # is set. Beyond loopback, a buffering TLS reverse proxy with header and body timeouts is
+    # required: the token is a bearer secret, and slow connections are never timed out here.
+    mcp_http_enabled: bool = False
+    mcp_http_host: str = "127.0.0.1"
+    mcp_http_port: int = Field(8001, ge=0, le=65535)
+    # Browser origins allowed to call /mcp (DNS-rebinding defence; JSON list, `:*` matches any
+    # port). Empty: any request carrying an Origin is refused. CORS stays closed regardless.
+    mcp_http_allowed_origins: list[str] = Field(default_factory=list)
+    # Host headers accepted; empty: the loopback names. Behind a proxy, its public host name.
+    mcp_http_allowed_hosts: list[str] = Field(default_factory=list)
+    # Assumed product limits: requests per minute per token and per client address, the
+    # largest request body, and concurrent connections (uvicorn answers 503 beyond it).
+    mcp_http_rate_per_token: int = Field(120, ge=1)
+    mcp_http_rate_per_ip: int = Field(300, ge=1)
+    mcp_http_max_body_bytes: int = Field(64 * 1024, ge=1024)
+    mcp_http_max_connections: int = Field(32, ge=1)
+    # Proxy addresses whose X-Forwarded-For the per-address limit trusts (uvicorn's
+    # `forwarded_allow_ips`, comma-separated). Empty: none, the socket's peer is the client.
+    mcp_http_forwarded_allow_ips: str = ""
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -190,7 +211,7 @@ class Settings(BaseSettings):
         key = self.openai_compatible_api_key
         if key is not None and key.get_secret_value() and self.openai_compatible_base_url:
             url = urlsplit(self.openai_compatible_base_url)
-            if url.scheme != "https" and not _is_loopback(url.hostname or ""):
+            if url.scheme != "https" and not is_loopback(url.hostname or ""):
                 raise ValueError(
                     "OPENAI_COMPATIBLE_API_KEY requires an https base URL (http only to loopback)"
                 )

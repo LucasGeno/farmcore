@@ -125,7 +125,7 @@ read that URL, from a client's config file or the process environment, can read 
 tokens and rewrite the access log, and token scoping no longer applies.
 
 - Treat stdio as installation-operator access. Never give it to a farmer who is not the
-  operator, or to a third party; they get remote MCP over HTTP with a token once it ships.
+  operator, or to a third party; they get remote MCP over HTTP with a token (below).
 - Keep `DATABASE_URL` inside the container: point the client at
   `ssh <host> docker compose -f <path>/docker-compose.yml exec -T -e FARMCORE_TOKEN app
   farmcore mcp`, with only `FARMCORE_TOKEN` in the client's config, never `DATABASE_URL`. ssh
@@ -134,6 +134,43 @@ tokens and rewrite the access log, and token scoping no longer applies.
   and shell history show it.
 - Do not run a shell-capable agent on a machine whose files or environment hold `DATABASE_URL`.
 - Use the runtime role's URL, never the database owner's.
+
+### MCP over HTTP is for remote agents
+
+`farmcore mcp --http` serves the same tools over Streamable HTTP at `/mcp`. It is off unless
+`MCP_HTTP_ENABLED=true` and listens on `127.0.0.1` unless `MCP_HTTP_HOST` says otherwise. The
+process holds `DATABASE_URL` as the web app does; the agent holds only its token, so this is the
+transport for anyone who is not the operator. Each request is checked before any MCP message is
+read (`core/mcp_http.py`):
+
+- **Token.** `Authorization: Bearer <token>` only. A request with any query string is refused
+  (400) without being authenticated, so a token pasted into a URL never works and never reaches
+  a log. Missing or wrong: 401. Every tool list and call re-checks the request's own token, so a
+  revoked or expired token fails its next request; the server keeps no session to take over and
+  no response stream (stateless, JSON responses; GET and DELETE get 405).
+- **DNS rebinding.** `Origin` must be in `MCP_HTTP_ALLOWED_ORIGINS` when present (403) and `Host`
+  in `MCP_HTTP_ALLOWED_HOSTS` (421; the loopback names by default). The server never sends CORS
+  headers, so a browser page can neither read a response nor preflight a token-bearing request.
+- **Limits** (assumed product values): `MCP_HTTP_RATE_PER_IP` requests a minute per client
+  address (checked before any token lookup), `MCP_HTTP_RATE_PER_TOKEN` per token (429 with
+  `Retry-After`), `MCP_HTTP_MAX_BODY_BYTES` per request (413), `MCP_HTTP_MAX_CONNECTIONS`
+  concurrent connections (503). Counters live in the process: several processes multiply them.
+- **Logs.** uvicorn's access log is off; each refusal logs one INFO line with its status and
+  the client address, never a header, URL or body.
+- **Slow requests are not timed out.** A connection that sends half a request, or nothing, stays
+  open: `MCP_HTTP_MAX_CONNECTIONS` of them, from one unauthenticated client and before any rate
+  limit, hold every slot and every other request gets 503. The 5 s keep-alive timeout only
+  starts after a response.
+- **Client address.** The per-address limit trusts `X-Forwarded-For` only from the addresses
+  in `MCP_HTTP_FORWARDED_ALLOW_IPS` (empty by default: the socket's peer is the client). Never
+  list loopback on a shared host: any local process could then rotate its address.
+
+Beyond loopback a **buffering reverse proxy with TLS and header and body timeouts is required**,
+not optional: TLS because the token is a bearer secret, the timeouts because of the slow-request
+limit above. Do not expose `MCP_HTTP_HOST=0.0.0.0` directly. Set `MCP_HTTP_ALLOWED_HOSTS` to the
+public host name and `MCP_HTTP_FORWARDED_ALLOW_IPS` to the proxy's address, and make the proxy
+append or overwrite `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`, Caddy's default),
+never pass a client's value through.
 
 ## Deployment checklist
 

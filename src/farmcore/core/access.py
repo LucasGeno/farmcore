@@ -33,7 +33,7 @@ from __future__ import annotations
 import hmac
 import secrets
 from collections.abc import Collection, Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request
@@ -601,6 +601,9 @@ Repo = Annotated[ScopedRepository, Depends(get_repo, scope="function")]
 TOKEN_PREFIXES = {"personal": "fc_pat_"}
 TOKEN_BYTES = 32
 TOKEN_MAX_LEN = 128  # longer input is refused before hashing
+# How stale Sharing's "Last used" may be: an HTTP agent authenticates on every request, and
+# writing the token row each time would serialise its calls on that row.
+LAST_USED_EVERY = timedelta(minutes=1)
 
 
 class TokenRejected(PermissionError):
@@ -650,7 +653,8 @@ def authenticate_token(
 
     Checked afresh on every call (never cached), so revoking or expiring the grant, or the issuer
     losing ownership of the farm or being disabled, refuses the next call. `farm_id`, when the
-    caller names a farm, must be the token's. Records `last_used_at`. `TokenRejected` otherwise.
+    caller names a farm, must be the token's. Records `last_used_at` (at most once per
+    `LAST_USED_EVERY`). `TokenRejected` otherwise.
     """
     if (
         not isinstance(raw, str)
@@ -676,8 +680,9 @@ def authenticate_token(
         or not is_farm_owner(session, token.created_by_identity_id, grant.farm_id)
     ):
         raise TokenRejected
-    token.last_used_at = now
-    session.flush()
+    if token.last_used_at is None or now - token.last_used_at >= LAST_USED_EVERY:
+        token.last_used_at = now
+        session.flush()
     return ScopedRepository(
         session,
         grant.farm_id,
