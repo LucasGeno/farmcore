@@ -460,6 +460,12 @@ class Manifest:
     version: str
     summary: str = ""
     depends: tuple[str, ...] = ()
+    # Optional apps this one loads (and runs its jobs) after when they are present, without
+    # needing them: chat's advice digest runs after crop protection's evaluation, and loads
+    # without it. A tuple of app names, never this app or one of its `depends`. An absent name
+    # is legitimate (the optional app is not in the bundle), so a typo is caught by the test
+    # that every shipped `after` names a discovered app, not at start.
+    after: tuple[str, ...] = ()
     scopes: tuple[str, ...] = ()
     models: tuple[str, ...] = ()  # modules to import
     jobs: tuple[JobSpec, ...] = ()
@@ -527,6 +533,14 @@ class Manifest:
                     f"app {self.name!r}: only core may add a phone bottom-nav slot"
                     " (extra_nav, group='farmer')"
                 )
+        if not isinstance(self.after, tuple) or not all(
+            isinstance(name, str) and name for name in self.after
+        ):
+            raise ValueError(f"app {self.name!r}: after must be a tuple of app names")
+        if self.name in self.after:
+            raise ValueError(f"app {self.name!r}: after names the app itself")
+        if both := sorted(set(self.after) & set(self.depends)):
+            raise ValueError(f"app {self.name!r}: after repeats depends {both}")
         _check_icon(self.icon, f"app {self.name!r}", app_name=self.name)
         if self.color and self.color not in COLOR_TOKENS:
             raise ValueError(

@@ -23,12 +23,14 @@ from __future__ import annotations
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs
-from farmcore.apps.advisor.engine.types import floor_hour
-from farmcore.apps.advisor.engine.window import closed_by
 from farmcore.apps.stations.conditions import WIND_MARGINAL_KMH
+from farmcore.core.weather.hourly import HourlyObs, floor_hour
+
+if TYPE_CHECKING:  # crop protection's rules; imported only when a window is graded
+    from farmcore.apps.advisor.engine import AdvisorConfig
 
 DAYS = 5
 GRADES = ("best", "good", "possible", "avoid")  # in order of suitability
@@ -113,6 +115,8 @@ def _grade_day(
             "Forecast inputs unavailable: missing required hours",
             has_forecast=False,
         )
+    from farmcore.apps.advisor.engine.window import closed_by
+
     closed = closed_by(series, hours, config, sulphur=sulphur)
     run = _longest_run(hours, closed)
     if not run:

@@ -6,10 +6,6 @@ from datetime import datetime, timedelta
 from hashlib import sha256
 from zoneinfo import ZoneInfo
 
-from farmcore.apps.advisor import service as advisor
-from farmcore.apps.advisor.engine.types import floor_hour
-from farmcore.apps.advisor.presenter import parcel_row
-from farmcore.apps.advisor.priority import of_advice
 from farmcore.apps.fields.seed import alias_number
 from farmcore.apps.forecast import ranking, store
 from farmcore.apps.stations import data_sources as station_sources
@@ -18,6 +14,7 @@ from farmcore.apps.stations.today import STALE_AFTER
 from farmcore.core.access import ScopeDenied
 from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.urls import with_farm
+from farmcore.core.weather.hourly import floor_hour
 
 
 @dataclass(frozen=True)
@@ -57,9 +54,41 @@ def item(
 def items(repo, now, tz, visible, *, busy_days=(), review_reader=False):
     out = []
     farm = repo.get(Farm, repo.farm_id, scope="fields:read")
+    unavailable = None
+    if "advisor" in visible:
+        found, unavailable = crop_protection_items(repo, now, tz, farm)
+        out.extend(found)
+    if "stations" in visible:
+        out.extend(station_items(repo, now, unavailable))
+    # The spray window grades days with crop protection's rules: only with it on.
+    if (
+        "forecast" in visible
+        and "advisor" in visible
+        and not (farm.props or {}).get("advisor_unavailable_reason")
+    ):
+        station = station_for_farm(repo)
+        if not station or not station.props.get("archive_only"):
+            out.extend(forecast_items(repo, now, tz, farm, busy_days))
+    # Review items name the parcel, requester/reviewer, time and opinion: only an owner or
+    # assigned advisor on this farm may see them, never an anonymous demo or other member.
+    if "review" in visible and review_reader:
+        out.extend(review_items(repo, now, tz))
+    return sorted(
+        out, key=lambda i: ({"red": 0, "amber": 1, "info": 2}[i.severity], -(i.priority or 0))
+    )
+
+
+def crop_protection_items(repo, now, tz, farm):
+    """Crop protection's advice items and its unavailable reason; only with `advisor` on, so a
+    bundle without crop protection never imports it."""
+    from farmcore.apps.advisor import service as advisor
+    from farmcore.apps.advisor.presenter import parcel_row
+    from farmcore.apps.advisor.priority import of_advice
+
+    out = []
     availability = advisor.current_availability(repo, now, tz)
     unavailable = availability[1]
-    if "advisor" in visible and unavailable:
+    if unavailable:
         out.append(
             item(
                 "unavailable",
@@ -70,7 +99,7 @@ def items(repo, now, tz, visible, *, busy_days=(), review_reader=False):
                 with_farm("/advisor/", farm.id),
             )
         )
-    if "advisor" in visible and not unavailable:
+    if not unavailable:
         latest = advisor.latest_advice(repo, now, tz=tz, availability=availability)
         parcels = sorted(
             repo.list(Parcel, scope="fields:read"), key=lambda p: alias_number(p.alias)
@@ -142,19 +171,7 @@ def items(repo, now, tz, visible, *, busy_days=(), review_reader=False):
                     )
                 )
         out.extend(i for _, i in sorted(advice_items, key=lambda pair: -pair[0]))
-    if "stations" in visible:
-        out.extend(station_items(repo, now, unavailable))
-    if "forecast" in visible and not (farm.props or {}).get("advisor_unavailable_reason"):
-        station = station_for_farm(repo)
-        if not station or not station.props.get("archive_only"):
-            out.extend(forecast_items(repo, now, tz, farm, busy_days))
-    # Review items name the parcel, requester/reviewer, time and opinion: only an owner or
-    # assigned advisor on this farm may see them, never an anonymous demo or other member.
-    if "review" in visible and review_reader:
-        out.extend(review_items(repo, now, tz))
-    return sorted(
-        out, key=lambda i: ({"red": 0, "amber": 1, "info": 2}[i.severity], -(i.priority or 0))
-    )
+    return out, unavailable
 
 
 REVIEW_WINDOW = timedelta(days=7)  # how long a finished check stays in the bell
@@ -226,6 +243,7 @@ def forecast_items(repo, now, tz, farm, busy_days):
                 href,
             )
         ]
+    from farmcore.apps.advisor import service as advisor
     from farmcore.apps.review.service import resolve
 
     try:

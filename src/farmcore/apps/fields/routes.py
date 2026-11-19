@@ -3,8 +3,9 @@
 The panel is a shell: Farm today (`GET /fields/panel`) or one parcel's facts
 (`GET /fields/panel/parcels/{id}`, 404 outside the selected farm), then one shared fragment slot
 (`core/_fragment.html`) per section URL a visible app declares (`farm_sections`,
-`parcel_sections`), in manifest load order. Fields never imports app code; each app's endpoint
-owns its facts and its own farm scope."""
+`parcel_sections`), in manifest load order. Fields never imports app code, except crop
+protection's latest advice to colour the parcel GeoJSON, and only while it is on; each app's
+endpoint owns its facts and its own farm scope."""
 
 from __future__ import annotations
 
@@ -99,11 +100,22 @@ def _map_context(request: Request, *, freeze_farm: bool = False) -> dict:
     }
 
 
+CROP_PROTECTION = "advisor"
+
+
 def _collection(request: Request, repo: Repo) -> dict:
     settings: Settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
     tz = time_zone_of(repo.session, repo.farm_id, settings)
-    return with_card_urls(request, parcels_feature_collection(repo, now, tz=tz))
+    assessments = None
+    # Colour by crop protection's decisions only while it is on (and in the bundle).
+    if any(m.name == CROP_PROTECTION for m in visible_manifests(request)):
+        from farmcore.apps.advisor.service import latest_advice
+
+        assessments = latest_advice(repo, now, tz=tz)
+    return with_card_urls(
+        request, parcels_feature_collection(repo, now, tz=tz, assessments=assessments)
+    )
 
 
 def with_card_urls(request: Request, collection: dict) -> dict:

@@ -52,7 +52,7 @@ node --test tests/core/*.mjs tests/apps/fields/*.mjs
 ## Writing an app
 
 An app is a package under `src/farmcore/apps/<name>/` with a `manifest.py` exporting `MANIFEST`
-(`farmcore.core.manifest.Manifest`): its `depends`, consent `scopes`, `resource_scopes`,
+(`farmcore.core.manifest.Manifest`): its `depends` (and optional apps it runs `after`), consent `scopes`, `resource_scopes`,
 `routes`, `jobs`, `seed`, and what it adds to the UI (`nav`, Today `widgets`, `map_layers`, map
 panel sections, debug panels, read-only assistant `tools`), and its lifecycle: `core_api` (the
 app contract version, `CORE_API`), version `requires` on its `depends`, and an optional

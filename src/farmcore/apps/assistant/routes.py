@@ -138,7 +138,8 @@ def ask(
         and t.scope.endswith(":read")
         and (t.name != "review_assessment_status" or review_reader)
     ]
-    if any(m.name == "forecast" for m in manifests):
+    # The plan grades days with crop protection's rules: offered only with both on.
+    if {"forecast", "advisor"} <= {m.name for m in manifests}:
         tools.append(PLAN)
     has_fields = any(m.name == "fields" for m in manifests)
     parcel = mentioned_parcel(scoped, q) if has_fields else None

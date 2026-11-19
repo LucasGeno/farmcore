@@ -1,17 +1,17 @@
 """One fourteen-date weather plan; Home previews it without selecting another Best day.
+It grades days with crop protection's rules, so callers reach it only with `advisor` on.
 
 Busy dates replan treatment windows locally; stored engine evaluations remain unchanged.
 """
 
-from datetime import UTC, date, datetime, timedelta
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from farmcore.apps.advisor import service as advice
-from farmcore.apps.advisor.engine.types import ceil_hour, floor_hour
 from farmcore.apps.forecast import ranking, sources, store
-from farmcore.apps.forecast.weather import day_weather
+from farmcore.apps.forecast.weather import day_label, day_weather, utc_text
 from farmcore.core.access import ScopeDenied, ScopedRepository
 from farmcore.core.models.canonical import Farm, Parcel
+from farmcore.core.weather.hourly import ceil_hour, floor_hour
 
 DAYS = 14
 WORDS = {
@@ -45,18 +45,6 @@ def top_days(days: list[dict], count: int = 3) -> list[dict]:
     ranked = [d for d in days if d["eligible"] and d["grade"] in GRADE_ORDER]
     ranked.sort(key=lambda d: GRADE_ORDER.index(d["grade"]))  # stable: earlier date wins ties
     return sorted(ranked[:count], key=lambda d: d["day"])
-
-
-def utc_text(ts: datetime) -> str:
-    utc = ts.astimezone(UTC)
-    return f"{utc.day} {utc:%b %H:%M} UTC"
-
-
-def day_label(day: date, today: date) -> str:
-    text = f"{day:%a} {day.day} {day:%b}"
-    if day == today:
-        return f"Today · {text}"
-    return f"Tomorrow · {text}" if (day - today).days == 1 else text
 
 
 def run_info(run):
@@ -106,6 +94,8 @@ def plan_days(
     today = now.astimezone(zone).date()
     run = store.latest_run(repo, now)
     farm = repo.get(Farm, repo.farm_id, scope=store.SCOPE)
+    # Crop protection's advice and rules: callers reach the plan only with it on.
+    from farmcore.apps.advisor import service as advice
     from farmcore.apps.review.service import resolve
 
     availability = advice.current_availability(repo, now, tz)

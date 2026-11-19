@@ -47,7 +47,7 @@ def send(session_factory, settings, status: int = 200) -> None:
 
 def test_manifest_declares_the_chat_app():
     assert MANIFEST.name == "chat"
-    assert MANIFEST.depends == ("fields", "operations", "advisor")
+    assert MANIFEST.depends == ("fields", "operations")  # crop protection is optional
     assert MANIFEST.scopes == ("logs:write",)
     assert MANIFEST.nav == ("AI log", "/chat/")
 

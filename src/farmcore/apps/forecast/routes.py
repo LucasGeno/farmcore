@@ -8,7 +8,10 @@
 
 Both read the latest run issued by clock now (`store.latest_run`) and grade it with the advisor's
 own rules (`ranking.rank_days`); no run → a "No forecast loaded" note. With the app switched off
-on `/apps` (routes stay mounted until the next start) both return an empty fragment.
+on `/apps` (routes stay mounted until the next start) both return an empty fragment. Without crop
+protection (`advisor` not in the bundle, or off) the spray window and plan say they are
+unavailable, and only then import the advisor; the forecast weather (`/home-weather`) and
+Free/Busy days work without it.
 Availability is farm-scoped server state (`forecast_availability`); changing it never fetches
 weather or rewrites a stored assessment.
 """
@@ -22,9 +25,8 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from farmcore.apps.advisor import service as advice
-from farmcore.apps.advisor.navigation import parcel_link
-from farmcore.apps.forecast import availability, planning, store
+from farmcore.apps.forecast import availability, store
+from farmcore.apps.forecast.weather import day_label, utc_text
 from farmcore.core.access import Repo, has_farm_membership, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.farm_location import time_zone_of
@@ -32,19 +34,24 @@ from farmcore.core.models.canonical import Parcel
 from farmcore.core.models.kernel import ClockState
 from farmcore.core.registry import visible_manifests
 from farmcore.core.routes_farms import safe_next
-from farmcore.web import render
+from farmcore.web import app_is_on, render, render_needs_app
 
 router = APIRouter()
 
 APP = "forecast"
 PARCEL_SCOPE = "fields:read"
+CROP_PROTECTION = "advisor"
 
 
-_utc_text = planning.utc_text
-_day_label = planning.day_label
+def _spray_window_unavailable(request: Request, *, page: bool = False) -> HTMLResponse | None:
+    if app_is_on(request, CROP_PROTECTION):
+        return None
+    return render_needs_app(request, "Spray window", CROP_PROTECTION, "Crop protection", page=page)
 
 
 def _plan_view(request: Request, repo: Repo, *, sulphur=False):
+    from farmcore.apps.forecast import planning
+
     settings = request.app.state.settings
     tz = time_zone_of(repo.session, repo.farm_id, settings)
     now = get_clock(repo.session, settings).now()
@@ -58,6 +65,8 @@ def _plan_view(request: Request, repo: Repo, *, sulphur=False):
 
 def _plan_selected(request: Request, repo: Repo, day: str | None) -> dict[str, Any]:
     """The shared plan, its best weather, and the selected day (best by default)."""
+    from farmcore.apps.advisor.navigation import parcel_link
+
     view = _plan_view(request, repo)
     selected = None
     if day:
@@ -93,6 +102,8 @@ def _window(
     sulphur: bool = False,
     top: bool = False,
 ) -> dict[str, Any]:
+    from farmcore.apps.forecast import planning
+
     view = _plan_view(request, repo, sulphur=sulphur)
     preview = (
         planning.top_days(view["days"], 3)
@@ -160,6 +171,10 @@ def parcel_window(parcel_id: int, request: Request, repo: Repo) -> HTMLResponse:
         return HTMLResponse("")
     if repo.get(Parcel, parcel_id, scope=PARCEL_SCOPE) is None:
         raise HTTPException(status_code=404, detail=f"parcel {parcel_id} not found")
+    if (unavailable := _spray_window_unavailable(request)) is not None:
+        return unavailable
+    from farmcore.apps.advisor import service as advice
+
     settings = request.app.state.settings
     now = get_clock(repo.session, settings).now()
     latest = advice.latest_advice(
@@ -194,6 +209,8 @@ def parcel_window(parcel_id: int, request: Request, repo: Repo) -> HTMLResponse:
 def today_window(request: Request, repo: Repo) -> HTMLResponse:
     if _off(request):
         return HTMLResponse("")
+    if (unavailable := _spray_window_unavailable(request)) is not None:
+        return unavailable
     return render(
         request,
         "forecast/_window.html",
@@ -221,7 +238,7 @@ def home_weather(request: Request, repo: Repo) -> HTMLResponse:
     days = [
         {
             "day": day.isoformat(),
-            "label": _day_label(day, today),
+            "label": day_label(day, today),
             **day_weather(run, day, tz),
         }
         for day in (today + timedelta(days=i) for i in range(5))
@@ -233,8 +250,8 @@ def home_weather(request: Request, repo: Repo) -> HTMLResponse:
         days=days,
         run=run,
         freshness=store.freshness(repo, now),
-        issued=_utc_text(run.issued_at) if run else None,
-        available=_utc_text(run.available_at) if run else None,
+        issued=utc_text(run.issued_at) if run else None,
+        available=utc_text(run.available_at) if run else None,
     )
 
 
@@ -242,6 +259,8 @@ def home_weather(request: Request, repo: Repo) -> HTMLResponse:
 def plan_page(request: Request, repo: Repo, day: str | None = None) -> HTMLResponse:
     if _off(request):
         raise HTTPException(status_code=404, detail="Plan is not enabled.")
+    if (unavailable := _spray_window_unavailable(request, page=True)) is not None:
+        return unavailable
     return render(request, "forecast/plan.html", **_plan_selected(request, repo, day))
 
 
@@ -249,4 +268,6 @@ def plan_page(request: Request, repo: Repo, day: str | None = None) -> HTMLRespo
 def plan_fragment(request: Request, repo: Repo, day: str | None = None) -> HTMLResponse:
     if _off(request):
         return HTMLResponse("")
+    if (unavailable := _spray_window_unavailable(request)) is not None:
+        return unavailable
     return render(request, "forecast/_plan_days.html", **_plan_selected(request, repo, day))

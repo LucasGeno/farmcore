@@ -8,6 +8,18 @@ from farmcore.apps.forecast.store import StoredRun
 HOUR = timedelta(hours=1)
 
 
+def utc_text(ts: datetime) -> str:
+    utc = ts.astimezone(UTC)
+    return f"{utc.day} {utc:%b %H:%M} UTC"
+
+
+def day_label(day: date, today: date) -> str:
+    text = f"{day:%a} {day.day} {day:%b}"
+    if day == today:
+        return f"Today · {text}"
+    return f"Tomorrow · {text}" if (day - today).days == 1 else text
+
+
 def day_weather(run: StoredRun | None, day: date, tz: str) -> dict:
     zone = ZoneInfo(tz)
     start = datetime.combine(day, time(), zone).astimezone(UTC)

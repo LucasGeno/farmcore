@@ -1,18 +1,22 @@
 """Engine data shapes: hourly observations in, sprays in, explained advice out.
 
-All timestamps are timezone-aware: `HourlyObs` and `Spray` raise `ValueError` on a naive `ts` and
-hold it in UTC. `HourlyObs.rr1_mm` is the rain in the hour ending at `ts` (Météo-France RR1);
-`None` means the value is missing, never zero. `Spray.products` and `ProductRef.targets` accept
-any sequence (a list from a log mapping is fine) and are held as tuples, so the shapes stay
-frozen and hashable.
+All timestamps are timezone-aware: `HourlyObs` (core's shared hourly weather shape,
+`core/weather/hourly.py`, re-exported here) and `Spray` raise `ValueError` on a naive `ts` and
+hold it in UTC. `Spray.products` and `ProductRef.targets` accept any sequence (a list from a log
+mapping is fine) and are held as tuples, so the shapes stay frozen and hashable.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from typing import Any, Literal
+
+from farmcore.core.weather.hourly import HourlyObs as HourlyObs
+from farmcore.core.weather.hourly import aware_utc as aware_utc
+from farmcore.core.weather.hourly import ceil_hour as ceil_hour
+from farmcore.core.weather.hourly import floor_hour as floor_hour
 
 Decision = Literal["spray", "wait", "protected", "none"]
 ProductType = Literal["contact", "penetrant"]
@@ -23,35 +27,6 @@ WASHED_OFF: Flag = "washed_off"
 EXPIRED: Flag = "expired"
 DATA_GAP: Flag = "data_gap"
 REPLAY_FORECAST: Flag = "replay_forecast"
-
-
-def aware_utc(ts: datetime, what: str) -> datetime:
-    """`ts` in UTC; a naive `ts` is a `ValueError` naming `what`."""
-    if ts.tzinfo is None or ts.utcoffset() is None:
-        raise ValueError(f"{what} must be timezone-aware, got naive {ts.isoformat()}")
-    return ts.astimezone(UTC)
-
-
-def floor_hour(ts: datetime) -> datetime:
-    """`ts` floored to the hour (region UTC offsets are whole hours)."""
-    return ts.replace(minute=0, second=0, microsecond=0)
-
-
-def ceil_hour(ts: datetime) -> datetime:
-    floor = floor_hour(ts)
-    return floor if floor == ts else floor + timedelta(hours=1)
-
-
-@dataclass(frozen=True, slots=True)
-class HourlyObs:
-    ts: datetime
-    rr1_mm: float | None = None
-    t_c: float | None = None
-    rh_pct: float | None = None
-    ff_kmh: float | None = None
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "ts", aware_utc(self.ts, "HourlyObs.ts"))
 
 
 @dataclass(frozen=True, slots=True)
