@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from farmcore.core.models.canonical import Log
+from farmcore.core.models.drafts import Draft
 from tests.apps.advisor import scenes
 
 manifests, seeded, step = scenes.manifests, scenes.seeded, scenes.step
@@ -95,7 +96,8 @@ def test_web_spray_log_asks_only_for_missing_fields_then_confirms(client, sessio
     body = first.json()
     assert body["kind"] == "clarify"
     assert body["text"].startswith("How much"), body["text"]
-    assert not session.scalars(select(Log).where(Log.status == "pending")).all()
+    [asking] = session.scalars(select(Draft)).all()  # the clarification is the open draft
+    assert (asking.status, asking.payload["missing"]) == ("open", ["dose"])
 
     body = _say(client, "2 kg per hectare").json()
     assert body["kind"] == "draft", body
@@ -103,13 +105,14 @@ def test_web_spray_log_asks_only_for_missing_fields_then_confirms(client, sessio
     assert "Checks:" in body["text"]
     [confirm, cancel] = body["actions"]
     assert confirm["label"].endswith("Confirm") and cancel["label"].endswith("Cancel")
-    [pending] = session.scalars(select(Log).where(Log.status == "pending")).all()
-    assert pending.sources[0].external_key.startswith("web:")
+    draft = session.get(Draft, body["draft_id"])
+    assert (draft.status, draft.actor) == ("open", "operator")
+    assert ("Review draft", f"/drafts/{draft.id}?farm={draft.farm_id}") in map(tuple, body["links"])
 
     done = client.post("/assistant/confirm", data={"action": confirm["action"]}).json()
     assert done["text"].startswith("✅ Logged"), done["text"]
     session.expire_all()
-    assert session.get(Log, pending.id).status == "done"
+    assert session.get(Draft, draft.id).status == "confirmed"
     # The read tools see the new record at once, in the same panel conversation.
     after = _say(client, "Which parcels did I spray?").json()
     assert "P5 Les Granges" in after["text"]
@@ -129,7 +132,7 @@ def test_web_message_still_answers_questions_and_cancel_clears_the_draft(
     # The open clarification survives a question and is then cancelled.
     assert _say(client, "cancel").json()["text"].startswith("❌ Cancelled")
     assert _say(client, "P5").json().get("kind") != "draft"
-    assert not session.scalars(select(Log).where(Log.status == "pending")).all()
+    assert {d.status for d in session.scalars(select(Draft))} == {"cancelled"}
 
 
 def test_only_the_signed_in_farmer_can_log_from_the_web(client, session, seeded, step):
@@ -140,26 +143,44 @@ def test_only_the_signed_in_farmer_can_log_from_the_web(client, session, seeded,
     body = _ask(client, "I sprayed P5 with copper 2 kg at 6")
     assert body["tool"] is None
     assert "Telegram" in body["text"]
-    assert not session.scalars(select(Log).where(Log.status == "pending")).all()
+    assert session.scalars(select(Draft)).all() == []
     client.cookies.clear()
     action = _say(client, "P5 copper 2 kg at 6").json()["actions"][0]["action"]
     client.cookies.set("farmcore_tour", "1")
     assert client.post("/assistant/confirm", data={"action": action}).status_code == 403
 
 
-def test_web_confirm_refuses_a_telegram_chats_draft(client, session, seeded, step):
+def test_a_telegram_chats_draft_is_confirmed_by_the_farm_owner_on_the_web(
+    client, session, seeded, step
+):
+    """The operator who owns the chat's farm reviews the chat's draft on `/drafts/<id>`, and
+    that confirm saves the spray's station weather as the chat confirm does."""
+    from farmcore.apps.chat.dto import Callback
     from farmcore.apps.chat.extractor import RegexExtractor
-    from farmcore.apps.chat.handlers import ChatDeps, on_message
-    from tests.apps.chat.test_handlers import voice
+    from farmcore.apps.chat.handlers import ChatDeps, on_callback, on_message
+    from farmcore.apps.operations.spray_weather import NAMESPACE
+    from tests.apps.chat.test_handlers import CHAT, voice
 
     seeded("B")
     step("2024-04-10 06:00")
     deps = ChatDeps(client.app.state.session_factory, RegexExtractor(), client.app.state.settings)
     telegram = on_message(deps, voice("P5 copper 2 kg at 6", 900))
-    action = telegram.buttons[0][1]
-    body = client.post("/assistant/confirm", data={"action": action}).json()
-    assert "no longer exists" in body["text"]
-    assert session.scalars(select(Log).where(Log.status == "pending")).all()
+    draft = session.scalar(select(Draft).where(Draft.actor == f"chat:{CHAT}"))
+    page = client.get(f"/drafts/{draft.id}?farm={draft.farm_id}")
+    assert page.status_code == 200
+
+    confirm = client.post(
+        f"/drafts/{draft.id}/confirm?farm={draft.farm_id}",
+        data={"revision": draft.revision},
+        follow_redirects=False,
+    )
+
+    assert confirm.status_code == 303
+    session.expire_all()
+    [log] = session.scalars(select(Log).where(Log.id == session.get(Draft, draft.id).result_id))
+    assert NAMESPACE in log.sources[0].raw_payload  # the weather capture ran on this path too
+    tap = on_callback(deps, Callback(chat_id=CHAT, data=telegram.buttons[0][1]))
+    assert tap.text == "This spray is already logged."
 
 
 def test_no_model_farm_questions_never_reach_the_model(client, session, seeded, step):

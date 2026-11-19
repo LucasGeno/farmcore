@@ -1,4 +1,5 @@
-"""From a farm and a message to an `ExtractRequest`, and from a draft to a checked spray.
+"""From a farm and a message to an `ExtractRequest`, and from an extracted operation to a checked
+record.
 
 Reads go through a `ScopedRepository` bound to the chat's farm. The request carries the
 farm's parcels (alias + name), the product shortlist and the clock's local date and time, so a
@@ -143,11 +144,13 @@ Checked = CheckedSpray | CheckedIrrigation | CheckedObservation
 
 
 class Unclear(ValueError):
-    """The draft cannot become a log; `reply` asks the farmer for what is missing."""
+    """The draft cannot become a log; `reply` asks the farmer for what is missing, and
+    `missing` names it (a `operations.drafts.Missing` value; None when no record type fits)."""
 
-    def __init__(self, reply: str) -> None:
+    def __init__(self, reply: str, missing: str | None = None) -> None:
         super().__init__(reply)
         self.reply = reply
+        self.missing = missing
 
 
 def _dropped(notes: list[str], prefix: str) -> list[str]:
@@ -192,16 +195,17 @@ def _checked_parcels(draft: DraftOperation, ctx: FarmContext, kind: str) -> list
     if unknown:
         raise Unclear(
             f"I don't know parcel {', '.join(dict.fromkeys(unknown))}. "
-            f"{_parcel_list(ctx)} {_parcel_question(kind)}"
+            f"{_parcel_list(ctx)} {_parcel_question(kind)}",
+            "parcel",
         )
     parcels = list(dict.fromkeys(by_alias[fold(a)] for a in draft.parcels))
     if not parcels:
-        raise Unclear(f"{_parcel_question(kind)} {_parcel_list(ctx)}")
+        raise Unclear(f"{_parcel_question(kind)} {_parcel_list(ctx)}", "parcel")
     return parcels
 
 
 def _when_question(kind: str) -> str:
-    said = "observe this" if kind == "observation" else "irrigate"
+    said = {"observation": "observe this", "irrigate": "irrigate"}.get(kind, "spray")
     return (
         f"When did you {said}? Say the date and time, "
         'for example "this morning" or "yesterday at 6".'
@@ -211,9 +215,9 @@ def _when_question(kind: str) -> str:
 def _checked_ts(
     draft: DraftOperation, ctx: FarmContext, notes: list[str], kind: str = "spray"
 ) -> datetime:
-    if draft.ts_start is None and kind in ("irrigate", "observation"):
-        raise Unclear(_when_question(kind))
-    ts = draft.ts_start or ctx.now_local
+    if draft.ts_start is None:  # never an assumed date (R4)
+        raise Unclear(_when_question(kind), "date")
+    ts = draft.ts_start
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=ctx.tz)
     if ts > ctx.now_utc:  # a draft never starts after the clock's now
@@ -234,11 +238,12 @@ def _check_spray(draft: DraftOperation, ctx: FarmContext) -> CheckedSpray:
     if unknown_products:
         raise Unclear(
             f"I don't know the product {', '.join(dict.fromkeys(unknown_products))}. "
-            f"{_product_list(ctx)}"
+            f"{_product_list(ctx)}",
+            "product",
         )
     products = list(dict.fromkeys(by_name[fold(n)] for n in draft.products))
     if not products:
-        raise Unclear(f"Which product did you spray? {_product_list(ctx)}")
+        raise Unclear(f"Which product did you spray? {_product_list(ctx)}", "product")
 
     rates = []
     if draft.product_doses:
@@ -246,16 +251,21 @@ def _check_spray(draft: DraftOperation, ctx: FarmContext) -> CheckedSpray:
         for product in products:
             dose = named.get(product.name)
             if dose is None:
-                raise Unclear(f"How much {product.name} did you use? Give its dose per hectare.")
+                raise Unclear(
+                    f"How much {product.name} did you use? Give its dose per hectare.", "dose"
+                )
             if dose.unit not in DOSE_UNITS or not DOSE_MIN <= dose.value <= DOSE_MAX:
-                raise Unclear(f"Please repeat the dose per hectare for {product.name}.")
+                raise Unclear(f"Please repeat the dose per hectare for {product.name}.", "dose")
             rates.append((product, dose.value, dose.unit))
     if not rates and (draft.dose_value is None or draft.dose_unit not in DOSE_UNITS):
-        raise Unclear('How much did you use? Say the dose per hectare, for example "2 kg/ha".')
+        raise Unclear(
+            'How much did you use? Say the dose per hectare, for example "2 kg/ha".', "dose"
+        )
     if not rates and not DOSE_MIN <= draft.dose_value <= DOSE_MAX:
         raise Unclear(
             f"A dose of {draft.dose_value:g} {draft.dose_unit} looks wrong. "
-            f"I expect {DOSE_MIN:g} to {DOSE_MAX:g} kg/ha or L/ha. Please say it again."
+            f"I expect {DOSE_MIN:g} to {DOSE_MAX:g} kg/ha or L/ha. Please say it again.",
+            "dose",
         )
 
     if not rates:
@@ -283,16 +293,20 @@ def _check_irrigation(draft: DraftOperation, ctx: FarmContext) -> CheckedIrrigat
     if value is None or not value.is_finite() or value <= 0 or not unit:
         raise Unclear(
             "How much water, and in which unit? Say the amount with mm, m3 or L, "
-            'for example "20 mm".'
+            'for example "20 mm".',
+            "amount" if value is None or not value.is_finite() or value <= 0 else "unit",
         )
     if unit not in IRRIGATION_UNITS:
         raise Unclear(
             "I only record irrigation in mm, m3 or L. Say the amount with one of those units, "
-            "as it was entered."
+            "as it was entered.",
+            "unit",
         )
     basis = (draft.basis or "").strip().casefold() or None
     if basis is not None and basis not in IRRIGATION_BASES:
-        raise Unclear('Was that gross or net? Say "gross" or "net"; I never assume an efficiency.')
+        raise Unclear(
+            'Was that gross or net? Say "gross" or "net"; I never assume an efficiency.', "basis"
+        )
     return CheckedIrrigation(
         parcels=parcels,
         amount_value=value,
@@ -309,7 +323,7 @@ def _check_observation(draft: DraftOperation, ctx: FarmContext) -> CheckedObserv
     parcels = _checked_parcels(draft, ctx, "observation")
     text = (draft.observation or "").strip()[:MAX_OBSERVATION_CHARS]
     if not text:
-        raise Unclear("What did you observe? Describe what you saw, and on which parcel.")
+        raise Unclear("What did you observe? Describe what you saw, and on which parcel.", "text")
     return CheckedObservation(
         parcels=parcels,
         text=text,

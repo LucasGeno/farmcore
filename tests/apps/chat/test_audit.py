@@ -19,9 +19,9 @@ from farmcore.apps.chat.extractor import (
     VertexExtractor,
 )
 from farmcore.apps.chat.handlers import on_message
-from farmcore.core.models.canonical import LlmAudit, Log
+from farmcore.core.models.canonical import LlmAudit
 from farmcore.settings import Settings
-from tests.apps.chat.test_handlers import SPEC_SENTENCE, deps, seed_farm, voice
+from tests.apps.chat.test_handlers import SPEC_SENTENCE, deps, drafts_of, seed_farm, voice
 
 RECORD = AuditRecord(
     adapter="vertex",
@@ -125,8 +125,8 @@ def test_vertex_call_through_the_handler_writes_one_audit_row_with_only_the_payl
     ]
     assert {p["name"] for p in payload["products"]} == {"Copper Shield 20 WP", "Sulfo Jet 80 WG"}
     assert not {"inlineData", "inline_data", "fileData", "audio"} & set(walk(row.request_body))
-    [log] = list(session.scalars(select(Log)))
-    assert log.sources[0].raw_payload["adapter"] == "vertex"
+    [draft] = drafts_of(session)
+    assert draft.payload["capture"]["adapter"] == "vertex"
 
 
 def test_vertex_failure_is_audited_and_the_regex_fallback_still_logs(
@@ -139,7 +139,7 @@ def test_vertex_failure_is_audited_and_the_regex_fallback_still_logs(
 
     [row] = rows(session)
     assert (row.status, row.error) == ("500", "HTTP 500")
-    [log] = list(session.scalars(select(Log)))
-    assert log.sources[0].raw_payload["adapter"] == "regex"
-    assert "fallback: regex (HTTP 500)" in log.sources[0].raw_payload["notes"]
+    [draft] = drafts_of(session)
+    assert draft.payload["capture"]["adapter"] == "regex"
+    assert "fallback: regex (HTTP 500)" in draft.payload["capture"]["notes"]
     assert "I used the simple one. Please check the details." in out.text

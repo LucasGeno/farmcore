@@ -389,8 +389,9 @@ class DraftKind:
 
     - validator: ``(session, farm_id, payload: dict) -> dict``, the normalised payload; raises
       ``ValueError`` with a farmer-readable reason.
-    - confirm: ``(session, draft, *, actor: str, now: datetime) -> tuple[str, int]``, the record's
-      model and id; raises ``ValueError`` when the draft can no longer be recorded.
+    - confirm: ``(session, draft, *, actor: str, now: datetime, services: dict) -> tuple[str,
+      int]``, the record's model and id; raises ``ValueError`` when the draft can no longer be
+      recorded. ``services`` holds the caller's composed readers (``spray_weather_reader``).
     - review: a fragment URL, loaded with ``?draft=<id>``.
     """
 

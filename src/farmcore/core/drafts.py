@@ -8,7 +8,9 @@ record. "Draft" (not yet confirmed) is distinct from "planned" (planned work).
 - **Scope.** A draft is visible only on its farm, and only to the principal that proposed it; a
   draft an agent proposed (`token:<id>`) is reviewed by the owner who issued that token, stored on
   the draft at propose time (`reviewer_identity_id`; the token's grant must be on the draft's
-  farm). Anyone else gets `DraftNotFound` (a 404), so a numeric id alone grants nothing.
+  farm). A Telegram chat's draft (`chat:<id>`) is also reviewed on the web by the operator,
+  the owner of the farm the chat is linked to (`/start` links chats to the installation's farm).
+  Anyone else gets `DraftNotFound` (a 404), so a numeric id alone grants nothing.
 - **Agents only propose.** A `token:<id>` actor may read its own draft but never confirm, cancel
   or edit it (`DraftForbidden`): confirmation is the farmer's action in FarmCore.
 - **Confirm and cancel** run under the farm's operations lock (`logs.lock_farm`) and a row lock,
@@ -51,6 +53,8 @@ MAX_PAYLOAD_BYTES = 64_000
 # Provenance is copied onto the confirmed record's `log_source`; keep it a receipt, not a file.
 MAX_PROVENANCE_BYTES = 8_000
 TOKEN = "token"
+CHAT = "chat"
+OPERATOR = "operator"
 
 
 class DraftError(Exception):
@@ -205,6 +209,8 @@ def _token_issuer(session: Session, farm_id: int, actor: str) -> int | None:
 def reviewers(draft: Draft) -> set[str]:
     """The actors who may open `draft` (a token only reads; see `_load`)."""
     allowed = {draft.actor}
+    if draft.actor.partition(":")[0] == CHAT:
+        allowed.add(OPERATOR)
     if draft.reviewer_identity_id is not None:
         allowed.add(f"identity:{draft.reviewer_identity_id}")
     return allowed
@@ -266,8 +272,10 @@ def revise(
     actor: str,
     payload: dict[str, Any],
     revision: int,
+    ttl: timedelta | None = None,
 ) -> Draft:
-    """Replace an open draft's payload (validated again) and bump its revision."""
+    """Replace an open draft's payload (validated again) and bump its revision; `ttl` also
+    restarts its expiry (a conversation's draft lives a while after its last turn)."""
     draft = _load(session, farm_id, draft_id, actor, lock=True)
     if draft.status != "open":
         raise DraftClosed("Only an open draft can be edited.")
@@ -276,6 +284,10 @@ def revise(
         raise problem
     draft.payload = _validated(session, manifests, farm_id, draft.kind, payload)
     draft.revision += 1
+    if ttl is not None:
+        if not timedelta(0) < ttl <= MAX_TTL:
+            raise DraftInvalid("A draft expires within 30 days.")
+        draft.expires_at = wall_now() + ttl
     session.flush()
     return draft
 
@@ -289,11 +301,13 @@ def confirm(
     actor: str,
     revision: int,
     now: datetime,
+    services: dict[str, Any] | None = None,
 ) -> tuple[Draft, bool]:
     """Record the draft through its kind's confirm service; returns `(draft, recorded_now)`.
 
     A draft already confirmed returns `(draft, False)` with its record unchanged, so a retried
-    or concurrent confirm never records twice. `now` is the farm clock, for the record."""
+    or concurrent confirm never records twice. `now` is the farm clock, for the record;
+    `services` (the process's composed readers, e.g. saved spray weather) go to the kind."""
     draft = _load(session, farm_id, draft_id, actor, lock=True)
     if draft.status == "confirmed":
         return draft, False
@@ -302,7 +316,7 @@ def confirm(
         raise problem
     service = import_string(_kind(manifests, draft.kind).confirm or "")
     try:
-        model, record_id = service(session, draft, actor=actor, now=now)
+        model, record_id = service(session, draft, actor=actor, now=now, services=services or {})
     except ValueError as exc:
         raise DraftInvalid(str(exc)) from exc
     draft.status = "confirmed"

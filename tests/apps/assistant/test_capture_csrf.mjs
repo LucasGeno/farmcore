@@ -41,7 +41,7 @@ function fixture({ messageUrl = '/assistant/message?farm=7', nonce = 'session-bo
     fetch: fetchImpl || (async (url, options) => {
       calls.push({ url: new URL(url), options });
       return { ok: true, json: async () => calls.length === 1
-        ? { kind: 'draft', text: 'Preview', actions: [{ label: 'Confirm', action: 'confirm:42' }] }
+        ? { kind: 'draft', text: 'Preview', actions: [{ label: 'Confirm', action: 'confirm:42:1' }] }
         : { kind: 'done', text: '✅ Logged', links: [] } };
     }) });
   return { ids, calls, submit: () => ids['assistant-form'].listeners.submit({ preventDefault() {} }),
@@ -64,7 +64,7 @@ test('member message and confirmation send the existing nonce with same-origin c
     assert.equal(call.url.href.includes('session-bound-nonce'), false);
   }
   assert.equal(f.calls[0].options.body.get('q'), 'I sprayed P1 copper 2 kg this morning');
-  assert.equal(f.calls[1].options.body.get('action'), 'confirm:42');
+  assert.equal(f.calls[1].options.body.get('action'), 'confirm:42:1');
 });
 
 test('a foreign mutation URL receives neither the nonce nor a request', async () => {
@@ -81,7 +81,7 @@ test('a retried submission reuses its request key; a new submission gets a new o
     calls.push({ url: new URL(url), options });
     if (fail) { fail = false; throw new Error('network down'); }
     return { ok: true, json: async () => (
-      { kind: 'draft', text: 'Preview', actions: [{ label: 'Confirm', action: 'confirm:42' }] }
+      { kind: 'draft', text: 'Preview', actions: [{ label: 'Confirm', action: 'confirm:42:1' }] }
     ) };
   } });
   f.submit(); await f.settle();

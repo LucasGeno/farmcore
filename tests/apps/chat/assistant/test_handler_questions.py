@@ -1,6 +1,6 @@
 """The question branch of `handlers.on_message`: the four demo questions are answered offline by
 the keyword fallback over the apps' tools, with "Open card" URL buttons, and nothing is logged.
-A spray sentence still becomes a pending log echoed with ✅ / ❌.
+A spray sentence still becomes a draft echoed with ✅ / ❌.
 
 Real seeds (Scene B) and real manifests, replayed to 10 Apr 2024 06:00 with P5 and P6 sprayed at
 05:30 and confirmed (the hero loop's state after ✅)."""
@@ -14,7 +14,8 @@ from farmcore.apps.chat.dto import Incoming
 from farmcore.apps.chat.extractor import RegexExtractor
 from farmcore.apps.chat.handlers import ChatDeps, on_message
 from farmcore.core import jobs
-from farmcore.core.models.canonical import AccessLog, Advice, Log, Parcel
+from farmcore.core.models.canonical import AccessLog, Advice, Parcel
+from farmcore.core.models.drafts import Draft
 from farmcore.core.models.kernel import AppModule
 from tests.apps.advisor import scenes
 from tests.apps.advisor.scenes import confirm_spray, local
@@ -72,7 +73,9 @@ def headline(session, alias: str) -> str:
 
 
 def pending(session) -> int:
-    return session.scalar(select(func.count()).select_from(Log).where(Log.status == "pending"))
+    """Complete drafts awaiting ✅ (a clarifying question leaves an incomplete one)."""
+    rows = session.scalars(select(Draft).where(Draft.status == "open"))
+    return sum(1 for draft in rows if not draft.payload.get("missing"))
 
 
 def assistant_rows(session) -> int:
@@ -164,7 +167,7 @@ def test_without_tools_a_question_is_not_answered(session, hero, deps):
     assert out.text.startswith("I can't answer that yet")
 
 
-def test_the_demo_spray_sentence_still_drafts_a_pending_log(session, hero, deps):
+def test_the_demo_spray_sentence_still_drafts_a_record(session, hero, deps):
     out = on_message(deps, voice(SPEC_SENTENCE, message_id=9))
 
     assert pending(session) == 1
@@ -183,14 +186,6 @@ def test_on_a_local_base_url_the_links_go_in_the_text(session, hero, settings, d
         "Open card P6: "
         f"http://localhost:8000/advisor/parcels/{parcel_id(session, 'P6')}?farm={farm_id}"
     )
-
-
-def test_a_spray_that_reads_like_a_question_still_drafts_a_pending_log(session, hero, deps):
-    out = on_message(deps, voice("I sprayed P1 with copper at 2 kg, is that ok?", message_id=11))
-
-    assert out.text.splitlines()[0].endswith("— confirm?")
-    assert pending(session) == 1
-    assert [label for label, _ in out.buttons] == ["✅ Confirm", "❌ Cancel"]
 
 
 def test_a_spray_with_a_rising_question_mark_takes_the_log_path(session, hero, deps):
@@ -312,13 +307,14 @@ def test_an_inverted_question_never_reaches_the_extractor(session, hero, deps, q
 @pytest.mark.parametrize(
     "report",
     [
-        "I sprayed P1 with copper at 2 kg, is that ok?",
-        "We have treated Le Plateau with copper, 2 kg",
-        "J'ai traité Le Plateau à la bouillie bordelaise, 2 kilos par hectare",
+        "I sprayed P1 with copper at 2 kg this morning, is that ok?",
+        "We have treated Le Plateau with copper, 2 kg, this morning",
+        "J'ai traité Le Plateau à la bouillie bordelaise, 2 kilos par hectare, ce matin",
     ],
 )
 def test_a_completed_report_with_a_check_still_drafts_a_log(session, hero, deps, report):
     out = on_message(deps, text(report, message_id=21))
 
-    assert out.buttons  # the ✅/❌ draft
+    assert out.text.splitlines()[0].endswith("— confirm?"), out.text
+    assert [label for label, _ in out.buttons] == ["✅ Confirm", "❌ Cancel"]
     assert pending(session) == 1

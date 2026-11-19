@@ -394,7 +394,9 @@ def create_pending_once(
     name: str | None = None,
     source_app: str = DEFAULT_SOURCE_APP,
 ) -> tuple[Log, bool]:
-    """A pending log awaiting confirmation, and whether this call created it.
+    """A pending log awaiting confirmation, and whether this call created it. Only a draft
+    confirm (`operations.drafts`) creates one, and confirms or rolls it back in the same
+    transaction: a draft is the one pre-confirm state.
 
     `True` means the source was already held (a replay or a concurrent duplicate): the existing
     draft is returned unchanged, and the caller must not write to it."""

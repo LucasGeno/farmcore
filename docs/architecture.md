@@ -90,7 +90,7 @@ server (faster-whisper). With `EXTRACTOR=vertex`, the transcript, parcel aliases
 shortlist and the date go to Vertex AI `gemini-2.5-flash` on a regional EU endpoint
 (`europe-west4` by default). The model returns a draft entry; the rules decide the advice and
 the farmer confirms every entry. A clarification additionally sends the unfinished draft and up
-to six recent turns from the same farm/chat (15-minute expiry). If the call fails, the local
+to six recent turns from the same farm/chat (kept on the open draft, 15-minute expiry). If the call fails, the local
 regex parser takes over. Every call is logged with its exact payload (administrator view of
 `/chat/`; visitors see a sanitised summary).
 
@@ -118,8 +118,8 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 - A plain `observation` table (a TimescaleDB hypertable has the same schema).
 - One administrator per installation: grants show the consent model but are not yet
   authenticated multi-tenant access.
-- Assistant context is one expiring draft plus a few recent turns, kept in process: no vector
-  store, long-term memory or multi-step agent loop.
+- Assistant context is one expiring draft plus a few recent turns, kept on that draft: no
+  vector store, long-term memory or multi-step agent loop.
 
 
 ### Live weather receipts
@@ -195,18 +195,22 @@ from an app's `draft_kinds`, the payload that kind validated, provenance (source
 a wall-clock expiry (seven days by default, an assumed product choice).
 
 - Only the proposing principal sees a draft; an agent's draft is reviewed by the owner who
-  issued its token (stored on the draft when it is proposed; the token must be for that farm).
+  issued its token (stored on the draft when it is proposed; the token must be for that farm),
+  and a Telegram chat's draft also by the operator, who owns the farm the chat is linked to.
   Anyone else, and any other farm, gets a 404. An agent token never confirms, cancels or edits.
 - Confirm runs the kind's app-owned confirm service under the farm's operations lock and a row
   lock: retried and concurrent confirms record once and return the same record. A stale revision
   or an expired draft is refused with the reason. Cancel is idempotent.
 - The Records app's kinds (`spray`, `irrigation`, `observation`) write through `core/logs.py`
-  (a pending log created and confirmed in one transaction, so the merge rule applies as in
-  chat) and keep the draft id, both actors and the provenance on the record's `log_source`.
+  (a pending log created and confirmed in one transaction, so the merge rule applies on every
+  path) and keep the draft id, both actors and the provenance on the record's `log_source`. A
+  confirmed spray saves its own station weather there, whichever path confirmed it.
+- Chat and the web assistant propose here too (actor `chat:<id>`, or the signed-in member), so
+  a draft is the only pre-confirm state and no committed `log` is pending. An incomplete
+  capture is an open draft that names what it still misses (parcel, date, product, dose,
+  amount, unit, basis, text) and is never previewed with a guessed value; each clarification
+  turn revises it, and it expires 15 minutes after its last turn. Telegram's ✅ / ❌ carry the
+  draft id and the revision the farmer saw, and confirm through the same service as
+  `/drafts/<id>`; the web panel's draft answer links there.
 - `drafts.expire` (every 15 minutes, wall time) marks open drafts past their expiry. A restored
   copy loads drafts as farm data; drafts that expired meanwhile are refused at once.
-
-Not yet moved onto drafts: the chat and web-assistant capture still keep their pre-confirm state
-as a pending `log` and their clarifications in `farm.props["clarifications"]`. The follow-up
-"Move chat and assistant capture onto drafts" removes both, so there is one pre-confirm state;
-until then no other entry path commits a pending `log`.

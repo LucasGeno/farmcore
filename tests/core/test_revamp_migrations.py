@@ -661,3 +661,100 @@ def test_job_completion_downgrade_refuses_completed_history_then_round_trips(scr
         command.check(cfg)
     finally:
         engine.dispose()
+
+
+def test_chat_pending_logs_become_drafts_and_clarifications_are_cleared_with_counts(
+    scratch_db_url, caplog
+):
+    """Upgrade of a DB holding pending logs and live clarifications: the chat capture becomes an
+    open draft its chat can confirm, any other pending log an expired draft with the same data,
+    the clarification is cleared, the counts are reported and no committed log is pending."""
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "core_0010")
+    engine = create_engine(scratch_db_url)
+    try:
+        with engine.begin() as db:
+            first, _, args = _planning_fixture(db)
+            parcel = db.execute(text("SELECT id FROM parcel")).scalar_one()
+            product = args["product_id"]
+            db.execute(
+                text(
+                    "UPDATE farm SET props = CAST(:props AS jsonb) WHERE id = :farm",
+                ),
+                {
+                    "farm": first,
+                    "props": json.dumps(
+                        {
+                            "chat": {
+                                "telegram_chat_ids": [42],
+                                "clarifications": {"42": {"draft": {}, "history": []}},
+                            }
+                        }
+                    ),
+                },
+            )
+            logs = {}
+            for key, source_type in (
+                ("tg:42:7", "voice"),
+                ("web:farmer:9", "voice"),  # the shared web panel, before member capture
+                ("receipt-1", "isoxml"),
+            ):
+                logs[key] = db.execute(
+                    text(
+                        "INSERT INTO log(farm_id,type,status,name,ts_start) VALUES "
+                        "(:farm,'spray','pending','x','2024-04-10T05:00:00+02:00') RETURNING id"
+                    ),
+                    {"farm": first},
+                ).scalar_one()
+                db.execute(
+                    text("INSERT INTO log_parcel(log_id,parcel_id) VALUES (:log,:parcel)"),
+                    {"log": logs[key], "parcel": parcel},
+                )
+                db.execute(
+                    text(
+                        "INSERT INTO quantity(log_id,measure,value,unit,product_id,label) "
+                        "VALUES (:log,'rate',2,'kg/ha',:product,'Copper')"
+                    ),
+                    {"log": logs[key], "product": product},
+                )
+                db.execute(
+                    text(
+                        "INSERT INTO log_source(log_id,source_type,external_key,raw_payload,"
+                        "precision_rank) VALUES (:log,:type,:key,CAST(:raw AS jsonb),10)"
+                    ),
+                    {
+                        "log": logs[key],
+                        "type": source_type,
+                        "key": key,
+                        "raw": json.dumps({"transcript": "P copper 2 kg at 5", "input": "text"}),
+                    },
+                )
+        with caplog.at_level("WARNING"):
+            command.upgrade(cfg, "head")
+        assert "2 pending logs became open drafts, 1 became expired drafts" in caplog.text
+        assert "1 unfinished chat clarifications cleared" in caplog.text
+        with engine.connect() as db:
+            assert db.execute(text("SELECT count(*) FROM log")).scalar_one() == 0
+            rows = db.execute(
+                text("SELECT actor, kind, status, request_key, payload FROM draft ORDER BY id")
+            ).all()
+            props = db.execute(text("SELECT props FROM farm WHERE id = :f"), {"f": first})
+            assert props.scalar_one()["chat"] == {"telegram_chat_ids": [42]}
+        (chat, web, other) = rows
+        assert (chat.actor, chat.kind, chat.status, chat.request_key) == (
+            "chat:42",
+            "spray",
+            "open",
+            "tg:42:7",
+        )
+        assert chat.payload["parcel_ids"] == [parcel]
+        assert chat.payload["doses"][0]["product_id"] == product
+        assert chat.payload["capture"]["input"] == "text"
+        assert (web.actor, web.status) == ("operator", "open")  # the farm owner on the web
+        assert (other.status, other.request_key) == ("expired", f"log:{logs['receipt-1']}")
+        assert other.payload["doses"] == chat.payload["doses"]  # kept, never confirmable
+        command.downgrade(cfg, "core_0010")
+        command.upgrade(cfg, "head")
+        command.check(cfg)
+    finally:
+        engine.dispose()

@@ -34,6 +34,7 @@ from farmcore.apps.chat.transcribe import FakeTranscriber, Transcript
 from farmcore.apps.operations import isoxml_demo
 from farmcore.core import jobs
 from farmcore.core.models.canonical import Log, Parcel
+from farmcore.core.models.drafts import Draft
 from tests.apps.advisor import scenes
 from tests.apps.advisor.scenes import local
 
@@ -125,7 +126,13 @@ def phone(session_factory, manifests, settings):
         assert all(r.ok for r in runs), runs
 
     push.set_sender(FakeTelegramSender())
-    yield SimpleNamespace(runtime=runtime, replies=replies, context=context, step=step)
+    yield SimpleNamespace(
+        runtime=runtime,
+        replies=replies,
+        context=context,
+        step=step,
+        session_factory=session_factory,
+    )
     push.set_sender(None)
 
 
@@ -137,7 +144,8 @@ def confirmed_voice_log(phone) -> int:
     assert label == "✅ Confirm"
     asyncio.run(phone.runtime.on_callback(callback_update(confirm), phone.context))
     assert phone.replies.sent[-1].text.startswith("✅ Logged:"), phone.replies.sent[-1].text
-    return int(confirm.removeprefix("confirm:"))
+    with phone.session_factory() as session:  # the button names the draft and its revision
+        return session.get(Draft, int(confirm.split(":")[1])).result_id
 
 
 def decisions(client) -> dict[str, str]:

@@ -23,7 +23,6 @@ import os
 import re
 import shutil
 import tempfile
-from contextlib import suppress
 from pathlib import Path
 
 import av
@@ -85,7 +84,8 @@ IRRIGATION_NOTE = re.compile(
     r"(?:mm|millimetres?|millimeters?|m3|cubic\s+met(?:re|er)s?|met(?:re|er)s?\s+cubed?)\b",
     re.I,
 )
-SPRAY_TURN = "spray_log"  # routing metadata only: a follow-up never re-runs a write
+SPRAY_TURN = "spray_log"
+REVIEW_LABEL = "Review draft"  # routing metadata only: a follow-up never re-runs a write
 
 
 @router.get("/ask")
@@ -342,9 +342,13 @@ def _end_request_transaction(repo: ScopedRepository) -> None:
 
 @router.post("/confirm", dependencies=[Depends(require_farm_owner)])
 def confirm(
-    request: Request, repo: Repo, action: str = Form(pattern=r"^(confirm|cancel):\d{1,12}$")
+    request: Request,
+    repo: Repo,
+    action: str = Form(pattern=r"^(confirm|cancel):\d{1,19}:\d{1,9}$"),
 ):
-    """✅ / ❌ on a web draft; the chat app's ownership, replay and merge checks apply."""
+    """✅ / ❌ on a web draft (`<draft id>:<revision>`): the chat handler confirms through
+    `core.drafts.confirm`, the service `/drafts/<id>` uses; its ownership, replay and merge
+    checks apply."""
     if "chat" not in {m.name for m in visible_manifests(request)}:
         raise HTTPException(404)
     deps = bound_chat_deps(request, repo)
@@ -363,40 +367,23 @@ def _spray_turn(request: Request, repo: Repo, text: str) -> bool:
         return True
     if said == intent.QUESTION:
         return False
-    now = get_clock(repo.session, request.app.state.settings).now()
-    open_draft = clarification.load(
-        repo.session, repo.farm_id, _capture_binding(request, repo).state_key, now
-    )
-    if open_draft is not None or (text.casefold() in CANCEL_WORDS and _has_pending(repo, request)):
+    actor = _capture_binding(request, repo).actor_key
+    if clarification.load(repo.session, repo.farm_id, actor) is not None:
+        return True
+    if text.casefold() in CANCEL_WORDS and clarification.open_captures(
+        repo.session, repo.farm_id, actor
+    ):
         return True
     if said != intent.OTHER or not IRRIGATION_NOTE.search(text):
         return False
     settings = request.app.state.settings
+    now = get_clock(repo.session, settings).now()
     return chat.names_a_parcel(text, chat_service.load_context(repo, now, settings.display_tz))
 
 
-def _has_pending(repo, request) -> bool:
-    from sqlalchemy import or_
-
-    from farmcore.core.models.canonical import Log, LogSource
-
-    session = repo.session
-    prefixes = _capture_binding(request, repo).prefixes
-    return (
-        session.query(LogSource.id)
-        .join(Log, Log.id == LogSource.log_id)
-        .filter(
-            Log.farm_id == repo.farm_id,
-            Log.status == "pending",
-            or_(*(LogSource.external_key.startswith(prefix) for prefix in prefixes)),
-        )
-        .first()
-        is not None
-    )
-
-
 def _web_reply(request: Request, repo: Repo, out: Outgoing) -> dict:
-    """The chat reply for the panel: confirm/cancel become actions, links stay on this site."""
+    """The chat reply for the panel: confirm/cancel become actions, links stay on this site; a
+    draft reply carries its `draft_id` and a link to its review page `/drafts/<id>`."""
     actions = [{"label": label, "action": data} for label, data in out.buttons]
     lines = [
         line
@@ -409,31 +396,32 @@ def _web_reply(request: Request, repo: Repo, out: Outgoing) -> dict:
         if logged
         else []
     )
-    if any(data.startswith(f"{chat.CONFIRM}:") for _, data in out.buttons):
+    draft_id = next(
+        (int(data.split(":")[1]) for _, data in out.buttons if data.startswith(f"{chat.CONFIRM}:")),
+        None,
+    )
+    if draft_id is not None:
         kind = "draft"
+        links = [(REVIEW_LABEL, with_farm(f"/drafts/{draft_id}", repo.farm_id))]
     elif logged or out.text.startswith("❌"):
         kind = "done"
     else:
-        now = get_clock(repo.session, request.app.state.settings).now()
         repo.session.expire_all()
         open_draft = clarification.load(
-            repo.session, repo.farm_id, _capture_binding(request, repo).state_key, now
+            repo.session, repo.farm_id, _capture_binding(request, repo).actor_key
         )
         kind = "clarify" if open_draft is not None else "reply"
-    return {"kind": kind, "text": "\n".join(lines), "actions": actions, "links": links}
+        draft_id = open_draft.id if open_draft is not None else None
+    body = {"kind": kind, "text": "\n".join(lines), "actions": actions, "links": links}
+    if draft_id is not None:
+        body["draft_id"] = draft_id
+    return body
 
 
 def _capture_binding(request, repo):
-    from farmcore.core.access import FarmNotSeeded, default_farm
     from farmcore.core.identity import principal_for
 
-    operator = is_admin(request)
-    legacy = False
-    if operator:
-        # Private-only installations have no shared demo draft namespace.
-        with suppress(FarmNotSeeded):
-            legacy = default_farm(repo.session, request.app.state.settings).id == repo.farm_id
-    return chat.CaptureBinding(repo.farm_id, principal_for(request), operator, legacy)
+    return chat.CaptureBinding(repo.farm_id, principal_for(request), is_admin(request))
 
 
 def bound_chat_deps(request, repo):
