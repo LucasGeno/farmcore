@@ -129,7 +129,6 @@ _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
 RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "access_log": frozenset({"audit:read"}),
     "access_token": frozenset({"audit:read"}),
-    "advice": frozenset({"advice:read"}),
     "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
     "catalog_item": _ANY,  # shared reference (a fertiliser's or a spray product's name)

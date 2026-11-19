@@ -626,3 +626,17 @@ def test_reset_then_legacy_step_revisits_spray_day_without_touching_other_farm(
                 )
     finally:
         push.set_sender(None)
+
+
+def test_a_switched_off_app_contributes_no_demo_counts(demo_client, session):
+    """`Manifest.demo_counts` comes only from loaded, switched-on apps: with crop protection
+    switched off, demo control shows no advice decision counts."""
+    from farmcore.core.models.kernel import AppModule
+
+    session.get(AppModule, "advisor").state = "uninstalled"
+    session.commit()
+
+    page = demo_client.get("/demo/")
+
+    assert page.status_code == 200 and "Demo controls" in page.text
+    assert "Not evaluated" not in page.text and "Protected" not in page.text

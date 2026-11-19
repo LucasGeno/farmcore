@@ -23,12 +23,13 @@ malformed shortlists, existing extension rows, an irrigation that would end with
 amount) and refuses with all of them: legacy data is never coerced. A post-check compares
 counts and per-record dose totals before the transaction commits.
 
-Downgrade (its refusals over the frozen tables hold only while they exist: core_0019 drops
-them and its downgrade rebuilds them as the rows are now) refuses while anything written since
-the upgrade has no legacy row to return to (a
+Downgrade returns every record intact or refuses, naming what has no legacy row to return to: a
 spray dose or plant-protection item without a map entry, a stock row, planning job or shortlist
-entry naming one) or a moved dose was changed or removed, naming the counts. Otherwise it maps
-everything back and deletes the moved rows: the frozen tables were never changed.
+entry naming one, a moved dose changed or removed since, or a corrected older record holding two
+amounts. Nothing is ever deleted to get past a refusal: restore the pre-upgrade backup to roll
+back records changed since. Otherwise it maps everything back and deletes the moved rows (the
+frozen tables were never changed). Once core_0019 has dropped them, its own downgrade refuses
+first, naming sprays whose moved dose a correction replaced, as only the receipt remains.
 
 Revision ID: core_0018
 Revises: core_0017
@@ -419,7 +420,7 @@ def _refusals(bind: sa.Connection) -> list[str]:
     for what, sql in counts.items():
         n = bind.execute(sa.text(sql)).scalar_one()
         if n:
-            out.append(f"{n} {what}: no legacy row to return to; back them up and remove them")
+            out.append(f"{n} {what}")
     # A record of another type corrected since the upgrade: its moved legacy amount and its new
     # entered one would both return, and the next upgrade's preflight would refuse the record.
     corrected = _ids(
@@ -436,7 +437,7 @@ def _refusals(bind: sa.Connection) -> list[str]:
                 "record(s) other than a spray corrected since the upgrade, holding a moved "
                 "legacy amount beside an entered one",
                 corrected,
-                "keep one amount per record (remove the legacy or the entered amount)",
+                "two amounts the legacy table cannot hold",
             )
         )
     return out
@@ -447,7 +448,10 @@ def downgrade() -> None:
     refusals = _refusals(bind)
     if refusals:
         raise MigrationRefused(
-            "core_0018 downgrade refused, nothing was changed: " + "; ".join(refusals)
+            "core_0018 downgrade refused, nothing was changed: "
+            + "; ".join(refusals)
+            + "; they have no legacy row to return to. Do not delete rows to get past this: "
+            "restore the pre-upgrade backup to roll back records changed since"
         )
     op.execute(
         "CREATE VIEW legacy_catalog_item AS "

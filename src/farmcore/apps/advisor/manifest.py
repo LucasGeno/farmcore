@@ -25,7 +25,10 @@ MANIFEST = Manifest(
     demo_counts="farmcore.apps.advisor.demo:decision_counts",
     query_values=(("model", ("all", "downy", "powdery")),),
     # Shared reference data, like `crop_protection_item` (planning and chat read it too).
-    resource_scopes=(("advisor_product", tuple(sorted(SCOPES))),),
+    resource_scopes=(
+        ("advisor_product", tuple(sorted(SCOPES))),
+        ("advice", ("advice:read",)),  # stored advice: crop protection's own read scope
+    ),
     jobs=(
         JobSpec(
             name=JOB_NAME,

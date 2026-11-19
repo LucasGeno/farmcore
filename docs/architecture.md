@@ -39,7 +39,14 @@ database, a small core and installable apps, in the style of Odoo.
   `product`/`quantity` tables and core_0019 dropped those; ids kept in older JSON resolve through
   core_0018's frozen maps. Core holds no crop-protection term (`tests/core/test_core_is_neutral.py`):
   advice (`advisor.advice`), its decisions and the activity products column belong to apps,
-  contributed through `Manifest.activity_products`, `demo_counts` and `query_values`. Published JSON shapes are versioned: [API compatibility](api-compatibility.md).
+  contributed through `Manifest.activity_products`, `demo_counts` and `query_values`.
+  Accepted residue: core still names the `advice` table in two places. It is in the grant and
+  token allowlist (`access.ScopedRepository.check`), a deliberately central security list of
+  what an ordinary grant may read; its read scope is the advisor manifest's. Demo reset also
+  deletes `advice` by table name before core deletes the assessments it projects, because
+  `planning_job` references `advice` and demo reset runs only the visible apps' hooks, in
+  dependency order (advisor before planning). So advisor's own hook could neither run after
+  planning's nor run at all when crop protection is switched off while its rows remain. Published JSON shapes are versioned: [API compatibility](api-compatibility.md).
 - **Provenance.** `ext_id(source, key)` makes re-imports idempotent; `log_source` lets one spray
   carry several sources (voice + machine file). An incoming spray merges with a log of the same
   farm whose parcels overlap and whose start is within 12 h, keeping the more precise values.

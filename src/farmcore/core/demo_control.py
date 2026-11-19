@@ -50,8 +50,9 @@ def metadata(row):
     return dict((row.job_runs or {}).get("demo") or {}) if row else {}
 
 
-def snapshot(session, settings):
-    """Read-only: never use Repo (read auditing) or clock_row (lazy initialization)."""
+def snapshot(session, settings, apps=frozenset()):
+    """Read-only: never use Repo (read auditing) or clock_row (lazy initialization). `apps`:
+    names of the loaded, switched-on apps; only they contribute counts."""
     farm = demo_farm(session, settings)
     row = session.get(ClockState, 1)
     now = row.replay_now if row and row.mode == "replay" else datetime.now(UTC)
@@ -60,11 +61,9 @@ def snapshot(session, settings):
         if now.tzinfo is None:
             now = now.replace(tzinfo=ZoneInfo(settings.display_tz))
     counts: dict[str, int] = {}
-    for path in DEMO_COUNTS.values():  # apps' own counts (crop protection: its decisions)
-        try:
+    for owner, path in DEMO_COUNTS.items():  # loaded, switched-on apps' own counts
+        if owner in apps:
             counts.update(import_string(path)(session, farm, now))
-        except ModuleNotFoundError:  # an app left out of this bundle counts nothing
-            continue
     chat = (farm.props or {}).get("chat") or {}
     meta = metadata(row)
     job_state = row.job_runs if row else {}

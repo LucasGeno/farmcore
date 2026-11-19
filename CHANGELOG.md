@@ -5,11 +5,13 @@ Notable changes for operators and app authors. Newest first.
 ## Unreleased
 
 - Migration `core_0019` drops the legacy `product` and `quantity` tables that `core_0018`
-  froze; the maps stay. Downgrading below it rebuilds both from the maps and the catalog rows
-  under their legacy ids, and refuses, naming ids, while a plant-protection item or a measured
-  dose has no legacy id. The rebuild holds the rows as they are now, so `core_0018`'s refusals
-  to undo a moved dose that a correction changed or removed apply only while the tables exist
-  (before `core_0019`); past it, a rollback returns the current values.
+  froze; the maps and the tables' id sequences stay. Downgrading below it rebuilds both from the
+  maps and the catalog rows under their legacy ids, with their sequences as they were, and then
+  `core_0018`'s rules apply: a rollback returns every record intact or refuses, naming them. It
+  refuses while a plant-protection item or a measured dose has no legacy id, or while a spray
+  has a correction confirmed since the upgrade that replaced a moved dose (only its receipt is
+  left). Never delete rows to get past a refusal: restore the pre-upgrade backup to roll back
+  records changed since.
 - NGSI-LD v1 has a Sunset date: 19 Feb 2027 (provisional), sent as `Sunset` (RFC 8594).
 - App authors: core no longer defines `Product`, `Quantity`, `PRODUCT_TYPES`, `PRODUCT_TARGETS`
   or `ADVICE_DECISIONS`; the `Advice` model and its decisions moved to
@@ -30,7 +32,8 @@ Notable changes for operators and app authors. Newest first.
   record other than a spray would hold more than one amount (a pre-#92 legacy quantity beside
   another or beside its entered amount). Fix those rows and run it again. Downgrading below it
   is refused while a spray recorded, changed or removed since the upgrade (or a product, stock
-  row, planning job or shortlist entry naming a new product) has no legacy row to return to.
+  row, planning job or shortlist entry naming a new product) has no legacy row to return to;
+  restore the pre-upgrade backup to roll those back, never delete them.
   `farmcore migrate` and `farmcore upgrade` now print a migration's refusal in full (ids and
   counts, no row values).
 - NGSI-LD export: v1 (the default) is deprecated since 2026-11-19 and sends `Deprecation`

@@ -43,7 +43,8 @@ def same_origin(request: Request):
 
 def view(request):
     with request.app.state.session_factory() as session:
-        return demo_control.snapshot(session, request.app.state.settings)
+        apps = {m.name for m in visible_manifests(request)}
+        return demo_control.snapshot(session, request.app.state.settings, apps)
 
 
 def target_time(request, form):
