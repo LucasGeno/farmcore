@@ -2,6 +2,7 @@
 {% block title %}Import parcels · farmcore{% endblock %}
 {% block head %}<script src="/static/onboarding/import.js" defer></script>{% endblock %}
 {% block content %}
+<p><a href="{{ farm_url('/onboarding/registry') }}" class="underline">Select parcels on the public CAP map</a></p>
 <h1 class="text-2xl font-semibold">Import parcels</h1>
 <p class="mt-2 text-muted">Choose a parcel file. Review names, areas and crop codes before confirming.</p>
 {% if error %}<p role="alert" class="mt-3 font-semibold">{{ error }}</p>{% endif %}

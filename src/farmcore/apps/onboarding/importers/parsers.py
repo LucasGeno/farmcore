@@ -56,6 +56,9 @@ def normalise(geometry, properties, index):
         "source_scope": str(properties.get("source_scope") or "")[:255],
         "geometry": json.loads(json.dumps(mapping(geometry))),
         "area_ha": area,
+        "attribution": str(properties.get("attribution") or "")[:255],
+        "licence": str(properties.get("licence") or "")[:100],
+        "year": properties.get("year"),
         "messages": list(dict.fromkeys(messages)),
     }
 
@@ -268,7 +271,9 @@ def parse(data, filename, *, name_field="", crop_field="", layer=""):
                     if override not in attrs:
                         raise ValueError(f"Column {override!r} is missing.")
                     attrs[target] = attrs[override]
-            attrs.pop("messages", None)  # Only the server can author review notices.
+            # Review notices and registry metadata are authored by the server only.
+            for field in ("messages", "attribution", "licence", "year"):
+                attrs.pop(field, None)
             attrs["source_scope"] = Path(filename or "").name
             out.append(normalise(geometry, attrs, index))
         return out

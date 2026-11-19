@@ -22,6 +22,9 @@ class ParcelInput(BaseModel):
     crop_code: str = Field(default="", max_length=200)
     source_ref: str = Field(default="", max_length=200)
     source_scope: str = Field(default="", max_length=255)
+    attribution: str = Field(default="", max_length=255)
+    licence: str = Field(default="", max_length=100)
+    year: int | None = Field(default=None, ge=2000, le=2100)
     geometry: dict
     area_ha: float = 0  # Always recomputed; never trust a proposed area.
     messages: list[str] = Field(default_factory=list, max_length=10)
@@ -127,6 +130,7 @@ def confirm(session, draft, *, actor, now, services):
                     "import_source_ref": item["source_ref"],
                     "import_source_scope": item["source_scope"],
                     "crop_code": item["crop_code"],
+                    "registry": {k: item[k] for k in ("attribution", "licence", "year")},
                 },
             )
             session.add(row)
