@@ -33,7 +33,7 @@ from farmcore.apps.operations.corrections import Dose
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.drafts import wall_now
-from farmcore.core.logs import EnteredQuantity, QuantityInput, SourceInput
+from farmcore.core.logs import QuantityInput, SourceInput
 from farmcore.core.models.canonical import Farm, Parcel, Product
 from farmcore.core.models.drafts import Draft
 
@@ -185,8 +185,7 @@ def _fields(record: _Record):
         ]
         return quantities, None
     if isinstance(record, IrrigationDraft):
-        amount = EnteredQuantity(Decimal(record.fact.amount), record.fact.unit)
-        return [amount], {facts.IRRIGATION: record.fact.model_dump(exclude_none=True)}
+        return [], None  # both copies of the amount: `facts.record_irrigation` in `stage`
     return [], {facts.OBSERVATION: record.fact.model_dump()}
 
 
@@ -238,7 +237,9 @@ def stage(session: Session, draft: Draft, *, actor: str, now: datetime):
         occurred_at=now,
         source_app=SOURCE_APP,
     )
-    if not held and props is not None:
+    if not held and isinstance(record, IrrigationDraft):
+        facts.record_irrigation(session, log, record.fact)
+    elif not held and props is not None:
         log.props = props
     return log, record, held
 

@@ -1,17 +1,22 @@
 """Confirmed field observations and irrigation facts on the operations pages.
 
-The amount, its unit and the gross/net basis are shown from validated `log.props`; a pending
-draft is not a record, and props that do not validate are never guessed.
+An irrigation's amount and unit are read from its one entered `typed_quantity`, the gross/net
+basis from validated `log.props`; a pending draft is not a record, and facts that do not validate
+are never guessed.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
+import pytest
 from sqlalchemy import select
 
+from farmcore.apps.operations import facts
 from farmcore.core import clock, logs
 from farmcore.core.models.canonical import Log
+from farmcore.core.models.catalog import TypedQuantity
 
 T_FACT = datetime(2024, 4, 10, 6, 0, tzinfo=UTC)
 T_CLOCK = datetime(2024, 4, 12, 6, 0, tzinfo=UTC)
@@ -23,6 +28,12 @@ def _at(session, settings, t=T_CLOCK):
 
 
 def _fact(session, demo, kind, props, *, status="done", key="fact-1", at=T_FACT):
+    """A record as capture writes it: an irrigation's amount also as its entered quantity."""
+    amount = (props.get("irrigation") or {}) if kind == "irrigate" else {}
+    try:
+        entered = [logs.EnteredQuantity(Decimal(amount["amount"]), amount["unit"])]
+    except (KeyError, ArithmeticError):
+        entered = []
     log, _ = logs.record_operation(
         session,
         farm_id=demo.farm.id,
@@ -30,7 +41,7 @@ def _fact(session, demo, kind, props, *, status="done", key="fact-1", at=T_FACT)
         parcel_ids=[demo.parcels[0].id],
         ts_start=at,
         ts_end=None,
-        quantities=[],
+        quantities=entered,
         source=logs.SourceInput("voice", key, {}, 0.9, logs.RANK_VOICE),
         actor="owner",
         occurred_at=at,
@@ -125,3 +136,55 @@ def test_the_spray_register_never_lists_an_irrigation(client, session, settings,
 
     assert all(row.get("log_id") != log.id for row in rows)
     assert session.scalar(select(Log).where(Log.id == log.id)).type == "irrigate"
+
+
+def _entered(session, log):
+    return [
+        (q.entered_value, q.entered_unit)
+        for q in session.scalars(
+            select(TypedQuantity).where(TypedQuantity.log_id == log.id).order_by(TypedQuantity.id)
+        )
+    ]
+
+
+def test_an_irrigation_amount_is_read_from_its_entered_quantity_only(
+    client, session, settings, demo
+):
+    """One reader: when the props copy disagrees, the page shows the entered quantity; with no
+    entered quantity (a pre-core_0017 row the backfill could not read) it says so."""
+    _at(session, settings)
+    log = _fact(
+        session, demo, "irrigate", {"irrigation": {"amount": "20", "unit": "mm", "basis": "net"}}
+    )
+    log.props = {"irrigation": {"amount": "99", "unit": "L", "basis": "net"}}
+    session.flush()
+
+    page = client.get("/operations/").text
+    assert "Irrigation 20 mm net" in page and "Irrigation 99 L" not in page
+
+    session.execute(TypedQuantity.__table__.delete().where(TypedQuantity.log_id == log.id))
+    session.flush()
+    assert "Irrigation (details unavailable)" in client.get("/operations/").text
+
+
+def test_an_irrigation_correction_updates_both_copies_or_neither(session, demo, monkeypatch):
+    log = _fact(
+        session, demo, "irrigate", {"irrigation": {"amount": "20", "unit": "mm", "basis": "gross"}}
+    )
+
+    facts.record_irrigation(session, log, facts.IrrigationFact(amount="12.50", unit="m3"))
+
+    assert _entered(session, log) == [(Decimal("12.50"), "m3")]
+    assert log.props == {"irrigation": {"amount": "12.50", "unit": "m3"}}
+    assert facts.irrigation(log) == facts.IrrigationFact(amount="12.50", unit="m3")
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(facts, "enter_quantity", fail)
+    with pytest.raises(RuntimeError):
+        facts.record_irrigation(session, log, facts.IrrigationFact(amount="30", unit="mm"))
+
+    session.refresh(log)
+    assert _entered(session, log) == [(Decimal("12.50"), "m3")]
+    assert log.props == {"irrigation": {"amount": "12.50", "unit": "m3"}}

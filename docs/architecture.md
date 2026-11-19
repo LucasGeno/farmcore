@@ -300,6 +300,10 @@ a wall-clock expiry (seven days by default, an assumed product choice).
   (a pending log created and confirmed in one transaction, so the merge rule applies on every
   path) and keep the draft id, both actors and the provenance on the record's `log_source`. A
   confirmed spray saves its own station weather there, whichever path confirmed it.
+- An irrigation's amount has one reader, its one entered `typed_quantity` (core_0017 backfilled
+  irrigations confirmed before capture wrote one). `log.props["irrigation"]` keeps a copy with the
+  gross/net basis; `operations.facts.record_irrigation` writes both in one savepoint, for capture
+  and any future correction.
 - Chat and the web assistant propose here too (actor `chat:<id>`, or the signed-in member), so
   a draft is the only pre-confirm state and no committed `log` is pending. An incomplete
   capture is an open draft that names what it still misses (parcel, date, product, dose,

@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from farmcore.apps.operations import corrections, facts
+from farmcore.core.models.canonical import Log
 
 
 def test_irrigation_amount_must_be_positive():
@@ -16,10 +17,12 @@ def test_irrigation_amount_must_be_positive():
 
 
 def test_props_that_are_not_a_fact_shape_read_as_absent():
-    assert facts.irrigation(None) is None
     assert facts.observation(None) is None
     assert facts.observation({facts.OBSERVATION: {"text": 123}}) is None
-    assert facts.irrigation({facts.IRRIGATION: "20 mm"}) is None
+    # Props alone are never an irrigation amount: a log with no entered quantity has none.
+    assert (
+        facts.irrigation(Log(type="irrigate", props={facts.IRRIGATION: {"amount": "20"}})) is None
+    )
 
 
 def test_dose_and_preview_validators_refuse_unsupported_inputs():
