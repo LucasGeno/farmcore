@@ -112,6 +112,11 @@ Sharing). It offers the tools of the apps that are on now within the token's sco
 `propose` tool also needs `drafts:propose`), checks arguments against each tool's JSON Schema,
 re-checks the token on every request and writes an `access_log` row per call (`mcp:<tool>`,
 actor `token:<id>`; the client's own name is never the actor). Details: `core/mcp.py`.
+Stdio is an installation-operator transport: the token bounds the agent's MCP tool calls, not
+the OS user or a shell-capable agent that can read the process's `DATABASE_URL`, which reaches
+every farm. Run it as `docker compose exec -T -e FARMCORE_TOKEN app farmcore mcp` (over `ssh`
+for a remote host) so `DATABASE_URL` stays in the container, and never hand stdio to anyone but
+the operator ([SECURITY.md](../SECURITY.md#mcp-over-stdio-is-an-operator-transport)).
 
 ## Stack
 

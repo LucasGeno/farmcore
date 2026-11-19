@@ -114,10 +114,26 @@ enabled owner of the farm refuses the next call with one message for every cause
 loads tokens and revokes their grants, so a token revoked after a backup does not come back and
 the copy starts with no agent access; issue new tokens on the copy.
 Send tokens in a header, never in a URL.
-`farmcore mcp` (MCP over stdio for a local agent) reads the token from `FARMCORE_TOKEN` only,
-never a flag, and never prints or returns it. The agent's calls are limited to the token's farm
-and scopes, but the process itself connects to the database: run it only on the machine that
-runs FarmCore, with the runtime role's `DATABASE_URL`, never the owner's.
+### MCP over stdio is an operator transport
+
+`farmcore mcp` (MCP over stdio) reads the agent token from `FARMCORE_TOKEN` only, never a flag,
+and never prints or returns it. The token bounds what the agent does **through MCP tools**: its
+farm, its scopes, `drafts:propose` for any write, an `access_log` row per call. It is **not** a
+boundary against whoever runs the process. The process holds `DATABASE_URL`, and the runtime
+role reads and writes every farm on the installation: anyone (or any agent with a shell) that can
+read that URL, from a client's config file or the process environment, can read every farm, mint
+tokens and rewrite the access log, and token scoping no longer applies.
+
+- Treat stdio as installation-operator access. Never give it to a farmer who is not the
+  operator, or to a third party; they get remote MCP over HTTP with a token once it ships.
+- Keep `DATABASE_URL` inside the container: point the client at
+  `ssh <host> docker compose -f <path>/docker-compose.yml exec -T -e FARMCORE_TOKEN app
+  farmcore mcp`, with only `FARMCORE_TOKEN` in the client's config, never `DATABASE_URL`. ssh
+  forwards the variable only with `SendEnv FARMCORE_TOKEN` on the client and
+  `AcceptEnv FARMCORE_TOKEN` on the host; never put the token on the command line, where `ps`
+  and shell history show it.
+- Do not run a shell-capable agent on a machine whose files or environment hold `DATABASE_URL`.
+- Use the runtime role's URL, never the database owner's.
 
 ## Deployment checklist
 

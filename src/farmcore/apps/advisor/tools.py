@@ -200,10 +200,20 @@ def _version(row) -> dict:
     return {"id": version.get("id"), "status": version.get("status")}
 
 
+def _unavailable(ctx: ToolContext) -> ToolResult | None:
+    """The reason advice cannot be shown to this repository (a grant or token that may not read
+    the inputs, a farm-level reason, no station), as the tool's whole answer; None otherwise.
+    Every surface calls the tools, so none shows advice the advisor page withholds."""
+    reason = service.unavailable_reason(ctx.repo)
+    return ToolResult({"unavailable": reason}, reason) if reason else None
+
+
 def today(ctx: ToolContext) -> ToolResult:
     """The farm's advice in at most three lines. A parcel without advice up to now is
     `advised: false` and "awaiting advice", never counted as nothing to spray: "Nothing to
     spray today" only when every parcel is evaluated and none is at risk."""
+    if (withheld := _unavailable(ctx)) is not None:
+        return withheld
     parcels = fields_tools.parcels(ctx.repo)
     advice = service.latest_advice(ctx.repo, ctx.now, tz=ctx.tz.key)
     rows: list[tuple[Any, Advice | None]] = [(p, advice.get(p.id)) for p in parcels]
@@ -294,6 +304,8 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
     found = fields_tools.resolve_parcel(ctx.repo, parcel)
     if found is None:
         return fields_tools.unknown_parcel(ctx)
+    if (withheld := _unavailable(ctx)) is not None:
+        return withheld
     label = fields_tools.label(found)
     fr = ctx.lang == "fr"
     links = ((f"Open card {found.alias}", _card(found.id)),)

@@ -116,8 +116,8 @@ def test_a_switched_off_module_loses_its_tools_without_a_restart(
 
 @pytest.mark.parametrize(
     "args",
-    [{"parcel": "P1", "ctx": "x"}, {"parcel": 5}],
-    ids=["unknown-argument", "wrong-type"],
+    [{"parcel": "P1", "ctx": "x"}, {"parcel": 5}, {"parcel": "P" * 81}],
+    ids=["unknown-argument", "wrong-type", "too-long"],
 )
 def test_arguments_outside_the_schema_are_refused_before_the_tool_runs(
     session, session_factory, settings, manifests, args
@@ -151,6 +151,22 @@ def test_a_tool_reading_beyond_the_token_fails_closed_and_the_call_is_still_audi
     assert calls == ["mcp:operations_last_spray"]
 
 
+@pytest.mark.parametrize(
+    ("tool", "args"), [("advisor_today", {}), ("advisor_parcel_status", {"parcel": "P1"})]
+)
+def test_advice_is_withheld_from_a_token_as_on_every_web_surface(
+    session, session_factory, settings, manifests, tool, args
+):
+    # A token cannot read the advisor's inputs, so the advisor page shows it no decision.
+    _farm, _id, raw = _token(session, ["advice:read", "fields:read"])
+    tools = farm_mcp.FarmTools(session_factory, settings, manifests, raw)
+
+    result = tools.call(tool, args)
+
+    assert set(result.facts) == {"unavailable"}
+    assert result.text.startswith("Assessment limited")
+
+
 def test_the_cli_refuses_to_start_without_a_valid_token_and_never_echoes_it(
     settings, monkeypatch, tmp_path
 ):
@@ -176,6 +192,10 @@ def test_the_official_client_lists_and_calls_tools_over_stdio_as_the_token(
 ):
     with committed_session_factory() as session:
         farm, token_id, raw = _token(session, ["fields:read", "logs:read"])
+        other, _, _ = _token(session, ["fields:read"], farm_name="Another farm")
+        session.add(
+            Parcel(farm_id=other.id, name="Only B", alias="P9", area_ha=Decimal("1"), geom=SQUARE)
+        )
         session.commit()
     errlog = (tmp_path / "mcp.err").open("w+")
     server = StdioServerParameters(
@@ -208,7 +228,8 @@ def test_the_official_client_lists_and_calls_tools_over_stdio_as_the_token(
     assert listed["fields_list_parcels"].annotations.read_only_hint is True
     assert not parcels.is_error
     assert "P1 Bel-Air" in parcels.content[0].text
-    assert parcels.structured_content["facts"]["parcels"][0]["alias"] == "P1"
+    listed_parcels = parcels.structured_content["facts"]["parcels"]
+    assert [p["alias"] for p in listed_parcels] == ["P1"]  # not the other farm's P1 or P9
     assert revoked.is_error
     with committed_session_factory() as session:
         actors = set(

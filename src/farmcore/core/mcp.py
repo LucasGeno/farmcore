@@ -51,7 +51,10 @@ from farmcore.settings import Settings
 logger = logging.getLogger(__name__)
 
 TOKEN_ENV = "FARMCORE_TOKEN"
-CLIENT_NAME_LOGGED = 64  # characters of the client's self-reported name kept in the log
+LOGGED_CHARS = 64  # characters of a client-sent name (tool, client) kept in a log line
+# Longest string argument, as the web assistant's model arguments (a parcel name or alias, a
+# day): a local agent has no business sending more, and the tool never needs it.
+MAX_ARG_CHARS = 80
 UNAVAILABLE = "This tool is not available to this token."
 BAD_ARGUMENTS = "The arguments do not match the tool's input schema."
 OUT_OF_SCOPE = "The tool needs data this token may not read."
@@ -67,6 +70,23 @@ def offered(tools: Iterable[ToolSpec], scopes: Collection[str]) -> list[ToolSpec
     `propose` tool only when it also holds `drafts:propose`."""
     held = set(scopes)
     return [t for t in tools if t.scope in held and (t.effect == "read" or DRAFTS_PROPOSE in held)]
+
+
+def _log_refusal(tool: str | None, actor: str, why: str) -> None:
+    """A refused request, on stderr only: access_log records data read, and a refusal read
+    nothing."""
+    logger.warning("mcp refused %r as %s (%s)", (tool or "list")[:LOGGED_CHARS], actor, why)
+
+
+def _arguments_fit(tool: ToolSpec, args: Any) -> bool:
+    """Only the tool's own parameters, matching its JSON Schema, no string over
+    `MAX_ARG_CHARS`."""
+    return (
+        isinstance(args, Mapping)
+        and set(args) <= set(tool.param_names)
+        and all(len(v) <= MAX_ARG_CHARS for v in args.values() if isinstance(v, str))
+        and Draft202012Validator(tool.params).is_valid(dict(args))
+    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -90,10 +110,11 @@ class FarmTools:
         self._manifests = list(manifests)
         self._token = token
 
-    def _authenticate(self, session: Session) -> ScopedRepository:
+    def _authenticate(self, session: Session, tool: str | None = None) -> ScopedRepository:
         try:
             return authenticate_token(session, self._token)
         except TokenRejected as exc:
+            _log_refusal(tool, "a rejected token", "token rejected")
             raise Refused(str(exc)) from None
 
     def _tools(self, session: Session, repo: ScopedRepository) -> list[ToolSpec]:
@@ -108,13 +129,13 @@ class FarmTools:
         """Run tool `name` as the token; `Refused` when it is not offered, the arguments do not
         match, or it fails."""
         with session_scope(self._session_factory) as session:
-            repo = self._authenticate(session)
+            repo = self._authenticate(session, name)
             tool = next((t for t in self._tools(session, repo) if t.name == name), None)
             if tool is None:
+                _log_refusal(name, repo.actor, "not offered to this token")
                 raise Refused(UNAVAILABLE)
-            if not isinstance(args, Mapping) or not set(args) <= set(tool.param_names):
-                raise Refused(BAD_ARGUMENTS)
-            if not Draft202012Validator(tool.params).is_valid(dict(args)):
+            if not _arguments_fit(tool, args):
+                _log_refusal(name, repo.actor, "arguments outside the schema")
                 raise Refused(BAD_ARGUMENTS)
             session.add(
                 AccessLog(
@@ -131,7 +152,7 @@ class FarmTools:
                 "mcp call %s as %s (client says %r)",
                 tool.name,
                 repo.actor,
-                (client or "")[:CLIENT_NAME_LOGGED],
+                (client or "")[:LOGGED_CHARS],
             )
             ctx = ToolContext(
                 repo=repo,

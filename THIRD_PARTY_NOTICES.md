@@ -26,7 +26,7 @@ Exact versions are pinned in `uv.lock`; each package keeps its own licence.
 | cffi | MIT | timezonefinder's C bindings |
 | flatbuffers | Apache-2.0 | timezonefinder's binary data reader |
 | typer | MIT | Command line |
-| mcp (mcp-types, pyjwt, sse-starlette), jsonschema | MIT; sse-starlette BSD-3-Clause | MCP server for local agents (`farmcore mcp`), tool argument checks |
+| mcp (mcp-types, pyjwt, sse-starlette; pywin32 on Windows only), jsonschema | MIT; sse-starlette BSD-3-Clause; pywin32 PSF-2.0 | MCP server for local agents (`farmcore mcp`), tool argument checks |
 | pint (flexcache, flexparser, platformdirs) | BSD-3-Clause; platformdirs MIT | Unit registry with Decimal arithmetic |
 
 The LGPL libraries are used unmodified, as separately installed packages imported by FarmCore.
