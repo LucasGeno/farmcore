@@ -21,6 +21,8 @@ from sqlalchemy.engine import make_url
 DEFAULT_DATABASE_URL = "postgresql+psycopg://farmcore:farmcore@localhost:55442/farmcore"
 DEFAULT_OPEN_METEO_BASE_URL = "https://api.open-meteo.com"
 DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL = "https://single-runs-api.open-meteo.com"
+DEFAULT_METEOFRANCE_API_BASE_URL = "https://public-api.meteofrance.fr/public"
+DEFAULT_METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token"
 
 
 def _check_http_url(v: str) -> str:
@@ -56,7 +58,10 @@ def _default_vertex_auth() -> str:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_ignore_empty=True, extra="ignore")
+    # No validation error echoes its input: a refused setting may sit beside a credential.
+    model_config = SettingsConfigDict(
+        env_file=".env", env_ignore_empty=True, extra="ignore", hide_input_in_errors=True
+    )
 
     database_url: str = Field(DEFAULT_DATABASE_URL, repr=False)
     # Admin URL used to create throwaway test databases; default: same server, `/postgres`.
@@ -71,6 +76,13 @@ class Settings(BaseSettings):
     open_meteo_single_runs_base_url: str = DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL
     # Customer API key, sent as `apikey`; never logged, stored or rendered.
     open_meteo_api_key: SecretStr | None = None
+    # Météo-France portal application (live station observations, `weather_meteofrance`): the
+    # OAuth client credentials, exchanged for a bearer token; never logged, stored or rendered.
+    # No client: the live ingest stays off.
+    meteofrance_client_id: SecretStr | None = None
+    meteofrance_client_secret: SecretStr | None = None
+    meteofrance_api_base_url: str = DEFAULT_METEOFRANCE_API_BASE_URL
+    meteofrance_token_url: str = DEFAULT_METEOFRANCE_TOKEN_URL
     # Optional address search on the location step: a Nominatim or Photon base URL. Empty (the
     # default) keeps the geocoder off; map, browser location and coordinates still work.
     geocoder_base_url: str = ""
@@ -131,7 +143,12 @@ class Settings(BaseSettings):
     def _default_when_empty(cls, v: object) -> object:
         return v or DEFAULT_DATABASE_URL
 
-    @field_validator("open_meteo_base_url", "open_meteo_single_runs_base_url")
+    @field_validator(
+        "open_meteo_base_url",
+        "open_meteo_single_runs_base_url",
+        "meteofrance_api_base_url",
+        "meteofrance_token_url",
+    )
     @classmethod
     def _http_url_without_credentials(cls, v: str) -> str:
         return _check_http_url(v)
@@ -152,6 +169,14 @@ class Settings(BaseSettings):
             for url in (self.open_meteo_base_url, self.open_meteo_single_runs_base_url):
                 if urlsplit(url).scheme != "https":
                     raise ValueError("OPEN_METEO_API_KEY requires https Open-Meteo base URLs")
+        return self
+
+    @model_validator(mode="after")
+    def _meteofrance_credentials_require_https(self) -> Settings:
+        if self.meteofrance_client_secret is not None:
+            for url in (self.meteofrance_api_base_url, self.meteofrance_token_url):
+                if urlsplit(url).scheme != "https":
+                    raise ValueError("METEOFRANCE_CLIENT_SECRET requires https Météo-France URLs")
         return self
 
     @model_validator(mode="after")

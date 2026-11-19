@@ -279,6 +279,29 @@ self-hosted server (or your own archiver); FarmCore keeps its own JSON copies un
 If you would rather not operate that data, leave `OPEN_METEO_SINGLE_RUNS_BASE_URL` on the public
 or customer Single Runs API.
 
+## 7. Météo-France live observations (optional)
+
+The `weather_meteofrance` app fetches live hourly observations of a farm's Météo-France station
+(the station the Weather app already shows, by its 8-digit number) from Météo-France's
+[API portal](https://portail-api.meteofrance.fr), in live clock mode only:
+
+- **Credentials.** Create an application on the portal, subscribe it to *Données d'observation*
+  (DPObs) and *Données climatologiques* (DPClim), and set `METEOFRANCE_CLIENT_ID` and
+  `METEOFRANCE_CLIENT_SECRET`. FarmCore exchanges them at `METEOFRANCE_TOKEN_URL` (OAuth2 client
+  credentials, HTTP Basic) for a one-hour bearer token. They are never logged, stored in a
+  receipt or shown; startup refuses a secret with an `http` URL. Without them the job does
+  nothing.
+- **Windows.** DPObs keeps the last 24 hours and answers one hour per call
+  ([guide](https://confluence-meteofrance.atlassian.net/wiki/spaces/OpenDataMeteoFrance/pages/853639294)).
+  Each hourly run asks DPObs for the hours since the newest one held, and orders any hour missing
+  from the week before that window from the DPClim archive
+  ([guide](https://confluence-meteofrance.atlassian.net/wiki/spaces/OpenDataMeteoFrance/pages/854261785)),
+  with its quality codes. A failed step stores nothing newer, so the gap is ordered again on the
+  next run; the station's `meteofrance_live` health holds the last error (step and HTTP status).
+- **Quotas.** DPObs allows 100 requests a minute, DPClim 50, per account; a first run on a new
+  farm takes up to 24 DPObs calls and one archive order.
+- **Licence.** Licence Ouverte / Etalab 2.0, attributed to Météo-France on every receipt.
+
 ## Backups and restore
 
 A backup is one file, a **bundle**: a `pg_dump` of the installation database (custom format,
