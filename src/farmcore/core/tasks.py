@@ -115,13 +115,22 @@ def enqueue(session: Session, task_name: str, farm_id: int) -> bool:
 
 def in_flight(session: Session, task_name: str) -> set[int]:
     """Farms with an unfinished attempt of `task_name` still before its deadline, in the current
-    clock generation: planning skips them, so a running task is never superseded early."""
+    clock generation, or whose task a worker has started but whose attempt has not begun yet (no
+    attempt started since): planning skips them, so a running task is never superseded early.
+    A worker that dies before beginning the attempt leaves that to `retry_stalled`."""
     return set(
         session.execute(
             text(
                 "SELECT a.farm_id FROM task_attempt a JOIN clock_state c "
                 "ON c.id = 1 AND c.generation = a.clock_generation "
-                "WHERE a.task_name = :n AND a.finished_at IS NULL AND a.deadline_at > now()"
+                "WHERE a.task_name = :n AND a.finished_at IS NULL AND a.deadline_at > now() "
+                "UNION "
+                "SELECT (j.args->>'farm_id')::bigint FROM procrastinate_jobs j "
+                "WHERE j.task_name = :n AND j.status = 'doing' AND NOT EXISTS ("
+                " SELECT 1 FROM task_attempt a WHERE a.task_name = :n"
+                " AND a.farm_id = (j.args->>'farm_id')::bigint AND a.started_at >= ("
+                "  SELECT max(e.at) FROM procrastinate_events e"
+                "  WHERE e.job_id = j.id AND e.type = 'started'))"
             ),
             {"n": task_name},
         ).scalars()

@@ -236,6 +236,15 @@ def test_running_the_live_job_only_enqueues_one_fetch_per_farm(
     assert run_now(session_factory, [MANIFEST], JOB, settings).ok
     assert calls == [] and queued() == sorted(farms)
 
+    # Claimed by a worker but its attempt not begun yet (a slow task start): still in flight.
+    claimed = session.execute(
+        text("SELECT (args->>'farm_id')::int FROM procrastinate_fetch_job_v2(:q, NULL)"),
+        {"q": [tasks.QUEUE]},
+    ).scalar_one()
+    session.execute(text("DELETE FROM procrastinate_jobs WHERE status = 'todo'"))
+    assert run_now(session_factory, [MANIFEST], JOB, settings).ok
+    assert queued() == [f for f in farms if f != claimed]
+
     session.execute(text("DELETE FROM procrastinate_jobs"))
     tasks.begin_attempt(session_factory, JOB, farms[0], timedelta(minutes=1))
     assert run_now(session_factory, [MANIFEST], JOB, settings).ok
