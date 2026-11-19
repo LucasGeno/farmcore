@@ -124,7 +124,9 @@ _FOREIGN_KEYS = text(
     "WHERE contype = 'f' AND connamespace = 'public'::regnamespace ORDER BY 1, 2"
 )
 # Never loaded: the copy starts with no member session, no access token, OAuth code or OAuth
-# token (a token revoked after the backup must not work again) and fresh sign-in throttling,
+# token (a token revoked after the backup must not work again), no OAuth client that registered
+# itself or was fetched (a cache, and a bundle row could pin a forged one; their connections
+# are revoked anyway, so those agents register again) and fresh sign-in throttling,
 # and its schema revision and migration-seeded reference data are the ones restore's migration
 # created (so a bundle can never supply its own unit factors). Nor the task queue: the copy
 # never runs the original's queued or running tasks; its workers plan due work again.
@@ -141,6 +143,7 @@ NOT_LOADED = frozenset(
         "access_token",
         "oauth_code",
         "oauth_token",
+        "oauth_client",
         *QUEUE_TABLES,
         *MIGRATION_OWNED_TABLES,
     }
@@ -150,7 +153,14 @@ _NEW_CLOCK_GENERATION = "UPDATE clock_state SET generation = generation + 1"
 PLAIN_FILES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 LOADER_PREFIX = "farmcore_restore_"
 # Emptied again after the load (an older revision may not have them yet).
-SESSION_TABLES = ("local_session", "login_bucket", "access_token", "oauth_code", "oauth_token")
+SESSION_TABLES = (
+    "local_session",
+    "login_bucket",
+    "access_token",
+    "oauth_code",
+    "oauth_token",
+    "oauth_client",
+)
 # Grants that an access token held (the `share.granted` event marks them): their tokens are not
 # loaded, so revoke them rather than show the farmer an active grant nothing can use. A forged
 # bundle can only add revocations this way.

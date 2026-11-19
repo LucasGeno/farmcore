@@ -150,3 +150,30 @@ class OAuthToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RegisteredClient(Base):
+    """An OAuth client this server knows without the operator listing it (`core/oauth/clients`):
+    one `dynamic`ally registered (RFC 7591, from the address slot `peer_slot`, never the
+    address) or the last valid client ID metadata document fetched from the URL `client_id`
+    (`metadata`, trusted until `fresh_until`, then fetched again). Name and redirect URIs are
+    self-reported by the client."""
+
+    __tablename__ = "oauth_client"
+    __table_args__ = (
+        CheckConstraint("registration IN ('dynamic', 'metadata')", name="registration"),
+        CheckConstraint(
+            "(registration = 'dynamic' AND fresh_until IS NULL AND client_id !~ '^https://')"
+            " OR (registration = 'metadata' AND fresh_until IS NOT NULL AND peer_slot IS NULL)",
+            name="registration_fields",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(255), unique=True)
+    registration: Mapped[str] = mapped_column(String(16))
+    client_name: Mapped[str] = mapped_column(String(80))
+    redirect_uris: Mapped[list[str]] = mapped_column(ARRAY(Text))
+    peer_slot: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    fresh_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

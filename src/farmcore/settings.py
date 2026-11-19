@@ -193,8 +193,8 @@ class Settings(BaseSettings):
     mcp_http_public_url: str = ""
     # OAuth 2.1 for MCP (`core/oauth`): this web app (PUBLIC_BASE_URL, the issuer) lets a farm
     # owner approve an agent, which then gets short-lived tokens for MCP_HTTP_PUBLIC_URL only.
-    # Off unless turned on. Clients are registered here until client registration exists:
-    # JSON list of {"client_id", "client_name", "redirect_uris"}.
+    # Off unless turned on. Agents register themselves (`core/oauth/clients.py`); clients
+    # listed here come first: JSON list of {"client_id", "client_name", "redirect_uris"}.
     mcp_oauth_enabled: bool = False
     mcp_oauth_clients: list[OAuthClient] = Field(default_factory=list)
 

@@ -17,6 +17,7 @@ from farmcore.core import errors, registry
 from farmcore.core.cookie_scope import InstallationCookies
 from farmcore.core.identity import require_csrf
 from farmcore.core.manifest import Manifest
+from farmcore.core.oauth.fetch import MetadataFetcher
 from farmcore.core.privacy import PrivacyMiddleware
 from farmcore.core.startup import (
     STATE_OK,
@@ -92,6 +93,7 @@ def create_app(
     registry.load(app, session_factory, manifests)
     # Saved spray weather: from the discovered apps; Weather's live state is read at capture.
     app.state.spray_weather_reader = compose_spray_weather_reader(app.state.all_manifests)
+    app.state.oauth_fetch = MetadataFetcher()  # client ID metadata documents (core/oauth)
 
     @app.get("/health")
     def health(response: Response, session: Session = Depends(get_session)) -> dict:

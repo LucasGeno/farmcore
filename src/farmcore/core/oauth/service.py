@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -36,8 +36,9 @@ from farmcore.core.access import (
 from farmcore.core.identity import token_hash
 from farmcore.core.models.canonical import DataGrant
 from farmcore.core.models.identity import AccessToken, OAuthCode, OAuthToken
+from farmcore.core.oauth.clients import Client
 from farmcore.core.timeline import post_event
-from farmcore.settings import OAuthClient, Settings
+from farmcore.settings import Settings
 
 CODE_PREFIX = "fc_oac_"
 # RFC 6749 §4.1.2 recommends at most 10 minutes; a client exchanges its code at once.
@@ -52,6 +53,17 @@ STATE_MAX = 512
 VSCHAR = re.compile(r"[\x20-\x7e]+")
 AGENT_NAME_MAX = 80
 SOURCE_APP = "core"
+# What each scope lets an agent do, in the owner's words (the consent page).
+SCOPE_TEXT = {
+    "fields:read": "See your fields (parcels) and their crops",
+    "stations:read": "See your weather stations' readings",
+    "logs:read": "See your spray logs and other farm records",
+    "register:read": "See your spray register",
+    "advice:read": "See spray advice and disease risk",
+    "planning:read": "See your planned jobs",
+    "drafts:propose": "Propose new records as drafts you confirm in FarmCore (it cannot save "
+    "anything itself)",
+}
 
 
 class Refused(Exception):
@@ -68,7 +80,7 @@ class Refused(Exception):
 
 @dataclass(frozen=True)
 class AuthorizationRequest:
-    client: OAuthClient
+    client: Client
     redirect_uri: str
     state: str | None
     scopes: tuple[str, ...]
@@ -93,17 +105,16 @@ def valid_state(state: str) -> bool:
     return len(state) <= STATE_MAX and VSCHAR.fullmatch(state) is not None
 
 
-def client(settings: Settings, client_id: str) -> OAuthClient | None:
-    return next((c for c in settings.mcp_oauth_clients if c.client_id == client_id), None)
-
-
 # What a request naming no scope asks for. Never `advice:read`: an owner grants it explicitly.
 DEFAULT_SCOPES = GRANT_READ_SCOPES - {"advice:read"}
 
 
-def parse_request(settings: Settings, params: Mapping[str, Any]) -> AuthorizationRequest:
-    """Check an authorization request (RFC 6749 §4.1.1): a registered client, one of its
-    `redirect_uri`s exactly (OAuth 2.1 §4.1.1: no prefix or pattern), `response_type=code`, an
+def parse_request(
+    settings: Settings, params: Mapping[str, Any], lookup: Callable[[str], Client | None]
+) -> AuthorizationRequest:
+    """Check an authorization request (RFC 6749 §4.1.1): a known client (`lookup`, see
+    `clients.resolve`), one of its `redirect_uri`s exactly (OAuth 2.1 §4.1.1: no prefix or
+    pattern; only a loopback one's port may differ, RFC 8252 §7.3), `response_type=code`, an
     S256 PKCE challenge (`plain` is a downgrade), this installation's MCP endpoint as the
     resource (RFC 8707 §2) and scopes an agent may hold (default: read only). `Refused`
     otherwise."""
@@ -112,11 +123,15 @@ def parse_request(settings: Settings, params: Mapping[str, Any]) -> Authorizatio
         value = params.get(name)
         return value if isinstance(value, str) else ""
 
-    found = client(settings, text("client_id"))
+    found = lookup(text("client_id"))
     if found is None:
-        raise Refused("invalid_request", "This client is not registered here.", redirect=False)
+        raise Refused(
+            "invalid_request",
+            "This client is not registered here, or its metadata could not be read.",
+            redirect=False,
+        )
     redirect_uri = text("redirect_uri")
-    if redirect_uri not in found.redirect_uris:
+    if not found.accepts(redirect_uri):
         raise Refused(
             "invalid_request",
             "This redirect URI is not registered for the client.",

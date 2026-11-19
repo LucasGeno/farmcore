@@ -6,5 +6,9 @@ the MCP endpoint (`core/mcp_http.py`) with a short-lived, audience-bound token.
   the authorize endpoint and owner consent page, and the token and revocation endpoints (the MCP
   SDK's handlers over `service`). The MCP listener serves the resource's metadata (RFC 9728).
 
-Off unless `MCP_OAUTH_ENABLED`. Clients are registered by the operator (`MCP_OAUTH_CLIENTS`).
+- `clients.py`: who a client is (the operator's list, a metadata document URL, or open
+  registration) and which redirect URIs it may use; `fetch.py`: the SSRF-fenced fetch of
+  client ID metadata documents.
+
+Off unless `MCP_OAUTH_ENABLED`.
 """

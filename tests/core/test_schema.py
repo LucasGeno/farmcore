@@ -104,6 +104,22 @@ def test_downgrade_to_core_0001_and_upgrade_again(scratch_db_url: str) -> None:
     cfg = alembic_config(scratch_db_url)
     command.upgrade(cfg, "head")
     assert _public_tables(scratch_db_url) >= CANONICAL_TABLES | IDENTITY_TABLES
+    # A downgrade past core_0016 would leave connected agents' grants active with no client.
+    eng = create_engine(scratch_db_url)
+    try:
+        with eng.begin() as db:
+            db.execute(
+                text(
+                    "INSERT INTO oauth_client(client_id, registration, client_name, redirect_uris)"
+                    " VALUES ('fc_dcr_x', 'dynamic', 'Codex', ARRAY['http://127.0.0.1/cb'])"
+                )
+            )
+        with pytest.raises(RuntimeError, match="downgrade refused"):
+            command.downgrade(cfg, "core_0001")
+        with eng.begin() as db:
+            db.execute(text("DELETE FROM oauth_client"))
+    finally:
+        eng.dispose()
 
     command.downgrade(cfg, "core_0001")
     left = _public_tables(scratch_db_url)
@@ -131,7 +147,7 @@ def test_the_installed_task_library_has_the_schema_core_0009_applied() -> None:
 
 
 def test_single_migration_head_creates_every_core_table(session) -> None:
-    head = "catalog_eu_0001"  # core_0015 -> catalog_eu_0001
+    head = "core_0016"  # catalog_eu_0001 -> core_0016
     assert ScriptDirectory.from_config(alembic_config()).get_heads() == [head]
     assert session.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     assert _tables(session) >= CANONICAL_TABLES | IDENTITY_TABLES

@@ -4,6 +4,12 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- With `MCP_OAUTH_ENABLED`, agents register themselves: an https `client_id` that is the URL of
+  their Client ID Metadata Document (fetched with SSRF fences and cached), or open Dynamic
+  Client Registration at `/oauth/register` (RFC 7591, public clients, rate-limited). Loopback
+  redirect URIs may change port, as Claude Code and Codex need. The consent page marks names
+  agents gave themselves as self-reported and says each scope in plain words.
+  `MCP_OAUTH_CLIENTS` stays optional. Migration `core_0016`.
 - Agent tokens and OAuth connections that hold `advice:read` can now read the farm's stored spray
   advice through the advisor tools (it was a no-op before). Existing ones start doing so on
   upgrade: review Sharing and remove `advice:read` from any you do not want to read advice. A
