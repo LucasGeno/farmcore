@@ -1,0 +1,27 @@
+{% extends "core/base.html" %}
+{% block title %}Select public parcels · farmcore{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="/static/core/vendor/maplibre-gl-4.7.1.css">
+<script src="/static/core/vendor/maplibre-gl-4.7.1.js"></script>
+<script src="/static/onboarding/registry.js" defer></script>
+{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-semibold">Select your public CAP parcels</h1>
+<p class="mt-2 text-muted">Tap boundaries or use the checkboxes, then review before saving. Public declarations may be out of date.</p>
+<p class="mt-2"><a class="underline" href="{{ farm_url('/onboarding/import') }}">Import a file instead</a> · <a class="underline" href="{{ farm_url('/onboarding/location') }}">Set farm location</a></p>
+<p id="registry-status" role="status" class="mt-2">{{ message or ('Load a small map window around your farm.' if point else 'Save your farm location first.') }}</p>
+{% if point %}
+<div id="registry-map" class="h-96 mt-4" aria-label="Public parcels near your farm"
+     data-lon="{{ point.longitude }}" data-lat="{{ point.latitude }}"
+     data-url="{{ farm_url('/onboarding/registry/features') }}"
+     data-tile-url="{{ tile_url }}" data-tile-attribution="{{ tile_attribution }}"></div>
+<button id="registry-load" type="button" class="mt-2 min-h-[48px] rounded-lg border border-line px-4">Load parcels in this window</button>
+<p class="mt-2 text-sm text-muted">France: IGN RPG · Etalab 2.0. Spain: FEGA SIGPAC · CC BY 4.0. Only the bounding box is sent to the registry.</p>
+<form id="registry-selection" action="{{ farm_url('/onboarding/registry/claim') }}" method="post" class="mt-4">
+{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+<input type="hidden" name="candidates" id="registry-candidates">
+<fieldset><legend class="font-semibold">Your parcels</legend><div id="registry-options"></div></fieldset>
+<button id="registry-review" disabled class="mt-2 min-h-[48px] rounded-lg border border-line px-4" type="submit">Review selected parcels</button>
+</form>
+{% endif %}
+{% endblock %}

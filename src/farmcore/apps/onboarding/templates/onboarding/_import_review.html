@@ -1,8 +1,12 @@
 <h2 class="text-lg font-semibold">Parcels to import</h2>
 <table class="mt-2 w-full text-sm">
-<caption class="text-left text-muted">Check boundaries in your source file. Crop codes are retained; unknown crops stay unknown.</caption>
-<thead><tr><th scope="col">Name</th><th scope="col">Area (ha)</th><th scope="col">Crop code</th></tr></thead>
-<tbody>{% for p in draft.payload.parcels %}<tr><td>{{ p.name }}</td><td class="tabular-nums">{{ '%.4f'|format(p.area_ha) }}</td><td>{{ p.crop_code or 'Unknown' }}</td></tr>{% endfor %}</tbody>
+<caption class="text-left text-muted">Check the selected boundaries. Crop codes are matched using the public crop crosswalk; unknown crops stay unknown.</caption>
+<thead><tr><th scope="col">Name</th><th scope="col">Area (ha)</th><th scope="col">Crop code</th><th scope="col">Crop</th></tr></thead>
+<tbody>{% for p in draft.payload.parcels %}<tr><td>{{ p.name }}</td><td class="tabular-nums">{{ '%.4f'|format(p.area_ha) }}</td><td>{{ p.crop_code or 'Unknown' }}</td><td>{{ p.crop_name or 'Unknown' }}</td></tr>{% endfor %}</tbody>
 </table>
 
 {% for p in draft.payload.parcels %}{% for message in p.messages %}<p role="status" class="mt-2">{{ p.name }}: {{ message }}</p>{% endfor %}{% endfor %}
+
+{% for p in draft.payload.parcels %}{% if p.attribution %}<p class="mt-2 text-sm">{{ p.name }}: {{ p.attribution }} · {{ p.licence }} · {% if p.year %}{{ p.year }}{% elif p.retrieved_at %}Retrieved {{ p.retrieved_at }}{% else %}Year not published{% endif %} · {{ p.source_ref }}</p>{% endif %}{% endfor %}
+
+<p class="mt-2 text-sm">After confirming parcels, <a class="underline" href="{{ farm_url('/onboarding/crops') }}">review crops and choose the season start date</a>.</p>

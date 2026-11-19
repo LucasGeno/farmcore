@@ -375,3 +375,6 @@ Known limits:
   rule) but not an attempt or intent already admitted.
 - Two concurrent switches (on for an app, off for its dependency) read states without a lock and
   can both pass; the dependant then counts as off everywhere.
+
+Public CAP map claims, canonical source references, snapshot signing and provider
+maintenance: [registry parcels](registry-parcels.md).

@@ -104,7 +104,7 @@ class Provenance(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     # manual: typed by a farmer; agent: proposed by an external agent through its token.
-    source_type: Literal["voice", "file", "isoxml", "manual", "agent"]
+    source_type: Literal["voice", "file", "isoxml", "manual", "agent", "registry"]
     file_name: str | None = Field(default=None, max_length=255)
     file_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     registry_ref: str | None = Field(default=None, max_length=200)

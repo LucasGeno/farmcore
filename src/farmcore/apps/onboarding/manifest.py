@@ -11,6 +11,7 @@ MANIFEST = Manifest(
         "farmcore.apps.onboarding.routes:router",
         "farmcore.apps.onboarding.import_routes:router",
         "farmcore.apps.onboarding.routes_setup:router",
+        "farmcore.apps.onboarding.registry_routes:router",
     ),
     draft_kinds=(
         DraftKind(
