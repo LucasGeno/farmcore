@@ -222,7 +222,10 @@ class Log(Base):
 
     parcels: Mapped[list[Parcel]] = relationship(secondary="log_parcel", passive_deletes=True)
     quantities: Mapped[list[Quantity]] = relationship(
-        back_populates="log", cascade="all, delete-orphan", passive_deletes=True
+        back_populates="log",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        order_by="Quantity.id",
     )
     sources: Mapped[list[LogSource]] = relationship(
         back_populates="log", cascade="all, delete-orphan", passive_deletes=True
