@@ -97,6 +97,12 @@ def record_receipt(
             "url": fetched.request.url,
             "params": fetched.request.params,
             "endpoint_kind": fetched.request.endpoint_kind,
+            # Receipt metadata retains the provider's wording without a schema migration.
+            **(
+                {"derived_attribution": licence.derived_attribution}
+                if licence.derived_attribution
+                else {}
+            ),
         },
         fetched_at=fetched.fetched_at,
         licence=identifier,

@@ -399,7 +399,8 @@ def test_owner_can_choose_advice_only_preset_and_recipient_opens_it(
     page = recipient_browser.get(f"/share/as/{grant.id}/")
     assert page.status_code == 200
     assert f'href="/share/as/{grant.id}/advice.json"' in page.text
-    assert "Current inputs are not authorized" in page.text
+    assert "Current advice" in page.text
+    assert "Weather inputs are redacted" in page.text
     assert "Not shared: this grant does not include the spray register" in page.text
 
 
@@ -895,8 +896,9 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
     from farmcore.apps.advisor import tools
     from farmcore.apps.share.service import grant_repo
     from farmcore.core.models.canonical import Advice, Asset
-    from farmcore.core.models.weather import WeatherReceipt
     from farmcore.core.tools import ToolContext
+    from farmcore.core.weather.contract import Fetched, Licence, Request
+    from farmcore.core.weather.store import record_receipt
     from tests.apps.share.synth import NOW
 
     bound_grant.scopes = ["advice:read", "fields:read"]
@@ -906,23 +908,34 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
         parcel_id=demo.parcels[0].id,
         evaluated_at=NOW,
         decision="protected",
-        reasons=[{"rule": "rain", "inputs": {"rr1_mm": 987.6}}],
+        reasons=[{"rule": "rain", "inputs": {"rr1_mm": 987.6}, "note": "31.7 °C observed"}],
         props={
             "headline": "Protected: 987.6 mm rain since spray",
             "mm_since_spray": 987.6,
+            "incubation_pct": 77.7,
             "assessment_status": "evaluable",
         },
     )
-    receipt = WeatherReceipt(
+    receipt = record_receipt(
+        session,
         farm_id=demo.farm.id,
-        provider="aemet",
-        dataset="synthetic",
-        fetched_at=NOW,
-        licence="AEMET reuse",
-        attribution="© AEMET",
-        redistribution=True,
+        provider="national-observations",
+        licence=Licence(
+            "Named reuse licence",
+            "Unaltered source credit",
+            True,
+            derived_attribution="Provider-supplied derived credit",
+        ),
+        fetched=Fetched(Request("synthetic", "https://example.test/weather", {}), NOW, b"one", []),
     )
-    session.add_all([row, receipt])
+    record_receipt(
+        session,
+        farm_id=demo.farm.id,
+        provider="fallback-source",
+        licence=Licence("etalab-2.0", "Fallback source credit", True),
+        fetched=Fetched(Request("synthetic", "https://example.test/weather", {}), NOW, b"two", []),
+    )
+    session.add(row)
     session.commit()
     url = f"/share/as/{bound_grant.id}"
     for state in ("allowed", "restricted", "stale", "farm-caveat"):
@@ -938,16 +951,29 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
         response = recipient_browser.get(url + "/advice.json")
         assert response.status_code == 200
         [shared] = response.json()
+        assert "31.7" not in response.text
         assert "987.6" not in response.text
+        assert "77.7" not in response.text
         assert shared["mm_since_spray"] is None
         context = ToolContext(
             repo=grant_repo(session, bound_grant), now=NOW, tz=ZoneInfo("Europe/Paris")
         )
         mcp = tools.parcel_status(context, "P1")
+        today = tools.today(context)
+        assert all(
+            value not in str(mcp.facts) + mcp.text + str(today.facts) + today.text
+            for value in ("31.7", "77.7", "987.6")
+        )
         if state == "allowed":
             assert shared["decision"] == mcp.facts["decision"] == "protected"
             assert shared["reasons"][0]["inputs"] is None
-            assert "Fuente: AEMET" in shared["headline"]
+            assert shared["headline"] == "Protected"
+            assert (
+                shared["attribution"]
+                == mcp.facts["attribution"]
+                == ["Fallback source credit", "Provider-supplied derived credit"]
+            )
+            assert today.facts["parcels"][0]["attribution"] == shared["attribution"]
             assert shared["headline"] == mcp.facts["headline"]
             owner = tools.parcel_status(
                 ToolContext(repo=owner_repo, now=NOW, tz=ZoneInfo("Europe/Paris")), "P1"
@@ -961,6 +987,8 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
                 "farm-caveat": "Archive data only.",
             }[state]
             assert shared["decision"] == "none"
+            assert shared["incubation_pct"] is None
+            assert shared["attribution"] == []
             assert reason in shared["headline"] and reason in mcp.text
             assert reason in recipient_browser.get(url + "/").text
         session.refresh(row)

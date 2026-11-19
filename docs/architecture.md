@@ -406,3 +406,21 @@ Season & impact (`kpi`, a replay of its advice). Without it:
 `tests/core/test_registry.py` imports every module of every other app, the CLI and the web app in
 a process where the advisor package does not exist; `tests/core/test_bundle_without_crop_protection.py`
 walks such a bundle over HTTP with the crop-protection packages blocked in-process.
+
+### Shared advice and weather provenance limits
+
+Shared advice and advisor tokens use the same farm-wide, timeless receipt gate. A farm with
+no weather receipts currently passes that gate: missing receipts are treated as redistributable,
+including legacy observations. This is a known limit, not proof of a licence; unknown-licence
+receipts themselves prohibit redistribution. Exact enforcement needs contributing receipt IDs
+on each evaluation.
+
+Derived credits use the provider's `Licence.derived_attribution`, retained in the receipt's
+`request.derived_attribution` metadata, falling back to `WeatherReceipt.attribution` for existing
+receipts and providers without separate wording. Credits currently include every redistributable
+receipt on the farm, even sources not used by that evaluation; receipt lineage is needed to
+narrow them. Shared advice and token facts expose those credits as an `attribution` list.
+
+Sharing's CSV omits all saved weather because capture snapshots lack receipt provenance.
+The omission is explained on Sharing and in the response header, but the downloaded CSV itself
+contains no omission note; a recipient receiving only the file will not see that explanation.

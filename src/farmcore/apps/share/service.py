@@ -368,6 +368,7 @@ def shared_advice(row) -> dict[str, Any]:
     )
     data = {key: stored[key] for key in allowed}
     props = row.props or {}
+    data["attribution"] = props.get("attribution", [])
     data["assessment_status"] = props.get("assessment_status")
     version = props.get("config_version")
     data["config_version"] = None

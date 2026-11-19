@@ -20,10 +20,20 @@ SCOPE = service.SCOPE
 MAP_PATH = "/fields/"
 MAX_CARD_BUTTONS = 4  # more parcels to spray than this: one "Open map" button instead
 TODAY_FACTS = frozenset(
-    {"parcels", "parcel", "decision", "headline", "advised", "assessment_status", "config_version"}
+    {
+        "parcels",
+        "parcel",
+        "decision",
+        "headline",
+        "advised",
+        "assessment_status",
+        "config_version",
+        "attribution",
+    }
 )
 STATUS_FACTS = frozenset(
     {
+        "attribution",
         "parcel",
         "decision",
         "headline",
@@ -228,6 +238,11 @@ def today(ctx: ToolContext) -> ToolResult:
                 else "unavailable",
                 "config_version": _version(a) if a else None,
                 "headline": (a.props or {}).get("headline") if a else None,
+                **(
+                    {"attribution": (a.props or {}).get("attribution", []) if a else []}
+                    if ctx.repo.grant_view
+                    else {}
+                ),
             }
             for p, a in rows
         ]
@@ -321,6 +336,7 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
         "config_version": _version(row),
         "decision": row.decision,
         "headline": props.get("headline"),
+        **({"attribution": props.get("attribution", [])} if ctx.repo.grant_view else {}),
         "protected_until": _local(row.protected_until, ctx),
         "mm_since_spray": service.redact_inputs(ctx.repo, props.get("mm_since_spray")),
         "next_window": (
