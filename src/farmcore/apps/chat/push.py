@@ -33,7 +33,6 @@ from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
-from farmcore.apps.advisor import priority
 from farmcore.apps.chat.telegram import (
     HttpxTelegramSender,
     TelegramOutcomeUnknown,
@@ -206,7 +205,7 @@ def _advance_farm(ctx: JobContext, farm_id: int) -> None:
     rows = repo.list(
         Advice, Advice.id.in_([i for i in advice_ids if i is not None]), scope="advice:read"
     )
-    priorities = {a.id: getattr(priority.of_advice(a), "level", None) for a in rows}
+    priorities = {a.id: getattr(_priority_of(a), "level", None) for a in rows}
     changes = [_change(e, parcels, priorities) for e in latest.values()]
     text, buttons = digest(changes, ctx.settings.public_base_url, repo.farm_id)
     for chat_id in chats:
@@ -219,6 +218,16 @@ def _advance_farm(ctx: JobContext, farm_id: int) -> None:
             payload={"chat_id": chat_id, "text": text, "url_buttons": [list(b) for b in buttons]},
             ttl=DIGEST_TTL,
         )
+
+
+def _priority_of(advice: Advice) -> Any:
+    """Crop protection's priority of a stored advice row; None in a bundle without crop
+    protection (events it wrote before it was removed still go out, ordered by alias)."""
+    try:
+        from farmcore.apps.advisor import priority
+    except ModuleNotFoundError:
+        return None
+    return priority.of_advice(advice)
 
 
 class TelegramDelivery:

@@ -50,12 +50,12 @@ def test_weather_only_consent_preserves_forecast_without_parameter_or_observatio
     repo = ScopedRepository(session, farm.id, grant, "recipient", "consent-bound weather")
     now = datetime(2024, 4, 9, 4, tzinfo=UTC)
     plan = plan_days(repo, now, settings.display_tz)
-    notifications = items(repo, now, settings.display_tz, ["forecast"])
+    notifications = items(repo, now, settings.display_tz, ["forecast", "advisor"])
     assert len(plan["days"]) == 14
     assert any(day["grade"] == "best" for day in plan["days"])
     assert "not authorized" in plan["unavailable"]
     assert all(not day["parcels"] for day in plan["days"])
-    assert notifications
+    assert any("#spray-window-" in n.href for n in notifications)
 
 
 def test_a_record_only_consent_cannot_read_recommendation_review_notes():

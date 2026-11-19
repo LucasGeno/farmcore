@@ -49,12 +49,11 @@ def bot_boundaries(monkeypatch, settings):
         event.remove(Engine, "engine_disposed", disposed)
 
 
-@pytest.mark.parametrize("disabled_app", ["chat", "advisor"])
 def test_bot_exits_cleanly_when_chat_is_off_before_constructing_transports_or_models(
-    committed_session_factory, bot_boundaries, disabled_app
+    committed_session_factory, bot_boundaries
 ):
     with committed_session_factory() as session:
-        session.add(AppModule(name=disabled_app, version="0.1.0", state="uninstalled"))
+        session.add(AppModule(name="chat", version="0.1.0", state="uninstalled"))
         session.commit()
 
     result = CliRunner().invoke(cli, ["bot"])
@@ -64,7 +63,8 @@ def test_bot_exits_cleanly_when_chat_is_off_before_constructing_transports_or_mo
     assert result.output.strip() == "Chat is off; the bot will not start."
 
 
-@pytest.mark.parametrize("app_state", [None, ("chat", "installed"), ("kpi", "uninstalled")])
+# Crop protection off: the bot still logs records (chat no longer needs it).
+@pytest.mark.parametrize("app_state", [None, ("chat", "installed"), ("advisor", "uninstalled")])
 def test_enabled_bot_polls_and_closes_resources(
     committed_session_factory, bot_boundaries, app_state
 ):

@@ -1,0 +1,7 @@
+{#- A capability this installation cannot offer because the app it needs is not on
+    (`web.render_needs_app`). It says so; it never implies "no risk" or "nothing to do". -#}
+<section data-needs-app="{{ needs_app }}" class="min-w-0 rounded-xl border border-line bg-surface p-4">
+  <h2 class="text-lg font-semibold">{{ capability }} unavailable</h2>
+  <p class="mt-2 text-[15px]">{{ capability }} needs {{ needs_title }}, which is not installed on this farm.</p>
+  <p class="mt-2 text-[14px] text-muted">Nothing here was assessed; this is not an all-clear.</p>
+</section>

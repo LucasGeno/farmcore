@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -82,6 +85,49 @@ def test_create_app_with_only_a_real_app_manifest_loads_just_that_app(
 
     app = create_app(settings, manifests=[FIELDS], session_factory=session_factory)
     assert app.state.manifests == [FIELDS]
+
+
+# Crop protection and the apps documented as extending it (docs/architecture.md, "Bundles
+# without crop protection"); every other app must work in a bundle that leaves these out.
+CROP_PROTECTION = {"advisor", "kpi", "planning", "review"}
+
+BUNDLE_PROBE = """
+import importlib, json, pkgutil, sys
+import farmcore, farmcore.apps, farmcore.cli, farmcore.main
+from farmcore.core import registry
+assert farmcore.__path__[0].startswith(sys.argv[1]), farmcore.__path__
+for info in pkgutil.walk_packages(farmcore.apps.__path__, "farmcore.apps."):
+    importlib.import_module(info.name)
+print(json.dumps([m.name for m in registry.discover()]))
+"""
+
+
+def test_a_bundle_without_crop_protection_imports_every_other_app_the_cli_and_the_web_app(
+    tmp_path: Path,
+) -> None:
+    # Bug prevented: a non-crop app importing the advisor package (directly or through another
+    # app) kills `create_app`, the worker and the `farmcore` CLI of a bundle built without it.
+    import farmcore
+
+    source = Path(farmcore.__path__[0])
+    bundle = tmp_path / "farmcore"
+    (bundle / "apps").mkdir(parents=True)
+    for entry in source.iterdir():
+        if entry.name not in {"apps", "__pycache__"}:
+            (bundle / entry.name).symlink_to(entry)
+    for entry in (source / "apps").iterdir():
+        if entry.name not in CROP_PROTECTION | {"__pycache__"}:
+            (bundle / "apps" / entry.name).symlink_to(entry)
+    done = subprocess.run(
+        [sys.executable, "-c", BUNDLE_PROBE, str(tmp_path)],
+        env={"PYTHONPATH": str(tmp_path), "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr[-3000:]
+    expected = {m.name for m in registry.discover()} - CROP_PROTECTION
+    assert set(json.loads(done.stdout.splitlines()[-1])) == expected
 
 
 def _rows(factory) -> dict[str, tuple[str, str, object]]:

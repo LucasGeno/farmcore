@@ -3,8 +3,9 @@
 - `discover(packages)`: core plus every subpackage holding a `manifest.py` with `MANIFEST`,
   returned in load order; registers each app's `resource_scopes` with the scoped repository.
 - `resolve_order(manifests)`: Kahn's algorithm, ties alphabetical, core first (every other app
-  implicitly depends on it). A dependency on core is always met, even when core is not in the
-  list, so `create_app(manifests=[MANIFEST])` loads just that app (01 contract). Cycles, unmet
+  implicitly depends on it); an app's `after` apps, when present, come before it too. A
+  dependency on core is always met, even when core is not in the list, so
+  `create_app(manifests=[MANIFEST])` loads just that app (01 contract). Cycles, unmet
   depends and duplicate names raise `RegistryError` naming the apps, so `create_app` fails at
   start.
 - `load(app, session_factory, manifests=None)`: upsert `app_module` rows (new -> installed,
@@ -146,7 +147,7 @@ def resolve_order(manifests: list[Manifest]) -> list[Manifest]:
                     f"app {m.name!r} needs {dependency!r} {specifier}, "
                     f"but {dependency!r} is {found.version}"
                 )
-    deps = {name: set(m.depends) & by_name.keys() for name, m in by_name.items()}
+    deps = {name: (set(m.depends) | set(m.after)) & by_name.keys() for name, m in by_name.items()}
     if CORE.name in by_name:
         for name in deps:
             if name != CORE.name:

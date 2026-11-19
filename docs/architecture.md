@@ -24,8 +24,9 @@ database, a small core and installable apps, in the style of Odoo.
 
 - **App registry.** Each app ships a manifest (`core/manifest.py`): `name`, `depends`, `scopes`,
   `models`, `jobs`, `routes`, plus what it adds to the UI (`nav`, Today `widgets`, `map_layers`,
-  map panel sections, debug panels, assistant `tools`). Apps load in dependency order. The core
-  and the page shell import no app: they render what the enabled apps declare. Required apps
+  map panel sections, debug panels, assistant `tools`). Apps load in dependency order, and after
+  their optional `after` apps when present. The core and the page shell import no app: they
+  render what the enabled apps declare. Required apps
   (Today, Map & parcels, Records) are always on; the others switch on and off on `/apps`
   (administrator only) or with `farmcore apps` ([module lifecycle](#module-lifecycle)).
 - **Canonical model**, farmOS-shaped: `farm`, `parcel` (PostGIS polygon + validated `props`
@@ -378,3 +379,25 @@ Known limits:
 
 Public CAP map claims, canonical source references, snapshot signing and provider
 maintenance: [registry parcels](registry-parcels.md).
+
+### Bundles without crop protection
+
+Crop protection (`advisor`) is optional. A bundle may leave it out, or an administrator may switch
+it off, and every other app still loads, starts and navigates. Only these apps extend crop
+protection and need it (`depends`): Planned jobs (`planning`), expert reviews (`review`) and
+Season & impact (`kpi`, a replay of its advice). Without it:
+
+- Forecast keeps its receipts and the five-day forecast weather; the spray window, its parcel
+  section and Plan say they need crop protection ("not an all-clear"), as does the assistant,
+  which no longer offers the plan tool.
+- Notifications list station and data issues only; no advice or spray-window items.
+- Chat logs records as before; its advice digest has no advice events to send. With crop
+  protection present, chat loads after it (`Manifest.after`), so a replay step's digest carries
+  that step's evaluation.
+- Hourly weather rows (`HourlyObs`, `core/weather/hourly.py`) belong to core, so reading a
+  forecast never imports crop protection. Code that grades spray windows imports the advisor
+  only on routes that first check it is on.
+
+`tests/core/test_registry.py` imports every module of every other app, the CLI and the web app in
+a process where the advisor package does not exist; `tests/core/test_bundle_without_crop_protection.py`
+walks such a bundle over HTTP.

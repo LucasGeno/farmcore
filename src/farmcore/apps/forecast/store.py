@@ -21,12 +21,12 @@ from typing import Any
 from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
-from farmcore.apps.advisor.engine import HourlyObs
 from farmcore.apps.forecast import normalised
 from farmcore.apps.forecast.models import ForecastRun, ForecastValue
 from farmcore.apps.forecast.sources import Run
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.weather import WeatherForecast
+from farmcore.core.weather.hourly import HourlyObs
 from farmcore.core.weather.variables import VARIABLES as CF
 
 SCOPE = "stations:read"

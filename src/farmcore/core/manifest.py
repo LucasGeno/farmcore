@@ -460,6 +460,10 @@ class Manifest:
     version: str
     summary: str = ""
     depends: tuple[str, ...] = ()
+    # Optional apps this one loads (and runs its jobs) after when they are present, without
+    # needing them: chat's advice digest runs after crop protection's evaluation, and loads
+    # without it.
+    after: tuple[str, ...] = ()
     scopes: tuple[str, ...] = ()
     models: tuple[str, ...] = ()  # modules to import
     jobs: tuple[JobSpec, ...] = ()

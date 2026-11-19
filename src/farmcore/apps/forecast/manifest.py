@@ -9,7 +9,7 @@ MANIFEST = Manifest(
     name="forecast",
     version="0.1.0",
     summary="The next five days ranked for spraying, from an imported forecast.",
-    depends=("stations", "advisor"),
+    depends=("stations",),
     scopes=("stations:read", "advice:read", "fields:read", "planning:write"),
     resource_scopes=(
         ("forecast_run", ("stations:read",)),

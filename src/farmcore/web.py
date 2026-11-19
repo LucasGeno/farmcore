@@ -134,6 +134,25 @@ def is_sunlight(request: Request) -> bool:
     return request.cookies.get(SUNLIGHT_COOKIE) == "1"
 
 
+def app_is_on(request: Request, name: str) -> bool:
+    """App `name` is loaded and switched on for this request (`visible_manifests`)."""
+    return any(m.name == name for m in visible_manifests(request))
+
+
+def render_needs_app(
+    request: Request, capability: str, needs: str, needs_title: str, *, page: bool = False
+) -> HTMLResponse:
+    """`capability` cannot be offered because app `needs` (`needs_title` to the farmer) is not
+    on: a fragment, or a whole page, that says so instead of an empty or all-clear answer."""
+    return render(
+        request,
+        "core/needs_app.html" if page else "core/_needs_app.html",
+        capability=capability,
+        needs_app=needs,
+        needs_title=needs_title,
+    )
+
+
 def render(request: Request, name: str, **ctx: Any) -> HTMLResponse:
     """Render a template with the shell context: `manifests` (the visible apps: loaded and not
     switched off), `is_admin`, `expert`, and the grouped `nav` with the item matching the current

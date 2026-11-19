@@ -10,9 +10,11 @@ MANIFEST = Manifest(
     demo_reset=("farmcore.apps.chat.conversation:reset",),
     version="0.1.0",
     summary="Log a spray by voice or text in Telegram and get the advice there.",
-    depends=("fields", "operations", "advisor"),
+    depends=("fields", "operations"),
+    # Runs after `advisor.evaluate` in the same replay step (chat loads after advisor when crop
+    # protection is in the bundle; without it the digest has no advice events to send).
+    after=("advisor",),
     scopes=("logs:write",),
-    # Runs after `advisor.evaluate` in the same replay step (chat loads after advisor).
     jobs=(
         JobSpec(
             name="chat.push_advice",
