@@ -23,6 +23,7 @@ DEFAULT_OPEN_METEO_BASE_URL = "https://api.open-meteo.com"
 DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL = "https://single-runs-api.open-meteo.com"
 DEFAULT_METEOFRANCE_API_BASE_URL = "https://public-api.meteofrance.fr/public"
 DEFAULT_METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token"
+DEFAULT_CDSAPI_URL = "https://cds.climate.copernicus.eu/api"
 
 
 def _check_http_url(v: str) -> str:
@@ -83,6 +84,12 @@ class Settings(BaseSettings):
     meteofrance_token_url: str = DEFAULT_METEOFRANCE_TOKEN_URL
     meteofrance_client_id: SecretStr | None = None
     meteofrance_client_secret: SecretStr | None = None
+    # Copernicus Climate Data Store (ERA5 history, `weather_era5`): the installation's free
+    # account key (the cdsapi variable names), sent as `PRIVATE-TOKEN`; never logged, stored or
+    # rendered. The URL stays declared before the key so a refusal never prints the key.
+    # No key: the backfill stays off.
+    cdsapi_url: str = DEFAULT_CDSAPI_URL
+    cdsapi_key: SecretStr | None = None
     # Optional address search on the location step: a Nominatim or Photon base URL. Empty (the
     # default) keeps the geocoder off; map, browser location and coordinates still work.
     geocoder_base_url: str = ""
@@ -169,6 +176,7 @@ class Settings(BaseSettings):
         "open_meteo_single_runs_base_url",
         "meteofrance_api_base_url",
         "meteofrance_token_url",
+        "cdsapi_url",
     )
     @classmethod
     def _http_url_without_credentials(cls, v: str) -> str:
@@ -198,6 +206,12 @@ class Settings(BaseSettings):
             for url in (self.meteofrance_api_base_url, self.meteofrance_token_url):
                 if urlsplit(url).scheme != "https":
                     raise ValueError("METEOFRANCE_CLIENT_SECRET requires https Météo-France URLs")
+        return self
+
+    @model_validator(mode="after")
+    def _cdsapi_key_requires_https(self) -> Settings:
+        if self.cdsapi_key is not None and urlsplit(self.cdsapi_url).scheme != "https":
+            raise ValueError("CDSAPI_KEY requires an https CDSAPI_URL")
         return self
 
     @model_validator(mode="after")

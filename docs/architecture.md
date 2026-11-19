@@ -59,7 +59,9 @@ database, a small core and installable apps, in the style of Odoo.
   `weather_station`, `weather_observation`, `weather_forecast`: CF variables, licence and
   attribution per receipt), which the station and forecast views and the advisor read. The
   replayed Météo-France station, live Météo-France observations (`weather_meteofrance`, DPObs
-  and the DPClim archive, under the same station) and Open-Meteo are the providers today; the legacy
+  and the DPClim archive, under the same station), ERA5 history through Copernicus
+  (`weather_era5`: a model's grid point, flagged `model-reanalysis`) and Open-Meteo are the
+  providers today; the legacy
   `observation` and `forecast_value` rows are still written beside them until the contract step.
   Saving the farm pin chooses its sources (`core/weather/selection.py`): the country's station
   providers, stations within 50 km ranked by great-circle distance with any station more than
