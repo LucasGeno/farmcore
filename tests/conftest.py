@@ -95,6 +95,8 @@ def settings(_test_database: URL) -> Settings:
         telegram_bot_token=None,
         gemini_api_key=None,
         vertex_access_token=None,
+        meteofrance_client_id=None,
+        meteofrance_client_secret=None,
         admin_token=SecretStr("test-installation-operator-token-00000000"),
         extractor="fake",
         vertex_project="example-project",

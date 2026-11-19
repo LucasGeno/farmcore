@@ -189,9 +189,17 @@ def test_only_an_owner_can_save_the_location(session, session_factory, settings)
             headers=headers,
         )
         assert refused.status_code == 403
+        sources = advisor_client.post(
+            "/onboarding/weather-sources",
+            params={"farm": farm.id},
+            data={"elevation": "900"},
+            headers=headers,
+        )
+        assert sources.status_code == 403
 
     session.expire_all()
     assert "forecast_location" not in (session.get(Farm, farm.id).props or {})
+    assert "elevation_m" not in (session.get(Farm, farm.id).props or {})
 
 
 @pytest.mark.parametrize(("outcome", "status"), [("results", 200), ("failure", 502)])

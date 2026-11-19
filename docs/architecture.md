@@ -61,6 +61,14 @@ database, a small core and installable apps, in the style of Odoo.
   replayed Météo-France station, live Météo-France observations (`weather_meteofrance`, DPObs
   and the DPClim archive, under the same station) and Open-Meteo are the providers today; the legacy
   `observation` and `forecast_value` rows are still written beside them until the contract step.
+  Saving the farm pin chooses its sources (`core/weather/selection.py`): the country's station
+  providers, stations within 50 km ranked by great-circle distance with any station more than
+  300 m above or below the farm down-ranked (the farm elevation is the owner's, never derived),
+  every forecast provider, and backfill providers (`Capabilities.backfill`, ERA5 once its app
+  exists). Discovery runs outside the farm's locks, at most 5 s per provider, and asks a
+  live-only provider (`Capabilities.live_only`) only in live clock mode; a provider that is not
+  configured or fails is noted. The choice and its reasons live in
+  `farm.props["weather_sources"]`; in Expert view the owner overrides them on the location step.
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
 
@@ -68,7 +76,7 @@ database, a small core and installable apps, in the style of Odoo.
 
 | App | Does |
 |---|---|
-| Set up | First-run location step: time zone and country derived offline, optional address search |
+| Set up | First-run location step: time zone and country derived offline, optional address search, weather sources chosen from the pin |
 | Today | Home page assembled from app widgets |
 | Map & parcels | Aerial map (MapLibre) with layers and panel sections contributed by apps |
 | Records | Spray logs, ISOXML import, Reg. (EU) 2023/564 register with record checks |

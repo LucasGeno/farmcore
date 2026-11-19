@@ -6,6 +6,12 @@ offline and stores the accepted facts. A sea, border or unknown-time-zone point 
 step with a question instead of a guess. `POST /onboarding/location/search` is the optional
 address search (only when `GEOCODER_BASE_URL` is configured; owner only, one request per
 submit, with a descriptive User-Agent).
+
+Saving the point also chooses the farm's weather sources from the providers of the apps that are
+on now (`service.discover`, outside the farm's locks, each provider bounded by
+`service.DISCOVERY_TIMEOUT_SECONDS`; live-only providers only in live clock mode); the step shows
+them with their reasons. In Expert view the
+owner can override them: `POST /onboarding/weather-sources` (owner only).
 """
 
 from __future__ import annotations
@@ -19,6 +25,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from farmcore.apps.onboarding import geocode, service
 from farmcore.core.access import Repo, ScopedRepository, require_farm_owner
+from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.farm_location import (
     Located,
     country_options,
@@ -26,8 +33,11 @@ from farmcore.core.farm_location import (
     location_needed,
 )
 from farmcore.core.identity import principal_for
+from farmcore.core.logs import lock_farm
 from farmcore.core.models.canonical import Farm
+from farmcore.core.registry import live_active
 from farmcore.core.tour import is_tour
+from farmcore.core.weather import registry as weather_registry
 from farmcore.web import context_url, is_admin, render
 
 router = APIRouter()
@@ -77,6 +87,7 @@ def _page(
         countries=country_options(),
         location_needed=location_needed(farm),
         start=farm_location(farm),
+        sources=service.sources_of(farm),
     )
     response.status_code = status
     response.headers["Cache-Control"] = "no-store"
@@ -149,8 +160,44 @@ def save_location(
             "mode": "manual",
         }
         return _page(request, repo, form=proposed, located=located, status=422)
-    service.store(_farm(repo), choice)
+    settings = request.app.state.settings
+    providers = weather_registry.installed(
+        live_active(repo.session, request.app.state.manifests),
+        settings,
+        timeout=service.DISCOVERY_TIMEOUT_SECONDS,
+    )
+    live = isinstance(get_clock(repo.session, settings), LiveClock)
+    farm = _farm(repo)
+    # Providers may answer over the network: end the request transaction first, so its farm
+    # locks (`get_repo`) never wait on them, then take them again and re-check the owner.
+    repo.session.commit()
+    chosen = service.discover(list(providers), farm, choice, live=live)
+    lock_farm(repo.session, repo.farm_id)
+    require_farm_owner(request, repo)
+    farm = _farm(repo)
+    repo.session.refresh(farm, with_for_update=True)
+    service.store(farm, choice)
+    service.store_sources(farm, chosen)
     return RedirectResponse(context_url(request, "/today/"), status_code=303)
+
+
+@router.post(
+    "/weather-sources", dependencies=[Depends(require_farm_owner)], response_class=HTMLResponse
+)
+def override_sources(
+    request: Request,
+    repo: Repo,
+    station: Annotated[str, Form()] = "",
+    forecast: Annotated[str, Form()] = "",
+    elevation: Annotated[str, Form()] = "",
+) -> Response:
+    try:
+        service.override_sources(
+            _farm(repo), station=station, forecast=forecast, elevation=elevation
+        )
+    except service.LocationError as exc:
+        return _page(request, repo, error=str(exc), status=422)
+    return RedirectResponse(context_url(request, "/onboarding/location"), status_code=303)
 
 
 @router.post(
