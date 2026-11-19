@@ -447,8 +447,10 @@ An installation's **external effects** are what it does outside itself on its ow
 Telegram advice push (`chat.push_advice`) and the bot's polling of its token. A restored copy
 starts with them paused, so two copies never both message the same farmers, and a second
 poller on one bot token never breaks the original's bot. While paused, the advice push sends
-nothing (pending changes go out in one digest once enabled), and the bot waits without polling
-until effects are enabled, then starts by itself.
+nothing: its digests wait in the outbox and go out once effects are enabled, unless they are
+more than six hours old by then. Digests the source had not sent when it was backed up are
+never sent by the copy; they are listed as ambiguous (`farmcore outbox`). The bot waits
+without polling until effects are enabled, then starts by itself.
 
 ```sh
 docker compose -p farm-c --env-file farm-c.env run --rm --no-deps migrate farmcore effects
@@ -458,7 +460,7 @@ docker compose -p farm-a --env-file farm-a.env run --rm --no-deps migrate farmco
 
 Only the database owner can switch them (the `migrate` service holds its password); the app's
 runtime role cannot, and is told which role it is connected as. Pausing stops the advice push
-from its next run; a bot that is already polling stops at its next start (`docker compose
+from its next dispatch; a bot that is already polling stops at its next start (`docker compose
 restart bot`). An installation that was never restored has effects enabled.
 
 ### Connectors after a restore

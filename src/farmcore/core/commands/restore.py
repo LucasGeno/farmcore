@@ -23,7 +23,8 @@ its rows are loaded by a role that can do nothing else.
    as a temporary login role that may only insert into those tables and set those sequences:
    not a superuser, no membership, no CREATE or TEMP anywhere. Foreign keys are dropped for the
    load and added back as the owner, which checks every row.
-6. As the owner: empty the session tables again, pause effects again, drop the loader role,
+6. As the owner: empty the session tables again, pause effects again, mark the outbox intents
+   the source had not settled ambiguous (the source may still send them), drop the loader role,
    check the target again, then swap the staging database in under the target's name and run
    the `migrate` steps (upgrade to this release's schema, a new installation id, the copy's
    own runtime role). Those migrations run as the superuser over restored rows, which are as
@@ -66,7 +67,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import DBAPIError
 
-from farmcore.core import registry
+from farmcore.core import outbox, registry
 from farmcore.core.commands.backup import (
     APP_PACKAGES,
     DUMP_NAME,
@@ -744,6 +745,8 @@ class Copy:
                         conn.exec_driver_sql(f"TRUNCATE {', '.join(sessions)}")
                     if "task_attempt" in self.present:
                         conn.exec_driver_sql(_NEW_CLOCK_GENERATION)
+                    if "outbox" in self.present:
+                        conn.exec_driver_sql(outbox.HOLD_INHERITED)
                     set_external_effects(conn, EFFECTS_PAUSED)
         finally:
             engine.dispose()

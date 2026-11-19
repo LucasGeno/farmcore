@@ -207,9 +207,40 @@ Known limits:
   waits. Task transactions end once idle for the task's deadline (one minute by default), which
   bounds the wait to about that, not to when the worker resumes.
 - The jobs without a task run under the global step lock, network calls included (the weekly
-  catalog download, the Telegram push): a replay step waits for them.
+  catalog download): a replay step waits for them. The Telegram push makes no network call
+  there; it only records outbox intents.
 - Their schedule is saved once all due jobs of a tick have run: a worker that dies mid-tick runs
-  that tick's earlier jobs again on restart (the push is cursor-based, so it sends nothing twice).
+  that tick's earlier jobs again on restart (the push moves its cursor with its intents, and each
+  intent has a unique dedupe key, so it records nothing twice).
+
+### Outbox
+
+Deliveries outside the installation go through `core/outbox.py`. The cause's transaction
+records an intent (`outbox` table; today `chat.push_advice` writes one Telegram digest per
+bound chat together with its cursor), so a rollback leaves none and a committed one outlives
+any worker. The worker dispatches them every tick in a loop of its own, in either clock mode,
+outside the step lock; `farmcore replay` dispatches once after its step. Apps declare the
+providers (`Manifest.delivery_providers`). Each send is claimed in a committed transaction
+first (`SKIP LOCKED`), so no intent is sent twice once the provider accepted it: a refusal the
+provider answered is retried (three claims at most), a send with no answer or whose worker died
+becomes `ambiguous` and is listed by `farmcore outbox` until the operator settles it
+(`farmcore outbox resolve ID sent|resend|drop`). Nothing is claimed while external effects are
+paused (`outbox.may_dispatch`); intents expire on the wall clock (a digest after six hours), so
+enabling never sends a stale backlog. A restore marks the intents it inherits ambiguous.
+
+Known limits:
+
+- Settled intents (`sent`, `failed`, `expired`) are kept: the table grows by one row per chat
+  per digest until a purge exists.
+- Ambiguous deliveries are shown by `farmcore outbox` and a worker warning only; there is no
+  admin page for them yet.
+- `farmcore replay` dispatches every farm's pending intents, including those a demo step for
+  one farm recorded, not only what its own step recorded; the worker would send them anyway.
+- Digests are wall-clock bound: an installation paused for more than six hours never sends the
+  digests recorded meanwhile (the cards still show current advice), and enabling sooner sends
+  each held digest, oldest first. A product choice, not an agronomic threshold.
+- Replay steps record digests about replayed advice exactly as they did before the outbox, and
+  the worker sends them whenever effects are enabled and a bot token is set.
 
 ### Drafts
 

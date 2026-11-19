@@ -118,7 +118,8 @@ services:
 
   # Durable live tasks (today the live forecast fetch): plans due work, runs it with a deadline
   # and retries the tasks of a worker that died. Idle while the clock replays; web requests only
-  # enqueue. Without it no live forecast is fetched. Several may run (`--scale worker=2`).
+  # enqueue. Without it no live forecast is fetched. It also sends the outbox (the Telegram
+  # advice digests), in either clock mode. Several may run (`--scale worker=2`).
   worker:
     <<: *farmcore
     command: ["farmcore", "worker"]

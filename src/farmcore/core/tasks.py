@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
+from farmcore.core import outbox
 from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.manifest import JobContext, JobSpec, Manifest, import_string
 from farmcore.db import session_scope
@@ -377,6 +379,26 @@ async def _housekeeping(
         await asyncio.sleep(tick)
 
 
+async def _deliveries(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    manifests: Sequence[Manifest],
+    tick: float,
+    stop: threading.Event,
+) -> None:
+    """The outbox (`core/outbox.py`), in its own loop and in either clock mode: a slow provider
+    never delays the jobs, and no send happens under the step lock. Cancelling this loop does
+    not stop a pass already running in its thread; `stop` does, before its next claim."""
+    while not stop.is_set():
+        try:
+            await asyncio.to_thread(
+                outbox.dispatch, session_factory, settings, manifests, stop=stop
+            )
+        except Exception as exc:  # the database may be briefly unreachable: next tick
+            logger.error("outbox dispatch failed (%s)", type(exc).__name__)
+        await asyncio.sleep(tick)
+
+
 async def _live_jobs(
     session_factory: sessionmaker[Session],
     settings: Settings,
@@ -408,11 +430,14 @@ def run_worker(
     stalled: float = STALLED_SECONDS,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> None:
-    """Run tasks until SIGTERM or SIGINT, planning due work, retrying stalled tasks and running
-    the due installation-wide jobs (`jobs.run_due_live`) every `tick` seconds. `concurrency`
+    """Run tasks until SIGTERM or SIGINT, planning due work, retrying stalled tasks, running
+    the due installation-wide jobs (`jobs.run_due_live`) and dispatching the outbox every `tick`
+    seconds. `concurrency`
     tasks run at once: more than the farms expected to be slow at the same time, so one farm's
     slow provider never holds up another farm's task."""
     app = make_app(settings, session_factory, manifests)
+
+    stopping = threading.Event()
 
     async def main() -> None:
         async with app.open_async():
@@ -421,6 +446,9 @@ def run_worker(
                     _housekeeping(app, session_factory, settings, manifests, tick, stalled)
                 ),
                 asyncio.create_task(_live_jobs(session_factory, settings, manifests, tick)),
+                asyncio.create_task(
+                    _deliveries(session_factory, settings, manifests, tick, stopping)
+                ),
             ]
             try:
                 await app.run_worker_async(
@@ -431,6 +459,7 @@ def run_worker(
                     install_signal_handlers=True,
                 )
             finally:
+                stopping.set()  # an outbox pass in its thread takes no further claim
                 for loop in housekeeping:
                     loop.cancel()
 

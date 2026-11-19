@@ -241,6 +241,20 @@ def test_a_restored_copy_pushes_no_advice_until_the_owner_enables_effects(
         "WHERE id = 1 RETURNING id",
         chat=CHAT,
     )
+    # Digests A recorded but had not sent when it was backed up: A sends the fresh one, C never
+    # does; the expired one is nobody's question.
+    for dedupe, text_, expiry in (("inherited", "from A", "1 day"), ("stale", "old", "-1 minute")):
+        dbs.query(
+            source["name"],
+            "INSERT INTO outbox (farm_id, source_app, kind, dedupe_key, payload, expires_at) "
+            "VALUES (1, 'chat', 'telegram.message', :k, jsonb_build_object('chat_id', :chat, "
+            "'text', CAST(:t AS text), 'url_buttons', jsonb_build_array()), "
+            "now() + CAST(:e AS interval)) RETURNING id",
+            k=dedupe,
+            chat=CHAT,
+            t=text_,
+            e=expiry,
+        )
     target = dbs.create()
     c = dbs.installation(target)
     assert restore(backup(source, recipient, tmp_path / "a.age"), key, c).exit_code == 0
@@ -255,7 +269,8 @@ def test_a_restored_copy_pushes_no_advice_until_the_owner_enables_effects(
     # A (effects enabled) pushes the same pending changes: the gate, not a lack of events.
     stepped = run_cli("replay", "--to", "2024-04-11 06:00", env={**a, "TELEGRAM_BOT_TOKEN": TOKEN})
     assert stepped.exit_code == 0, stepped.output
-    assert [s.chat_id for s in telegram.sent] == [CHAT]
+    assert [s.chat_id for s in telegram.sent] == [CHAT, CHAT]
+    assert telegram.sent[0].text == "from A"
     telegram.sent.clear()
 
     # The runtime role (what the app and bot use) cannot switch effects on, and is named.
@@ -264,12 +279,20 @@ def test_a_restored_copy_pushes_no_advice_until_the_owner_enables_effects(
     assert denied.exit_code == 1 and c["RUNTIME_DATABASE_ROLE"] in denied.output
     assert effects(c) == "external effects: paused"
 
-    # The owner enables them; the next push goes out. Pausing stops them again.
+    # The owner enables them; the digests held while paused go out, never A's inherited one,
+    # which is listed for the operator. Pausing stops them again.
     assert run_cli("effects", "enable", env=c).exit_code == 0
     assert effects(runtime) == "external effects: enabled"
     stepped = run_cli("replay", "--to", "2024-04-12 06:00", env={**c, "TELEGRAM_BOT_TOKEN": TOKEN})
     assert stepped.exit_code == 0, stepped.output
-    assert [s.chat_id for s in telegram.sent] == [CHAT]
+    rows = dbs.query(target, "SELECT id, dedupe_key, state FROM outbox ORDER BY id")
+    [(inherited, _, held), (stale, _, expired), *own] = rows
+    assert (held, expired) == ("ambiguous", "expired")
+    assert own and {state for _, _, state in own} == {"sent"}
+    assert [s.chat_id for s in telegram.sent] == [CHAT] * len(own)
+    assert not {"from A", "old"} & {s.text for s in telegram.sent}
+    listed = run_cli("outbox", env=runtime).output
+    assert f"{inherited}  farm 1" in listed and f"{stale}  farm 1" not in listed
     assert run_cli("effects", "pause", env=c).exit_code == 0
     telegram.sent.clear()
     run_cli("replay", "--to", "2024-04-13 06:00", env={**c, "TELEGRAM_BOT_TOKEN": TOKEN})

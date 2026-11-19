@@ -28,7 +28,8 @@ def register(cli: typer.Typer) -> None:
     ) -> None:
         """Run all live background work: plan and run durable tasks, run the other due jobs and
         retry the tasks of dead workers, every tick. Live mode only; while the clock replays
-        nothing is planned or run and queued tasks do nothing."""
+        nothing is planned or run and queued tasks do nothing. The outbox (Telegram advice
+        digests) is sent every tick in either mode."""
         logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
         settings = get_settings()
         engine = make_engine(settings)

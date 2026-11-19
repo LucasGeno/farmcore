@@ -20,6 +20,7 @@ MANIFEST = Manifest(
             interval=timedelta(hours=1),
         ),
     ),
+    delivery_providers=(("telegram.message", "farmcore.apps.chat.push:delivery_provider"),),
     routes=("farmcore.apps.chat.routes:router",),
     title="Telegram assistant",
     category="Voice & chat",
