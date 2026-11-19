@@ -181,9 +181,22 @@ and `PUBLIC_BASE_URL` has no path (metadata is served at the host's root).
 
 - **Discovery.** `/mcp`'s 401 names its resource metadata (RFC 9728), which names this server;
   its metadata (RFC 8414) advertises S256 PKCE only and `iss` on authorization responses.
-- **Clients** are registered by the operator in `MCP_OAUTH_CLIENTS` (public clients, no
-  secret). An unknown client or a `redirect_uri` that is not exactly a registered one gets a
-  400 page and no redirect, so the server is never an open redirector.
+- **Clients** are public (no secret) and come from three places, in this order: the operator's
+  `MCP_OAUTH_CLIENTS`; an https `client_id` that is the URL of the client's metadata document
+  (Client ID Metadata Documents, the MCP spec's preferred way); or open Dynamic Client
+  Registration at `/oauth/register` (RFC 7591), capped per address and while unused, issuing
+  IDs that never start with `https://`. An unknown client, unreadable metadata or a
+  `redirect_uri` that is not a registered one gets a 400 page and no redirect, so the server is
+  never an open redirector. Matching is exact, except that a loopback redirect URI
+  (`127.0.0.1`, `[::1]`, `localhost`) may name any port (RFC 8252 §7.3), as local agents need.
+- **Metadata fetches** are a server-side request the client chooses, so they are fenced: https
+  only, the name resolved once and every address public (no loopback, private, link-local,
+  shared, multicast, mapped or NAT64 address), the connection pinned to that checked address
+  (no second DNS answer), no redirects, no proxy, no cookies, JSON only, 5 KB and a 5-second
+  deadline. A document counts only if its `client_id` is the URL it came from, byte for byte,
+  and it asks for no secret. Valid documents are cached 5 minutes to a day (Cache-Control
+  within those bounds); failures are never cached. Anyone can make the server fetch a public
+  URL this way (the authorize page does it before sign-in), at most 5 KB each.
 - **Codes.** Single use, 5 minutes, bound to the client, `redirect_uri` and an S256 challenge
   (`plain` is refused). A code presented again with its valid client, `redirect_uri` and verifier
   ends the connection it created (RFC 6749 §4.1.2); a replay with wrong parameters ends
@@ -193,7 +206,9 @@ and `PUBLIC_BASE_URL` has no path (metadata is served at the host's root).
 - **Consent** is a signed-in owner's of the farm they choose, CSRF-checked like every form, and
   never a tour's, and the page refuses to be framed (`X-Frame-Options`, `frame-ancestors`). The
   page names the client, where the browser goes back to and each requested
-  scope; the token gets the requested scopes the owner left ticked, never more, and never more
+  scope in plain words. A name the client gave itself is marked self-reported, with the host
+  its metadata came from; a redirect to this computer warns that any local program could
+  claim it; no client logo is shown; the token gets the requested scopes the owner left ticked, never more, and never more
   than an agent token may hold (read scopes and `drafts:propose`).
 - **Tokens** are opaque and stored hashed. An access token lasts an hour and is accepted only by
   the MCP endpoint whose public URL (`MCP_HTTP_PUBLIC_URL`) it was issued for (RFC 8707): never

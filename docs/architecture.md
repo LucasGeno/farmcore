@@ -137,6 +137,8 @@ With `MCP_OAUTH_ENABLED` the web app is also the OAuth 2.1 authorization server 
 (`core/oauth`): the farm owner approves an agent on a consent page, and the agent gets
 short-lived tokens bound to the MCP endpoint's URL, refreshed by rotation; the connection is a
 grant on Sharing ([SECURITY.md](../SECURITY.md#oauth-for-mcp-lets-an-owner-approve-an-agent)).
+Agents register themselves: by an https `client_id` that is their metadata document's URL
+(fetched with SSRF fences, cached) or by Dynamic Client Registration (`core/oauth/clients.py`).
 
 ## Stack
 
