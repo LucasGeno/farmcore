@@ -433,11 +433,11 @@ def test_the_advice_card_carries_the_window_slot_only_while_the_app_is_on(
     on = _get(client, session, settings, f"/advisor/parcels/{parcel.id}", _utc(9, 4))
     session.get(AppModule, "forecast").state = "uninstalled"
     off = _get(client, session, settings, f"/advisor/parcels/{parcel.id}", _utc(9, 4))
-    fragment = _get(client, session, settings, f"/forecast/parcels/{parcel.id}", _utc(9, 4))
+    session.commit()
 
     assert f"/forecast/parcels/{parcel.id}" in on
     assert "/forecast/" not in off
-    assert fragment.strip() == ""
+    assert client.get(f"/forecast/parcels/{parcel.id}").status_code == 404
 
 
 def test_window_markup_wraps_on_a_phone(client, session, settings, parcel, imported):

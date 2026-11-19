@@ -36,13 +36,16 @@ def register(cli: typer.Typer) -> None:
         try:
             factory = make_session_factory(engine)
             ordered = registry.discover(packages=tuple(app_package))
-            with factory() as session:
-                states = registry.read_states(session, ordered)
-            manifests = registry.active_manifests(ordered, states)
+            with factory() as session:  # the rows the task fence locks, as web and bot create
+                registry.sync_modules(session, ordered)
+                session.commit()
+            # Every discovered app: which are on is read live each tick, claim and publication
+            # (`registry.live_active`, the task fence, `outbox.may_dispatch`), so switching an app
+            # off or on needs no worker restart.
             tasks.run_worker(
                 settings,
                 factory,
-                manifests,
+                ordered,
                 concurrency=concurrency,
                 tick=tick,
                 stalled=stalled,

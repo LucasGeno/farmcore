@@ -52,6 +52,23 @@ def test_missing_dependency_is_refused_naming_app_and_dependency() -> None:
     assert "orchard" in str(err.value) and "irrigation" in str(err.value)
 
 
+@pytest.mark.parametrize(
+    ("app", "named"),
+    [
+        (Manifest(name="orchard", version="1.0.0", core_api=2), "core_api 2"),
+        (
+            Manifest(name="orchard", version="1.0.0", depends=("b",), requires=(("b", ">=2"),)),
+            "'b' >=2",
+        ),
+    ],
+    ids=["core-api", "dependency-version"],
+)
+def test_an_incompatible_app_is_refused_naming_what_it_needs(app, named) -> None:
+    with pytest.raises(registry.RegistryError) as err:
+        registry.resolve_order([registry.CORE, _m("b"), app])  # b is 0.1.0
+    assert "orchard" in str(err.value) and named in str(err.value)
+
+
 def test_core_dependency_is_implicit_when_core_is_not_given() -> None:
     orchard = _m("orchard", "core")
     assert registry.resolve_order([orchard]) == [orchard]
@@ -151,6 +168,11 @@ def test_create_app_fails_at_start_on_a_broken_graph(settings, session_factory) 
         )
     with pytest.raises(registry.RegistryError, match="lonely.*ghost"):
         create_app(settings, manifests=[_m("lonely", "ghost")], session_factory=session_factory)
+    future = replace(_m("future"), core_api=2)
+    with pytest.raises(registry.RegistryError, match="future"):
+        create_app(settings, manifests=[future], session_factory=session_factory)
+    with session_factory() as session:  # refused before anything was written
+        assert session.scalars(select(AppModule.name)).all() == []
 
 
 @pytest.fixture

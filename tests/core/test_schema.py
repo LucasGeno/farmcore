@@ -131,7 +131,7 @@ def test_the_installed_task_library_has_the_schema_core_0009_applied() -> None:
 
 
 def test_single_migration_head_creates_every_core_table(session) -> None:
-    head = "core_0013"  # inventory_0002 -> core_0013
+    head = "core_0014"  # core_0013 -> core_0014
     assert ScriptDirectory.from_config(alembic_config()).get_heads() == [head]
     assert session.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     assert _tables(session) >= CANONICAL_TABLES | IDENTITY_TABLES
@@ -498,5 +498,39 @@ def test_catalog_upgrade_reads_legacy_rows_without_inventing_facts(scratch_db_ur
         with engine.connect() as conn:
             assert conn.execute(text("SELECT count(*) FROM quantity")).scalar_one() == 3
         command.upgrade(cfg, "head")
+    finally:
+        engine.dispose()
+
+
+def test_module_generation_upgrade_keeps_switched_off_apps_off(scratch_db_url: str) -> None:
+    """core_0014 on a populated installation: states survive both ways; a state change, however
+    made, moves the generation the task fence compares."""
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "core_0013")
+    engine = create_engine(scratch_db_url)
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO app_module (name, state, version) VALUES "
+                    "('kpi', 'uninstalled', '0.1.0'), ('forecast', 'installed', '0.1.0')"
+                )
+            )
+        command.upgrade(cfg, "core_0014")
+        with engine.begin() as conn:
+            rows = "SELECT name, state, generation, settings FROM app_module ORDER BY name"
+            assert conn.execute(text(rows)).all() == [
+                ("forecast", "installed", 0, {}),
+                ("kpi", "uninstalled", 0, {}),
+            ]
+            conn.execute(text("UPDATE app_module SET state = 'installed' WHERE name = 'kpi'"))
+            conn.execute(text("UPDATE app_module SET version = '0.2.0' WHERE name = 'forecast'"))
+            assert conn.execute(text(rows)).all() == [
+                ("forecast", "installed", 0, {}),
+                ("kpi", "installed", 1, {}),
+            ]
+        command.downgrade(cfg, "core_0013")
+        with engine.begin() as conn:
+            assert conn.execute(text("SELECT count(*) FROM app_module")).scalar_one() == 2
     finally:
         engine.dispose()

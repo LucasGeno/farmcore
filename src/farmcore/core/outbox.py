@@ -21,11 +21,12 @@ once its provider accepted it; the price is that a send whose outcome is unknown
 A pending intent past its expiry is marked `expired` and never sent.
 
 Nothing is claimed while the installation's external effects are paused (a restored copy until
-its owner runs `farmcore effects enable`): intents wait, and expire on time, so enabling sends
-the fresh ones and never a stale backlog. `may_dispatch` is the admission check for each intent;
-module lifecycle extends it. A restore turns the unexpired intents it inherits from the source,
-which the source may have sent, into `ambiguous`, and the expired ones into `expired`
-(`HOLD_INHERITED`). A worker stopping sets `dispatch`'s `stop`: no claim is taken after it.
+its owner runs `farmcore effects enable`), nor while the app that recorded it is switched off:
+intents wait, and expire on time, so enabling sends the fresh ones and never a stale backlog.
+`may_dispatch` is the admission check for each intent. A restore turns the unexpired intents it
+inherits from the source, which the source may have sent, into `ambiguous`, and the expired ones
+into `expired` (`HOLD_INHERITED`). A worker stopping sets `dispatch`'s `stop`: no claim is taken
+after it.
 """
 
 from __future__ import annotations
@@ -123,11 +124,22 @@ def add(
     return inserted is not None
 
 
+# The intent's app row, locked against a switch until the claim commits (a disable waits for it;
+# a claim after the disable reads the new state). No row reads as installed.
+_SOURCE = text("SELECT state FROM app_module WHERE name = :a FOR SHARE")
+
+
 def may_dispatch(session: Session, intent: Intent) -> bool:
-    """Whether `intent` may be sent now, checked in the transaction that claims it. Today: the
-    installation's external effects are enabled. A held intent stays pending (and expires on
-    time); the check runs again at the next dispatch."""
-    return read_external_effects(session) == EFFECTS_ENABLED
+    """Whether `intent` may be sent now, checked in the transaction that claims it: the
+    installation's external effects are enabled and the app that recorded it is on (a switched
+    off app's intents wait, and are sent if it is switched on before they expire). A held intent
+    stays pending (and expires on time); the check runs again at the next dispatch."""
+    if read_external_effects(session) != EFFECTS_ENABLED:
+        return False
+    # Only the source app's own row: a switch never leaves a dependant on while its dependency is
+    # off (`registry.switch_refusal`); a dependency switched off by hand in SQL is not seen here.
+    state = session.execute(_SOURCE, {"a": intent.source_app}).scalar()
+    return state is None or state == "installed"
 
 
 _EXPIRE = text(

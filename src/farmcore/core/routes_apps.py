@@ -4,10 +4,13 @@
   version, maturity and load order only in Expert view.
 - `GET /apps.json`: every app in load order (name, title, category, version, summary, depends,
   state, maturity, loaded, required, removable).
-- `POST /apps/{name}/uninstall|install` (admin): only change `app_module.state`. The UI follows
-  at once for apps loaded at start (`registry.visible_manifests`); routes load or unload at the
-  next start. Required apps (and core) cannot be switched off. Refusals (409) name apps by
-  their title: "Crop protection needs Weather. Switch off Crop protection first."
+- `POST /apps/{name}/uninstall|install` (admin): only change `app_module.state`
+  (`registry.switch`). Off takes effect at once everywhere: pages, writes and tools 404 or
+  disappear in every web process, and the worker neither plans, runs nor publishes the app's
+  work nor sends its outbox intents. On is immediate for an app loaded at start; an app off at
+  start mounts its routes at the next start. Required apps (and core) cannot be switched off;
+  an app with invalid settings cannot be switched on. Refusals (409) name apps by their title:
+  "Crop protection needs Weather. Switch off Crop protection first."
 
 JSON by default; a browser form post (`Accept: text/html`) gets a redirect back to `/apps`,
 or the page with the refusal and status 409.
@@ -22,14 +25,13 @@ from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
 from farmcore.core.manifest import Manifest
-from farmcore.core.models.kernel import AppModule
 from farmcore.core.registry import (
     CORE,
     INSTALLED,
     UNINSTALLED,
     join_names,
     read_states,
-    switch_refusal,
+    switch,
 )
 from farmcore.core.routes_clock import require_admin
 from farmcore.db import get_session
@@ -155,21 +157,6 @@ def _refuse(request: Request, session: Session, detail: str, **extra: Any) -> Re
     return JSONResponse({"detail": detail, **extra}, status_code=409)
 
 
-def _set_state(request: Request, session: Session, manifest: Manifest, state: str) -> Response:
-    row = session.get(AppModule, manifest.name)
-    if row is None:
-        row = AppModule(name=manifest.name, version=manifest.version)
-        session.add(row)
-    if row.state != state:
-        row.state = state
-    session.commit()
-    if _wants_html(request):
-        return RedirectResponse(context_url(request, "/apps"), status_code=303)
-    return JSONResponse(
-        {"name": manifest.name, "state": state, "applies": "at next start", "ui": "now"}
-    )
-
-
 @router.get("/apps")
 def apps_page(request: Request, session: Session = Depends(get_session)) -> Response:
     return _page(request, session)
@@ -182,10 +169,17 @@ def apps_json(request: Request, session: Session = Depends(get_session)) -> list
 
 def _switch(request: Request, session: Session, name: str, state: str) -> Response:
     manifest = _manifest(request, name)
-    refusal = switch_refusal(_ordered(request), _states(request, session), manifest, state)
+    refusal = switch(session, _ordered(request), _states(request, session), manifest, state)
     if refusal is not None:
+        session.rollback()
         return _refuse(request, session, refusal.detail, **refusal.extra)
-    return _set_state(request, session, manifest, state)
+    session.commit()
+    if _wants_html(request):
+        return RedirectResponse(context_url(request, "/apps"), status_code=303)
+    loaded = any(m.name == manifest.name for m in request.app.state.manifests)
+    # Off applies at once in every process; on, at once for an app this process loaded.
+    applies = "now" if state == UNINSTALLED or loaded else "at next start"
+    return JSONResponse({"name": manifest.name, "state": state, "applies": applies, "ui": "now"})
 
 
 @router.post("/apps/{name}/uninstall", dependencies=[Depends(require_admin)])

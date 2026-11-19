@@ -28,6 +28,7 @@ from farmcore.apps.chat.telegram import FakeTelegramSender
 from farmcore.apps.chat.transcribe import FakeTranscriber, Transcript
 from farmcore.core.clock import set_replay
 from farmcore.core.models.canonical import Farm, Log, Parcel, Product
+from farmcore.core.models.kernel import AppModule
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.chat.test_handlers import drafts_of
 
@@ -639,3 +640,24 @@ def test_voice_confirm_merge_keeps_second_product_in_reply_register_and_checks(
     else:
         assert all(row["log_id"] == target_id for row in rows)
     assert any("sulphur" in str(check).lower() for row in rows for check in row["checks"])
+
+
+def test_a_bot_started_with_chat_on_ignores_messages_once_chat_is_switched_off(
+    session_factory, session, settings, sender, bot
+):
+    """Switching Telegram off on /apps reaches the running bot: no extractor call (no farm text
+    leaves), no draft and no record, from a message, a voice note or a confirm button."""
+    seed_farm(session, settings)
+    session.merge(AppModule(name="chat", version="0", state="uninstalled"))
+    session.commit()
+    extractor = FakeExtractor(draft())
+    transcriber = RecordingTranscriber(Transcript(text="P1 copper 2 kg", language="en", seconds=1))
+    rt = runtime(session_factory, settings, sender, transcriber=transcriber, extractor=extractor)
+
+    handle(rt.on_text(text_update("P1 copper 2 kg this morning"), SimpleNamespace(bot=bot)))
+    handle(rt.on_voice(voice_update(), SimpleNamespace(bot=bot)))
+    handle(rt.on_callback(callback_update("confirm:1:1"), SimpleNamespace(bot=bot)))
+
+    assert extractor.requests == [] and transcriber.saw_bytes == []
+    assert drafts_of(session) == [] and pending_logs(session) == []
+    assert {m.text for m in sender.sent} == {bot_module.REPLY_CHAT_OFF}

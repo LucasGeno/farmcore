@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
+from farmcore.core import registry
 from farmcore.core.logs import lock_farm
 from farmcore.core.manifest import JobContext, Manifest, collect_draft_kinds, import_string
 from farmcore.core.models.canonical import DataGrant
@@ -115,15 +116,17 @@ def wall_now() -> datetime:
     return datetime.now(UTC)
 
 
-def _kind(manifests: Sequence[Manifest], key: str):
-    found = collect_draft_kinds(manifests).get(key)
+def _kind(session: Session, manifests: Sequence[Manifest], key: str):
+    """The draft kind `key` of an app that is on now (`registry.live_active`), whichever process
+    asks: a switched-off app's drafts can be neither proposed, edited nor confirmed."""
+    found = collect_draft_kinds(registry.live_active(session, manifests)).get(key)
     if found is None:
         raise DraftInvalid(f"No enabled app records {key!r} drafts.")
     return found[1]
 
 
 def _validated(session: Session, manifests, farm_id: int, kind: str, payload: dict) -> dict:
-    validator = import_string(_kind(manifests, kind).validator)
+    validator = import_string(_kind(session, manifests, kind).validator)
     try:
         clean = validator(session, farm_id, dict(payload))
     except (ValueError, ValidationError) as exc:
@@ -345,7 +348,7 @@ def confirm(
     problem = refusal(draft, revision)
     if problem is not None:
         raise problem
-    service = import_string(_kind(manifests, draft.kind).confirm or "")
+    service = import_string(_kind(session, manifests, draft.kind).confirm or "")
     try:
         model, record_id = service(session, draft, actor=actor, now=now, services=services or {})
     except ValueError as exc:

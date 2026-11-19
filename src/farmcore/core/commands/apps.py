@@ -1,8 +1,8 @@
 """`farmcore apps [--install NAME] [--uninstall NAME]`: switch optional apps on or off, then
 print the apps in load order with version, state and dependencies.
 
-Like `POST /apps/{name}/install|uninstall`, a switch only changes `app_module.state`, takes
-effect at the next start and follows the same rule (`registry.switch_refusal`). Several
+Like `POST /apps/{name}/install|uninstall`, a switch only changes `app_module.state` and goes
+through the same rule and write (`registry.switch`): off applies at once in every process. Several
 switches apply together or not at all: switches off first (dependants before what they need),
 then switches on (dependencies first).
 """
@@ -12,7 +12,6 @@ from __future__ import annotations
 import typer
 
 from farmcore.core import registry
-from farmcore.core.models.kernel import AppModule
 from farmcore.db import make_engine, make_session_factory, session_scope
 from farmcore.settings import get_settings
 
@@ -42,20 +41,15 @@ def register(cli: typer.Typer) -> None:
             with session_scope(make_session_factory(engine)) as session:
                 states = registry.read_states(session, ordered)
                 for manifest, state in switches:
-                    refusal = registry.switch_refusal(ordered, states, manifest, state)
+                    refusal = registry.switch(session, ordered, states, manifest, state)
                     if refusal is not None:
                         typer.echo(refusal.detail, err=True)
                         raise typer.Exit(1)
                     states = {**states, manifest.name: state}
-                    row = session.get(AppModule, manifest.name) or AppModule(
-                        name=manifest.name, version=manifest.version
-                    )
-                    row.state = state
-                    session.add(row)
         finally:
             engine.dispose()
         for i, m in enumerate(ordered, start=1):
             depends = ", ".join(m.depends) or "-"
             typer.echo(f"{i:>2}  {m.name:<12} {m.version:<8} {states[m.name]:<12} {depends}")
         if switches:
-            typer.echo("Changes apply when the app and bot restart.")
+            typer.echo("Off applies now; an app switched on mounts its pages at the next start.")

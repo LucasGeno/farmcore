@@ -293,7 +293,7 @@ def test_tour_get_and_app_off_keep_farm_boundaries(client, session, settings):
     assert "advice" not in after and "observation" not in after and "forecast_run" not in after
     session.get(AppModule, "notifications").state = "uninstalled"
     session.commit()
-    assert client.get("/notifications").text == ""
+    assert client.get("/notifications").status_code == 404
 
 
 @pytest.mark.spanish_data

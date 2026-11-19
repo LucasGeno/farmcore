@@ -1,4 +1,4 @@
-"""`/apps`: list apps in load order, uninstall and install (applied at the next start)."""
+"""`/apps`: list apps in load order, uninstall and install."""
 
 from __future__ import annotations
 
@@ -118,21 +118,45 @@ def test_unknown_app_is_404(fake_client: TestClient) -> None:
     assert fake_client.post("/apps/ghost/install").status_code == 404
 
 
-def test_uninstalling_a_leaf_unmounts_it_at_the_next_start(
-    fake_client: TestClient, settings, session_factory
+def test_a_switched_off_app_is_unreachable_at_once_and_back_when_switched_on(
+    fake_client: TestClient,
 ) -> None:
-    resp = fake_client.post("/apps/a/uninstall")
-    assert resp.status_code == 200
-    assert resp.json()["state"] == "uninstalled"
-    # Still mounted until the next start; the listing shows the new state.
-    assert fake_client.get("/a/ping").status_code == 200
-    a = fake_client.get("/apps.json").json()[3]
-    assert (a["state"], a["loaded"]) == ("uninstalled", True)
-    with _restart(settings, session_factory) as c:
-        c.headers["X-Admin-Token"] = settings.admin_token.get_secret_value()
-        assert c.get("/a/ping").status_code == 404
-        a = c.get("/apps.json").json()[3]
-        assert (a["name"], a["state"], a["loaded"]) == ("a", "uninstalled", False)
+    """Off is not a hidden nav item: its pages and its writes are gone in the running process."""
+    assert fake_client.post("/apps/a/uninstall").json()["state"] == "uninstalled"
+    assert fake_client.get("/a/ping").status_code == 404
+    assert fake_client.post("/a/ping").status_code == 404
+    assert fake_client.post("/apps/a/install").json()["state"] == "installed"
+    assert fake_client.post("/a/ping").json() == {"app": "a", "poked": "yes"}
+
+
+def test_an_app_route_fails_closed_when_its_state_cannot_be_read(fake_client: TestClient) -> None:
+    """`/a/ping` touches no database: only the gate stands between a read error and serving it."""
+    from sqlalchemy.exc import OperationalError
+
+    def unreachable():
+        raise OperationalError("SELECT", {}, Exception("database is down"))
+
+    fake_client.app.state.session_factory = unreachable
+    assert fake_client.get("/a/ping").status_code == 503
+
+
+def test_invalid_settings_refuse_the_switch_on_and_change_nothing(
+    fake_client: TestClient, session_factory
+) -> None:
+    from farmcore.core.models.kernel import AppModule
+
+    assert fake_client.post("/apps/a/uninstall").status_code == 200
+    with session_factory() as s:
+        s.get(AppModule, "a").settings = {"threshold_c": "hot"}
+        s.commit()
+        before = s.get(AppModule, "a").generation
+    resp = fake_client.post("/apps/a/install")
+    assert resp.status_code == 409
+    assert resp.json()["invalid_settings"] == ["threshold_c"]
+    assert fake_client.get("/a/ping").status_code == 404
+    with session_factory() as s:
+        row = s.get(AppModule, "a")
+        assert (row.state, row.generation) == ("uninstalled", before)
 
 
 def test_install_is_refused_while_a_dependency_is_uninstalled(fake_client: TestClient) -> None:

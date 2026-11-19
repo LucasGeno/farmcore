@@ -27,7 +27,7 @@ database, a small core and installable apps, in the style of Odoo.
   map panel sections, debug panels, assistant `tools`). Apps load in dependency order. The core
   and the page shell import no app: they render what the enabled apps declare. Required apps
   (Today, Map & parcels, Records) are always on; the others switch on and off on `/apps`
-  (administrator only).
+  (administrator only) or with `farmcore apps` ([module lifecycle](#module-lifecycle)).
 - **Canonical model**, farmOS-shaped: `farm`, `parcel` (PostGIS polygon + validated `props`
   JSONB), `asset`, `log` + `quantity` + `product`, `observation`, `advice`, `event`.
   Apps extend it with 1:1 side tables or `props`, never by injecting columns at runtime.
@@ -295,3 +295,49 @@ Crop protection saves kind `advisor.spray` (spray / wait / protected / none with
 products and windows). Its `advice` row stays the public representation every reader uses and
 points at its envelope (`advice.assessment_id`, same farm, parcel and time); advice saved before
 `core_0012` keeps its evidence in `advice.props` and has no envelope.
+
+### Module lifecycle
+
+An app is **on** when its `app_module` row is installed (no row counts as installed) and every
+dependency it was loaded with is on (`registry.live_active`). Every process reads that live state,
+so switching an app off takes effect within one request or worker tick, without a restart:
+
+- web: every app router is gated (404 while off, pages and writes alike); nav, widgets, map
+  layers and the assistant's tools follow the same rule;
+- Telegram bot: with Chat off it answers allowed users with a fixed line before any transcription,
+  extraction or draft work;
+- drafts: a switched-off app's draft kinds can be neither proposed, revised nor confirmed, from
+  any process (the bot included);
+- worker: it loads every discovered app and, each tick, plans and runs only the apps that are on;
+  a task attempt does not begin for an app that is off;
+- in-flight work: a trigger adds one to `app_module.generation` on every change of state (revision
+  `core_0014`). An attempt keeps the generation it began in and publishes only while its app is
+  still installed in that generation, under a share lock on the row, so a disable (or a disable
+  and re-enable) waits for a publication in progress and fences every later one. A durable job's
+  name is `<app>.<job>`, which is how the fence finds its app;
+- outbox: intents recorded by an app that is off are held (they stay pending and expire on time)
+  and are sent if it is switched on before they expire.
+
+Switching off never deletes data; switching on never runs a seed. A switch is refused while
+an installed app depends on the app (off) or a dependency is off (on), and when the app's
+stored settings (`app_module.settings`) fail its settings model (`Manifest.settings`). An app
+built for another `core_api`, or whose `requires` names a dependency version it cannot use, or a
+dependency cycle, fails at start before any write, and before any migration (`migrations/env.py`
+discovers the apps first).
+
+Known limits:
+
+- An app that was off when a web process started mounts its routes at that process's next start;
+  the worker picks it up at once.
+- If the state cannot be read, the web shell and nav count every loaded app as on, so the page
+  frame still renders, but an app's own routes answer 503; the worker's fence fails closed.
+- The Telegram bot keeps polling while Chat is off and answers every allowed message with one
+  fixed line; nothing is transcribed, extracted, drafted or confirmed.
+- Settings are validated when an app is switched on, not at start: an upgrade whose settings
+  model rejects the stored settings leaves the app on until it is switched off and on again.
+  There is no settings editor yet.
+- The task fence and the outbox check the app's own row only. A switch never leaves a dependant on
+  while its dependency is off; a dependency switched off by hand in SQL stops planning (live
+  rule) but not an attempt or intent already admitted.
+- Two concurrent switches (on for an app, off for its dependency) read states without a lock and
+  can both pass; the dependant then counts as off everywhere.

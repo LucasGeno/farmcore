@@ -15,13 +15,18 @@
   database: run `farmcore migrate` before starting either.
 - `app.state.manifests`: the loaded apps in load order (navbar, jobs, `GET /`).
   `app.state.all_manifests`: every discovered app in load order, loaded or not (`/apps`).
-- `visible_manifests(request)`: the loaded apps the farm has not switched off. The UI
-  (nav, Today widgets, map layers) renders from this, so switching an app off or on shows at
-  once; one `app_module` read per request, cached on `request.state`.
+- `visible_manifests(request)`: the loaded apps that are on now. The UI (nav, Today widgets,
+  map layers) renders from this and every app router is gated by it (404 while off); one
+  `app_module` read per request, cached on `request.state`.
+- `live_active(session, manifests)`: the same rule for any process (assistant tools, drafts,
+  replay steps, the worker's planning and live jobs).
 
-Install / uninstall only change `app_module.state`. The UI follows at once for loaded apps;
-routes, jobs and models follow at the next start. `switch_refusal` is the one rule for which
-switches are allowed, shared by `/apps` and `farmcore apps`.
+Install / uninstall only change `app_module.state` (`switch`: dependency refusals, then the
+app's settings model, then the write); a trigger adds one to `app_module.generation` on every
+change of state, which fences durable work begun before it (`tasks.publish_if_current`) and
+outbox intents are held by their source app (`outbox.may_dispatch`). Off applies at once in every
+process; an app off at start mounts its routes at the next start. `resolve_order` refuses an
+app built for another `core_api`, an unmet `requires` version or a cycle before any write.
 """
 
 from __future__ import annotations
@@ -30,12 +35,16 @@ import heapq
 import importlib
 import importlib.util
 import pkgutil
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
+from packaging.specifiers import SpecifierSet
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
@@ -44,6 +53,7 @@ from sqlalchemy.orm import Session, configure_mappers, sessionmaker
 from farmcore.core.access import register_resource_scopes
 from farmcore.core.app_manifest import MANIFEST as CORE
 from farmcore.core.manifest import (
+    CORE_API,
     Manifest,
     collect_assessment_kinds,
     collect_draft_kinds,
@@ -106,7 +116,9 @@ def resolve_order(manifests: list[Manifest]) -> list[Manifest]:
     every other app implicitly depends on it. A dependency on core is met even when core is
     not given.
 
-    Raises `RegistryError` on a duplicate name, an unmet dependency or a cycle.
+    Raises `RegistryError` on a duplicate name, an app built for another `core_api`, an unmet
+    dependency or version requirement (`Manifest.requires`), or a cycle. It runs before any
+    write: at start (`load`) and before any migration (`migrations/env.py` discovers first).
     """
     collect_parcel_views(manifests)
     collect_record_types(manifests)
@@ -118,11 +130,22 @@ def resolve_order(manifests: list[Manifest]) -> list[Manifest]:
             raise RegistryError(f"app {m.name!r} is declared twice")
         by_name[m.name] = m
     for m in sorted(by_name.values(), key=lambda m: m.name):
+        if m.core_api != CORE_API:
+            raise RegistryError(
+                f"app {m.name!r} is built for core_api {m.core_api}; this core is {CORE_API}"
+            )
         missing = sorted(set(m.depends) - by_name.keys() - {CORE.name})
         if missing:
             raise RegistryError(
                 f"app {m.name!r} depends on {', '.join(map(repr, missing))}, which is not available"
             )
+        for dependency, specifier in m.requires:
+            found = by_name.get(dependency)
+            if found is not None and found.version not in SpecifierSet(specifier):
+                raise RegistryError(
+                    f"app {m.name!r} needs {dependency!r} {specifier}, "
+                    f"but {dependency!r} is {found.version}"
+                )
     deps = {name: set(m.depends) & by_name.keys() for name, m in by_name.items()}
     if CORE.name in by_name:
         for name in deps:
@@ -217,8 +240,9 @@ def load(
     configure_mappers()
     for manifest in active:
         prefix = "" if manifest.name == CORE.name else f"/{manifest.name}"
+        gate = [] if manifest.name == CORE.name else [Depends(_module_gate(manifest.name))]
         for route in manifest.routes:
-            app.include_router(import_string(route), prefix=prefix)
+            app.include_router(import_string(route), prefix=prefix, dependencies=gate)
         static = _static_dir(manifest)
         if static is not None:
             app.mount(
@@ -229,6 +253,30 @@ def load(
     app.state.manifests = active
     app.state.all_manifests = ordered
     return active
+
+
+def _module_gate(name: str):
+    """A route dependency: 404 while app `name` is off (`visible_manifests`, this request's one
+    read), so a switched-off app's pages and writes are gone at once, not at the next start;
+    503 when that read failed."""
+
+    def gate(request: Request) -> None:
+        visible = visible_manifests(request)
+        if getattr(request.state, "module_states_unread", False):
+            # The shell renders with every app (fail-open); an app's own routes fail closed.
+            raise HTTPException(status_code=503, detail="App state unavailable")
+        if all(m.name != name for m in visible):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+    return gate
+
+
+def live_active(session: Session, manifests: Sequence[Manifest]) -> list[Manifest]:
+    """The apps of `manifests` that are on right now, by their live `app_module` state: the one
+    rule the web gate, the assistant's tools, drafts, replay steps and the worker's planning
+    and live jobs all apply, so every process agrees within one request or tick."""
+    ordered = list(manifests)
+    return visible_from_states(ordered, read_states(session, ordered))
 
 
 def active_manifests(ordered: list[Manifest], states: dict[str, str]) -> list[Manifest]:
@@ -255,7 +303,8 @@ def visible_manifests(request: Request) -> list[Manifest]:
     """The loaded apps (load order) whose `app_module` state is not `uninstalled`.
 
     One query per request, cached on `request.state`. With no session factory, or when the read
-    fails, every loaded app counts as visible: the shell still renders.
+    fails, every loaded app counts as visible: the shell still renders (the route gate refuses
+    an app's own routes with 503 when the read failed).
     """
     cached = getattr(request.state, "visible_manifests", None)
     if cached is not None:
@@ -271,24 +320,34 @@ def visible_manifests(request: Request) -> list[Manifest]:
                 )
         except SQLAlchemyError:
             off = set()
+            request.state.module_states_unread = True  # the route gate refuses (503)
     visible = visible_from_states(loaded, {name: UNINSTALLED for name in off})
     request.state.visible_manifests = visible
     return visible
 
 
 def visible_from_states(manifests: list[Manifest], states: dict[str, str]) -> list[Manifest]:
-    """The loaded apps (load order) a visitor sees: core, required apps, and every app whose
-    `app_module` state is not `uninstalled` (no row = installed).
+    """The apps of `manifests` (load order) that are on: core, required apps, and apps whose
+    `app_module` state is installed (no row = installed) and whose dependencies among
+    `manifests` are on too. A dependency outside `manifests` is not judged here: the list was
+    resolved when it was loaded (a caller may pass just the apps it needs).
 
-    The one rule behind the shell (`visible_manifests`), the debug drawer's panels and the
-    chat assistant's tools, so an app switched off on `/apps` disappears from all three without a
-    restart.
+    The one rule behind the shell and the route gate (`visible_manifests`), the debug drawer's
+    panels, the assistant's tools, drafts and the worker (`live_active`), so an app switched off
+    on `/apps` disappears from all of them without a restart.
     """
-    return [
-        m
-        for m in manifests
-        if m.name == CORE.name or m.required or states.get(m.name, INSTALLED) != UNINSTALLED
-    ]
+    given = {m.name for m in manifests}
+    on: set[str] = {CORE.name}
+    visible: list[Manifest] = []
+    for m in manifests:
+        if m.name != CORE.name and not m.required:
+            if states.get(m.name, INSTALLED) != INSTALLED:
+                continue
+            if any(d in given and d not in on for d in m.depends):
+                continue
+        on.add(m.name)
+        visible.append(m)
+    return visible
 
 
 def join_names(names: list[str]) -> str:
@@ -340,3 +399,44 @@ def switch_refusal(
     else:
         detail = f"{this} needs {join_names(titles)}. Switch them on first."
     return SwitchRefusal(detail, {"uninstalled_dependencies": missing})
+
+
+def settings_refusal(manifest: Manifest, settings: dict[str, Any]) -> SwitchRefusal | None:
+    """None if `settings` satisfy the app's settings model (`Manifest.settings`), checked before
+    it is switched on: an app with invalid settings never turns on."""
+    if not manifest.settings:
+        return None
+    try:
+        import_string(manifest.settings).model_validate(settings)
+    except ValidationError as exc:
+        fields = sorted({".".join(map(str, e["loc"])) for e in exc.errors()})
+        return SwitchRefusal(
+            f"{manifest.display_name} has invalid settings: {', '.join(fields)}.",
+            {"invalid_settings": fields},
+        )
+    return None
+
+
+def switch(
+    session: Session,
+    ordered: list[Manifest],
+    states: dict[str, str],
+    manifest: Manifest,
+    state: str,
+) -> SwitchRefusal | None:
+    """Switch `manifest` to `state` in the session's transaction, or return why not and write
+    nothing. The one write path of `/apps` and `farmcore apps`; the database adds one to the
+    row's `generation` on every change of state (core_0014), which fences work begun before."""
+    refusal = switch_refusal(ordered, states, manifest, state)
+    row = session.get(AppModule, manifest.name)
+    if refusal is None and state == INSTALLED:
+        refusal = settings_refusal(manifest, row.settings if row is not None else {})
+    if refusal is not None:
+        return refusal
+    if row is None:
+        row = AppModule(name=manifest.name, version=manifest.version)
+        session.add(row)
+    if row.state != state:
+        row.state = state
+    session.flush()
+    return None

@@ -15,6 +15,8 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import parse_qsl, urlsplit
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -22,6 +24,9 @@ if TYPE_CHECKING:
 
 Maturity = Literal["alpha", "beta", "stable"]
 CORE_NAME = "core"
+# The app contract's version. An app built for another `core_api` is refused before it loads or
+# migrates (`registry.resolve_order`).
+CORE_API = 1
 # Core icon names from `core/templates/core/_icons.html`; an app `icon` is one of these, or a safe
 # SVG path the app ships.
 ICON_NAMES = frozenset(
@@ -494,6 +499,12 @@ class Manifest:
     # Outbox deliveries (core.outbox): (intent kind, "module:factory"), factory(settings) ->
     # a provider, or None when unconfigured (its intents then wait, and expire).
     delivery_providers: tuple[tuple[str, str], ...] = ()
+    # Module lifecycle (`registry`): the app contract version it was built for; version
+    # requirements on its `depends`, as (app, PEP 440 specifier), e.g. (("forecast", ">=0.3"),);
+    # and a "module:Model" Pydantic model its `app_module.settings` must satisfy to switch on.
+    core_api: int = CORE_API
+    requires: tuple[tuple[str, str], ...] = ()
+    settings: str = ""
 
     def __post_init__(self) -> None:
         keys = [view.key for view in self.parcel_views]
@@ -528,6 +539,24 @@ class Manifest:
             _check_provider(path, f"app {self.name!r} weather provider")
         for kind, path in self.delivery_providers:
             _check_provider(path, f"app {self.name!r} delivery provider {kind!r}")
+        for job in self.jobs:
+            if job.task is not None and not job.name.startswith(f"{self.name}."):
+                # The task fence finds the task's module by this prefix (`tasks.module_of`).
+                raise ValueError(
+                    f"app {self.name!r}: durable job {job.name!r} must be named '{self.name}.<job>'"
+                )
+        _check_provider(self.settings, f"app {self.name!r} settings")
+        for dependency, specifier in self.requires:
+            if dependency not in self.depends:
+                raise ValueError(
+                    f"app {self.name!r}: requires {dependency!r}, which is not in depends"
+                )
+            try:
+                SpecifierSet(specifier)
+            except InvalidSpecifier as exc:
+                raise ValueError(
+                    f"app {self.name!r}: invalid version requirement {specifier!r}"
+                ) from exc
         for locale, words in self.keywords.items():
             if not re.fullmatch(r"[a-z]{2}(-[A-Za-z]{2,4})?", locale):
                 raise ValueError(f"app {self.name!r}: invalid keyword locale {locale!r}")

@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
-from farmcore.core import tasks
+from farmcore.core import registry, tasks
 from farmcore.core.clock import LiveClock, clock_row, get_clock, set_replay
 from farmcore.core.manifest import JobContext, JobSpec, Manifest, import_string
 from farmcore.db import session_scope
@@ -99,6 +99,7 @@ def step_locked(
     """Caller holds STEP_LOCK_KEY; scoped runs keep separate due-job metadata."""
     scope_key = ",".join(map(str, sorted(farm_ids))) if farm_ids is not None else None
     with session_scope(session_factory) as session:
+        manifests = registry.live_active(session, manifests)  # an app off runs no job
         set_replay(session, t, settings)  # rejects a naive t
         if invalidate_preview:
             row = clock_row(session, settings)
@@ -173,11 +174,13 @@ def run_now(
     farm_ids: tuple[int, ...] | None = None,
     wait: float = 0.0,
 ) -> JobRun | None:
-    """Run job `name` once at the current clock; None when no manifest declares it.
+    """Run job `name` once at the current clock; None when no app that is on declares it.
 
     In live mode a durable job (`JobSpec.task`) for given farms is queued for `farmcore worker`
     instead, never run here: the call then waits at most `wait` seconds for an evaluation that
     began after it to publish for every farm, and is not ok ("queued") if none did in time."""
+    with session_factory() as session:
+        manifests = registry.live_active(session, manifests)
     spec = next((s for m in manifests for s in m.jobs if s.name == name), None)
     if spec is None:
         return None
@@ -204,11 +207,12 @@ def run_due_live(
     session_factory: sessionmaker[Session], manifests: Sequence[Manifest], settings: Settings
 ) -> list[JobRun]:
     """What `farmcore worker` does each tick for jobs without a durable task: in live mode, run
-    each one whose interval has passed since its last live run, in manifest order, at the wall
-    time. The step lock is held throughout, so the mode cannot change under a job and two
-    workers never both run one; the schedule is kept in `clock_state`, so a restart forgets
-    nothing. A job is first due one interval after a worker first sees it (the replay schedule
-    is separate). Only a successful run moves its schedule on, as in `step_to`."""
+    each one of an app that is on now whose interval has passed since its last live run, in
+    manifest order, at the wall time. The step lock is held throughout, so the mode cannot change
+    under a job and two workers never both run one; the schedule is kept in `clock_state`, so a
+    restart forgets nothing. A job is first due one interval after a worker first sees it (the
+    replay schedule is separate). Only a successful run moves its schedule on, as in
+    `step_to`."""
     with session_scope(session_factory) as coordinator:
         coordinator.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": STEP_LOCK_KEY})
         with session_scope(session_factory) as session:
@@ -217,6 +221,7 @@ def run_due_live(
                 return []
             now = clock.now()
             last_runs = dict(clock_row(session, settings).job_runs.get(LIVE_LAST_RUN, {}))
+            manifests = registry.live_active(session, manifests)  # an app off runs no job
         runs = []
         for spec in (s for m in manifests for s in m.jobs if s.task is None):
             prev = last_runs.get(spec.name)

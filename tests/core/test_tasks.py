@@ -12,6 +12,7 @@ from sqlalchemy import text
 from farmcore.core import clock, tasks
 from farmcore.core.manifest import JobSpec
 from farmcore.core.models.canonical import Farm
+from farmcore.core.models.kernel import AppModule
 
 TASK = "test.fetch"
 MINUTE = timedelta(minutes=1)
@@ -36,6 +37,26 @@ def _switch_to_replay_and_back(factory, settings, farm_id) -> None:
         session.commit()
 
 
+def _module_state(factory, *states: str) -> None:
+    """Switch TASK's module (`test`) through `states`, each committed, as `/apps` would."""
+    for state in states:
+        with factory() as session:
+            row = session.get(AppModule, "test")
+            if row is None:
+                session.add(AppModule(name="test", version="0", state=state))
+            else:
+                row.state = state
+            session.commit()
+
+
+def _disable_module(factory, settings, farm_id) -> None:
+    _module_state(factory, "uninstalled")
+
+
+def _disable_and_reenable_module(factory, settings, farm_id) -> None:
+    _module_state(factory, "uninstalled", "installed")
+
+
 def _delete_farm(factory, settings, farm_id) -> None:
     with factory() as session:
         session.delete(session.get(Farm, farm_id))
@@ -50,8 +71,18 @@ def _delete_farm(factory, settings, farm_id) -> None:
         (_switch_to_replay_and_back, MINUTE, False),  # the attempt's clock generation ended
         (_delete_farm, MINUTE, False),  # the farm is no longer eligible
         (None, timedelta(0), False),  # deadline reached
+        (_disable_module, MINUTE, False),  # its module was switched off
+        (_disable_and_reenable_module, MINUTE, False),  # ... and on again: a new generation
     ],
-    ids=["current", "superseded", "clock-switched", "farm-deleted", "deadline"],
+    ids=[
+        "current",
+        "superseded",
+        "clock-switched",
+        "farm-deleted",
+        "deadline",
+        "module-disabled",
+        "module-cycled",
+    ],
 )
 def test_only_the_current_attempt_in_its_live_generation_publishes(
     session_factory, settings, change, deadline, publishes

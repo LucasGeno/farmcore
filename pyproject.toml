@@ -25,6 +25,7 @@ dependencies = [
     "pint>=0.26.2",
     "timezonefinder>=9.2.0",
     "procrastinate==3.10.0",
+    "packaging>=24",
 ]
 
 [project.urls]

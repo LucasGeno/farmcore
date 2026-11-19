@@ -168,7 +168,7 @@ def test_global_app_actions_do_not_acquire_farm_scoped_authority(client, farms, 
     assert restored.json() == {
         "name": "share",
         "state": "installed",
-        "applies": "at next start",
+        "applies": "now",
         "ui": "now",
     }
     assert client.cookies.get(FARM_COOKIE) == str(first.id)

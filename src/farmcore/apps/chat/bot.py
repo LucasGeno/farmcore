@@ -28,6 +28,7 @@ from telegram.ext import (
 from farmcore.apps.chat import handlers, push
 from farmcore.apps.chat.dto import Callback, Incoming, Outgoing
 from farmcore.apps.chat.handlers import ChatDeps
+from farmcore.apps.chat.manifest import MANIFEST as CHAT_MANIFEST
 from farmcore.apps.chat.telegram import TelegramSender
 from farmcore.apps.chat.transcribe import Transcriber
 from farmcore.apps.operations.catalogue import products_for_farm
@@ -38,12 +39,14 @@ from farmcore.core.access import (
     ensure_owner_grant,
 )
 from farmcore.core.models.canonical import Farm, Parcel
+from farmcore.core.registry import live_active
 from farmcore.db import session_scope
 
 logger = logging.getLogger(__name__)
 
 PURPOSE = "chat"
 REPLY_PRIVATE_DEMO = "This is a private bot. Ask the farm administrator for access."
+REPLY_CHAT_OFF = "The Telegram assistant is switched off for this farm."
 REPLY_NO_TRANSCRIPT = "Sorry, I could not transcribe that voice note. Please type it instead."
 REPLY_NOTHING_HEARD = "🎤 (no words heard)"
 # A reset drops the database, and with it the chat binding `/start` wrote.
@@ -78,13 +81,26 @@ class BotRuntime:
     def _send(self, chat_id: int, out: Outgoing) -> None:
         self.sender.send(chat_id, out.text, buttons=out.buttons, url_buttons=out.url_buttons)
 
+    def _chat_on(self) -> bool:
+        """Whether Chat is on now (`registry.live_active`, the rule every process applies): a
+        bot started with Chat on follows a switch-off on /apps without a restart."""
+        manifests = list(self.deps.manifests)
+        if all(m.name != CHAT_MANIFEST.name for m in manifests):
+            manifests.append(CHAT_MANIFEST)
+        with session_scope(self.deps.session_factory) as session:
+            return any(m.name == CHAT_MANIFEST.name for m in live_active(session, manifests))
+
     async def _allowed(self, update: Update) -> bool:
         """Gate for every handler, before any Whisper, Vertex or database work. A stranger gets
-        one polite reply per process; ids are never logged with message content."""
+        one polite reply per process; ids are never logged with message content. With Chat
+        switched off, an allowed user gets a fixed reply and nothing else runs."""
         user = update.effective_user
-        if user is not None and user.id in self.deps.settings.allowed_telegram_users():
-            return True
         chat_id = update.effective_chat.id
+        if user is not None and user.id in self.deps.settings.allowed_telegram_users():
+            if await asyncio.to_thread(self._chat_on):
+                return True
+            await asyncio.to_thread(self._send, chat_id, Outgoing(text=REPLY_CHAT_OFF))
+            return False
         if chat_id not in self.refused:
             self.refused.add(chat_id)
             logger.warning("refused update from a user not on the allowlist")

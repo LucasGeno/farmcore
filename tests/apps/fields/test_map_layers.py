@@ -136,12 +136,13 @@ def test_advisor_switched_off_the_parcel_list_keeps_alias_and_name_only(client, 
 
 @pytest.mark.parametrize("path", PAGES)
 def test_weather_switched_off_has_no_weather_chip(client, seeded, path):
+    # Crop protection needs Weather: with Weather off it is off too, as at the next start.
     _switch_off(seeded, "stations")
 
     page = client.get(path).text
 
-    assert _layers(page) == _expected_layers(path, seeded, ADVICE)
-    assert set(_chips(page)) == {"advice"}
+    assert _layers(page) == _expected_layers(path, seeded)
+    assert set(_chips(page)) == set()
     assert "/stations/layer.geojson" not in page
 
 

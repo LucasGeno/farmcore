@@ -10,7 +10,7 @@ Failure model (tier 3; each named failure has one owning test, here or beside):
 4. Two corrections of one record both apply, a retried correction applies twice, or the original
    values, reason and actor are lost. -> `test_stock.py::test_competing_corrections_...`
 5. Farm and module authority: a visitor proposes, or a switched-off app still records.
-   -> `test_routes.py`
+   -> `test_routes.py`; from a process loaded before the switch (the bot) -> `test_a_process_...`
 6. A legacy stock row is lost or rewritten by the schema change, or a downgrade drops a
    fertiliser's stock. -> `test_migration.py`
 Not owned here (core already proves it): token actors never confirm, another principal's draft
@@ -29,6 +29,7 @@ from farmcore.apps.inventory.models import InventoryStock
 from farmcore.core import drafts
 from farmcore.core.models.canonical import CropSeason, Farm, Log
 from farmcore.core.models.catalog import CatalogItem, CropProtectionItem
+from farmcore.core.models.kernel import AppModule
 from tests.apps.fertilization.conftest import (
     APPLIED,
     LABEL,
@@ -148,3 +149,13 @@ def test_the_season_is_the_one_covering_the_farm_local_day(session, case):
     draft = propose(session, case, application(case, ts_start=early))
     log = session.get(Log, confirm(session, case, draft.id)[0].result_id)
     assert log.props["fertilization"]["seasons"] == {str(case.A): season.id}
+
+
+def test_a_process_loaded_before_the_switch_off_cannot_confirm_its_draft(session, case):
+    """The bot keeps the manifests it started with; the draft service reads the live state."""
+    draft = propose(session, case, application(case))
+    session.merge(AppModule(name="fertilization", version="0", state="uninstalled"))
+    session.flush()
+    with pytest.raises(drafts.DraftInvalid):
+        confirm(session, case, draft.id)
+    assert session.scalar(select(Log.id).where(Log.type == "fertilise")) is None
