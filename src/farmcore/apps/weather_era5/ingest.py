@@ -6,7 +6,8 @@ runs `backfill_farm`:
 
 1. read which hours the farm's ERA5 grid point already holds this season (no transaction stays
    open during the requests);
-2. `plan` the whole days it lacks, from 1 January to the newest day ERA5 serves, in windows of
+2. `plan` the whole days it lacks, from 1 January to the newest day the dataset serves (its
+   public constraints), in windows of
    at most `MAX_DAYS`. A CDS order can queue for a long time, so a run orders one window and
    waits for it only until its deadline: an order still queued is kept in the farm's
    `era5_backfill` health and collected, not ordered again, on the next run. Windows are
@@ -25,10 +26,11 @@ are overwritten upstream by the final ERA5 about two months later; the first rec
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Collection
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.stations import service
@@ -42,7 +44,7 @@ from farmcore.core.models.canonical import Farm
 from farmcore.core.models.weather import WeatherObservation, WeatherStation
 from farmcore.core.weather.contract import Fetched, Point, Station, TimeRange
 from farmcore.core.weather.store import record_receipt, store_observations, upsert_station
-from farmcore.core.weather.variables import VARIABLES
+from farmcore.core.weather.variables import BY_LEGACY
 from farmcore.db import session_scope
 
 logger = logging.getLogger(__name__)
@@ -54,19 +56,21 @@ DEADLINE = timedelta(minutes=3)
 HEALTH = "era5_backfill"
 
 HOUR = timedelta(hours=1)
-# ERA5 is about 5 days behind real time; the catalogue's constraints ended 11 days behind on
-# 2026-11-19. Assumed: 10 days, so a window is rarely refused for lying beyond the data.
-LAG = timedelta(days=10)
+# Used only when the dataset's constraints cannot be read: this copy of ERA5 ended 11 days
+# behind real time on 2026-11-19 (its catalogue says ERA5 is ~5 days behind), so 14 is assumed.
+FALLBACK_LAG = timedelta(days=14)
 # Assumed: a quarter keeps one order small (the CDS publishes no size limit for the dataset,
 # and asks for small requests over large ones).
 MAX_DAYS = 92
 # A run orders at most this many windows; later ones wait for the next day's run.
 MAX_WINDOWS = 3
-# Assumed: an order not finished after a day is abandoned and ordered again.
-MAX_PENDING = timedelta(days=1)
+# Assumed: an order not finished after this long is abandoned and ordered again. Well above
+# INTERVAL: the next run starts more than INTERVAL after the last, so the order must outlive it.
+MAX_PENDING = timedelta(days=5)
 # The share of the attempt's deadline the requests may use: storing is fenced by the same
 # deadline (`publish_if_current`), so the rest is left to write the receipts and the health.
 FETCH_SHARE = 0.8
+STORED = tuple(BY_LEGACY[n].name for n in ("rr1_mm", "t_c", "rh_pct", "ff_kmh"))  # per hour
 GRID = 0.25  # degrees: the timeseries dataset's grid
 
 
@@ -78,8 +82,10 @@ def season_start(now: datetime) -> datetime:
 
 def grid_station(point: Point) -> Station:
     """The ERA5 grid point nearest `point`, as the station its hours are stored under."""
-    latitude = round(round(point.latitude / GRID) * GRID, 2)
-    longitude = round(round(point.longitude / GRID) * GRID, 2)
+    # Half up (not Python's banker's rounding); a pin on a cell edge may still be put in the
+    # neighbour by the CDS, whose row carries the real point.
+    latitude = round(math.floor(point.latitude / GRID + 0.5) * GRID, 2)
+    longitude = round(math.floor(point.longitude / GRID + 0.5) * GRID, 2)
     return Station(
         provider_station_id=f"{latitude:.2f},{longitude:.2f}",
         name=f"ERA5 grid point {latitude:.2f}, {longitude:.2f} (model reanalysis)",
@@ -89,12 +95,11 @@ def grid_station(point: Point) -> Station:
 
 
 def plan(
-    held: Collection[datetime], now: datetime, start: datetime, max_days: int = MAX_DAYS
+    held: Collection[datetime], last: date, start: datetime, max_days: int = MAX_DAYS
 ) -> list[TimeRange]:
     """The windows to order, oldest first, each `(start, end]` on whole UTC days: the days from
-    `start` to the newest ERA5 serves (`LAG` before `now`) for which `held` (the valid times
+    `start` to `last`, the newest day the dataset serves, for which `held` (the valid times
     held) lacks an hour, each run of missing days a window of at most `max_days`."""
-    last = (now - LAG).astimezone(UTC).date()
     day = start.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     windows: list[tuple[datetime, datetime]] = []
     while day.date() <= last:
@@ -131,9 +136,12 @@ def _held(session: Session, farm_id: int, station: Station, since: datetime) -> 
         .where(
             WeatherStation.provider == provider.PROVIDER,
             WeatherStation.provider_station_id == station.provider_station_id,
-            WeatherObservation.variable == VARIABLES["air_temperature"].name,
             WeatherObservation.period_end > since,
-        ),
+        )
+        .group_by(WeatherObservation.period_end)
+        # An hour is held only with every variable (a member missing from a response must not
+        # leave its variable unfilled for good).
+        .having(func.count(WeatherObservation.variable.distinct()) == len(STORED)),
         scope=service.SCOPE,
         resource="weather_observation",
     ).scalars()
@@ -167,13 +175,18 @@ def backfill_farm(ctx: tasks.TaskContext) -> None:
         held = _held(session, ctx.farm_id, station, start - HOUR)
         state = (session.get(Farm, ctx.farm_id).props or {}).get(HEALTH)
     era5 = provider.provider(ctx.settings, timeout=ctx.attempt.remaining() * FETCH_SHARE)
-    kept = _pending(state, now)
-    jobs: list[tuple[str | None, TimeRange]] = (
-        [kept] if kept else [(None, w) for w in plan(held, now, start)[:MAX_WINDOWS]]
-    )
     responses: list[Fetched] = []
     errors: list[str] = []
     pending = None
+    kept = _pending(state, now)
+    jobs: list[tuple[str | None, TimeRange]] = [kept] if kept else []
+    if not kept:
+        try:
+            last = era5.last_day()
+        except Exception as exc:  # the newest day is then guessed, never a reason to skip a run
+            errors.append(str(exc) if isinstance(exc, provider.PortalError) else type(exc).__name__)
+            last = (now - FALLBACK_LAG).date()
+        jobs = [(None, w) for w in plan(held, last, start)[:MAX_WINDOWS]]
     for job, window in jobs:
         try:
             job = job or era5.submit(station, window)
@@ -220,7 +233,7 @@ def store(
     receipt = record_receipt(
         session,
         provider=era5.name,
-        licence=era5.licence(),
+        licence=era5.licence(fetched.fetched_at),
         fetched=fetched,
         secret_fields=[f.name for f in era5.auth_schema() if f.secret],
         farm_id=farm_id,

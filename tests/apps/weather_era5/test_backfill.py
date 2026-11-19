@@ -73,7 +73,12 @@ def test_a_live_tick_backfills_two_days_as_flagged_model_data_under_a_grid_point
         True,
         farm.id,
     )
-    assert "Copernicus Climate Change Service" in receipt.attribution
+    # The notice for the year of use and the catalogue citation with its DOI.
+    assert (
+        f"Contains modified Copernicus Climate Change Service information {datetime.now(UTC).year}"
+        in receipt.attribution
+    )
+    assert "DOI: 10.24381/1cf1ad76" in receipt.attribution
 
 
 @pytest.mark.parametrize("fail", ["submit", "job"], ids=["key-refused", "job-failed"])
@@ -99,7 +104,19 @@ def test_an_order_still_queued_at_the_deadline_is_resumed_not_ordered_again(
     assert health["pending"] and health["error"] is None
     assert session.scalar(select(func.count(WeatherObservation.id))) == 0
     fake.queued = 0  # the CDS finishes it
-    session.execute(text("DELETE FROM task_attempt"))  # the next day's tick
+    # The next run comes more than INTERVAL later (that is when planning queues the farm again):
+    # the order must still be collected then, not abandoned as too old.
+    later = ingest.INTERVAL + timedelta(minutes=5)
+    session.execute(
+        text("UPDATE task_attempt SET finished_at = finished_at - :later"), {"later": later}
+    )
+    farm_row = session.get(Farm, farm.id)
+    order = dict(farm_row.props[ingest.HEALTH]["pending"])
+    order["submitted"] = (datetime.fromisoformat(order["submitted"]) - later).isoformat()
+    farm_row.props = {
+        **farm_row.props,
+        ingest.HEALTH: {**farm_row.props[ingest.HEALTH], "pending": order},
+    }
     session.commit()
 
     health = _tick(session, session_factory, credentials, farm)
@@ -135,12 +152,16 @@ def test_the_cds_key_is_refused_over_plain_http_without_echoing_it() -> None:
 def test_selection_now_offers_era5_as_the_backfill_for_a_pin(credentials) -> None:
     from farmcore.apps.weather_era5.provider import provider
 
-    chosen = select_sources(
-        [provider(credentials)], Point(PIN["latitude"], PIN["longitude"]), "FR", None
+    where = Point(PIN["latitude"], PIN["longitude"])
+
+    chosen = select_sources([provider(credentials)], where, "FR", None)
+    keyless = select_sources(
+        [provider(credentials.model_copy(update={"cdsapi_key": None}))], where, "FR", None
     )
 
     assert [b.provider for b in chosen.backfill] == ["copernicus-era5"]
     assert chosen.stations == ()
+    assert keyless.backfill == ()  # no key: the job would do nothing, so it is not offered
 
 
 def test_an_order_never_ready_ends_out_of_time_for_the_contract_call(cds) -> None:

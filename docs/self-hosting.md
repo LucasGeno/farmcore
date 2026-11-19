@@ -323,23 +323,32 @@ in live clock mode only. It avoids Open-Meteo's non-commercial historical API.
   to that host as `PRIVATE-TOKEN`, never logged, stored in a receipt or shown; startup refuses
   a key with an `http` URL. Without it the job does nothing.
 - **What it does.** Once a day it orders the whole days the farm lacks, up to the newest day
-  ERA5 serves (assumed 10 days back), for the ERA5 grid point nearest the pin (0.25 degrees),
-  in orders of at most 92 days. The CDS queues orders, and one can wait for a long time: a run
-  waits a few minutes, keeps the order id in the farm's `era5_backfill` health and collects it
-  the next day instead of ordering again (an order older than a day is ordered anew).
+  the dataset serves (read from its public constraints each run, about 11 days behind on
+  2026-11-19; 14 days back if they cannot be read), for the ERA5 grid point nearest the pin
+  (0.25 degrees), in orders of at most 92 days. The CDS queues orders, and one can wait for a
+  long time: a run waits a few minutes, keeps the order id in the farm's `era5_backfill` health
+  and collects it on a later run instead of ordering again (an order older than five days is
+  ordered anew). An hour counts as held only with all four variables.
 - **Model data.** Hours are stored under a `copernicus-era5` grid-point station, never a
   station asset, and their receipt says `endpoint_kind: model-reanalysis`. Temperature, wind
   and precipitation come from ERA5; humidity is derived from temperature and dew point
   (Magnus formula, Alduchov and Eskridge 1996). The newest days are ERA5T and the final ERA5
   overwrites them about two months later; the first receipt is kept.
-- **Known limits.** The grid point is shared by every farm in the same 0.25 degree cell, so a
-  second farm sees the first farm's hours as held. The CSV column names were not verifiable
-  without an account and are assumed from the CDS short names (`t2m`, `d2m`, `u10`, `v10`,
-  `tp`).
-- **Licence.** CC BY 4.0. Every receipt carries the Copernicus notice: "Generated using
-  Copernicus Climate Change Service information. Contains modified Copernicus Climate Change
-  Service information (ERA5, ECMWF); neither the European Commission nor ECMWF is responsible
-  for any use of this information."
+- **Known limits.** ECMWF calls this dataset (`reanalysis-era5-single-levels-timeseries`) an
+  experimental catalogue entry, not recommended for operational systems
+  ([announcement](https://forum.ecmwf.int/t/11919)); the dataset id is one constant, so a
+  switch to `reanalysis-era5-single-levels` is one change. The grid point is shared by every
+  farm in the same 0.25 degree cell, so a second farm sees the first farm's hours as held. The
+  response is a zip of CSVs (a plain CSV is read too) with the columns `valid_time, latitude,
+  longitude` and the CDS short names `t2m`, `d2m`, `u10`, `v10`, `tp`, as another client of the
+  same API documents; no recorded real file is in the tests.
+- **Licence.** CC BY 4.0. Every receipt carries the attribution the dataset asks for, built
+  per fetch: "Contains modified Copernicus Climate Change Service information <year>. Neither
+  the European Commission nor ECMWF is responsible for any use that may be made of the
+  Copernicus information or data it contains." and the citation "Copernicus Climate Change
+  Service (2025): ERA5 hourly time-series data on single levels from 1940 to present. Copernicus
+  Climate Change Service (C3S) Climate Data Store (CDS). DOI: 10.24381/1cf1ad76 (Accessed on
+  <date>)".
 
 ## Backups and restore
 

@@ -3,7 +3,9 @@ CSV from a second host. Recorded shapes only; no network."""
 
 from __future__ import annotations
 
+import io
 import json
+import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,9 +40,14 @@ class Cds:
         path = request.url.path
         if request.url.host == CSV_HOST:
             assert "private-token" not in request.headers  # the key stays on the CDS host
-            return httpx.Response(200, text=self._csv())
+            return httpx.Response(200, content=self._zip())
         if request.headers.get("private-token") != KEY or self.fail == "submit":
             return httpx.Response(403, json={"title": "authentication failed"})
+        if path.endswith(f"/processes/{DATASET}/constraints"):
+            body = json.loads((FIXTURES / "constraints.json").read_text())
+            newest = datetime.now(UTC) - timedelta(days=10)  # the copy lags real time
+            body["date"] = [f"1940-01-01/{newest:%Y-%m-%d}"]
+            return httpx.Response(200, json=body)
         if path.endswith(f"/processes/{DATASET}/execution") and request.method == "POST":
             if self.throttle:
                 self.throttle -= 1
@@ -62,24 +69,30 @@ class Cds:
             return httpx.Response(200, json={"jobID": path.rsplit("/", 1)[1], **status})
         return httpx.Response(404)
 
-    def _csv(self) -> str:
-        """One row per hour of the requested days, from the recorded row."""
-        header, row = (FIXTURES / "era5-timeseries-row.csv").read_text().splitlines()
+    def _zip(self) -> bytes:
+        """The asset: a zip of two CSVs (instantaneous and accumulated parameters), one row per
+        hour of the requested days, from the recorded rows."""
         first, last = (datetime.strptime(d, "%Y-%m-%d") for d in self.dates)
-        rest = row.split(",", 1)[1]
-        hours = int((last - first).days + 1) * 24
-        lines = [f"{first + timedelta(hours=i):%Y-%m-%d %H:%M:%S},{rest}" for i in range(hours)]
-        return "\n".join([header, *lines]) + "\n"
+        hours = [first + timedelta(hours=i) for i in range(((last - first).days + 1) * 24)]
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            for member, fixture in (("instant", "era5-instant-row"), ("accum", "era5-accum-row")):
+                header, row = (FIXTURES / f"{fixture}.csv").read_text().splitlines()
+                rest = row.split(",", 1)[1]
+                lines = [f"{h:%Y-%m-%d %H:%M:%S},{rest}" for h in hours]
+                archive.writestr(f"data_stream-{member}.csv", "\n".join([header, *lines]) + "\n")
+        return buffer.getvalue()
 
 
 @pytest.fixture
 def cds(monkeypatch) -> Callable[..., Cds]:
     """Route the provider's HTTP to a fake CDS; polls and waits do not sleep."""
     monkeypatch.setattr(live, "POLL_SECONDS", 0.0)
-    # Two whole days to fill: the newest day served is 10 days back, and the season starts 11.
+    # Two whole days to fill: the fake's constraints end 10 days back, the season starts 11.
     monkeypatch.setattr(
         ingest, "season_start", lambda now: (now - timedelta(days=11)).replace(hour=0, minute=0)
     )
+    monkeypatch.setattr(ingest, "FALLBACK_LAG", timedelta(days=10))
     real = httpx.Client
 
     def install(**kw) -> Cds:

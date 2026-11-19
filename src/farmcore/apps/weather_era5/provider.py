@@ -11,24 +11,27 @@ Sources (ECMWF and Copernicus, read 2026-11-19):
   workload and a request that would exceed them is queued, so an order can wait for a long time
   (https://confluence.ecmwf.int/display/CKB/Climate+Data+Store+%28CDS%29+documentation).
   This module speaks that API directly rather than through `cdsapi` (Apache-2.0, 0.7.7, now a
-  wrapper over `ecmwf-datastores-client`, also Apache-2.0): its blocking wait cannot be capped
-  by a task's deadline, which a resumable order needs.
+  wrapper over `ecmwf-datastores-client`, also Apache-2.0): it is three calls, so no dependency
+  is needed, and the job id must outlive a run (a queued order is collected by a later one).
 - Dataset `reanalysis-era5-single-levels-timeseries`: hourly ERA5 for one location (the nearest
   point of a 0.25 degree grid), `variable`, `location`, `date` (`YYYY-MM-DD/YYYY-MM-DD`, whole
-  days) and `data_format` `csv`. ERA5 is updated daily about 5 days behind real time (ERA5T;
-  the catalogue's constraints ended 11 days behind on 2026-11-19), and ERA5T is overwritten by
-  the final ERA5 about two months later.
+  days) and `data_format` `csv`, answered as a zip of CSVs (one per group of parameters, as
+  pvlib's client for this dataset documents). ERA5 is updated daily about 5 days behind real
+  time (ERA5T), but this copy ends later: the newest day it serves is the `date` maximum of
+  its public constraints (`POST /processes/<dataset>/constraints`), 11 days behind on
+  2026-11-19. ERA5T is overwritten by the final ERA5 about two months later. ECMWF calls this
+  entry experimental and not recommended for operational systems (forum.ecmwf.int t/11919).
   https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries
 - Values: `t2m` and `d2m` in K, `u10` and `v10` in m/s (instantaneous at the valid time), `tp` in
   m accumulated over the hour ending at the valid time
   (https://confluence.ecmwf.int/display/CKB/ERA5%3A+data+documentation).
   Relative humidity is derived from `t2m` and `d2m` with the Magnus formula of Alduchov and
   Eskridge (1996, J. Appl. Meteor. 35, 601-609), constants 17.625 and 243.04 degC, over water.
-  The CSV column names are not published where they could be read: they are taken as the CDS
-  short names above and the parser matches them case-insensitively (to verify on a real file).
-- Licence CC-BY-4.0 (https://spdx.org/licenses/CC-BY-4.0, the catalogue's `license`). The notice
-  below is the wording Copernicus asks for; it could not be checked against an official page
-  here.
+  Columns are `valid_time, latitude, longitude` and the CDS short names above (as pvlib's
+  client reads them); the parser matches them case-insensitively.
+- Licence CC-BY-4.0 (https://spdx.org/licenses/CC-BY-4.0, the catalogue's `license`). The
+  dataset page's "Citation and attribution" asks for the notice and the catalogue citation
+  built in `notice`.
 
 Every value is model data (a reanalysis), not an observation: it lands under its own grid-point
 station and its receipt says `endpoint_kind: model-reanalysis`.
@@ -40,6 +43,7 @@ import csv
 import io
 import math
 import time
+import zipfile
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -66,12 +70,23 @@ from farmcore.settings import Settings
 PROVIDER = "copernicus-era5"
 DATASET = "reanalysis-era5-single-levels-timeseries"
 KIND = "model-reanalysis"
-NOTICE = (
-    "Generated using Copernicus Climate Change Service information. "
-    "Contains modified Copernicus Climate Change Service information (ERA5, ECMWF); "
-    "neither the European Commission nor ECMWF is responsible for any use of this information."
-)
-LICENCE = Licence("CC-BY-4.0", NOTICE, True)
+DOI = "10.24381/1cf1ad76"
+CITATION_YEAR = 2025  # the catalogue entry's year in its citation
+
+
+def notice(fetched_at: datetime) -> str:
+    """The attribution the dataset asks for, from its "Citation and attribution" text: the
+    Copernicus notice for the year of use, and the catalogue citation with the access date."""
+    return (
+        f"Contains modified Copernicus Climate Change Service information {fetched_at:%Y}. "
+        "Neither the European Commission nor ECMWF is responsible for any use that may be made "
+        "of the Copernicus information or data it contains. "
+        f"Copernicus Climate Change Service ({CITATION_YEAR}): ERA5 hourly time-series data on "
+        "single levels from 1940 to present. Copernicus Climate Change Service (C3S) Climate "
+        f"Data Store (CDS). DOI: {DOI} (Accessed on {fetched_at:%d-%b-%Y})"
+    )
+
+
 AUTH = (AuthField("PRIVATE-TOKEN", secret=True, description="Copernicus CDS account API key"),)
 VARIABLES = (
     "2m_temperature",
@@ -131,12 +146,29 @@ def _value(name: str, value: Decimal, end: datetime, span: timedelta = timedelta
     )
 
 
-def era5_values(text: str, range: TimeRange) -> list[ObservationValue]:
-    """A timeseries CSV's values, converted to the stored units, for valid times in
+def _rows(payload: bytes) -> list[str]:
+    """The CSV texts of a response: the members of a zip (one per group of parameters), or the
+    payload itself when it is a plain CSV."""
+    if payload[:2] != b"PK":
+        return [payload.decode("utf-8-sig")]
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            return [
+                archive.read(n).decode("utf-8-sig")
+                for n in archive.namelist()
+                if n.lower().endswith(".csv")
+            ]
+    except (zipfile.BadZipFile, UnicodeDecodeError):
+        raise PortalError("results: unreadable zip") from None
+
+
+def era5_values(payload: bytes, range: TimeRange) -> list[ObservationValue]:
+    """A response's values, converted to the stored units, for valid times in
     `(start, end]`. Temperature, humidity and wind are instantaneous (period start = end);
     precipitation covers the hour ending at the valid time."""
     values = []
-    for row in csv.DictReader(io.StringIO(text)):
+    rows = (r for text in _rows(payload) for r in csv.DictReader(io.StringIO(text)))
+    for row in rows:
         row = {k.strip().lower(): (v or "").strip() for k, v in row.items() if k}
         try:
             end = datetime.fromisoformat(row["valid_time"]).replace(tzinfo=UTC)
@@ -275,22 +307,41 @@ class Era5:
             if cds.deadline - time.monotonic() <= POLL_SECONDS:
                 return None
             time.sleep(POLL_SECONDS)
-        href = cds.json("results", "GET", f"jobs/{job}/results", 200)
         try:
-            url = href["asset"]["value"]["href"]
-        except (KeyError, TypeError):
-            raise PortalError("results: no file in the response") from None
-        if not isinstance(url, str) or urlsplit(url).scheme != "https":
-            raise PortalError("results: not an https file")
-        response = cds.send("results", "GET", url)
-        if response.status_code != 200:
-            raise PortalError(f"results: HTTP {response.status_code}")
+            href = cds.json("results", "GET", f"jobs/{job}/results", 200)
+            try:
+                url = href["asset"]["value"]["href"]
+            except (KeyError, TypeError):
+                raise PortalError("results: no file in the response") from None
+            if not isinstance(url, str) or urlsplit(url).scheme != "https":
+                raise PortalError("results: not an https file")
+            response = cds.send("results", "GET", url)
+            if response.status_code != 200:
+                raise PortalError(f"results: HTTP {response.status_code}")
+        except PortalError:
+            if cds.expired():
+                return None  # done upstream, out of time here: collected by the next run
+            raise
         return Fetched(
             request=self._request(station, range),
             fetched_at=datetime.now(UTC),
             payload=response.content,
-            values=era5_values(response.text, range),
+            values=era5_values(response.content, range),
         )
+
+    def last_day(self) -> date:
+        """The newest day the dataset serves: the `date` maximum of its public constraints."""
+        body = self.cds().json(
+            "constraints",
+            "POST",
+            f"processes/{DATASET}/constraints",
+            200,
+            json={"inputs": {"variable": list(VARIABLES)}},
+        )
+        try:
+            return date.fromisoformat(body["date"][0].split("/")[1])
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise PortalError("constraints: no date range in the response") from None
 
     def discover_stations(self, bbox: BBox) -> list[Station]:
         return []  # a gridded model has no stations: it serves any point
@@ -311,12 +362,13 @@ class Era5:
             observations=False,
             forecast=False,
             variables=frozenset(BY_LEGACY[n].name for n in ("rr1_mm", "t_c", "rh_pct", "ff_kmh")),
-            backfill=True,
+            backfill=bool(self._key),  # without a key the job does nothing: not offered
             live_only=True,
         )
 
-    def licence(self) -> Licence:
-        return LICENCE
+    def licence(self, fetched_at: datetime | None = None) -> Licence:
+        """CC BY 4.0 with the notice for the year and day of `fetched_at` (now by default)."""
+        return Licence("CC-BY-4.0", notice(fetched_at or datetime.now(UTC)), True)
 
     def auth_schema(self) -> tuple[AuthField, ...]:
         return AUTH
