@@ -55,7 +55,7 @@ from farmcore.core.models.weather import WeatherObservation
 from farmcore.core.routes_clock import require_admin
 from farmcore.core.weather import attribution
 from farmcore.db import get_session
-from farmcore.web import context_url, is_admin, is_expert, operator_authenticated, render
+from farmcore.web import app_is_on, context_url, is_admin, is_expert, operator_authenticated, render
 
 router = APIRouter()
 
@@ -715,6 +715,11 @@ def grantee_advice(request: Request, repo: GrantRepo) -> JSONResponse:
         )
     except ScopeDenied as exc:
         raise HTTPException(403, "Not shared: this grant does not include advice.") from exc
+    if not app_is_on(request, "advisor"):
+        # Shared advice is crop protection's output: without it, say so, never an empty list.
+        raise HTTPException(
+            409, "Unavailable: crop protection is not installed, so advice cannot be read."
+        )
     current_inputs = "not_loaded" if "stations:read" in repo.grant.scopes else "not_authorized"
     return JSONResponse(
         [{**service.shared_advice(row), "current_inputs_status": current_inputs} for row in rows]

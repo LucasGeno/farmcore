@@ -391,6 +391,9 @@ Season & impact (`kpi`, a replay of its advice). Without it:
   section and Plan say they need crop protection ("not an all-clear"), as does the assistant,
   which no longer offers the plan tool.
 - Notifications list station and data issues only; no advice or spray-window items.
+- The map colours parcels by crop protection's decisions only while it is on; otherwise every
+  parcel reads "no advice". A recipient's `advice.json` answers 409 in plain words (crop
+  protection is not installed) rather than an empty list.
 - Chat logs records as before; its advice digest has no advice events to send. With crop
   protection present, chat loads after it (`Manifest.after`), so a replay step's digest carries
   that step's evaluation.
@@ -400,4 +403,4 @@ Season & impact (`kpi`, a replay of its advice). Without it:
 
 `tests/core/test_registry.py` imports every module of every other app, the CLI and the web app in
 a process where the advisor package does not exist; `tests/core/test_bundle_without_crop_protection.py`
-walks such a bundle over HTTP.
+walks such a bundle over HTTP with the crop-protection packages blocked in-process.

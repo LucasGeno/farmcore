@@ -71,8 +71,9 @@ def parcels_feature_collection(
     """The farm's parcels as a GeoJSON FeatureCollection, ordered P1..P10.
 
     Properties: id, alias, name, area_ha, variety, decision (`none` without advice up to now),
-    advised (an advice row exists up to now), last_spray (local date `YYYY-MM-DD` in `tz`, or
-    None), card_url, label_point [lon, lat].
+    advised (an advice row exists up to now; `assessments` is crop protection's latest advice
+    per parcel, given by a caller that checked it is on: none given, no parcel is advised),
+    last_spray (local date `YYYY-MM-DD` in `tz`, or None), card_url, label_point [lon, lat].
     """
     point = func.ST_PointOnSurface(Parcel.geom)
     stmt = select(
@@ -82,10 +83,7 @@ def parcels_feature_collection(
         func.ST_Y(point).label("label_y"),
     ).where(Parcel.farm_id == repo.farm_id)
     rows = repo.execute(stmt, scope="fields:read", resource="parcel").all()
-    from farmcore.apps.advisor.service import latest_advice
-
-    if assessments is None:
-        assessments = latest_advice(repo, now, tz=tz)
+    assessments = assessments or {}
     decisions = {pid: row.decision for pid, row in assessments.items()}
     sprays = _last_sprays(repo, now)
     zone = ZoneInfo(tz)

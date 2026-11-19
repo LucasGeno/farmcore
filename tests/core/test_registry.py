@@ -19,6 +19,7 @@ from farmcore.core.manifest import Manifest
 from farmcore.core.models.kernel import AppModule
 from farmcore.main import create_app
 from tests.core import fake_apps
+from tests.core.crop_protection import CROP_PROTECTION
 
 FAKE = ("tests.core.fake_apps",)
 
@@ -87,10 +88,6 @@ def test_create_app_with_only_a_real_app_manifest_loads_just_that_app(
     assert app.state.manifests == [FIELDS]
 
 
-# Crop protection and the apps documented as extending it (docs/architecture.md, "Bundles
-# without crop protection"); every other app must work in a bundle that leaves these out.
-CROP_PROTECTION = {"advisor", "kpi", "planning", "review"}
-
 BUNDLE_PROBE = """
 import importlib, json, pkgutil, sys
 import farmcore, farmcore.apps, farmcore.cli, farmcore.main
@@ -128,6 +125,27 @@ def test_a_bundle_without_crop_protection_imports_every_other_app_the_cli_and_th
     assert done.returncode == 0, done.stderr[-3000:]
     expected = {m.name for m in registry.discover()} - CROP_PROTECTION
     assert set(json.loads(done.stdout.splitlines()[-1])) == expected
+
+
+@pytest.mark.parametrize(
+    "after",
+    ["advisor", ("",), ("orchard",), ("b",)],
+    ids=["str", "empty-name", "self", "also-a-dependency"],
+)
+def test_a_malformed_after_is_refused_when_the_manifest_is_built(after) -> None:
+    # Bug prevented: `after="advisor"` iterated as letters, or a self/depends entry, silently
+    # changing the load order chat's digest relies on.
+    with pytest.raises(ValueError, match="after"):
+        Manifest(name="orchard", version="1.0.0", depends=("b",), after=after)
+
+
+def test_every_shipped_after_names_an_app_of_the_full_tree() -> None:
+    # Bug prevented: a typo (`after=("advsior",)`) resolves silently, as an absent optional app,
+    # and runs chat's digest before the evaluation it should carry.
+    found = registry.discover()
+    names = {m.name for m in found}
+    assert {(m.name, a) for m in found for a in m.after if a not in names} == set()
+    assert any(m.after for m in found)
 
 
 def _rows(factory) -> dict[str, tuple[str, str, object]]:
