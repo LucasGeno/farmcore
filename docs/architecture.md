@@ -133,6 +133,10 @@ Each request carries its own bearer token in `Authorization` (never the URL), pa
 `Origin` allowlists, per-address and per-token rate limits and a body limit, and every list and
 call re-checks that token. Details: `core/mcp_http.py`,
 [SECURITY.md](../SECURITY.md#mcp-over-http-is-for-remote-agents).
+With `MCP_OAUTH_ENABLED` the web app is also the OAuth 2.1 authorization server for `/mcp`
+(`core/oauth`): the farm owner approves an agent on a consent page, and the agent gets
+short-lived tokens bound to the MCP endpoint's URL, refreshed by rotation; the connection is a
+grant on Sharing ([SECURITY.md](../SECURITY.md#oauth-for-mcp-lets-an-owner-approve-an-agent)).
 
 ## Stack
 

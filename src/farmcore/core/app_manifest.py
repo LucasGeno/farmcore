@@ -22,6 +22,7 @@ MANIFEST = Manifest(
         "farmcore.core.routes_identity:router",
         "farmcore.core.routes_members:router",
         "farmcore.core.routes_drafts:router",
+        "farmcore.core.oauth.routes:router",
         "farmcore.core.debug:router",
     ),
     seed="farmcore.core.seed:seed",

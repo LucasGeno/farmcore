@@ -104,8 +104,11 @@ class FarmTools:
         session_factory: sessionmaker[Session],
         settings: Settings,
         manifests: Sequence[Manifest],
+        audience: str | None = None,
     ) -> None:
+        """`audience`: the resource this server is, for OAuth tokens (None: they are refused)."""
         self._session_factory = session_factory
+        self._audience = audience
         self._settings = settings
         self._manifests = list(manifests)
 
@@ -113,7 +116,7 @@ class FarmTools:
         self, session: Session, token: str, tool: str | None = None
     ) -> ScopedRepository:
         try:
-            return authenticate_token(session, token)
+            return authenticate_token(session, token, audience=self._audience)
         except TokenRejected as exc:
             _log_refusal(tool, "a rejected token", "token rejected")
             raise Refused(str(exc)) from None

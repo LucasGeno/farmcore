@@ -8,11 +8,14 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from farmcore.core.access import FarmNotSeeded, selected_farm
 from farmcore.core.errors import AUTH_REQUIRED, FARM_DENIED, refusal
 from farmcore.core.identity import resolve_principal
+from farmcore.core.oauth.routes import PUBLIC_PATHS as OAUTH_PATHS
 from farmcore.core.tour import EXIT as TOUR_EXIT
 from farmcore.web import operator_authenticated
 
 # Leaving the tour only drops a cookie, so a browser in any state may do it.
-PUBLIC_PATHS = frozenset({"/health", "/admin/sign-in", "/admin/sign-out", "/login", TOUR_EXIT})
+PUBLIC_PATHS = (
+    frozenset({"/health", "/admin/sign-in", "/admin/sign-out", "/login", TOUR_EXIT}) | OAUTH_PATHS
+)
 
 
 class PrivacyMiddleware:

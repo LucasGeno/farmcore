@@ -11,9 +11,14 @@ MCP message is read:
 3. `Host` and `Origin` against allowlists (the SDK's check, DNS rebinding): 421 / 403. No CORS
    headers are ever sent.
 4. The client address's rate (429): before the database is asked about any token.
-5. A bearer token in `Authorization` only (`access.authenticate_token`): 401 otherwise.
+5. A bearer token in `Authorization` only (`access.authenticate_token`): 401 otherwise. An
+   OAuth token counts only if it was issued for this endpoint's public URL (RFC 8707).
 6. That token's rate (429), keyed by token, not by address.
 7. The body size (413, the SDK's limit).
+
+With OAuth on (`MCP_OAUTH_ENABLED`), `GET /.well-known/oauth-protected-resource<path>` serves
+this resource's metadata (RFC 9728 §3) and every 401 names it (§5.1), so a client finds the
+authorization server (`core/oauth`).
 
 Each tool list and call then re-authenticates the request's own token (`mcp.FarmTools`) and is
 audited as `token:<id>`. Nothing here logs a URL, a header or a body; uvicorn's access log is off
@@ -28,6 +33,7 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
+from urllib.parse import urlsplit
 
 import anyio
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -40,7 +46,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import Receive, Scope, Send
 
-from farmcore.core.access import TokenRejected, authenticate_token
+from farmcore.core.access import TOKEN_SCOPES, TokenRejected, authenticate_token
 from farmcore.core.manifest import Manifest
 from farmcore.core.mcp import FarmTools, server
 from farmcore.db import session_scope
@@ -92,11 +98,19 @@ def _refusal(status: int, message: str, **headers: str) -> Response:
     return JSONResponse({"error": message}, status_code=status, headers=headers)
 
 
-def _unauthorized() -> Response:
+def resource_metadata_url(settings: Settings) -> str:
+    """RFC 9728 §3.1: the well-known path inserted between the resource's host and path."""
+    url = urlsplit(settings.mcp_resource_url)
+    path = "" if url.path == "/" else url.path
+    return f"{url.scheme}://{url.netloc}/.well-known/oauth-protected-resource{path}"
+
+
+def _unauthorized(settings: Settings) -> Response:
+    challenge = 'Bearer error="invalid_token"'
+    if settings.mcp_oauth_enabled:
+        challenge += f', resource_metadata="{resource_metadata_url(settings)}"'
     return _refusal(
-        401,
-        "A bearer token issued on Sharing is required.",
-        **{"WWW-Authenticate": 'Bearer error="invalid_token"'},
+        401, "A bearer token issued on Sharing is required.", **{"WWW-Authenticate": challenge}
     )
 
 
@@ -114,6 +128,7 @@ class Gate:
         mcp: StreamableHTTPSessionManager,
     ) -> None:
         self._session_factory = session_factory
+        self._settings = settings
         self._mcp = mcp
         self._origin = TransportSecurityMiddleware(
             TransportSecuritySettings(
@@ -127,7 +142,7 @@ class Gate:
     def _actor(self, token: str) -> str | None:
         with session_scope(self._session_factory) as session:
             try:
-                return authenticate_token(session, token).actor
+                return authenticate_token(session, token, audience=audience(self._settings)).actor
             except TokenRejected:
                 return None
 
@@ -145,7 +160,7 @@ class Gate:
         token = bearer(request.headers)
         actor = await anyio.to_thread.run_sync(self._actor, token) if token else None
         if actor is None:
-            return _unauthorized()
+            return _unauthorized(self._settings)
         if wait := self._per_token.wait(actor):
             return _too_many(wait)
         return None
@@ -163,6 +178,26 @@ class Gate:
         await self._mcp.handle_request(scope, receive, send)
 
 
+def audience(settings: Settings) -> str | None:
+    """The resource an OAuth token must have been issued for here; None while OAuth is off."""
+    return settings.mcp_resource_url if settings.mcp_oauth_enabled else None
+
+
+def _resource_metadata(settings: Settings) -> Route:
+    document = {
+        "resource": settings.mcp_resource_url,
+        "authorization_servers": [settings.oauth_issuer],
+        "scopes_supported": sorted(TOKEN_SCOPES),
+        "bearer_methods_supported": ["header"],
+        "resource_name": "FarmCore",
+    }
+
+    async def endpoint(request: Request) -> Response:
+        return JSONResponse(document)
+
+    return Route(urlsplit(resource_metadata_url(settings)).path, endpoint, methods=["GET"])
+
+
 def _token_of(ctx: Any) -> str:
     """The token of the HTTP request carrying this MCP message (the gate checked it)."""
     return bearer(ctx.request.headers) or ""
@@ -173,7 +208,7 @@ def create_app(
 ) -> Starlette:
     """The `/mcp` endpoint (run it with uvicorn's access log off)."""
     mcp = StreamableHTTPSessionManager(
-        server(FarmTools(session_factory, settings, manifests), _token_of),
+        server(FarmTools(session_factory, settings, manifests, audience(settings)), _token_of),
         stateless=True,
         json_response=True,
         max_request_body_size=settings.mcp_http_max_body_bytes,
@@ -185,7 +220,10 @@ def create_app(
             yield
 
     gate = Gate(session_factory, settings, mcp)
-    app = Starlette(routes=[Route(PATH, endpoint=gate, methods=None)], lifespan=lifespan)
+    routes = [Route(PATH, endpoint=gate, methods=None)]
+    if settings.mcp_oauth_enabled:
+        routes.append(_resource_metadata(settings))
+    app = Starlette(routes=routes, lifespan=lifespan)
     # No redirect from /mcp/ to /mcp: its Location would echo the query string.
     app.router.redirect_slashes = False
     return app
