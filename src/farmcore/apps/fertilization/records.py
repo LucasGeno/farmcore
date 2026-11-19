@@ -9,7 +9,8 @@ each parcel on that day, and the conversion factors the owner entered.
 - **Nothing is inferred.** The validator, not the proposer, decides what a draft still lacks
   (`missing`): the parcel, the date, the fertiliser, the amount, the composition, a treated area
   for a per-hectare amount on a parcel whose area is unknown, a density for an amount in litres
-  (a declared composition is a share by mass, so litres need kg/l). A draft that lacks something
+  (a declared composition is a share by mass, so litres need kg/l), and a density when the
+  amount is a mass and the farm stocks the fertiliser in litres. A draft that lacks something
   stays open, names it, and cannot be confirmed; nothing is guessed from a product name or
   defaulted. A composition always says where it comes from (the label, a lab analysis, the
   supplier's sheet or the farmer); one without that is refused.
@@ -31,20 +32,29 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
+from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.operations.corrections import decimal_text, fingerprint
 from farmcore.core import logs, units
+from farmcore.core.farm_location import farm_time_zone
 from farmcore.core.logs import FACTORS, EnteredQuantity, SourceInput
-from farmcore.core.models.canonical import CropSeason, Log, Parcel
-from farmcore.core.models.catalog import CatalogItem, TypedQuantity, enter_quantity
+from farmcore.core.models.canonical import CropSeason, Farm, Log, Parcel
+from farmcore.core.models.catalog import (
+    CatalogItem,
+    CropProtectionItem,
+    TypedQuantity,
+    enter_quantity,
+)
 from farmcore.core.models.corrections import OperationCorrection
 from farmcore.core.models.drafts import Draft
 from farmcore.core.models.identity import LocalIdentity
 from farmcore.core.timeline import post_event
+from farmcore.settings import get_settings
 
 SOURCE_APP = "fertilization"
 LOG_TYPE = "fertilise"
@@ -68,7 +78,7 @@ MISSING_WORDS = {
     "amount": "the amount",
     "composition": "the nutrient composition and where it comes from",
     "area": "the area fertilised (a parcel's area is unknown)",
-    "density": "the density in kg/l (the amount is in litres)",
+    "density": "the density in kg/l (litres on one side, kg on the other)",
 }
 # A farmer's typed record ranks with a file; an agent's proposal with voice (operations.drafts).
 RANKS = {
@@ -160,7 +170,8 @@ class FertilizationDraft(_Strict):
     def aware(cls, value):
         if value is not None and value.tzinfo is None:
             raise ValueError("Supply a timezone.")
-        return value
+        # One instant, one spelling: a correction compares instants, never offsets.
+        return value.astimezone(UTC) if value is not None else None
 
 
 def _parcels(session: Session, farm_id: int, ids: list[int]) -> list[Parcel]:
@@ -177,7 +188,10 @@ def _checked(session: Session, farm_id: int, payload: dict) -> FertilizationDraf
     record = FertilizationDraft.model_validate({**payload, "missing": []})
     parcels = _parcels(session, farm_id, record.parcel_ids)
     item = record.fertiliser.catalog_item_id if record.fertiliser else None
-    if item is not None and session.get(CatalogItem, item) is None:
+    if (
+        item is not None
+        and session.scalar(offered_items(farm_id).where(CatalogItem.id == item)) is None
+    ):
         raise ValueError("This fertiliser is not in the catalogue.")
     missing: list[str] = []
     for name, absent in (
@@ -194,10 +208,45 @@ def _checked(session: Session, farm_id: int, payload: dict) -> FertilizationDraf
         unknown_area = not parcels or any(p.area_ha is None or p.area_ha <= 0 for p in parcels)
         if measure in RATES and record.area_ha is None and parcels and unknown_area:
             missing.append("area")
-        if measure in VOLUMES and record.density_kg_per_l is None:
+        # Litres need kg/l for the composition (a share by mass); kg against a stock kept in
+        # litres needs it too.
+        in_litres = _stock_unit(session, farm_id, item, record.ts_start) == "l"
+        if record.density_kg_per_l is None and (measure in VOLUMES or in_litres):
             missing.append("density")
     record.missing = missing
     return record
+
+
+def offered_items(farm_id: int):
+    """Catalog items a fertilization may name: not a crop-protection product, or one this farm
+    keeps a stock row of (`select(CatalogItem.id, CatalogItem.name)`)."""
+    return select(CatalogItem.id, CatalogItem.name).where(
+        ~select(CropProtectionItem.catalog_item_id)
+        .where(CropProtectionItem.catalog_item_id == CatalogItem.id)
+        .exists()
+        | select(InventoryStock.id)
+        .where(InventoryStock.catalog_item_id == CatalogItem.id, InventoryStock.farm_id == farm_id)
+        .exists()
+    )
+
+
+def farm_zone(session: Session, farm_id: int) -> ZoneInfo:
+    """The farm's own time zone, else the installation's (`core.farm_location`)."""
+    return ZoneInfo(farm_time_zone(session.get(Farm, farm_id), get_settings()))
+
+
+def _stock_unit(session: Session, farm_id: int, item: int | None, at: datetime | None):
+    """The unit (`kg` or `l`) this farm stocks `item` in for the application's season."""
+    if item is None or at is None:
+        return None
+    season = at.astimezone(farm_zone(session, farm_id)).year
+    return session.scalar(
+        select(InventoryStock.unit).where(
+            InventoryStock.farm_id == farm_id,
+            InventoryStock.catalog_item_id == item,
+            InventoryStock.season == season,
+        )
+    )
 
 
 def validate(session: Session, farm_id: int, payload: dict) -> dict:
@@ -209,8 +258,12 @@ def incomplete(payload: dict) -> str:
     return ", ".join(MISSING_WORDS.get(m, m) for m in payload.get("missing") or [])
 
 
-def _seasons(session: Session, farm_id: int, parcel_ids: list[int], day) -> dict[str, int | None]:
-    """The crop season of each parcel on `day` (None: no season covers it, which is unknown)."""
+def seasons_on(
+    session: Session, farm_id: int, parcel_ids: list[int], at: datetime
+) -> dict[str, int | None]:
+    """The crop season of each parcel on the farm-local day of `at` (None: no season covers it,
+    which is unknown, shown as "not recorded")."""
+    day = at.astimezone(farm_zone(session, farm_id)).date()
     out: dict[str, int | None] = {}
     for parcel_id in parcel_ids:
         out[str(parcel_id)] = session.scalar(
@@ -228,7 +281,7 @@ def _props(session: Session, farm_id: int, record: FertilizationDraft) -> dict[s
     facts = record.model_dump(
         mode="json", include={"fertiliser", "composition", "notes"}, exclude_none=True
     )
-    facts["seasons"] = _seasons(session, farm_id, record.parcel_ids, record.ts_start.date())
+    facts["seasons"] = seasons_on(session, farm_id, record.parcel_ids, record.ts_start)
     factors = {}
     if record.area_ha is not None:
         factors["area_ha"] = decimal_text(record.area_ha.value)

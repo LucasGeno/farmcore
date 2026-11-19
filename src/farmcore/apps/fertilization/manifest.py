@@ -15,7 +15,8 @@ MANIFEST = Manifest(
     name="fertilization",
     version="0.1.0",
     summary="What fertiliser went on which parcel this season, with its nutrients.",
-    depends=("core", "fields", "operations"),
+    # inventory: the fertiliser's stock unit (density asked) and its season (`season_start`).
+    depends=("core", "fields", "operations", "inventory"),
     # logs:read: the records; fields:read: parcel names and areas; corrections:read: receipts.
     scopes=("logs:read", "fields:read", "corrections:read"),
     routes=("farmcore.apps.fertilization.routes:router",),

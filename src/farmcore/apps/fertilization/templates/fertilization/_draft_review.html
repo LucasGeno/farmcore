@@ -1,6 +1,7 @@
 {% macro facts(r) -%}
 {% if r.local_start %}<p class="mt-1 break-words">{{ r.local_start.strftime('%Y-%m-%d %H:%M') }}</p>{% endif %}
 <p class="mt-1 break-words">Parcels: {{ r.parcels|join(', ') or 'not given' }}</p>
+<p class="mt-1 break-words">Crop season: {{ r.season }}</p>
 {% if r.fertiliser %}<p class="mt-1 break-words">{{ r.fertiliser.name }}{% if r.amount %} · {{ r.amount.value }} {{ r.amount.unit }}{% endif %}</p>{% endif %}
 {% if r.composition %}<p class="mt-1 break-words">Declared: {% for n, share in r.composition.nutrients.items() %}{{ n }} {{ share }} %{% if not loop.last %}, {% endif %}{% endfor %} ({{ r.composition.source }}{% if r.composition.reference %}: {{ r.composition.reference }}{% endif %})</p>{% endif %}
 {% if r.density_kg_per_l %}<p class="mt-1">Density {{ r.density_kg_per_l.value }} kg/l ({{ r.density_kg_per_l.source }})</p>{% endif %}

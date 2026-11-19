@@ -16,7 +16,7 @@ the next start); writes are owner-only, like every farm write.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
@@ -29,7 +29,7 @@ from farmcore.core import drafts, routes_drafts
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.clock import get_clock
 from farmcore.core.farm_location import time_zone_of
-from farmcore.core.models.canonical import Log, Parcel
+from farmcore.core.models.canonical import CropSeason, Log, Parcel
 from farmcore.core.models.catalog import CatalogItem
 from farmcore.core.models.corrections import OperationCorrection
 from farmcore.core.registry import visible_manifests
@@ -86,7 +86,8 @@ def payload_from_form(form, tz: str) -> dict[str, Any]:
             local = datetime.fromisoformat(form["applied_at"])
         except ValueError as exc:
             raise ValueError("Give the date as YYYY-MM-DD HH:MM.") from exc
-        out["ts_start"] = local.replace(tzinfo=ZoneInfo(tz)).isoformat()
+        # An instant in UTC, as a record's facts give it: an unchanged form changes nothing.
+        out["ts_start"] = local.replace(tzinfo=ZoneInfo(tz)).astimezone(UTC).isoformat()
     if not _blank(form.get("fertiliser")):
         item = form.get("catalog_item_id")
         out["fertiliser"] = {
@@ -118,6 +119,11 @@ def payload_from_form(form, tz: str) -> dict[str, Any]:
     return out
 
 
+def _echo(form) -> dict[str, Any]:
+    """The typed form back, for a refused post; several parcels stay several."""
+    return {**dict(form), "parcel_ids": form.getlist("parcel_ids")}
+
+
 def _form_page(
     request: Request,
     repo: Repo,
@@ -130,7 +136,7 @@ def _form_page(
 ) -> HTMLResponse:
     parcels = repo.list(Parcel, scope=FIELDS_SCOPE, order_by=Parcel.alias)
     items = repo.execute(
-        select(CatalogItem.id, CatalogItem.name).order_by(CatalogItem.name),
+        records.offered_items(repo.farm_id).order_by(CatalogItem.name),
         scope=LOGS_SCOPE,
         resource="catalog_item",
     ).all()
@@ -208,7 +214,7 @@ def propose(request: Request, repo: Repo, form=Depends(_form)) -> Response:
             request,
             repo,
             action="/fertilization/drafts",
-            values=dict(form),
+            values=_echo(form),
             problem=reason,
             status=422,
         )
@@ -251,7 +257,7 @@ def revise(draft_id: int, request: Request, repo: Repo, form=Depends(_form)) -> 
             request,
             repo,
             action=f"/fertilization/drafts/{draft_id}/revise",
-            values=dict(form),
+            values=_echo(form),
             problem=reason,
             status=getattr(exc, "status_code", 422),
             extra={"revision": form.get("revision")},
@@ -278,8 +284,17 @@ def draft_review(
         before = None
     elif item.kind == records.CORRECTION_KIND:
         record = item.payload.get("after") or {}
-        log = repo.get(Log, item.payload["log_id"], scope=LOGS_SCOPE)
-        before = records.record_facts(log) if log is not None else None
+        receipt = repo.session.scalar(
+            select(OperationCorrection).where(
+                OperationCorrection.farm_id == repo.farm_id,
+                OperationCorrection.request_key == f"draft:{item.id}",
+            )
+        )
+        if receipt is not None:  # confirmed: the record as it was, not as it is now
+            before = receipt.before_snapshot
+        else:
+            log = repo.get(Log, item.payload["log_id"], scope=LOGS_SCOPE)
+            before = records.record_facts(log) if log is not None else None
     else:
         raise HTTPException(404, "Draft not found.")
 
@@ -287,10 +302,15 @@ def draft_review(
         if facts is None:
             return None
         start = facts.get("ts_start")
+        at = datetime.fromisoformat(start) if start else None
+        seasons = facts.get("seasons")
+        if seasons is None and at is not None:
+            seasons = records.seasons_on(repo.session, repo.farm_id, facts["parcel_ids"], at)
         return {
             **facts,
             "parcels": _parcel_names(repo, facts.get("parcel_ids", [])),
-            "local_start": datetime.fromisoformat(start).astimezone(tz) if start else None,
+            "local_start": at.astimezone(tz) if at else None,
+            "season": _season_text(repo, seasons),
         }
 
     return render(
@@ -302,6 +322,20 @@ def draft_review(
         missing=records.incomplete(item.payload),
         reason=item.payload.get("reason", ""),
     )
+
+
+def _season_text(repo: Repo, seasons: dict[str, int | None] | None) -> str:
+    """The crop season of each parcel on the day, or "not recorded" (unknown, never guessed)."""
+    ids = [i for i in (seasons or {}).values() if i is not None]
+    found = {s.id: s for s in repo.list(CropSeason, CropSeason.id.in_(ids), scope=FIELDS_SCOPE)}
+    names = []
+    for season_id in (seasons or {}).values():
+        row = found.get(season_id)
+        if row is None:
+            names.append("not recorded")
+        else:
+            names.append(f"{row.crop_name or row.crop_eppo or 'crop unknown'} from {row.starts_on}")
+    return ", ".join(dict.fromkeys(names)) or "not recorded"
 
 
 # --- One record and its corrections ------------------------------------------------------
@@ -341,6 +375,9 @@ def _record_page(
             "record": log,
             "facts": facts,
             "parcel_names": _parcel_names(repo, facts["parcel_ids"]),
+            "season": _season_text(
+                repo, ((log.props or {}).get(records.PROPS_KEY) or {}).get("seasons")
+            ),
             "corrections": corrections,
         },
     )
@@ -373,7 +410,7 @@ def propose_correction(log_id: int, request: Request, repo: Repo, form=Depends(_
         repo.session.rollback()
         reason = exc.reason if isinstance(exc, drafts.DraftError) else str(exc)
         log = _done_record(repo, log_id)
-        return _record_page(request, repo, log, problem=reason, status=422, values=dict(form))
+        return _record_page(request, repo, log, problem=reason, status=422, values=_echo(form))
     return RedirectResponse(context_url(request, f"/drafts/{draft.id}"), status_code=303)
 
 

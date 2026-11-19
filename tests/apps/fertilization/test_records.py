@@ -19,14 +19,18 @@ is a 404, expired and stale-revision drafts are refused (`tests/core/test_drafts
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
+from farmcore.apps.inventory.models import InventoryStock
 from farmcore.core import drafts
-from farmcore.core.models.canonical import Farm, Log
+from farmcore.core.models.canonical import CropSeason, Farm, Log
+from farmcore.core.models.catalog import CatalogItem, CropProtectionItem
 from tests.apps.fertilization.conftest import (
+    APPLIED,
     LABEL,
     MANIFESTS,
     application,
@@ -51,13 +55,23 @@ from tests.apps.fertilization.conftest import (
         ),
         # 300 kg/ha on a parcel whose area is unknown: the farmer gives 0.5 ha -> 150 kg.
         (lambda c: {"parcel_ids": [c.Z]}, ["area"], {"area_ha": {"value": "0.5"}}, "150"),
+        # Bought in litres, applied in kg: 264 kg/ha x 2 ha / 1.32 kg/l = 400 l.
+        (
+            lambda c: {"amount": {"value": "264", "unit": "kg/ha"}, "stock_unit": "l"},
+            ["density"],
+            {"density_kg_per_l": {"value": "1.32", "source": "label"}},
+            "400",
+        ),
     ],
-    ids=["composition", "density", "area"],
+    ids=["composition", "density", "area", "litre-stock"],
 )
 def test_an_incomplete_application_asks_and_is_never_recorded_with_a_guess(
     session, case, asked, lacks, answer, expected_used
 ):
-    payload = application(case, **asked(case))
+    asked = asked(case)
+    if "stock_unit" in asked:
+        session.execute(update(InventoryStock).values(unit=asked.pop("stock_unit")))
+    payload = application(case, **asked)
     draft = propose(session, case, payload)
     assert draft.payload["missing"] == lacks
     with pytest.raises(drafts.DraftInvalid, match="incomplete"):
@@ -86,8 +100,15 @@ def test_an_incomplete_application_asks_and_is_never_recorded_with_a_guess(
         ("fertilization", {"amount": {"value": "3", "unit": "sacks"}}, "known unit"),
         ("fertilization", {"parcel_ids": "other"}, "not on this farm"),
         ("fertilization-correction", "other-record", "not found"),
+        ("fertilization", "crop-protection-item", "not in the catalogue"),
     ],
-    ids=["composition-without-source", "unknown-unit", "other-farm-parcel", "other-farm-record"],
+    ids=[
+        "composition-without-source",
+        "unknown-unit",
+        "other-farm-parcel",
+        "other-farm-record",
+        "crop-protection-item",
+    ],
 )
 def test_a_proposal_is_refused_with_its_reason(session, settings, case, kind, payload, reason):
     other_farm = Farm(name="Other farm")
@@ -98,9 +119,32 @@ def test_a_proposal_is_refused_with_its_reason(session, settings, case, kind, pa
         theirs = propose(session, other, application(other), key="theirs")
         _, _ = confirm(session, other, theirs.id)
         payload = {"log_id": theirs.result_id, "reason": "typo", "changes": {"notes": "x"}}
+    elif payload == "crop-protection-item":  # an E-Phy pesticide is not a fertiliser
+        pesticide = CatalogItem(name="Copper Shield 20 WP")
+        session.add(pesticide)
+        session.flush()
+        session.add(
+            CropProtectionItem(
+                catalog_item_id=pesticide.id, product_type="contact", targets=["downy"]
+            )
+        )
+        payload = application(case, fertiliser={"name": "Copper", "catalog_item_id": pesticide.id})
     elif payload.get("parcel_ids") == "other":
         payload = application(case, parcel_ids=[other.A])
     else:
         payload = application(case, **payload)
     with pytest.raises(drafts.DraftInvalid, match=reason):
         propose(session, case, payload, kind=kind)
+
+
+def test_the_season_is_the_one_covering_the_farm_local_day(session, case):
+    """00:30 in Paris on a season's first day is still the previous day in UTC."""
+    season = CropSeason(
+        farm_id=case.farm_id, parcel_id=case.A, starts_on=date(2024, 4, 9), created_by="test"
+    )
+    session.add(season)
+    session.flush()
+    early = APPLIED.replace(hour=0, minute=30).isoformat()
+    draft = propose(session, case, application(case, ts_start=early))
+    log = session.get(Log, confirm(session, case, draft.id)[0].result_id)
+    assert log.props["fertilization"]["seasons"] == {str(case.A): season.id}

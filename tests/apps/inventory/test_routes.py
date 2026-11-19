@@ -192,6 +192,8 @@ def test_low_stock_needs_the_admin_token_and_is_blocked_for_tour_visitors(
 
 def test_switching_the_app_off_removes_its_nav_entry(client, inv):
     assert 'href="/inventory/"' in client.get("/today/").text
+    # Fertilization depends on Inventory (its stock unit and season), so it goes first.
+    assert client.post("/apps/fertilization/uninstall").status_code == 200
     assert client.post("/apps/inventory/uninstall").status_code == 200
 
     page = client.get("/today/").text

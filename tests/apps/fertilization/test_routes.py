@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from farmcore.core.models.canonical import Log
+from farmcore.core.models.corrections import OperationCorrection
 from farmcore.main import create_app
 from tests.apps.fertilization.conftest import seed
 
@@ -48,6 +49,7 @@ def test_the_owner_records_through_the_form_and_a_visitor_cannot(session, settin
     draft = _draft_id(_post(client, f"/fertilization/drafts{farm}", _form(case)))
     review = client.get(f"/fertilization/drafts/review{farm}&draft={draft}")
     assert "CAN 27" in review.text and "Still needs" not in review.text
+    assert "Crop season: not recorded" in review.text  # no season on that day: shown, not guessed
     confirmed = _post(client, f"/drafts/{draft}/confirm{farm}", {"revision": "1"})
     assert confirmed.status_code == 303
 
@@ -58,18 +60,21 @@ def test_the_owner_records_through_the_form_and_a_visitor_cannot(session, settin
     section = client.get(f"/fertilization/map/parcels/{case.A}{farm}")
     assert "CAN 27 300 kg/ha" in section.text
 
-    correction = _draft_id(
-        _post(
-            client,
-            f"/fertilization/records/{log_id}/corrections{farm}",
-            _form(case, request_key="fix-1", amount="200", reason="spreader recalibrated"),
-        )
-    )
+    corrections = f"/fertilization/records/{log_id}/corrections{farm}"
+    unchanged = _post(client, corrections, _form(case, request_key="same", reason="checked"))
+    assert unchanged.status_code == 422  # the record form posted as it is corrects nothing
+    assert session.scalar(select(OperationCorrection.id)) is None
+
+    fix = _form(case, request_key="fix-1", amount="200", reason="spreader recalibrated")
+    correction = _draft_id(_post(client, corrections, fix))
     assert (
         _post(client, f"/drafts/{correction}/confirm{farm}", {"revision": "1"}).status_code == 303
     )
-    record = client.get(f"/fertilization/records/{log_id}{farm}")
-    assert "spreader recalibrated" in record.text and "was 300 kg/ha, now 200 kg/ha" in record.text
+    (receipt,) = session.scalars(select(OperationCorrection))
+    assert (receipt.reason, receipt.before_snapshot["amount"]["value"]) == (
+        "spreader recalibrated",
+        "300",
+    )
 
 
 def test_a_switched_off_app_refuses_every_entry_point(session, settings, client):

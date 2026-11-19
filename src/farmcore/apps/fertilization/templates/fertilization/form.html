@@ -8,6 +8,7 @@
 {% block content %}
 {% if record %}
 {% call page_header(facts.fertiliser.name if facts.fertiliser else "Fertilization", "Confirmed application on " ~ parcel_names|join(', ') ~ ".") %}{% endcall %}
+<p class="mt-2 break-words">Crop season: {{ season }}</p>
 <section class="mt-2 rounded-xl border border-line bg-surface p-4">
 <h2 class="text-lg font-semibold">Corrections</h2>
 {% if not corrections %}<p class="mt-1 text-[13px] text-muted">None yet.</p>{% endif %}

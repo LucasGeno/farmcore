@@ -18,6 +18,8 @@ from farmcore.core.models.drafts import Draft
 from tests.apps.fertilization.conftest import APPLIED, application, confirm, propose, seed, used
 
 WORKERS = 6
+# A Telegram chat proposes; the installation operator reviews and confirms (core/drafts.py).
+PROPOSER = "chat:42"
 
 
 @pytest.fixture
@@ -92,6 +94,7 @@ def test_competing_corrections_apply_once_and_keep_the_original(
                 {"log_id": log_id, "reason": reason, "changes": {"amount": amount}},
                 kind="fertilization-correction",
                 key=reason,
+                actor=PROPOSER,
             ).id
             for reason, amount in (
                 ("spreader calibrated at 200", {"value": "200", "unit": "kg/ha"}),
@@ -124,6 +127,6 @@ def test_competing_corrections_apply_once_and_keep_the_original(
         assert receipt.after_snapshot["amount"]["value"] == str(amount)
         assert (receipt.reason, receipt.actor_key, receipt.finalized_actor_key) == (
             winner.payload["reason"],
-            "operator",
+            PROPOSER,
             "operator",
         )

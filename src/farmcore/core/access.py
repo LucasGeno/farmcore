@@ -105,6 +105,9 @@ _VIA_PARENT: dict[type[Base], tuple[Any, type[Base]]] = {
 # Rows a farm owns or every farm shares (null owner: a public network station).
 _OWNED_OR_PUBLIC: dict[type[Base], Any] = {WeatherStation: WeatherStation.owner_farm_id}
 # Reference data shared by every farm (product catalogue, data sources).
+# Catalog items are public reference data (E-Phy imports) and records keep their own facts
+# (a fertiliser's composition lives on the record). If farms ever write catalog items, drop
+# CatalogItem from here and from RESOURCE_SCOPES' `_ANY`, and scope it to its farm.
 _SHARED: frozenset[type[Base]] = frozenset({Product, Source, CatalogItem})
 
 _ANY = SCOPES
