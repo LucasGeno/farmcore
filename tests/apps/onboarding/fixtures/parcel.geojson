@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"name":"North field","crop_code":"BTH","source_ref":"synthetic-1"},"geometry":{"type":"Polygon","coordinates":[[[2,48],[2.001,48],[2.001,48.001],[2,48.001],[2,48]]]}}]}

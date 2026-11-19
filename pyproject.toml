@@ -28,6 +28,9 @@ dependencies = [
     "packaging>=24",
     "mcp==2.3.0",
     "jsonschema>=4.20",
+    "pyogrio==0.13.0",
+    "geopandas==1.1.3",
+    "defusedxml==0.7.1",
 ]
 
 [project.urls]
