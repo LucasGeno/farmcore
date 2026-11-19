@@ -98,6 +98,8 @@ def test_web_spray_log_asks_only_for_missing_fields_then_confirms(client, sessio
     assert body["text"].startswith("How much"), body["text"]
     [asking] = session.scalars(select(Draft)).all()  # the clarification is the open draft
     assert (asking.status, asking.payload["missing"]) == ("open", ["dose"])
+    review = client.get(f"/operations/drafts/review?draft={asking.id}&farm={asking.farm_id}")
+    assert review.status_code == 200 and "Still needs the dose" in review.text
 
     body = _say(client, "2 kg per hectare").json()
     assert body["kind"] == "draft", body

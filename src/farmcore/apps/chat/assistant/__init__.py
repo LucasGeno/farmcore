@@ -1,7 +1,7 @@
 """Chat assistant: a question in the chat is answered from the apps' read-only tools.
 
 `handlers._on_message` sends a *question* (`router.intent`) here, after the bot's allowlist gate;
-logs and everything else keep the extractor → pending → ✅/❌ path. The tools come from the
+logs and everything else keep the extractor → draft → ✅/❌ path. The tools come from the
 visible apps (`visible_from_states` on the live `app_module` state, then `collect_tools`), read
 through the chat's repository with purpose `assistant` (`context.tool_context`), and the keyword
 fallback picks one and replies with its text and "Open card" buttons. Nothing leaves the host;

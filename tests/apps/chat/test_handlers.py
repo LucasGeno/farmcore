@@ -520,6 +520,14 @@ def test_a_button_from_another_chat_does_not_touch_the_draft(session_factory, se
     assert confirm.text == cancel.text == "This spray was cancelled or no longer exists."
     assert [d.status for d in drafts_of(session)] == ["open"]
     assert logs_of(session) == []
+    # A button sent before the upgrade names the pending log the draft was migrated from:
+    # it still confirms for its own chat only (core_0011).
+    [draft] = drafts_of(session)
+    draft.provenance = {**draft.provenance, "details": {"migrated_from_log": 777}}
+    session.commit()
+    stolen = on_callback(d, Callback(chat_id=CHAT + 1, data="confirm:777"))
+    assert stolen.text == "This spray was cancelled or no longer exists."
+    assert on_callback(d, Callback(chat_id=CHAT, data="confirm:777")).text.startswith("✅ Logged")
 
 
 def test_a_redelivered_message_echoes_the_same_draft_without_a_second(

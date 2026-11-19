@@ -6,9 +6,16 @@ Every pending `log` becomes a `draft` and is deleted, so no committed log is pen
   `web:farmer:<message>` or `web:farm:<farm>:<actor>:<message>`) of a spray, irrigation or
   observation with its parcels, time and dose or fact becomes an **open** draft of its proposer
   (`chat:<chat>`, `operator` or `identity:<id>`), expiring seven days after the upgrade (the
-  default draft TTL), that its chat confirms as before.
+  default draft TTL). The ✅ / ❌ buttons sent before the upgrade (`confirm:<log id>`) still
+  find it for the same chat or member (`provenance.details.migrated_from_log`), as does
+  `/confirm` and, for the farm's owners, `/drafts/<id>`.
 - Any other pending log becomes an **expired** draft holding the same record data, so nothing
-  is dropped: it can be read but never confirmed.
+  is dropped: it can be read but never confirmed. Its `details` keep every source (type, key,
+  raw payload, confidence), every quantity (label-only ones too) and the log's props.
+
+The removed log's "waiting for confirmation" activity events (`log.created` with status
+pending) are deleted with it: that trace now lives on the draft, and no later event of the old
+log id could ever resolve them.
 
 Unfinished chat clarifications (`farm.props.chat.clarifications`, 15-minute state) are removed.
 The counts of open drafts, expired drafts and cleared clarifications are logged.
@@ -99,7 +106,7 @@ def _complete(kind: str | None, payload: dict) -> bool:
 def upgrade() -> None:
     db = op.get_bind()
     now = datetime.now(UTC)
-    opened = expired = 0
+    opened = expired = events = 0
     pending = db.execute(
         sa.text(
             "SELECT id, farm_id, type, ts_start, ts_end, props FROM log "
@@ -144,8 +151,25 @@ def upgrade() -> None:
         else:
             # Not a chat capture (or not a complete one): kept readable, never confirmable.
             details["sources"] = [
-                {"source_type": s.source_type, "external_key": s.external_key} for s in sources
+                {
+                    "source_type": s.source_type,
+                    "external_key": s.external_key,
+                    "raw_payload": s.raw_payload,
+                    "confidence": s.confidence,
+                }
+                for s in sources
             ]
+            details["quantities"] = [
+                dict(q._mapping)
+                for q in db.execute(
+                    sa.text(
+                        "SELECT measure, value, unit, product_id, label FROM quantity "
+                        "WHERE log_id = :id ORDER BY id"
+                    ),
+                    {"id": log.id},
+                )
+            ]
+            details["props"] = log.props or {}
             kind = kind or log.type[:32]
             actor, status, request_key, expires_at, finalized_at = (
                 UPGRADE,
@@ -169,7 +193,9 @@ def upgrade() -> None:
                 "kind": kind,
                 "key": request_key,
                 "payload": json.dumps(payload, default=str),
-                "provenance": json.dumps({"source_type": source_type, "details": details}),
+                "provenance": json.dumps(
+                    {"source_type": source_type, "details": details}, default=str
+                ),
                 "status": status,
                 "expires": expires_at,
                 "finalized": finalized_at,
@@ -179,6 +205,13 @@ def upgrade() -> None:
         db.execute(
             sa.text("DELETE FROM ext_id WHERE model = 'log' AND res_id = :id"), {"id": log.id}
         )
+        events += db.execute(
+            sa.text(
+                "DELETE FROM event WHERE farm_id = :farm AND kind = 'log.created' "
+                "AND payload ->> 'status' = 'pending' AND payload ->> 'log_id' = :id"
+            ),
+            {"farm": log.farm_id, "id": str(log.id)},
+        ).rowcount
         db.execute(sa.text("DELETE FROM log WHERE id = :id"), {"id": log.id})
 
     cleared = 0
@@ -196,10 +229,12 @@ def upgrade() -> None:
             {"chat": json.dumps(chat), "id": farm.id},
         )
     logger.warning(
-        "core_0011: %d pending logs became open drafts, %d became expired drafts; "
+        "core_0011: %d pending logs became open drafts, %d became expired drafts "
+        "(%d waiting-for-confirmation events removed); "
         "%d unfinished chat clarifications cleared",
         opened,
         expired,
+        events,
         cleared,
     )
 

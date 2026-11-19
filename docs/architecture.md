@@ -196,7 +196,8 @@ a wall-clock expiry (seven days by default, an assumed product choice).
 
 - Only the proposing principal sees a draft; an agent's draft is reviewed by the owner who
   issued its token (stored on the draft when it is proposed; the token must be for that farm),
-  and a Telegram chat's draft also by the operator, who owns the farm the chat is linked to.
+  and a Telegram chat's draft also by the owners of the farm the chat is linked to: the
+  operator, and any member whose owner membership is active, checked at each review.
   Anyone else, and any other farm, gets a 404. An agent token never confirms, cancels or edits.
 - Confirm runs the kind's app-owned confirm service under the farm's operations lock and a row
   lock: retried and concurrent confirms record once and return the same record. A stale revision

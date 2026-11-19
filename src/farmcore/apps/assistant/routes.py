@@ -344,11 +344,11 @@ def _end_request_transaction(repo: ScopedRepository) -> None:
 def confirm(
     request: Request,
     repo: Repo,
-    action: str = Form(pattern=r"^(confirm|cancel):\d{1,19}:\d{1,9}$"),
+    action: str = Form(pattern=r"^(confirm|cancel):\d{1,19}(:\d{1,9})?$"),
 ):
-    """✅ / ❌ on a web draft (`<draft id>:<revision>`): the chat handler confirms through
-    `core.drafts.confirm`, the service `/drafts/<id>` uses; its ownership, replay and merge
-    checks apply."""
+    """✅ / ❌ on a web draft (`<draft id>:<revision>`, or a pre-draft `<log id>`): the chat
+    handler confirms through `core.drafts.confirm`, the service `/drafts/<id>` uses; its
+    ownership, replay and merge checks apply."""
     if "chat" not in {m.name for m in visible_manifests(request)}:
         raise HTTPException(404)
     deps = bound_chat_deps(request, repo)

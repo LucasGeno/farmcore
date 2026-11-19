@@ -729,14 +729,42 @@ def test_chat_pending_logs_become_drafts_and_clarifications_are_cleared_with_cou
                         "raw": json.dumps({"transcript": "P copper 2 kg at 5", "input": "text"}),
                     },
                 )
+                db.execute(  # the "waiting for confirmation" activity row of the pending log
+                    text(
+                        "INSERT INTO event(farm_id,res_model,res_id,kind,body,payload,actor,"
+                        "source_app,occurred_at) VALUES (:farm,'parcel',:parcel,'log.created',"
+                        "'spray noted',CAST(:payload AS jsonb),'chat:42','chat',now())"
+                    ),
+                    {
+                        "farm": first,
+                        "parcel": parcel,
+                        "payload": json.dumps({"log_id": logs[key], "status": "pending"}),
+                    },
+                )
+            db.execute(  # history of a done record stays
+                text(
+                    "INSERT INTO event(farm_id,res_model,res_id,kind,body,payload,actor,"
+                    "source_app,occurred_at) VALUES (:farm,'parcel',:parcel,'log.created',"
+                    '\'spray\',CAST(\'{"log_id": 999, "status": "done"}\' AS jsonb),'
+                    "'seed','core',now())"
+                ),
+                {"farm": first, "parcel": parcel},
+            )
         with caplog.at_level("WARNING"):
             command.upgrade(cfg, "head")
         assert "2 pending logs became open drafts, 1 became expired drafts" in caplog.text
+        assert "(3 waiting-for-confirmation events removed)" in caplog.text
         assert "1 unfinished chat clarifications cleared" in caplog.text
         with engine.connect() as db:
             assert db.execute(text("SELECT count(*) FROM log")).scalar_one() == 0
+            # No ghost "waiting for confirmation" row is left; other history is kept.
+            kept = db.execute(text("SELECT payload ->> 'status' FROM event")).scalars().all()
+            assert kept == ["done"]
             rows = db.execute(
-                text("SELECT actor, kind, status, request_key, payload FROM draft ORDER BY id")
+                text(
+                    "SELECT actor, kind, status, request_key, payload, provenance "
+                    "FROM draft ORDER BY id"
+                )
             ).all()
             props = db.execute(text("SELECT props FROM farm WHERE id = :f"), {"f": first})
             assert props.scalar_one()["chat"] == {"telegram_chat_ids": [42]}
@@ -753,6 +781,9 @@ def test_chat_pending_logs_become_drafts_and_clarifications_are_cleared_with_cou
         assert (web.actor, web.status) == ("operator", "open")  # the farm owner on the web
         assert (other.status, other.request_key) == ("expired", f"log:{logs['receipt-1']}")
         assert other.payload["doses"] == chat.payload["doses"]  # kept, never confirmable
+        [source] = other.provenance["details"]["sources"]
+        assert source["raw_payload"]["transcript"] == "P copper 2 kg at 5"
+        assert chat.provenance["details"]["migrated_from_log"] == logs["tg:42:7"]
         command.downgrade(cfg, "core_0010")
         command.upgrade(cfg, "head")
         command.check(cfg)

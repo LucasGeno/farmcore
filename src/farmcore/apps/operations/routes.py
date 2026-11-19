@@ -640,7 +640,7 @@ def draft_review(request: Request, repo: Repo, draft: Annotated[int, Query(ge=1,
     """The review fragment of a spray, irrigation or observation draft (`/drafts/<id>`)."""
     from zoneinfo import ZoneInfo
 
-    from farmcore.apps.operations.drafts import MODELS
+    from farmcore.apps.operations.drafts import MODELS, incomplete
     from farmcore.core import routes_drafts
 
     require_farm_owner(request, repo)
@@ -666,5 +666,9 @@ def draft_review(request: Request, repo: Repo, draft: Annotated[int, Query(ge=1,
         parcels=[parcels[i] for i in record.parcel_ids if i in parcels],
         doses=[(products.get(d.product_id, f"Product {d.product_id}"), d) for d in doses],
         fact=getattr(record, "fact", None),
-        local_start=record.ts_start.astimezone(ZoneInfo(_farm_tz(request, repo))),
+        # An incomplete chat or assistant draft names what it still misses, never a guess.
+        missing=incomplete(item.payload),
+        local_start=record.ts_start.astimezone(ZoneInfo(_farm_tz(request, repo)))
+        if record.ts_start is not None
+        else None,
     )

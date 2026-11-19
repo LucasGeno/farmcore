@@ -513,13 +513,28 @@ def on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
         return Outgoing(text=REPLY_NO_FARM)
 
 
+def _migrated_draft(session: Session, farm_id: int, actor: str, log_id: int) -> int | None:
+    """The draft the upgrade made from pending log `log_id` for this actor (`core_0011`)."""
+    return session.scalar(
+        select(Draft.id).where(
+            Draft.farm_id == farm_id,
+            Draft.actor == actor,
+            Draft.provenance["details"]["migrated_from_log"].as_integer() == log_id,
+        )
+    )
+
+
 def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
     action, _, rest = callback.data.partition(":")
     raw_id, _, raw_revision = rest.partition(":")
-    # A button names the draft and the revision the farmer saw; older buttons named a log.
-    if action not in (CONFIRM, CANCEL) or not raw_id.isdigit() or not raw_revision.isdigit():
+    # A button names the draft and the revision the farmer saw. A button sent before the
+    # upgrade to drafts (`confirm:<log id>`) names the pending log its draft was migrated from.
+    legacy = raw_revision == ""
+    if action not in (CONFIRM, CANCEL) or not raw_id.isdigit():
         return Outgoing(text=REPLY_UNKNOWN_BUTTON)
-    draft_id, revision = int(raw_id), int(raw_revision)
+    if not legacy and not raw_revision.isdigit():
+        return Outgoing(text=REPLY_UNKNOWN_BUTTON)
+    draft_id, revision = int(raw_id), 1 if legacy else int(raw_revision)
     if not 1 <= draft_id < 2**63 or not 1 <= revision < 2**31:
         return Outgoing(text=REPLY_GONE)
     actor = _actor(callback.chat_id, deps)
@@ -527,6 +542,10 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
         repo = _repo(session, deps, callback.chat_id)
         tz = ZoneInfo(time_zone_of(repo.session, repo.farm_id, deps.settings))
         now = deps.clock(session, deps.settings).now()
+        if legacy:
+            draft_id = _migrated_draft(session, repo.farm_id, actor, draft_id)
+            if draft_id is None:
+                return Outgoing(text=REPLY_GONE)
         try:  # only the chat (or member) that proposed it, on its farm, sees a draft
             draft = drafts.get(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
         except drafts.DraftNotFound:
@@ -550,7 +569,12 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
         # Replay safety (logs.py leaves clock bounds to callers): the clock may have been
         # stepped back since the echo, past the draft or past a spray it would merge into.
         if datetime.fromisoformat(draft.payload["ts_start"]) > now:
-            drafts.cancel(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
+            try:  # a concurrent confirm or cancel may have closed it meanwhile
+                drafts.cancel(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
+            except drafts.DraftClosed:
+                draft = drafts.get(session, farm_id=repo.farm_id, draft_id=draft_id, actor=actor)
+                if draft.status == "confirmed":
+                    return _done_reply(draft.kind)
             return Outgoing(text=REPLY_DATED_LATER if is_spray else REPLY_DATED_LATER_RECORD)
         later = _later_merge_target(session, draft, now) if is_spray else None
         if later is not None:

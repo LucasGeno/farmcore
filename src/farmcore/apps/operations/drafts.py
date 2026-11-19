@@ -19,6 +19,7 @@ its own station weather there (`spray_weather`), whichever path confirmed it.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
@@ -36,6 +37,8 @@ from farmcore.core.logs import EnteredQuantity, QuantityInput, SourceInput
 from farmcore.core.models.canonical import Farm, Parcel, Product
 from farmcore.core.models.drafts import Draft
 
+logger = logging.getLogger(__name__)
+
 SOURCE_APP = "operations"
 RecordId = Annotated[int, Field(gt=0, lt=2**63)]
 # A farmer's typed record ranks with a file; an agent's proposal with voice (both `assumed`).
@@ -47,6 +50,7 @@ RANKS = {
     "isoxml": logs.RANK_MACHINE,
 }
 LOG_TYPES = {"spray": "spray", "irrigation": "irrigate", "observation": "observation"}
+WEATHER_FAILED = "Saved weather unavailable; nothing was recorded. Try again."
 # `services` key of `core.drafts.confirm`: the composed station reader, None without Weather.
 WEATHER_READER = "spray_weather_reader"
 Missing = Literal["parcel", "date", "product", "dose", "amount", "unit", "basis", "text"]
@@ -267,11 +271,15 @@ def confirm(
             session, draft.farm_id, ensure_owner_grant(session, farm), actor, SOURCE_APP
         )
         kept = {s.id for s in log.sources}
-        spray_weather.capture(
-            repo,
-            [r for r in receipts if r.source_id in kept],
-            reader=(services or {}).get(WEATHER_READER),
-            data_now=now,
-            captured_at=wall_now(),
-        )
+        try:
+            spray_weather.capture(
+                repo,
+                [r for r in receipts if r.source_id in kept],
+                reader=(services or {}).get(WEATHER_READER),
+                data_now=now,
+                captured_at=wall_now(),
+            )
+        except ValueError as exc:  # the farmer gets a plain reason; the detail goes to the log
+            logger.warning("saved spray weather failed (%s): %s", type(exc).__name__, exc)
+            raise ValueError(WEATHER_FAILED) from exc
     return "log", log.id
