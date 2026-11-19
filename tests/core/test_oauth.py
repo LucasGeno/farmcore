@@ -3,8 +3,8 @@
 Failure model (one owning test each; the MCP gate itself is owned by test_mcp_http.py, what a
 token's grant may read by tests/apps/share/test_tokens.py):
 - a client cannot discover the authorization server or the resource, or discovers another one
-  (metadata test: RFC 8414, RFC 9728 and the 401's `resource_metadata`); OAuth is on unless
-  the installation turned it off (metadata test: 404 by default);
+  (metadata test: RFC 8414, RFC 9728 and the 401's `resource_metadata`); OAuth is off unless
+  the installation turns it on (metadata test: 404 by default);
 - a code reaches an attacker: an unregistered or loosely matched `redirect_uri` (open redirect),
   an unknown client, an implicit grant, PKCE missing or downgraded to `plain` (authorize table);
 - mix-up: a client cannot tell which server answered, because an authorization response, success
@@ -14,11 +14,14 @@ token's grant may read by tests/apps/share/test_tokens.py):
   (authorize table);
 - a token leaks: in a redirect URL, a cached response, or the logs (journey);
 - consent is forged or hijacked: no CSRF nonce, a member who is not the owner, a farm the signer
-  does not own, or scopes the owner did not tick or cannot grant (consent table);
-- an intercepted or replayed code, a wrong verifier, another redirect or client, or an expired
-  code buys a token; a replayed code leaves its first tokens alive (token table);
+  does not own, or scopes the owner did not tick or cannot grant (consent table), or the page is
+  framed (clickjacking; journey);
+- an intercepted or replayed code, a wrong verifier, another redirect, client or resource, or an
+  expired code buys a token; a valid replay leaves its first tokens alive, or a replay with a
+  wrong verifier (anyone who saw the callback URL) ends them (token table);
 - a refresh token is not rotated, a rotated one still works, its reuse leaves the connection
-  alive, revocation does not end it, an expired access token still works (refresh test).
+  alive, revocation does not end it, another client revokes it, an expired access token still
+  works (refresh test).
 Clock skew: this server issues and checks every expiry with one wall clock and opaque tokens
 (no JWT `exp` read by another party), so skew between parties cannot extend a token.
 Not committed: real-client runs (later ticket), a browser's SameSite handling of the consent hop.
@@ -252,7 +255,8 @@ def test_an_owner_connects_an_agent_whose_token_works_only_for_this_resource(
 ) -> None:
     """RFC 6749 §4.1 with RFC 7636 §4.6 (S256), RFC 9207 §2 (`iss` on the response), RFC 8707
     §2 (the token is bound to the requested resource and refused for any other), RFC 6749 §5.1
-    (`Cache-Control: no-store`) and §10.3/§10.5 (tokens never in a URL or a log)."""
+    (`Cache-Control: no-store`) and §10.3/§10.5 (tokens never in a URL or a log), OAuth 2.1
+    §7.11 (the consent page refuses to be framed)."""
     caplog.set_level(logging.DEBUG)
     page = owner.get("/oauth/authorize", params=_request())
 
@@ -261,6 +265,8 @@ def test_an_owner_connects_an_agent_whose_token_works_only_for_this_resource(
 
     assert page.status_code == 200
     assert page.headers["cache-control"] == "no-store"
+    assert page.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in page.headers["content-security-policy"]
     assert 'value="fields:read"' in page.text and 'value="logs:read"' in page.text
     assert "Test agent" in page.text and "agent.example" in page.text
     assert set(answer) == {"code", "state", "iss"}
@@ -302,9 +308,9 @@ def test_an_authorization_request_that_could_leak_a_code_is_refused(
     agent, name, over, error
 ) -> None:
     """RFC 6749 §4.1.2.1 (no redirect to an unverified client or `redirect_uri`, an error
-    redirect otherwise), OAuth 2.1 §4.1.3 (exact `redirect_uri` match), RFC 7636 §4.4.1 and
-    OAuth 2.1 §4.1.1 (S256 only, a 43-128 character challenge), RFC 8707 §2 (`invalid_target`),
-    RFC 9207 §2 (`iss` on error responses too)."""
+    redirect otherwise), OAuth 2.1 §2.3.1 and §4.1.1 (exact `redirect_uri` match), RFC 7636
+    §4.4.1 and OAuth 2.1 §4.1.1 (S256 only, a 43-128 character challenge), RFC 8707 §2
+    (`invalid_target`), RFC 9207 §2 (`iss` on error responses too)."""
     refused = agent.get("/oauth/authorize", params=_request(**over), follow_redirects=False)
 
     if error is None:
@@ -339,7 +345,7 @@ def test_an_authorization_request_that_could_leak_a_code_is_refused(
 def test_only_the_farms_owner_consents_and_only_to_what_was_asked(
     app, agent, farm, session, name, signer, over, outcome
 ) -> None:
-    """Consent is the owner's, on this farm, CSRF-protected (OAuth 2.1 §7.6 / RFC 6749 §10.12);
+    """Consent is the owner's, on this farm, CSRF-protected (RFC 6749 §10.12);
     the token holds at most the requested scopes the owner ticked (RFC 6749 §3.3), never more
     than an agent token may hold; a denial is an `access_denied` redirect with `iss`."""
     if over.get("farm") == "other":
@@ -375,19 +381,22 @@ def test_only_the_farms_owner_consents_and_only_to_what_was_asked(
         ("other-redirect", {"redirect_uri": "https://agent.example/other"}, "invalid_request"),
         ("other-client", {"client_id": OTHER_CLIENT}, "invalid_grant"),
         ("expired", {}, "invalid_grant"),
+        ("other-resource", {"resource": "https://other.example/mcp"}, "invalid_target"),
         ("replayed", {}, "invalid_grant"),
+        ("replayed-wrong-verifier", {"code_verifier": "x" * 43}, "invalid_grant"),
     ],
 )
 def test_a_stolen_or_replayed_code_buys_no_token(owner, agent, farm, session, name, over, error):
     """RFC 7636 §4.6 (the verifier must match), RFC 6749 §4.1.3 (same client and
     `redirect_uri`; codes are single-use, and on reuse the tokens already issued from it are
-    revoked, §4.1.2), OAuth 2.1 §4.1.2 (short-lived codes)."""
+    revoked, §4.1.2), but not on a replay with wrong parameters (OAuth 2.1 §7.5.3), OAuth 2.1
+    §4.1.2 (short-lived codes), RFC 8707 §2 (`invalid_target` for another resource)."""
     code = _answer(_consent(owner, farm))["code"]
     first = None
     if name == "expired":
         session.execute(update(OAuthCode).values(expires_at=datetime.now(UTC) - timedelta(1)))
         session.commit()
-    if name == "replayed":
+    if name.startswith("replayed"):
         first = _exchange(agent, code).json()
 
     refused = _exchange(agent, code, **over)
@@ -396,14 +405,16 @@ def test_a_stolen_or_replayed_code_buys_no_token(owner, agent, farm, session, na
     assert refused.json()["error"] == error
     assert "access_token" not in refused.json()
     if first is not None:
-        assert not _accepted(session, first["access_token"])
+        # A valid replay ends the connection; a wrong verifier proves nothing, ends nothing.
+        assert _accepted(session, first["access_token"]) == (name != "replayed")
 
 
 def test_refresh_rotates_and_reuse_revocation_or_expiry_ends_the_connection(
     owner, agent, farm, session
 ) -> None:
     """OAuth 2.1 §4.3.1 (public clients' refresh tokens rotate; a reused one is a breach, so
-    the connection ends), RFC 7009 §2.1-2.2 (revoking ends access and refresh, 200 either way),
+    the connection ends), RFC 7009 §2.1-2.2 (revoking ends access and refresh with 200; another
+    client's request is refused and ends nothing),
     RFC 6749 §5.1 (`expires_in`): an access token past it is refused."""
     first = _connect(owner, agent, farm)
     rotated = _refresh(agent, first["refresh_token"]).json()
@@ -412,6 +423,10 @@ def test_refresh_rotates_and_reuse_revocation_or_expiry_ends_the_connection(
     reused = _refresh(agent, first["refresh_token"])
 
     second = _connect(owner, agent, farm)
+    foreign = agent.post(
+        "/oauth/revoke", data={"token": second["access_token"], "client_id": OTHER_CLIENT}
+    )
+    foreign_left_it = _accepted(session, second["access_token"])
     revoked = agent.post(
         "/oauth/revoke", data={"token": second["access_token"], "client_id": CLIENT}
     )
@@ -431,6 +446,8 @@ def test_refresh_rotates_and_reuse_revocation_or_expiry_ends_the_connection(
     assert reused.status_code == 400 and reused.json()["error"] == "invalid_grant"
     assert not _accepted(session, rotated["access_token"])  # reuse ended the connection
     assert _refresh(agent, rotated["refresh_token"]).status_code == 400
+    assert foreign.status_code == 400 and foreign.json()["error"] == "unauthorized_client"
+    assert foreign_left_it
     assert revoked.status_code == 200
     assert not _accepted(session, second["access_token"])
     assert _refresh(agent, second["refresh_token"]).status_code == 400

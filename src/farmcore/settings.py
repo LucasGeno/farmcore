@@ -278,6 +278,10 @@ class Settings(BaseSettings):
                 "MCP_OAUTH_ENABLED needs https PUBLIC_BASE_URL and MCP_HTTP_PUBLIC_URL "
                 "(http only to loopback)"
             )
+        if self.mcp_oauth_enabled and urlsplit(self.public_base_url).path.strip("/"):
+            # RFC 8414 §3.1 would put an issuer's path after the well-known segment; this
+            # server publishes its metadata at the host's root only.
+            raise ValueError("MCP_OAUTH_ENABLED needs a PUBLIC_BASE_URL without a path")
         return self
 
     @property

@@ -47,6 +47,9 @@ CONNECTION_TTL = timedelta(days=90)  # assumed product policy: the owner approve
 # RFC 7636 §4.2: an S256 challenge is BASE64URL(SHA256(verifier)) without padding, 43 chars.
 S256_CHALLENGE = re.compile(r"[A-Za-z0-9_-]{43}")
 STATE_MAX = 512
+# RFC 6749 Appendix A.5: state is VSCHAR (printable ASCII), so the authorize URL carried to
+# sign-in and back (`next`) always fits.
+VSCHAR = re.compile(r"[\x20-\x7e]+")
 AGENT_NAME_MAX = 80
 SOURCE_APP = "core"
 
@@ -86,6 +89,10 @@ class AuthorizationRequest:
         }
 
 
+def valid_state(state: str) -> bool:
+    return len(state) <= STATE_MAX and VSCHAR.fullmatch(state) is not None
+
+
 def client(settings: Settings, client_id: str) -> OAuthClient | None:
     return next((c for c in settings.mcp_oauth_clients if c.client_id == client_id), None)
 
@@ -112,8 +119,8 @@ def parse_request(settings: Settings, params: Mapping[str, Any]) -> Authorizatio
             redirect=False,
         )
     state = text("state") or None
-    if state is not None and len(state) > STATE_MAX:
-        raise Refused("invalid_request", "The state is too long.")
+    if state is not None and not valid_state(state):
+        raise Refused("invalid_request", "The state is too long or not printable ASCII.")
     if text("response_type") != "code":
         raise Refused("unsupported_response_type", "Only the authorization code flow is served.")
     if text("code_challenge_method") != "S256" or not S256_CHALLENGE.fullmatch(
@@ -186,22 +193,18 @@ def _lookup[M: (OAuthCode, OAuthToken)](
 
 
 def find_code(session: Session, raw: str) -> OAuthCode | None:
-    """The unused code `raw`. A used one is a replay: the connection it created ends (RFC 6749
-    §4.1.2), and nothing is returned."""
-    code = _lookup(session, OAuthCode, raw, CODE_PREFIX)
-    if code is None:
-        return None
-    if code.used_at is not None:
-        if code.grant_id is not None:
-            end_connection(session, code.grant_id, "an authorization code was used twice")
-        return None
-    return code
+    """The code `raw`, used or not, so the token endpoint checks its client, `redirect_uri` and
+    verifier first: a replay with wrong parameters must not end anything (OAuth 2.1 §7.5.3, a
+    denial of service by anyone who saw the callback URL). `exchange_code` acts on a replay."""
+    return _lookup(session, OAuthCode, raw, CODE_PREFIX)
 
 
 def exchange_code(session: Session, raw: str, client_id: str) -> dict[str, Any] | None:
-    """Spend code `raw` (PKCE and `redirect_uri` already checked by the token endpoint): the
-    connection it approves and its first tokens. Only one exchange wins; None (`invalid_grant`)
-    for a used, expired or foreign code, or an approver who is no longer the farm's owner."""
+    """Spend code `raw` (client, `redirect_uri` and PKCE already checked by the token endpoint):
+    the connection it approves and its first tokens. Only one exchange wins; None
+    (`invalid_grant`) for a used, expired or foreign code, or an approver who is no longer the
+    farm's owner. A used code presented with valid parameters is a replay: the connection it
+    created ends (RFC 6749 §4.1.2), also when two exchanges race."""
     now = datetime.now(UTC)
     code = session.scalar(
         update(OAuthCode)
@@ -214,7 +217,18 @@ def exchange_code(session: Session, raw: str, client_id: str) -> dict[str, Any] 
         .values(used_at=now)
         .returning(OAuthCode)
     )
-    if code is None or not is_farm_owner(session, code.created_by_identity_id, code.farm_id):
+    if code is None:
+        used = session.scalar(
+            select(OAuthCode).where(
+                OAuthCode.code_hash == token_hash(raw),
+                OAuthCode.client_id == client_id,
+                OAuthCode.used_at.is_not(None),
+            )
+        )
+        if used is not None and used.grant_id is not None:
+            end_connection(session, used.grant_id, "an authorization code was used twice")
+        return None
+    if not is_farm_owner(session, code.created_by_identity_id, code.farm_id):
         return None
     grant = DataGrant(
         farm_id=code.farm_id,

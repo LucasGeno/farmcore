@@ -53,6 +53,8 @@ REVOKE_PATH = "/oauth/revoke"
 # Reached without a signed-in member (PrivacyMiddleware): clients, and owners about to sign in.
 PUBLIC_PATHS = frozenset({METADATA_PATH, AUTHORIZE_PATH, TOKEN_PATH, REVOKE_PATH})
 NO_STORE = {"Cache-Control": "no-store", "Pragma": "no-cache"}
+# OAuth 2.1 §7.11: the consent page must never be framed (clickjacking).
+NO_FRAMING = {"X-Frame-Options": "DENY", "Content-Security-Policy": "frame-ancestors 'none'"}
 
 
 def _settings(request: Request) -> Settings:
@@ -97,7 +99,8 @@ def _refused(settings: Settings, exc: service.Refused, params: Any) -> Response:
         params["redirect_uri"],
         error=exc.error,
         error_description=exc.description,
-        state=state if isinstance(state, str) and state else None,
+        # Echoed only when it is a state this server accepts (never an oversized one).
+        state=state if isinstance(state, str) and service.valid_state(state) else None,
     )
     return RedirectResponse(url, status_code=302, headers=NO_STORE)
 
@@ -134,7 +137,7 @@ def authorize(request: Request) -> Response:
             "csrf_token": request.cookies.get("farmcore_csrf", ""),
         },
     )
-    page.headers.update(NO_STORE)
+    page.headers.update(NO_STORE | NO_FRAMING)
     return page
 
 
@@ -297,6 +300,15 @@ class Provider:
 @router.post(TOKEN_PATH)
 async def token(request: Request) -> Response:
     settings = _settings(request)
+    form = await request.form()  # cached: the SDK's handler reads the same form
+    resource = form.get("resource")
+    if resource is not None and resource != settings.mcp_resource_url:
+        # RFC 8707 §2: every code and refresh token here is for this one resource.
+        return JSONResponse(
+            {"error": "invalid_target", "error_description": "Unknown resource."},
+            status_code=400,
+            headers=NO_STORE,
+        )
     provider = Provider(request.app.state.session_factory, settings)
     handler = TokenHandler(provider, ClientAuthenticator(provider))  # type: ignore[arg-type]
     return await handler.handle(request)
@@ -304,8 +316,9 @@ async def token(request: Request) -> Response:
 
 @router.post(REVOKE_PATH)
 async def revoke(request: Request) -> Response:
-    """RFC 7009 §2: a public client names itself; a token of another client, an unknown or an
-    already revoked token is ignored, and the answer is 200 either way (§2.2)."""
+    """RFC 7009 §2: a public client names itself. A token issued to another client is refused
+    (`unauthorized_client`, §2.1) and stays alive; an unknown or already revoked token gets 200
+    (§2.2)."""
     settings = _settings(request)
     form = await request.form()
     raw, client_id = form.get("token"), form.get("client_id")
@@ -314,15 +327,22 @@ async def revoke(request: Request) -> Response:
     if service.client(settings, client_id) is None:
         return JSONResponse({"error": "invalid_client"}, status_code=401, headers=NO_STORE)
 
-    def end(session: Session) -> None:
+    def end(session: Session) -> bool:
         found = service.find_token(session, raw)
-        if found is not None and found.token.client_id == client_id:
-            service.end_connection(session, found.grant.id, "the agent revoked it")
+        if found is None:
+            return True
+        if found.token.client_id != client_id:
+            return False
+        service.end_connection(session, found.grant.id, "the agent revoked it")
+        return True
 
-    await anyio.to_thread.run_sync(partial(_in_session, request.app.state.session_factory, end))
+    if not await anyio.to_thread.run_sync(
+        partial(_in_session, request.app.state.session_factory, end)
+    ):
+        return JSONResponse({"error": "unauthorized_client"}, status_code=400, headers=NO_STORE)
     return Response(status_code=200, headers=NO_STORE)
 
 
-def _in_session(factory: sessionmaker[Session], work: Callable[[Session], None]) -> None:
+def _in_session[T](factory: sessionmaker[Session], work: Callable[[Session], T]) -> T:
     with session_scope(factory) as session:
-        work(session)
+        return work(session)

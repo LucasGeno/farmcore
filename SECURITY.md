@@ -176,7 +176,8 @@ never pass a client's value through.
 
 With `MCP_OAUTH_ENABLED=true` the web app is also an OAuth 2.1 authorization server for the
 MCP endpoint (`core/oauth`; the issuer is `PUBLIC_BASE_URL`), so a remote agent gets a token by
-its owner's consent instead of a pasted one. Both URLs must be https (http only to loopback).
+its owner's consent instead of a pasted one. Both URLs must be https (http only to loopback),
+and `PUBLIC_BASE_URL` has no path (metadata is served at the host's root).
 
 - **Discovery.** `/mcp`'s 401 names its resource metadata (RFC 9728), which names this server;
   its metadata (RFC 8414) advertises S256 PKCE only and `iss` on authorization responses.
@@ -184,16 +185,21 @@ its owner's consent instead of a pasted one. Both URLs must be https (http only 
   secret). An unknown client or a `redirect_uri` that is not exactly a registered one gets a
   400 page and no redirect, so the server is never an open redirector.
 - **Codes.** Single use, 5 minutes, bound to the client, `redirect_uri` and an S256 challenge
-  (`plain` is refused). A code used twice ends the connection it created (RFC 6749 §4.1.2).
+  (`plain` is refused). A code presented again with its valid client, `redirect_uri` and verifier
+  ends the connection it created (RFC 6749 §4.1.2); a replay with wrong parameters ends
+  nothing (OAuth 2.1 §7.5.3), so seeing a used callback URL is not enough to disconnect an
+  agent. A token request naming another resource gets `invalid_target`.
   Every authorization response, success or error, carries `iss` (RFC 9207: mix-up attacks).
 - **Consent** is a signed-in owner's of the farm they choose, CSRF-checked like every form, and
-  never a tour's. The page names the client, where the browser goes back to and each requested
+  never a tour's, and the page refuses to be framed (`X-Frame-Options`, `frame-ancestors`). The
+  page names the client, where the browser goes back to and each requested
   scope; the token gets the requested scopes the owner left ticked, never more, and never more
   than an agent token may hold (read scopes and `drafts:propose`).
 - **Tokens** are opaque and stored hashed. An access token lasts an hour and is accepted only by
   the MCP endpoint whose public URL (`MCP_HTTP_PUBLIC_URL`) it was issued for (RFC 8707): never
   on stdio, never by another resource. Refresh tokens rotate; reusing a rotated one, or
-  revoking either token (RFC 7009), ends the connection. The connection is a grant on Sharing
+  revoking either token (RFC 7009; only by the client it was issued to), ends the connection.
+  Parallel refreshes with one refresh token count as reuse too. The connection is a grant on Sharing
   (actor `token:<id>`, 90 days at most) and revoking it there ends it too. Every expiry is set
   and checked by this server's clock alone.
 - **Sign-in cookies are `SameSite=Strict`**, so arriving from the agent's site the owner signs
