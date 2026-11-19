@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from farmcore.apps.fields.seed import alias_number
 from farmcore.core.access import ScopedRepository
+from farmcore.core.model_spec import validation_json
 from farmcore.core.models.canonical import Log, LogParcel, Parcel
 
 NO_ADVICE = "none"
@@ -59,6 +60,10 @@ def _last_sprays(repo: ScopedRepository, now: datetime) -> dict[int, datetime]:
     )
     rows = repo.execute(stmt, scope="logs:read", resource="log")
     return {parcel_id: ts for parcel_id, ts in rows}
+
+
+# Crop protection's assessment kind: `assessments` are its advice rows (`core/model_spec.py`).
+ADVICE_KIND = "advisor.spray"
 
 
 def parcels_feature_collection(
@@ -111,6 +116,14 @@ def parcels_feature_collection(
                         )
                         if parcel.id in assessments
                         else "unavailable"
+                    ),
+                    "model_validation": (
+                        validation_json(
+                            ADVICE_KIND,
+                            (assessments[parcel.id].props or {}).get("model_validation"),
+                        )
+                        if parcel.id in assessments
+                        else None
                     ),
                     "last_spray": last.astimezone(zone).date().isoformat() if last else None,
                     "card_url": CARD_URL.format(id=parcel.id),

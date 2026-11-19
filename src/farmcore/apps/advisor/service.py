@@ -538,6 +538,7 @@ def advice_row(
             "incubation_pct": result["incubation_pct"],
             "passes": advice.passes,
             "treatments": advice.treatments,
+            "model_validation": envelope.config_version.get("model_validation"),
         },
         assessment=envelope,
     )
@@ -568,6 +569,12 @@ def saved_evidence(repo: ScopedRepository, row: Advice) -> dict[str, Any]:
         "effective_config": props.get("effective_config"),
         "input_snapshot": props.get("input_snapshot"),
     }
+
+
+def model_validation(row: Advice) -> dict[str, Any]:
+    """What the models behind this stored advice could claim when it was computed (stamped on
+    its envelope and props); advice stored before the stamp claims `unvalidated`."""
+    return validation_json(SPRAY_KIND.key, (row.props or {}).get("model_validation"))
 
 
 def advice_json(row: Advice) -> dict[str, Any]:
@@ -601,7 +608,7 @@ def advice_json(row: Advice) -> dict[str, Any]:
         "passes": props.get("passes", 0),
         "treatments": props.get("treatments", 0),
         "card_path": CARD_PATH.format(id=row.parcel_id),
-        "model_validation": validation_json(SPRAY_KIND),
+        "model_validation": model_validation(row),
         **priority.as_dict(priority.of_advice(row)),
     }
 
@@ -625,6 +632,7 @@ def empty_advice_json(parcel_id: int, headline_text: str) -> dict[str, Any]:
         "products": [],
         "passes": 0,
         "treatments": 0,
+        "model_validation": None,
         "card_path": CARD_PATH.format(id=parcel_id),
         **priority.as_dict(None),
     }

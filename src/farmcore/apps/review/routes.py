@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import distinct_on
 
+from farmcore.apps.advisor.service import model_validation
 from farmcore.apps.review import recommendations, service
 from farmcore.apps.review.models import ParameterActivation, ParameterReview, ParameterVersion
 from farmcore.apps.review.parameters import catalog
@@ -434,6 +435,7 @@ def recommendation_json(advice, parcel, state, tz: str, *, current: bool):
         "decision": advice.decision,
         "assessment_status": (advice.props or {}).get("assessment_status", "legacy-unknown"),
         "headline": (advice.props or {}).get("headline"),
+        "model_validation": model_validation(advice),
         "request": request_payload(state.request) if state.request else None,
         "response": response_payload(state.response) if state.response else None,
         "open": state.open,

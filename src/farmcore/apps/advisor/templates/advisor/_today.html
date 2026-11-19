@@ -4,7 +4,7 @@
 {% from "core/_icons.html" import icon %}
 {% from "core/_ui.html" import decision_chip, priority_badge %}
 {% from "core/_validation.html" import validation_badge with context %}
-{% from "advisor/_summary.html" import farm_summary %}
+{% from "advisor/_summary.html" import farm_summary with context %}
 {% macro parcel_row(r, cls="") -%}
 <li id="home-parcel-{{ r.id }}" tabindex="-1" data-parcel="{{ r.alias }}" data-decision="{{ r.decision }}" class="scroll-mt-20 focus:outline focus:outline-2 focus:outline-brand-700 {{ cls }}">
   <a href="{{ workspace_links[r.id] }}" class="group flex min-h-[60px] items-center gap-3 border-b border-line px-1 py-2.5 transition-colors hover:bg-ground/60">
@@ -18,7 +18,7 @@
       {{ priority_badge(r.priority_label, r.priority) }}
     </span>
     {% if r.washed_off %}<span class="rounded-full border border-spray px-2 py-0.5 text-[12px] font-semibold text-spray">Washed off</span>{% endif %}
-    {{ decision_chip(r.decision, size="sm") }}{{ validation_badge("advisor.spray", link=False) }}
+    {{ decision_chip(r.decision, size="sm") }}{% if r.has_advice %}{{ validation_badge("advisor.spray", link=False) }}{% endif %}
     {{ icon("chevron-right", "h-4 w-4 text-muted transition-transform group-hover:translate-x-0.5") }}
   </a>
 </li>

@@ -89,7 +89,11 @@ def test_is_peyrot_protected_quotes_the_headline_with_an_open_card_button(sessio
 
     out = on_message(deps, text("Is Peyrot protected?"))
 
-    assert out.text.splitlines() == ["P6 Peyrot: protected.", headline(session, "P6")]
+    assert out.text.splitlines() == [
+        "P6 Peyrot: protected.",
+        headline(session, "P6"),
+        "Trust: model not validated.",
+    ]
     farm_id = session.get(Parcel, parcel_id(session, "P6")).farm_id
     assert out.url_buttons == [
         (
@@ -200,7 +204,7 @@ def test_farm_wide_protection_answers_with_todays_advice(session, hero, deps):
     out = on_message(deps, text("Are my parcels protected?"))
 
     assert out.text.startswith("8 parcels to spray:")
-    assert out.text.splitlines()[-1] == "Others: 2 protected."
+    assert out.text.splitlines()[-1] == "Others: 2 protected. Trust: model not validated."
     assert pending(session) == 0
 
 

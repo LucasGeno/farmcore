@@ -20,6 +20,7 @@
     Tile hosts, pinned and named: IGN Géoplateforme WMTS (orthophoto, Licence Ouverte, no key)
     and OpenStreetMap (plan). No other external fetch. -#}
 {%- from "core/_ui.html" import decision_chip -%}
+{%- from "core/_validation.html" import validation_badge with context -%}
 {%- from "core/_icons.html" import icon -%}
 {%- set map_id = map_id | default("today-parcel-map") -%}
 {%- set with_assets = with_assets | default(true) -%}
@@ -132,6 +133,7 @@
   <template data-chip="{{ decision }}">{{ decision_chip(decision, label, size="sm") }}</template>
   {%- endfor %}
   <template data-chip="not-advised">{{ decision_chip("none", not_advised_label, size="sm") }}</template>
+  <template data-validation-badge>{{ validation_badge("advisor.spray", link=False) }}</template>
   {%- endif %}
 </section>
 {%- if with_assets %}

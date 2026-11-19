@@ -1,5 +1,5 @@
 {% from "core/_parcel_shape.html" import parcel_shape with context %}
-{% from "advisor/_summary.html" import farm_summary %}
+{% from "advisor/_summary.html" import farm_summary with context %}
 {% from "core/_ui.html" import decision_chip, priority_badge, priority_why %}
 {% from "core/_validation.html" import validation_badge with context %}
 {% set actionable = not unavailable and hero.decision in ('spray', 'wait') %}
@@ -27,7 +27,7 @@
         {{ parcel_shape(r.id) }}<span class="min-w-0 flex-1 break-words"><strong>{{ r.alias }}</strong> · {{ r.name }}
           {% if expert %}{{ priority_why(r.priority_why, false, "mt-0.5 block text-[12px] leading-snug text-muted") }}{% endif %}</span>
         {{ priority_badge(r.priority_label, r.priority) }}
-        {{ decision_chip(r.decision, size="sm") }}{{ validation_badge("advisor.spray", link=False) }}
+        {{ decision_chip(r.decision, size="sm") }}{% if r.has_advice %}{{ validation_badge("advisor.spray", link=False) }}{% endif %}
       </a></li>
       {% endfor %}
     </ul>

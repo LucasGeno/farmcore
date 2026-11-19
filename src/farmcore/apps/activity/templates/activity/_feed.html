@@ -1,4 +1,5 @@
 {% from "core/_ui.html" import decision_chip %}
+{% from "core/_validation.html" import validation_badge with context %}
 <div id="activity-feed"{% if not paged %} data-poll-feed hx-get="{{ farm_url(poll_url) }}" hx-trigger="every 12s [!document.hidden]" hx-target="this" hx-swap="outerHTML" hx-sync="this:drop"{% endif %}>
 {% if rows %}
 {# One markup: a table from md up; below md each row is a card and each cell names its column. #}
@@ -14,7 +15,7 @@
       {% for c in columns %}
       <td data-col="{{ c.key }}" class="block min-w-0 break-words py-0.5 md:table-cell md:px-2 md:py-2 md:align-top {% if c.key == 'what' %}font-semibold{% endif %}">
         {%- if c.key not in ('time', 'what') %}<span class="mr-1 text-[13px] text-muted md:hidden">{{ c.label }}:</span>{% endif -%}
-        {%- if c.key == 'what' %}{% if r.link %}<a href="{{ farm_url(r.link) }}" class="inline-flex min-h-[44px] items-center py-1 text-brand-700 underline">{{ r.text }}</a>{% else %}{{ r.text }}{% endif %}{% if r.decision %} {{ decision_chip(r.decision, size="sm") }}{% endif %}
+        {%- if c.key == 'what' %}{% if r.link %}<a href="{{ farm_url(r.link) }}" class="inline-flex min-h-[44px] items-center py-1 text-brand-700 underline">{{ r.text }}</a>{% else %}{{ r.text }}{% endif %}{% if r.decision %} {{ decision_chip(r.decision, size="sm") }} {{ validation_badge("advisor.spray") }}{% endif %}
         {%- elif c.key == 'parcel' and r.parcel_links %}{% for item in r.parcel_links %}<a href="{{ item.url }}" class="inline-flex min-h-[44px] items-center text-brand-700 underline">{{ item.alias }}{% if not loop.last %},{% endif %}</a>{% if not loop.last %} {% endif %}{% endfor %}
         {%- elif c.key == 'time' %}<span class="text-[13px] text-muted md:text-sm md:text-ink">{{ r.cells.time }}</span>
         {%- else %}{{ r.cells[c.key] }}{% endif -%}

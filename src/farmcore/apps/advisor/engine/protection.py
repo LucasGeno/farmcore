@@ -26,6 +26,7 @@ _COMMON = (
     "rapid_growth_start",
     "rapid_growth_end",
 )
+THRESHOLDS = (*_COMMON, *WASHOFF_KEY.values())
 
 
 def rule_name(disease: Disease) -> str:

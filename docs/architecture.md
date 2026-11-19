@@ -336,12 +336,17 @@ points at its envelope (`advice.assessment_id`, same farm, parcel and time); adv
 Each kind names the models that compute it (`AssessmentKind.models`), each a `ModelSpec`
 (`core/model_spec.py`): method and citation, EPPO host and pest codes, BBCH window, inputs, every
 parameter with its source and status (`sourced`, `assumed`, or `unsourced`, never a guessed
-citation), validation level (`unvalidated`, `literature-evaluated`, `locally-evaluated`,
-`official-service`, each above the first with what backs it) and provenance. The registry checks
-them at load, so a missing declaration or a kind with no model fails the start. The UI shows the
-weakest model's level beside every result (`core/_validation.html`) and links it to "About this
-model" (`GET /models/{key}`, `GET /models?kind=`); the advice JSON carries it as
-`model_validation`. Crop protection's specs are in `apps/advisor/specs.py`.
+citation), validation level and provenance. A level above `unvalidated` fills the fields that
+back it: `literature-evaluated` region and years, `locally-evaluated` metrics and region,
+`official-service` the service. The registry checks them at load, so a missing declaration or a
+kind with no model fails the start. When an envelope is written, the kind's weakest level and its
+model keys are stamped on it (`config_version.model_validation`), and crop protection copies the
+stamp to the advice row. A later, stronger spec never upgrades an older result, and a result
+stored before stamps reads as `unvalidated`. Every result surface shows the level: a badge
+(`core/_validation.html`) linking to "About this model" (`GET /models/{key}`,
+`GET /models?kind=`, open to any signed-in principal), `model_validation` in each JSON, and a
+"Trust:" line in assistant text. Crop protection's specs are in `apps/advisor/specs.py`; their
+parameters are the engine rules' own `THRESHOLDS`.
 
 ### Module lifecycle
 

@@ -263,6 +263,20 @@
       return span;
     }
 
+    // The model validation badge beside an advised parcel's chip: the core badge from the
+    // fragment's <template data-validation-badge>, with the level stamped on this parcel's advice.
+    function validationBadge(info) {
+      var v = info.model_validation;
+      var tpl = v && info.advised !== false ? section.querySelector("template[data-validation-badge]") : null;
+      var badge = tpl && tpl.content.firstElementChild;
+      if (!badge) return null;
+      badge = badge.cloneNode(true);
+      badge.dataset.validation = v.level;
+      badge.title = "Model validation: " + v.label;
+      badge.lastChild.textContent = v.label;
+      return badge;
+    }
+
     // Neutral priority bars: ranking only, independent of the Spray/Wait decision.
     // Map labels omit the visible word; popups show it just like lists and advice cards.
     function priorityBadge(info, compact) {
@@ -360,8 +374,10 @@
       root.dataset.popupFacts = "";
       if (info) {
         var status = document.createElement("div");
-        status.className = "mt-1.5";
+        status.className = "mt-1.5 flex flex-wrap items-center gap-1.5";
         status.appendChild(chip(info));
+        var badge = validationBadge(info);
+        if (badge) status.appendChild(badge);
         root.appendChild(status);
         if (info.priority) root.appendChild(priorityFacts(info));
         // The cover date only for a protected parcel: a spray/wait advice can still carry the

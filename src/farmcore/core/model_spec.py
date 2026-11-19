@@ -32,6 +32,13 @@ VALIDATION_LEVELS: dict[str, str] = {
     "locally-evaluated": "Locally evaluated",
     "official-service": "Used by an official service",
 }
+# The structured fields each level above `unvalidated` must fill (M2).
+LEVEL_FIELDS: dict[str, tuple[str, ...]] = {
+    "unvalidated": (),
+    "literature-evaluated": ("region", "years"),
+    "locally-evaluated": ("metrics", "region"),
+    "official-service": ("service",),
+}
 PARAMETER_STATUSES = ("sourced", "assumed", "unsourced")
 INPUT_ORIGINS = ("measured", "estimated")
 
@@ -88,10 +95,16 @@ class Parameter:
 
 @dataclass(frozen=True)
 class Validation:
-    """The M2 level and what backs it: region and years, metrics, or the service's name."""
+    """The M2 level and what backs it (`LEVEL_FIELDS`): `literature-evaluated` names the region
+    and years, `locally-evaluated` its metrics against observed data (BSV bulletins, traps) and
+    the region, `official-service` the service. `detail` is free text for any level."""
 
     level: str = ""
     detail: str = ""
+    region: str = ""
+    years: str = ""
+    metrics: str = ""
+    service: str = ""
 
     @property
     def label(self) -> str:
@@ -147,8 +160,12 @@ def _problems(spec: ModelSpec) -> Iterable[str]:
             yield f"parameter {p.name!r} has no source: cite one or mark it 'unsourced'"
     if spec.validation.level not in VALIDATION_LEVELS:
         yield f"missing validation level ({', '.join(VALIDATION_LEVELS)})"
-    elif spec.validation.level != "unvalidated" and not spec.validation.detail:
-        yield f"validation {spec.validation.level!r} needs what backs it (region, years, metrics)"
+    else:
+        missing = [
+            f for f in LEVEL_FIELDS[spec.validation.level] if not getattr(spec.validation, f)
+        ]
+        if missing:
+            yield f"validation {spec.validation.level!r} needs what backs it: {', '.join(missing)}"
     if not spec.provenance:
         yield "missing provenance"
 
@@ -171,7 +188,23 @@ def collect_model_specs(manifests) -> dict[str, tuple[ModelSpec, ...]]:
     """Assessment kind key -> the specs of its models, for every kind the manifests declare.
 
     Runs at load: a kind with no model, a path that is not a `ModelSpec`, or two different specs
-    under one model key raise `ModelSpecInvalid`."""
+    under one model key raise `ModelSpecInvalid`. Cached per manifest
+    tuple, since every badge on a page asks."""
+    manifests = tuple(manifests)
+    key = tuple(map(id, manifests))
+    hit = _CACHE.get(key)
+    if hit is None:
+        # Keep the manifests with the result, so their ids are not reused while cached.
+        hit = _CACHE[key] = (manifests, _collect(manifests))
+        if len(_CACHE) > 64:
+            _CACHE.pop(next(iter(_CACHE)))
+    return dict(hit[1])
+
+
+_CACHE: dict[tuple[int, ...], tuple[tuple, tuple]] = {}
+
+
+def _collect(manifests: tuple) -> tuple[tuple[str, tuple[ModelSpec, ...]], ...]:
     by_kind: dict[str, tuple[ModelSpec, ...]] = {}
     seen: dict[str, ModelSpec] = {}
     for m in manifests:
@@ -180,7 +213,7 @@ def collect_model_specs(manifests) -> dict[str, tuple[ModelSpec, ...]]:
             for spec in by_kind[kind.key]:
                 if seen.setdefault(spec.key, spec) is not spec:
                     raise ModelSpecInvalid(f"model {spec.key!r} is declared twice")
-    return by_kind
+    return tuple(by_kind.items())
 
 
 @dataclass(frozen=True)
@@ -204,17 +237,49 @@ def kind_validation(manifests, kind: str) -> KindValidation | None:
     return _weakest(kind, specs) if specs else None
 
 
-def validation_json(kind: AssessmentKind) -> dict[str, Any]:
-    """What a result of `kind` carries in JSON: the weakest level, its models and their About."""
-    v = models_of(kind)
-    summary = _weakest(kind.key, v)
+def validation_stamp(kind: AssessmentKind) -> dict[str, Any]:
+    """What a result of `kind` can claim when it is computed: `{level, models}`. Stamped on the
+    envelope at write time (`assessments.envelope`), so a later, stronger level never reaches a
+    result computed before it."""
+    v = _weakest(kind.key, models_of(kind))
+    return {"level": v.validation.level, "models": [s.key for s in v.models]}
+
+
+def validation_json(kind: str, stamp: dict[str, Any] | None) -> dict[str, Any]:
+    """The `model_validation` a stored result of kind key `kind` carries, from its write-time
+    `stamp`. A result stored before stamps existed claims nothing: `unvalidated`, no models."""
+    level = (stamp or {}).get("level")
+    if level not in VALIDATION_LEVELS:
+        stamp, level = None, "unvalidated"
     return {
-        "level": summary.validation.level,
-        "label": summary.validation.label,
-        "detail": summary.validation.detail,
-        "models": [s.key for s in v],
-        "about": f"/models?kind={kind.key}",
+        "level": level,
+        "label": VALIDATION_LEVELS[level],
+        "models": list((stamp or {}).get("models", [])),
+        "about": f"/models?kind={kind}",
     }
+
+
+# The level in a sentence, for assistant text (`validation_words`).
+LEVEL_WORDS = {
+    "en": {
+        "unvalidated": "model not validated",
+        "literature-evaluated": "model evaluated in the literature",
+        "locally-evaluated": "model evaluated locally",
+        "official-service": "model used by an official service",
+    },
+    "fr": {
+        "unvalidated": "modèle non validé",
+        "literature-evaluated": "modèle évalué dans la littérature",
+        "locally-evaluated": "modèle évalué localement",
+        "official-service": "modèle utilisé par un service officiel",
+    },
+}
+
+
+def validation_words(validation: dict[str, Any] | None, lang: str = "en") -> str:
+    """`model_validation` as a short clause ("model not validated"), for assistant text."""
+    words = LEVEL_WORDS.get(lang, LEVEL_WORDS["en"])
+    return words.get((validation or {}).get("level"), words["unvalidated"])
 
 
 def find_spec(manifests, key: str) -> ModelSpec | None:

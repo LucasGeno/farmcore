@@ -3,7 +3,9 @@
 An envelope (`assessment` table) holds what makes a result reproducible and comparable across
 modules: farm and optional parcel, evaluation time, availability status (`evaluable`, `limited`,
 `unavailable`), the configuration version (or, without a version, the configuration itself) and
-the inputs read. The result is typed by its kind (`Manifest.assessment_kinds`): the kind's own
+the inputs read, with what its models could claim when it was computed
+(`config_version["model_validation"]`: `{level, models}`, `core/model_spec.py`). The result is
+typed by its kind (`Manifest.assessment_kinds`): the kind's own
 Pydantic model validates it on the way in and types it on the way out, so a module never has to
 map its result onto another module's vocabulary (no frost result becomes a spray decision), and
 the envelope never relaxes a kind's validation to fit another.
@@ -21,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from farmcore.core.manifest import AssessmentKind, import_string
+from farmcore.core.model_spec import validation_stamp
 from farmcore.core.models.assessment import ASSESSMENT_STATUSES, Assessment
 
 
@@ -61,7 +64,11 @@ def envelope(
         kind_version=kind.version,
         evaluated_at=evaluated_at,
         status=status,
-        config_version=config_version,
+        config_version=(
+            {**config_version, "model_validation": validation_stamp(kind)}
+            if kind.models
+            else config_version
+        ),
         effective_config=effective_config,
         input_snapshot=input_snapshot,
         result=typed.model_dump(mode="json"),

@@ -39,24 +39,30 @@ _SRC_GATE = (
     "assumption: shoots ≥ 10 cm (BBCH 13–15) dated per region and year; Bordeaux usually "
     "mid–late April (BSV Sud Aquitaine); default, " + _PENDING
 )
-_SRC_3_10 = "3-10 rule (Baldacci 1947) via Gessi et al. 2022, Microorganisms 11:73"
+_SRC_3_10 = "3-10 rule (Baldacci 1947) via Velasquez-Camacho et al. 2023, Microorganisms 11(1):73"
 _SRC_PROTECTION = (
-    "République et canton de Genève, annexe 22 (ge.ch/document/2937/annexe/22): "
+    "République et canton de Genève, annexe 22 (ge.ch/document/2937/annexe/22; that address "
+    "now serves another document, a dated copy is still to be pinned): "
     "contact 8–10 d, penetrant 10–12 d, 7–8 d in rapid growth"
 )
 _SRC_PHASE = "assumption: rapid-growth phase dates (shoot growth to pea size) per year; " + _PENDING
-_SRC_ARRETE = "Arrêté du 4 mai 2017 (FR), via INERIS aida.ineris.fr/node/43636"
+_SRC_ARRETE = (
+    "Arrêté du 4 mai 2017 modifié (FR; the 8 mm/h rain rule is from the 27 Dec 2019 amendment), "
+    "via INERIS aida.ineris.fr/node/43636"
+)
 _SRC_RAINFAST = (
     "no rain ≥ 2 h after spraying: Regione Marche agromet bulletin; Nita 2020 (Virginia Tech)"
 )
 
 
 _SRC_GOIDANICH = (
-    "Goidanich et al. 1957 table via VineSens (Pérez-Expósito et al. 2017, Sensors 17:465, Table 1)"
+    "Goidanich et al. 1957 table via VineSens (Pérez-Expósito et al. 2017, Sensors 17:465, "
+    "Table 1, daily rates; FarmCore accumulates them hourly)"
 )
 _SRC_GT = (
-    "Gubler–Thomas risk index, UC IPM ipm.ucanr.edu/agriculture/grape/powdery-mildew/; "
-    "Thomas, Gubler et al. 1994"
+    "UC Davis powdery mildew risk index (Gubler–Thomas), UC IPM "
+    "ipm.ucanr.edu/agriculture/grape/powdery-mildew/; Thomas, Gubler & Leavitt 1994, "
+    "Phytopathology 84:1070, abstract"
 )
 _SRC_BLOOM = "assumption: bloom (BBCH 61) dated per region and year; " + _PENDING
 _SRC_BUNCH_CLOSURE = (
@@ -411,7 +417,9 @@ class AdvisorConfig(BaseModel):
         assumed=True,
     )
     incub_alert_pct: Threshold[float] = _t(
-        50.0, "Montenegro DSS alert at GI ≥ 50 % (Sensors 26:2843, PMC13165835)", "%"
+        50.0,
+        "Montenegro DSS alert at GI ≥ 50 % (Racković et al. 2026, Sensors 26:2843, PMC13165835)",
+        "%",
     )
     incub_symptoms_pct: Threshold[float] = _t(
         100.0, _SRC_GOIDANICH + "; GI ≥ 100 % = incubation complete, symptoms expected", "%"
@@ -474,7 +482,10 @@ class AdvisorConfig(BaseModel):
     # Wash-off of contact covers: cumulative rain since the spray (copper = downy contact cover,
     # sulphur = powdery contact cover).
     washoff_copper_mm: Threshold[float] = _t(
-        20.0, "Pleinchamp / IFV: copper renewed after ~20 mm, half lost in the first 5 mm", "mm"
+        20.0,
+        "Pleinchamp / Réussir (IFV series): copper renewed after ~20 mm, "
+        "half lost in the first 5 mm",
+        "mm",
     )
     washoff_sulphur_mm: Threshold[float] = _t(
         30.0,
@@ -502,7 +513,10 @@ class AdvisorConfig(BaseModel):
         assumed=True,
     )
     window_sulphur_tmax_c: Threshold[float] = _t(
-        32.0, "AWRI eBulletin Oct 2021: sulphur phytotoxicity risk > 32 °C", "°C"
+        32.0,
+        "AWRI eBulletin Oct 2021: sulphur phytotoxicity risk > 32 °C with RH > 70 % "
+        "(applied here whatever the humidity)",
+        "°C",
     )
     window_min_open_hours: Threshold[int] = _t(2, _SRC_RAINFAST + " (≥ 2 open hours)", "h")
     window_horizon_h: Threshold[int] = _t(

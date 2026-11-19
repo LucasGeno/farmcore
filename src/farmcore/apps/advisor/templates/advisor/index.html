@@ -4,7 +4,7 @@
 {% from "core/_ui.html" import page_header, decision_chip, empty_state, priority_badge, priority_why %}
 {% from "core/_validation.html" import validation_badge with context %}
 {% from "core/_icons.html" import icon %}
-{% from "advisor/_summary.html" import farm_summary %}
+{% from "advisor/_summary.html" import farm_summary with context %}
 {% block title %}Crop protection · farmcore{% endblock %}
 {% block content %}
 <div class="mx-auto max-w-3xl">
@@ -48,7 +48,7 @@
             {{ priority_why(r.priority_why, false, "mt-0.5 block text-[12px] leading-snug text-muted") }}
           </span>
           {% if r.washed_off %}<span data-washed-off class="shrink-0 rounded-full border border-spray px-2 py-0.5 text-[12px] font-semibold text-spray">Washed off</span>{% endif %}
-          {{ decision_chip(r.decision, r.chip_label, size="sm") }}{{ validation_badge("advisor.spray", link=False) }}
+          {{ decision_chip(r.decision, r.chip_label, size="sm") }}{% if r.has_advice %}{{ validation_badge("advisor.spray", link=False) }}{% endif %}
           {{ icon("chevron-right", "h-4 w-4 shrink-0 text-muted transition-transform group-hover:translate-x-0.5") }}
         </a>
         {% if expert %}<details class="px-4 pb-3">
@@ -84,7 +84,7 @@
           {% if p.headline %}<span class="block text-[13px] leading-snug text-muted">{{ p.headline }}</span>{% endif %}
           {{ priority_badge(p.priority_label, p.priority) }}
         </span>
-        {{ decision_chip(p.decision, p.chip_label, size="sm") }}{{ validation_badge("advisor.spray", link=False) }}
+        {{ decision_chip(p.decision, p.chip_label, size="sm") }}{% if p.has_advice %}{{ validation_badge("advisor.spray", link=False) }}{% endif %}
         {{ icon("chevron-right", "h-4 w-4 shrink-0 text-muted transition-transform group-hover/row:translate-x-0.5") }}
       </a>
     </li>

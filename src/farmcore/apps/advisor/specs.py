@@ -3,15 +3,25 @@
 Parameters are read from the engine's own config (`engine/config.py`): value, unit, source and
 `assumed` flag, so a spec cannot disagree with the rules it describes. Season dates are set per
 region and year, so their spec value is None. No citation is added here that the config does
-not already carry; DOIs are left empty where the config names none.
+not already carry; a DOI is attached only to a source this module's `DOIS` names (verified
+against the publisher), and left empty otherwise.
 
 Validation is honest: the models have only been replayed on one farm's seasons against a
-calendar programme, so every model is `unvalidated`.
+calendar programme, so every model is `unvalidated`. The decision model's parameters are the
+engine rules' own `THRESHOLDS`; a test checks that every engine threshold is in some spec.
 """
 
 from __future__ import annotations
 
-from farmcore.apps.advisor.engine import downy, incubation, powdery, window
+from farmcore.apps.advisor.engine import (
+    downy,
+    gate,
+    incubation,
+    powdery,
+    protection,
+    tankmix,
+    window,
+)
 from farmcore.apps.advisor.engine.config import _SRC_GT as GT_SOURCE  # the index's citation
 from farmcore.apps.advisor.engine.config import DEFAULT_REGION, GOIDANICH_TABLE, AdvisorConfig
 from farmcore.core.model_spec import (
@@ -27,11 +37,25 @@ HOST = "VITVI"  # Vitis vinifera
 DOWNY = "PLASVI"  # Plasmopara viticola
 POWDERY = "UNCINE"  # Erysiphe necator
 
-VALIDATION = Validation(
-    "unvalidated",
+_REPLAYED = (
     "replayed on the 2024 and 2025 seasons of one farm against a calendar programme; "
-    "not yet checked against observed disease records or other regions",
+    "not yet checked against observed disease records or other regions"
 )
+VALIDATION = Validation("unvalidated", _REPLAYED)
+# Known DOIs, by a phrase of the source that cites them.
+DOIS = {
+    "Velasquez-Camacho et al. 2023": "10.3390/microorganisms11010073",
+    "Pérez-Expósito et al. 2017": "10.3390/s17030465",
+    "Gadoury 2003": "10.1094/PHYTO.2003.93.5.547",
+    "Racković et al. 2026": "10.3390/s26092843",
+    "Parton & Logan 1981": "10.1016/0002-1571(81)90105-9",
+}
+
+
+def _doi(source: str) -> str:
+    return next((doi for phrase, doi in DOIS.items() if phrase in source), "")
+
+
 PROVENANCE = (
     "Implemented in FarmCore from the published rules cited per parameter; no third-party model "
     "code. No golden fixtures from other implementations yet."
@@ -52,6 +76,7 @@ def _parameters(names: tuple[str, ...]) -> tuple[Parameter, ...]:
                 value=None if dated else t.value,
                 unit=t.unit,
                 source=t.source,
+                doi=_doi(t.source),
                 status="assumed" if t.assumed else "sourced",
                 region="per region and year" if dated else "",
             )
@@ -68,12 +93,16 @@ _SEASON = Stages(13, None, "from the season gate, shoots ≥ 10 cm (BBCH 13–15
 DOWNY_3_10 = ModelSpec(
     key="advisor.downy_3_10",
     title="Downy mildew primary infection (3-10 rule)",
-    method=Method("3-10 rule on rolling hourly windows", _CONFIG.downy_rain_min_mm.source),
+    method=Method(
+        "3-10 rule on rolling hourly windows",
+        _CONFIG.downy_rain_min_mm.source,
+        _doi(_CONFIG.downy_rain_min_mm.source),
+    ),
     host=HOST,
     pests=(DOWNY,),
     stages=_SEASON,
     inputs=(_hourly("rain", "mm"), _hourly("air temperature", "°C")),
-    parameters=_parameters(("season_gate", *downy.THRESHOLDS)),
+    parameters=_parameters((*gate.THRESHOLDS, *downy.THRESHOLDS)),
     validation=VALIDATION,
     provenance=PROVENANCE,
 )
@@ -81,7 +110,11 @@ DOWNY_3_10 = ModelSpec(
 DOWNY_INCUBATION = ModelSpec(
     key="advisor.downy_incubation",
     title="Downy mildew incubation (Goidanich table)",
-    method=Method("Goidanich incubation table, accumulated hourly", GOIDANICH_TABLE.source),
+    method=Method(
+        "Goidanich incubation table, accumulated hourly",
+        GOIDANICH_TABLE.source,
+        _doi(GOIDANICH_TABLE.source),
+    ),
     host=HOST,
     pests=(DOWNY,),
     stages=Stages(13, None, "after each 3-10 infection event; no end stage"),
@@ -93,6 +126,7 @@ DOWNY_INCUBATION = ModelSpec(
             f"{GOIDANICH_TABLE.rows[-1][0]:g} °C",
             unit="%/day",
             source=GOIDANICH_TABLE.source,
+            doi=_doi(GOIDANICH_TABLE.source),
             status="assumed",
             note=GOIDANICH_TABLE.note,
         ),
@@ -111,7 +145,11 @@ POWDERY_GUBLER_THOMAS = ModelSpec(
     stages=Stages(61, None, "from bloom (BBCH 61) to bloom + 28 d (berry resistance)"),
     inputs=(_hourly("air temperature", "°C"),),
     parameters=_parameters(powdery.THRESHOLDS),
-    validation=VALIDATION,
+    validation=Validation(
+        "unvalidated",
+        _REPLAYED + "; the method is published by UC IPM, but this implementation (an hourly "
+        "proxy for the 15-minute heat rule, an assumed combined penalty) is not compared with it",
+    ),
     provenance=PROVENANCE,
 )
 
@@ -131,19 +169,7 @@ SPRAY_DECISION = ModelSpec(
         _hourly("wind speed (forecast)", "km/h", "estimated"),
         _hourly("air temperature (forecast)", "°C", "estimated"),
     ),
-    parameters=_parameters(
-        (
-            "protection_contact_days",
-            "protection_penetrant_days",
-            "protection_rapid_growth_days",
-            "rapid_growth_start",
-            "rapid_growth_end",
-            "washoff_copper_mm",
-            "washoff_sulphur_mm",
-            *window.THRESHOLDS,
-            "tankmix_cover_ending_days",
-        )
-    ),
+    parameters=_parameters((*protection.THRESHOLDS, *window.THRESHOLDS, *tankmix.THRESHOLDS)),
     validation=VALIDATION,
     provenance=PROVENANCE,
 )
