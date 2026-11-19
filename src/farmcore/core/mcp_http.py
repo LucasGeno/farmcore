@@ -7,7 +7,7 @@ MCP message is read:
 
 1. `POST /mcp` only: a GET stream or a DELETE gets 405 (the transport spec allows it).
 2. No query string: a token in a URL lands in proxy and browser logs, so such a request is
-   refused (400) without being authenticated.
+   refused (400) without being authenticated. Any other path is 404, never a redirect.
 3. `Host` and `Origin` against allowlists (the SDK's check, DNS rebinding): 421 / 403. No CORS
    headers are ever sent.
 4. The client address's rate (429): before the database is asked about any token.
@@ -16,11 +16,13 @@ MCP message is read:
 7. The body size (413, the SDK's limit).
 
 Each tool list and call then re-authenticates the request's own token (`mcp.FarmTools`) and is
-audited as `token:<id>`. Nothing here logs a URL, a header or a body; uvicorn's access log is off.
+audited as `token:<id>`. Nothing here logs a URL, a header or a body; uvicorn's access log is off
+and each refusal logs one line with its status and the client address.
 """
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from collections.abc import AsyncIterator, Sequence
@@ -43,6 +45,8 @@ from farmcore.core.manifest import Manifest
 from farmcore.core.mcp import FarmTools, server
 from farmcore.db import session_scope
 from farmcore.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 PATH = "/mcp"
 LOOPBACK_HOSTS = ("127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*")
@@ -147,8 +151,13 @@ class Gate:
         return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        refused = await self._refusal(Request(scope))
+        request = Request(scope)
+        refused = await self._refusal(request)
         if refused is not None:
+            # Status and address only: the access log is off, and a URL, header or body may
+            # carry a token.
+            client = request.client.host if request.client else "?"
+            logger.info("mcp http refused %s from %s", refused.status_code, client)
             await refused(scope, receive, send)
             return
         await self._mcp.handle_request(scope, receive, send)
@@ -176,7 +185,7 @@ def create_app(
             yield
 
     gate = Gate(session_factory, settings, mcp)
-    return Starlette(
-        routes=[Route(PATH, endpoint=gate, methods=None)],
-        lifespan=lifespan,
-    )
+    app = Starlette(routes=[Route(PATH, endpoint=gate, methods=None)], lifespan=lifespan)
+    # No redirect from /mcp/ to /mcp: its Location would echo the query string.
+    app.router.redirect_slashes = False
+    return app

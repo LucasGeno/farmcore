@@ -22,7 +22,7 @@ from sqlalchemy.orm import configure_mappers
 from farmcore.core import mcp, registry
 from farmcore.core.commands.backup import database_error
 from farmcore.db import make_engine, make_session_factory
-from farmcore.settings import _is_loopback, get_settings
+from farmcore.settings import get_settings, is_loopback
 
 
 def _fail(message: str, code: int = 1) -> None:
@@ -36,10 +36,14 @@ def _serve_http(session_factory, settings, manifests) -> None:
     from farmcore.core import mcp_http
 
     host = settings.mcp_http_host
-    if not _is_loopback(host):
+    if not is_loopback(host):
         logging.getLogger(__name__).warning(
-            "MCP over HTTP listens beyond loopback on %s: serve it only behind TLS.", host
+            "MCP over HTTP listens beyond loopback on %s: serve it only behind a buffering TLS "
+            "reverse proxy with header and body timeouts; idle or half-sent connections are "
+            "never timed out here.",
+            host,
         )
+    forwarded = settings.mcp_http_forwarded_allow_ips
     uvicorn.run(
         mcp_http.create_app(session_factory, settings, manifests),
         host=host,
@@ -47,6 +51,9 @@ def _serve_http(session_factory, settings, manifests) -> None:
         access_log=False,  # a URL may carry what a client should never have put there
         limit_concurrency=settings.mcp_http_max_connections,
         timeout_keep_alive=5,
+        # Trust X-Forwarded-For only from the configured proxy, never implicitly from loopback.
+        proxy_headers=bool(forwarded),
+        forwarded_allow_ips=forwarded or None,
         log_level="info",
     )
 

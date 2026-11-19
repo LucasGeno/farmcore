@@ -18,8 +18,9 @@ test_mcp_stdio.py, the token itself by tests/apps/share/test_tokens.py):
 - the token lands in the server's logs, from a header or a URL (journey);
 - every HTTP call writes the token row (`last_used_at` is written at most once a minute:
   tests/apps/share/test_tokens.py).
-Not committed: slow-drip bodies and headers (bounded by uvicorn's concurrency limit and
-keep-alive timeout; a reverse proxy buffers requests in a real deployment).
+Not committed: slow or idle connections. Nothing here times out a half-sent or silent request:
+`MCP_HTTP_MAX_CONNECTIONS` of them hold every slot, so beyond loopback a buffering reverse proxy
+with header and body timeouts is required (SECURITY.md).
 """
 
 from __future__ import annotations
@@ -151,6 +152,7 @@ def test_the_server_refuses_to_start_unless_the_installation_turns_it_on(
         ("no-token", 401),
         ("wrong-token", 401),
         ("token-in-query", 400),
+        ("token-in-query-trailing-slash", 404),
         ("foreign-origin", 403),
         ("foreign-host", 421),
         ("oversized-body", 413),
@@ -172,6 +174,9 @@ def test_a_request_reaches_mcp_only_with_a_bearer_token_from_an_allowed_origin(
         response = _post(url, "fc_pat_" + "A" * 43)
     elif case == "token-in-query":
         response = _post(f"{url}?access_token={raw}")
+    elif case == "token-in-query-trailing-slash":
+        # A redirect to /mcp would echo the token in its Location header.
+        response = _post(f"{url}/?access_token={raw}")
     elif case == "foreign-origin":
         response = _post(url, raw, Origin="http://rebind.example")
     elif case == "foreign-host":

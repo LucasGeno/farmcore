@@ -155,12 +155,22 @@ read (`core/mcp_http.py`):
   address (checked before any token lookup), `MCP_HTTP_RATE_PER_TOKEN` per token (429 with
   `Retry-After`), `MCP_HTTP_MAX_BODY_BYTES` per request (413), `MCP_HTTP_MAX_CONNECTIONS`
   concurrent connections (503). Counters live in the process: several processes multiply them.
-- **Logs.** uvicorn's access log is off; refusals log no header, URL or body.
+- **Logs.** uvicorn's access log is off; each refusal logs one INFO line with its status and
+  the client address, never a header, URL or body.
+- **Slow requests are not timed out.** A connection that sends half a request, or nothing, stays
+  open: `MCP_HTTP_MAX_CONNECTIONS` of them, from one unauthenticated client and before any rate
+  limit, hold every slot and every other request gets 503. The 5 s keep-alive timeout only
+  starts after a response.
+- **Client address.** The per-address limit trusts `X-Forwarded-For` only from the addresses
+  in `MCP_HTTP_FORWARDED_ALLOW_IPS` (empty by default: the socket's peer is the client). Never
+  list loopback on a shared host: any local process could then rotate its address.
 
-Beyond loopback, serve it only behind a TLS reverse proxy (the token is a bearer secret), set
-`MCP_HTTP_ALLOWED_HOSTS` to the public host name, `FORWARDED_ALLOW_IPS` to the proxy so the
-per-address limit sees clients, and let the proxy bound slow requests: slow-drip headers and
-bodies are bounded here only by the connection limit and a 5 s keep-alive timeout.
+Beyond loopback a **buffering reverse proxy with TLS and header and body timeouts is required**,
+not optional: TLS because the token is a bearer secret, the timeouts because of the slow-request
+limit above. Do not expose `MCP_HTTP_HOST=0.0.0.0` directly. Set `MCP_HTTP_ALLOWED_HOSTS` to the
+public host name and `MCP_HTTP_FORWARDED_ALLOW_IPS` to the proxy's address, and make the proxy
+append or overwrite `X-Forwarded-For` (nginx `$proxy_add_x_forwarded_for`, Caddy's default),
+never pass a client's value through.
 
 ## Deployment checklist
 
