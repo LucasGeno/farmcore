@@ -32,7 +32,8 @@
         </label>
         <noscript><button type="submit" class="min-h-[44px] rounded-lg border border-line px-3 text-sm font-semibold">Apply</button></noscript>
       </form>
-      <a href="{{ farm_url('/operations/register.csv' ~ ('?' ~ export_query if export_query else '')) }}" download="{{ export_csv_name }}" class="mt-2 flex min-h-[44px] items-center text-sm font-semibold text-brand-700 underline underline-offset-4">Spray register CSV (Reg. 2023/564)</a>
+      <p>Saved weather omitted: its receipt licence was not retained with the record.</p>
+      <a href="{{ farm_url('/share/register.csv' ~ ('?' ~ export_query if export_query else '')) }}" download="{{ export_csv_name }}" class="mt-2 flex min-h-[44px] items-center text-sm font-semibold text-brand-700 underline underline-offset-4">Spray register CSV (Reg. 2023/564)</a>
       <a href="{{ farm_url('/share/ngsi-ld.json' ~ ('?' ~ export_query if export_query else '')) }}" download="{{ export_ld_name }}" class="flex min-h-[44px] items-center text-sm font-semibold text-brand-700 underline underline-offset-4">Export NGSI-LD</a>
     </li>
     <li class="min-w-0 rounded-xl border border-line bg-surface p-4"><p class="font-semibold">Weather</p><p class="mt-1 text-sm text-muted">Share weather station data, read only.</p></li>

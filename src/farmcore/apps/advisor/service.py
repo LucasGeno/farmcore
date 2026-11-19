@@ -124,8 +124,8 @@ def _grant_reason(repo: ScopedRepository) -> str | None:
 
 def redact_inputs(repo: ScopedRepository, value: Any) -> Any:
     """`value`, a raw weather input of an advice row (`mm_since_spray`, a reason's `inputs`),
-    as a grant or token view may show it: None. The owner's view is unchanged. Used by the
-    advisor tools; the share `advice.json` does not use it yet (weather-providers 14)."""
+    as a grant or token view may show it: None. The owner's view is unchanged.
+    Used by advisor tools and shared advice."""
     return None if repo.grant_view else value
 
 
@@ -269,6 +269,33 @@ def latest_advice(
     ).mappings()
     result = {row["parcel_id"]: Advice(**row) for row in rows}
     status, reason = availability or current_availability(repo, now, tz)
+    if repo.grant_view:
+        # Rebuild free-text headlines from the decision, so they cannot carry raw
+        # weather. Attribution is farm-wide until evaluations record receipt lineage.
+        sources = repo.session.execute(
+            select(WeatherReceipt.provider, WeatherReceipt.attribution)
+            .where(WeatherReceipt.farm_id == repo.farm_id, WeatherReceipt.redistribution.is_(True))
+            .distinct()
+            .order_by(WeatherReceipt.provider, WeatherReceipt.attribution)
+        ).all()
+        credits = list(
+            dict.fromkeys(
+                "Fuente: AEMET — Información elaborada utilizando, entre otras, la obtenida "
+                "de la Agencia Estatal de Meteorología"
+                if provider.casefold() == "aemet"
+                else credit
+                for provider, credit in sources
+                if provider.casefold() == "aemet" or credit
+            )
+        )
+        for a in result.values():
+            a.props = {
+                **(a.props or {}),
+                "headline": a.decision.capitalize()
+                + (". " + "; ".join(credits) if credits else ""),
+                "mm_since_spray": redact_inputs(repo, (a.props or {}).get("mm_since_spray")),
+            }
+            a.reasons = [{**r, "inputs": redact_inputs(repo, r.get("inputs"))} for r in a.reasons]
     if reason:
         # Transient read projection: saved historical evidence is never modified.
         projected = {}

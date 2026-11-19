@@ -387,3 +387,13 @@ def shared_advice(row) -> dict[str, Any]:
             }
         data["config_version"] = safe
     return data
+
+
+def current_advice(repo: ScopedRepository, now: datetime, tz: str):
+    """The same current, licence-gated projection used by advisor MCP tools."""
+    from farmcore.apps.advisor import service as advisor
+
+    repo.check("advice:read", "advice")
+    availability = advisor.current_availability(repo, now, tz)
+    rows = advisor.latest_advice(repo, now, tz=tz, availability=availability)
+    return rows, availability[1]

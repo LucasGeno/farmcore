@@ -127,7 +127,7 @@ def test_sharing_ignores_non_ascii_digits(admin, demo):
     for params in ({"parcel": "²"}, {"season": "²²²²"}, {"parcel": "٣"}, {"season": "２０２４"}):
         r = admin.get("/share/", params=params)
         assert r.status_code == 200, params
-        assert "/operations/register.csv?season=2024" in _links(r.text)
+        assert "/share/register.csv?season=2024" in _links(r.text)
 
 
 def test_new_year_midnight_falls_in_exactly_one_season(admin, settings, session, demo, spray):
@@ -217,17 +217,17 @@ def test_sharing_offers_a_season_selector_defaulting_to_the_current_one(admin, t
     assert '<option value="2023">' in select_html
     assert 'name="parcel"' in page and ">All parcels<" in page
     links = _links(page)
-    assert "/operations/register.csv?season=2024" in links
+    assert "/share/register.csv?season=2024" in links
     assert "/share/ngsi-ld.json?season=2024" in links
     assert '<option value="all">All seasons</option>' in select_html
     every = admin.get("/share/", params={"season": "all"}).text
     assert re.search(r'<option value="all" selected>All seasons', every)
-    assert "/operations/register.csv" in _links(every)
+    assert "/share/register.csv" in _links(every)
     assert "/share/ngsi-ld.json" in _links(every)
     assert 'download="spray-register.csv"' in every
     all_parcels = admin.get("/share/", params={"season": 2023, "parcel": ""})  # the form's "All"
     assert all_parcels.status_code == 200
-    assert "/operations/register.csv?season=2023" in _links(all_parcels.text)
+    assert "/share/register.csv?season=2023" in _links(all_parcels.text)
 
 
 def test_sharing_links_carry_the_chosen_season_and_parcel(admin, two_seasons):
@@ -236,7 +236,7 @@ def test_sharing_links_carry_the_chosen_season_and_parcel(admin, two_seasons):
     page = admin.get("/share/", params={"season": 2023, "parcel": p1.id}).text
 
     links = _links(page)
-    assert f"/operations/register.csv?season=2023&parcel={p1.id}" in links
+    assert f"/share/register.csv?season=2023&parcel={p1.id}" in links
     assert f"/share/ngsi-ld.json?season=2023&parcel={p1.id}" in links
     assert 'download="spray-register-2023-P1.csv"' in page
     assert re.search(rf'<option value="{p1.id}" selected>P1', page)

@@ -86,3 +86,18 @@ def test_grantee_page_and_ngsi_export_never_show_saved_weather(
         assert STATION not in resp.text
         assert "saved_weather" not in resp.text
         assert spray_weather.NAMESPACE not in resp.text
+
+
+def test_sharing_csv_omits_unlicensed_snapshots_but_owner_keeps_them(admin, evidence):
+    import re
+
+    page = admin.get("/share/")
+    link = re.search(r'href="([^"]+)" download="spray-register', page.text).group(1)
+    exported = admin.get(link.replace("&amp;", "&"))
+    assert exported.status_code == 200
+    assert "saved_weather" not in exported.text
+    assert STATION not in exported.text
+    assert "Saved weather omitted" in page.text
+    assert "licence" in exported.headers["x-weather-omitted"]
+    owner = admin.get("/operations/register.csv")
+    assert "saved_weather" in owner.text and STATION in owner.text

@@ -311,9 +311,10 @@ def test_advisor_and_foreign_owner_cannot_administer_grants(
 def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_provenance(
     recipient_browser, bound_grant, session, demo, other_farm
 ):
-    from farmcore.core.models.canonical import Advice, Parcel
+    from farmcore.core.models.canonical import Advice, Asset, Parcel
     from tests.apps.share.synth import NOW
 
+    session.add(Asset(farm_id=demo.farm.id, kind="station", name="Synthetic station"))
     private_marker = "private-parameter-inputs-and-reviewer-notes"
     bound_grant.scopes = ["advice:read"]
     parcel = session.scalar(select(Parcel).where(Parcel.farm_id == demo.farm.id))
@@ -356,7 +357,7 @@ def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_p
     response = recipient_browser.get(f"/share/as/{bound_grant.id}/advice.json")
     assert response.status_code == 200
     [data] = response.json()
-    assert data["headline"] == "Stored evaluation"
+    assert data["headline"] == "Wait"
     assert data["flags"] == ["limited"]
     assert data["config_version"] == {
         "id": 7,
@@ -371,7 +372,10 @@ def test_advice_only_grant_exports_stored_whitelist_without_weather_or_private_p
     assert private_marker not in response.text
     assert "props" not in data and "input_snapshot" not in data and "effective_config" not in data
     reads = session.scalars(select(AccessLog).where(AccessLog.grant_id == bound_grant.id)).all()
-    assert [(r.scope, r.resource) for r in reads] == [("advice:read", "advice")]
+    assert {(r.scope, r.resource) for r in reads} == {
+        ("advice:read", "advice"),
+        ("advice:read", "farm"),
+    }
     assert recipient_browser.get(f"/share/as/{bound_grant.id}/observations.json").status_code == 403
     assert recipient_browser.get(f"/share/as/{bound_grant.id}/register.json").status_code == 403
     assert recipient_browser.get(f"/share/as/{bound_grant.id}/audit.json").status_code == 403
@@ -881,3 +885,84 @@ def test_active_register_consent_does_not_authorize_advice_json(
     assert session.scalar(select(AccessLog.id).where(AccessLog.id > last)) is None
     session.refresh(bound_grant)
     assert bound_grant.scopes == ["logs:read", "register:read"]
+
+
+def test_shared_advice_and_mcp_apply_the_same_weather_gate(
+    recipient_browser, bound_grant, session, demo, owner_repo
+):
+    from zoneinfo import ZoneInfo
+
+    from farmcore.apps.advisor import tools
+    from farmcore.apps.share.service import grant_repo
+    from farmcore.core.models.canonical import Advice, Asset
+    from farmcore.core.models.weather import WeatherReceipt
+    from farmcore.core.tools import ToolContext
+    from tests.apps.share.synth import NOW
+
+    bound_grant.scopes = ["advice:read", "fields:read"]
+    session.add(Asset(farm_id=demo.farm.id, kind="station", name="Synthetic station"))
+    row = Advice(
+        farm_id=demo.farm.id,
+        parcel_id=demo.parcels[0].id,
+        evaluated_at=NOW,
+        decision="protected",
+        reasons=[{"rule": "rain", "inputs": {"rr1_mm": 987.6}}],
+        props={
+            "headline": "Protected: 987.6 mm rain since spray",
+            "mm_since_spray": 987.6,
+            "assessment_status": "evaluable",
+        },
+    )
+    receipt = WeatherReceipt(
+        farm_id=demo.farm.id,
+        provider="aemet",
+        dataset="synthetic",
+        fetched_at=NOW,
+        licence="AEMET reuse",
+        attribution="© AEMET",
+        redistribution=True,
+    )
+    session.add_all([row, receipt])
+    session.commit()
+    url = f"/share/as/{bound_grant.id}"
+    for state in ("allowed", "restricted", "stale", "farm-caveat"):
+        if state == "restricted":
+            receipt.redistribution = False
+        elif state == "stale":
+            receipt.redistribution = True
+            row.evaluated_at = NOW - timedelta(hours=3)
+        elif state == "farm-caveat":
+            row.evaluated_at = NOW
+            demo.farm.props = {"advisor_unavailable_reason": "Archive data only."}
+        session.commit()
+        response = recipient_browser.get(url + "/advice.json")
+        assert response.status_code == 200
+        [shared] = response.json()
+        assert "987.6" not in response.text
+        assert shared["mm_since_spray"] is None
+        context = ToolContext(
+            repo=grant_repo(session, bound_grant), now=NOW, tz=ZoneInfo("Europe/Paris")
+        )
+        mcp = tools.parcel_status(context, "P1")
+        if state == "allowed":
+            assert shared["decision"] == mcp.facts["decision"] == "protected"
+            assert shared["reasons"][0]["inputs"] is None
+            assert "Fuente: AEMET" in shared["headline"]
+            assert shared["headline"] == mcp.facts["headline"]
+            owner = tools.parcel_status(
+                ToolContext(repo=owner_repo, now=NOW, tz=ZoneInfo("Europe/Paris")), "P1"
+            )
+            assert owner.facts["mm_since_spray"] == 987.6
+            assert owner.facts["headline"] == "Protected: 987.6 mm rain since spray"
+        else:
+            reason = {
+                "restricted": "redistribution",
+                "stale": "out of date",
+                "farm-caveat": "Archive data only.",
+            }[state]
+            assert shared["decision"] == "none"
+            assert reason in shared["headline"] and reason in mcp.text
+            assert reason in recipient_browser.get(url + "/").text
+        session.refresh(row)
+        assert row.props["mm_since_spray"] == 987.6
+        assert row.reasons[0]["inputs"]["rr1_mm"] == 987.6
