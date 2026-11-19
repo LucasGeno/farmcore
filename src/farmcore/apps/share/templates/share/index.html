@@ -123,6 +123,7 @@
 {% set typed_scopes = token_form.get('scope', []) %}
 <details class="mt-4 rounded-xl border border-line bg-surface p-4"{% if token_errors %} open{% endif %}>
   <summary class="flex min-h-[44px] cursor-pointer items-center font-semibold">Create an agent token</summary>
+  <p class="mt-1 text-sm"><a href="{{ farm_url('/share/connect') }}" class="font-semibold text-brand-700 underline underline-offset-4">Connect your agent</a>: address, setup for Claude Desktop and Codex.</p>
   <p class="mt-1 text-sm text-muted">For your own AI agent. It reads what you tick and can only propose drafts that you confirm here. It ends on the date you choose (at most {{ token_max_days }} days) or when you revoke it.</p>
   <form method="post" action="/share/tokens?farm={{ farm_id }}" class="mt-3 grid gap-3 sm:grid-cols-2">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
