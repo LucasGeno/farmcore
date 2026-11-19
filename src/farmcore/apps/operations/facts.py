@@ -69,7 +69,11 @@ def amount_text(value: float | Decimal | str) -> str:
 
 def irrigation(log: Log) -> IrrigationFact | None:
     """The irrigation's amount and unit from its one entered quantity, with the basis from props;
-    None when there is no single entered quantity or the fact does not validate."""
+    None when there is no single entered quantity or the fact does not validate.
+
+    `log` must be attached to a session: the entered quantity is read through it, one query per
+    log, keyed on a log the caller already read under its scope. A detached log reads as None
+    (details unavailable)."""
     session = object_session(log)
     entered = (
         session.scalars(select(TypedQuantity).where(TypedQuantity.log_id == log.id).limit(2)).all()

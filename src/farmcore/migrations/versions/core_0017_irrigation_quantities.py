@@ -6,10 +6,11 @@ one since #92 (2026-11-18); a done irrigation confirmed before then holds its am
 the entered value and unit, the standard measure/value/unit from the frozen `unit_definition`
 table (`mm` has none and stays null), no label and no catalog item.
 
-Only props that validate as capture's fact are read (a positive finite decimal amount of at most
-64 characters, unit `mm`, `m3` or `L`); others are left alone and still read as details
-unavailable. A log that already has a typed quantity is skipped, so nothing is counted twice and
-a re-run writes nothing. Pending logs are drafts being confirmed, never committed: skipped.
+Only props that validate as capture's fact are read (keys `amount`, `unit` and an optional
+`basis` only; a positive finite decimal amount of at most 64 characters; unit `mm`, `m3` or `L`;
+basis `gross`, `net` or absent); others are left alone and still read as details unavailable.
+A log that already has a typed quantity is skipped, so nothing is counted twice and a re-run
+writes nothing. Pending logs are drafts being confirmed, never committed: skipped.
 
 Downgrade changes nothing and loses nothing: core_0016 capture writes these same rows, so they
 are valid there, and keeping them makes the next upgrade a no-op.
@@ -31,6 +32,8 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 UNITS = ("mm", "m3", "L")  # capture's irrigation units (operations.facts, frozen here)
+BASES = (None, "gross", "net")  # absent, or the word the farmer said
+KEYS = {"amount", "unit", "basis"}
 MAX_AMOUNT_CHARS = 64
 
 
@@ -63,7 +66,7 @@ def upgrade() -> None:
         )
     ):
         value, unit = _amount(fact.get("amount")), fact.get("unit")
-        if value is None or unit not in UNITS:
+        if value is None or unit not in UNITS or set(fact) - KEYS or fact.get("basis") not in BASES:
             continue
         measure, standard_unit, factor = standard.get(unit, (None, None, None))
         rows.append(

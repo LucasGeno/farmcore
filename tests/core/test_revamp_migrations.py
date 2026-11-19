@@ -795,7 +795,8 @@ def test_chat_pending_logs_become_drafts_and_clarifications_are_cleared_with_cou
 def test_irrigations_confirmed_before_entered_quantities_are_backfilled_once(scratch_db_url):
     """core_0017: a done irrigation with only `props.irrigation` (before #92) gets its amount as
     one entered typed quantity, exactly as capture now writes it; an irrigation that already has
-    one, a pending one and one whose props do not validate are left alone. A downgrade and a
+    one, a pending one and those whose props do not validate (an unexpected key, a basis other
+    than gross/net/absent) are left alone. A downgrade and a
     second upgrade write nothing twice."""
     cfg = alembic_config(scratch_db_url)
     command.upgrade(cfg, "core_0016")
@@ -835,6 +836,8 @@ def test_irrigations_confirmed_before_entered_quantities_are_backfilled_once(scr
             irrigation(db, farm, {"amount": "abc", "unit": "mm"})
             irrigation(db, farm, {"amount": "-5", "unit": "mm"})
             irrigation(db, farm, {"amount": "5", "unit": "gal"})
+            irrigation(db, farm, {"amount": "5", "unit": "mm", "note": "x"})  # unexpected key
+            irrigation(db, farm, {"amount": "5", "unit": "mm", "basis": "gross "})  # bad basis
             irrigation(db, farm, {"amount": "20", "unit": "mm"}, status="pending")
         command.upgrade(cfg, "head")
         with engine.connect() as db:
