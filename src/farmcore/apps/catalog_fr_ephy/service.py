@@ -21,6 +21,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from farmcore.apps.catalog_eu_pesticides.service import upsert_substance_links
+from farmcore.apps.catalog_eu_pesticides.substances import substance_key
 from farmcore.apps.catalog_fr_ephy import sources
 from farmcore.apps.catalog_fr_ephy.models import CatalogImport, CatalogUse
 from farmcore.core.models.catalog import CatalogAuthorisation, CatalogItem
@@ -225,7 +227,7 @@ def import_ephy(
 
     existing = _existing_items(session, [row.amm for row in products.rows])
     new_items: list[tuple[str, CatalogItem]] = []
-    changed: list[tuple[CatalogItem, list[sources.UseRow]]] = []
+    changed: list[tuple[CatalogItem, list[sources.UseRow], tuple[dict[str, str], ...]]] = []
     products_written = 0
     for row in products.rows:
         uses_for = uses_by_amm.get(row.amm, [])
@@ -240,7 +242,7 @@ def import_ephy(
         else:
             item.name = row.name
         item.props = _props(row, product_hash)
-        changed.append((item, uses_for))
+        changed.append((item, uses_for, row.substances))
         products_written += 1
     session.flush()  # new items get their ids
 
@@ -250,11 +252,19 @@ def import_ephy(
 
     new_item_ids = {item.id for _, item in new_items}
     use_rows: list[tuple[int, sources.UseRow]] = []
-    for item, uses_for in changed:
+    for item, uses_for, _substances in changed:
         if item.id not in new_item_ids:
             _delete_stale_uses(session, item.id, {_use_key(use) for use in uses_for})
         use_rows.extend((item.id, use) for use in uses_for)
     uses_written = _upsert_uses(session, use_rows)
+
+    for item, _uses_for, substances in changed:
+        links = [
+            (substance_key(ref), ref)
+            for ref in (s.get("ref") or s.get("name", "") for s in substances)
+            if ref.strip()
+        ]
+        upsert_substance_links(session, item.id, links)
 
     source_use_count = sum(
         len({_use_key(use) for use in uses_for}) for uses_for in uses_by_amm.values()

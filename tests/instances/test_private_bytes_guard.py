@@ -38,6 +38,12 @@ ALLOWED = {
     ("apps/chat/bot.py", "TemporaryDirectory"): TEMPORARY,
     ("apps/chat/bot.py", "download_to_drive"): TEMPORARY,
     ("apps/catalog_fr_ephy/sources.py", "mkdir"): "public E-Phy open-data download (data.gouv.fr)",
+    ("apps/catalog_eu_pesticides/sources.py", "mkdir"): "public EU Pesticides open-data download",
+    ("apps/catalog_eu_pesticides/sources.py", "write_bytes"): (
+        "public EU Pesticides open-data download"
+    ),
+    ("apps/catalog_it_salute/sources.py", "mkdir"): "public Fitosanitari open-data download",
+    ("apps/catalog_it_salute/sources.py", "write_bytes"): "public Fitosanitari open-data download",
     ("apps/forecast/sources.py", "mkdir"): "open-data cache (DATA_DIR)",
     ("apps/forecast/sources.py", "write_text"): "open-data cache (DATA_DIR)",
     ("apps/operations/commands.py", "mkdir"): "synthetic demo file (`isoxml-demo` CLI)",

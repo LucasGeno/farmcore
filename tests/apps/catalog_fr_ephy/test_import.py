@@ -11,6 +11,7 @@ from pathlib import Path
 
 from sqlalchemy import func, select
 
+from farmcore.apps.catalog_eu_pesticides.models import CatalogItemSubstance
 from farmcore.apps.catalog_fr_ephy import service
 from farmcore.apps.catalog_fr_ephy.models import CatalogImport, CatalogUse
 from farmcore.core.models.canonical import Farm, Log
@@ -186,6 +187,18 @@ def test_changed_use_replaces_old_row(session, ephy, tmp_path):
     assert len(matching) == 1
     assert matching[0].max_dose == Decimal("2.0")
     assert matching[0].state == "withdrawn"
+
+
+def test_products_link_their_substances_by_key(session, ephy):
+    service.import_ephy(session, products_path=ephy["products"], uses_path=ephy["uses"])
+
+    authorised = _item(session, AUTHORISED_AMM)
+    links = session.execute(
+        select(CatalogItemSubstance.substance_key, CatalogItemSubstance.name).where(
+            CatalogItemSubstance.catalog_item_id == authorised.id
+        )
+    ).all()
+    assert ("buprofezin", "Buprofezin") in links
 
 
 def test_use_upsert_chunks_across_batch_boundary(session, ephy, monkeypatch):
