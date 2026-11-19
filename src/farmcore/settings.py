@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -51,6 +51,29 @@ def is_loopback(host: str) -> bool:
         return ipaddress.ip_address(host).is_loopback
     except ValueError:
         return False
+
+
+def _secure_url(v: str) -> bool:
+    """https, or http to a loopback host (local development)."""
+    url = urlsplit(v)
+    return url.scheme == "https" or (url.scheme == "http" and is_loopback(url.hostname or ""))
+
+
+class OAuthClient(BaseModel):
+    """An MCP client the operator registered for OAuth: a public client (no secret; PKCE binds
+    its codes) that may only be sent back to one of `redirect_uris`, matched exactly."""
+
+    client_id: str = Field(min_length=1, max_length=255)
+    client_name: str = Field(min_length=1, max_length=80)
+    redirect_uris: list[str] = Field(min_length=1)
+
+    @field_validator("redirect_uris")
+    @classmethod
+    def _absolute_secure(cls, v: list[str]) -> list[str]:
+        for uri in v:
+            if not _secure_url(uri) or urlsplit(uri).fragment or not urlsplit(uri).hostname:
+                raise ValueError("a redirect URI is https (http only to loopback), no fragment")
+        return v
 
 
 def _default_vertex_auth() -> str:
@@ -165,6 +188,15 @@ class Settings(BaseSettings):
     # Proxy addresses whose X-Forwarded-For the per-address limit trusts (uvicorn's
     # `forwarded_allow_ips`, comma-separated). Empty: none, the socket's peer is the client.
     mcp_http_forwarded_allow_ips: str = ""
+    # The URL agents use for /mcp (behind a proxy, its public https URL): the OAuth resource
+    # (RFC 8707) every OAuth token is bound to. Empty: http://localhost:<MCP_HTTP_PORT>/mcp.
+    mcp_http_public_url: str = ""
+    # OAuth 2.1 for MCP (`core/oauth`): this web app (PUBLIC_BASE_URL, the issuer) lets a farm
+    # owner approve an agent, which then gets short-lived tokens for MCP_HTTP_PUBLIC_URL only.
+    # Off unless turned on. Clients are registered here until client registration exists:
+    # JSON list of {"client_id", "client_name", "redirect_uris"}.
+    mcp_oauth_enabled: bool = False
+    mcp_oauth_clients: list[OAuthClient] = Field(default_factory=list)
 
     @field_validator("database_url", mode="before")
     @classmethod
@@ -185,6 +217,11 @@ class Settings(BaseSettings):
     @field_validator("openai_compatible_base_url")
     @classmethod
     def _openai_base_url(cls, v: str) -> str:
+        return _check_http_url(v) if v else v
+
+    @field_validator("mcp_http_public_url")
+    @classmethod
+    def _mcp_public_url(cls, v: str) -> str:
         return _check_http_url(v) if v else v
 
     @field_validator("geocoder_base_url")
@@ -230,6 +267,28 @@ class Settings(BaseSettings):
                     "OPENAI_COMPATIBLE_API_KEY requires an https base URL (http only to loopback)"
                 )
         return self
+
+    @model_validator(mode="after")
+    def _oauth_over_https(self) -> Settings:
+        # Codes and tokens are bearer secrets: never over plain http beyond this machine.
+        if self.mcp_oauth_enabled and not (
+            _secure_url(self.public_base_url) and _secure_url(self.mcp_resource_url)
+        ):
+            raise ValueError(
+                "MCP_OAUTH_ENABLED needs https PUBLIC_BASE_URL and MCP_HTTP_PUBLIC_URL "
+                "(http only to loopback)"
+            )
+        return self
+
+    @property
+    def mcp_resource_url(self) -> str:
+        """The MCP endpoint's public URL: the resource OAuth tokens are bound to."""
+        return self.mcp_http_public_url or f"http://localhost:{self.mcp_http_port}/mcp"
+
+    @property
+    def oauth_issuer(self) -> str:
+        """This installation as an OAuth authorization server (RFC 8414 `issuer`)."""
+        return self.public_base_url.rstrip("/")
 
     @model_validator(mode="after")
     def _derive_test_database_url(self) -> Settings:

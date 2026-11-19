@@ -1,0 +1,25 @@
+{% extends "core/public_auth.html" %}
+{% block title %}Connect an agent · FarmCore{% endblock %}
+{% block content %}
+<h1 class="text-2xl font-semibold">Connect {{ asked.client.client_name }} to your farm?</h1>
+<p class="mt-3 text-muted">It will act as the agent you name here, with only what you tick, until you revoke it on Sharing. Afterwards you go back to <strong>{{ returns_to }}</strong>.</p>
+<form method="post" action="/oauth/authorize" class="mt-6 grid gap-3">
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+{% for key, value in form.items() %}<input type="hidden" name="{{ key }}" value="{{ value }}">
+{% endfor %}
+<label for="farm">Farm</label>
+<select id="farm" name="farm" class="min-h-[44px] border border-line rounded-lg bg-surface px-3">
+{% for farm in farms %}<option value="{{ farm.id }}">{{ farm.name }}</option>{% endfor %}
+</select>
+<label for="name">Agent name (shown on Sharing)</label>
+<input id="name" name="name" value="{{ asked.client.client_name }}" maxlength="80" required class="min-h-[44px] border border-line rounded-lg bg-surface px-3">
+<fieldset class="grid gap-2"><legend>It may</legend>
+{% for scope in asked.scopes %}<label class="flex items-center gap-2"><input type="checkbox" name="allow" value="{{ scope }}" checked> <code>{{ scope }}</code></label>
+{% endfor %}
+</fieldset>
+<div class="flex gap-3">
+<button type="submit" name="decision" value="approve" class="min-h-[44px] flex-1 rounded-lg bg-brand-900 hover:bg-brand-700" style="color: var(--surface)">Connect</button>
+<button type="submit" name="decision" value="deny" class="min-h-[44px] flex-1 rounded-lg border border-line">Cancel</button>
+</div>
+</form>
+{% endblock %}

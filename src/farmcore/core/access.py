@@ -60,7 +60,12 @@ from farmcore.core.models.canonical import (
     Source,
 )
 from farmcore.core.models.catalog import CatalogItem, TypedQuantity
-from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIdentity
+from farmcore.core.models.identity import (
+    AccessToken,
+    FarmMembership,
+    LocalIdentity,
+    OAuthToken,
+)
 from farmcore.core.models.weather import (
     WeatherForecast,
     WeatherObservation,
@@ -106,6 +111,7 @@ _VIA_PARENT: dict[type[Base], tuple[Any, type[Base]]] = {
     LogParcel: (LogParcel.log_id, Log),
     Observation: (Observation.asset_id, Asset),
     AccessToken: (AccessToken.grant_id, DataGrant),
+    OAuthToken: (OAuthToken.grant_id, DataGrant),
     WeatherObservation: (WeatherObservation.receipt_id, WeatherReceipt),
     WeatherForecast: (WeatherForecast.receipt_id, WeatherReceipt),
 }
@@ -146,6 +152,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "farm_membership": frozenset({"audit:read"}),
     "forecast_availability": frozenset({"fields:read", "planning:read", "planning:write"}),
     "llm_audit": frozenset({"audit:read"}),
+    # OAuth connections' codes and hashed secrets (`core/oauth`): operational, never data.
+    "oauth_code": frozenset({"audit:read"}),
+    "oauth_token": frozenset({"audit:read"}),
     "local_identity": frozenset({"audit:read"}),
     "local_session": frozenset({"audit:read"}),
     "log": _LOG_READS,
@@ -598,7 +607,9 @@ Repo = Annotated[ScopedRepository, Depends(get_repo, scope="function")]
 # --- Access tokens ------------------------------------------------------------------------------
 # A token is `<prefix><43 url-safe chars>` from 32 random bytes. Only its SHA-256 is stored: a
 # slow KDF protects guessable secrets such as passwords, and 256 random bits are not guessable.
-TOKEN_PREFIXES = {"personal": "fc_pat_"}
+TOKEN_PREFIXES = {"personal": "fc_pat_", "oauth": "fc_oat_"}
+# An OAuth refresh token: only the token endpoint takes it (`core/oauth`), never a resource.
+REFRESH_PREFIX = "fc_ort_"
 TOKEN_BYTES = 32
 TOKEN_MAX_LEN = 128  # longer input is refused before hashing
 # How stale Sharing's "Last used" may be: an HTTP agent authenticates on every request, and
@@ -646,15 +657,41 @@ def is_farm_owner(session: Session, identity_id: int, farm_id: int) -> bool:
     )
 
 
+def _oauth_connection(session: Session, digest: str, audience: str | None) -> AccessToken | None:
+    """The OAuth connection a live access token of `digest` belongs to, if it was issued for
+    `audience` (RFC 8707: a token for another resource, or presented where no resource is
+    named, as on stdio, is refused)."""
+    secret = session.scalar(
+        select(OAuthToken).where(OAuthToken.token_hash == digest, OAuthToken.kind == "access")
+    )
+    if (
+        secret is None
+        or not hmac.compare_digest(secret.token_hash, digest)
+        or secret.revoked_at is not None
+        or secret.expires_at <= datetime.now(UTC)
+    ):
+        return None
+    token = session.scalar(
+        select(AccessToken).where(
+            AccessToken.grant_id == secret.grant_id, AccessToken.kind == "oauth"
+        )
+    )
+    if token is None or audience is None or token.audience != audience:
+        return None
+    return token
+
+
 def authenticate_token(
-    session: Session, raw: str, *, farm_id: int | None = None
+    session: Session, raw: str, *, farm_id: int | None = None, audience: str | None = None
 ) -> ScopedRepository:
     """The repository a token reads through: its grant's farm and scopes, actor `token:<id>`.
 
-    Checked afresh on every call (never cached), so revoking or expiring the grant, or the issuer
-    losing ownership of the farm or being disabled, refuses the next call. `farm_id`, when the
-    caller names a farm, must be the token's. Records `last_used_at` (at most once per
-    `LAST_USED_EVERY`). `TokenRejected` otherwise.
+    A personal token (`fc_pat_`) or an OAuth access token (`fc_oat_`); the latter only where
+    the caller names the resource it serves (`audience`, the MCP endpoint's public URL) and it
+    is that token's. Checked afresh on every call (never cached), so revoking or expiring the
+    grant or the token, or the issuer losing ownership of the farm or being disabled, refuses
+    the next call. `farm_id`, when the caller names a farm, must be the token's. Records
+    `last_used_at` (at most once per `LAST_USED_EVERY`). `TokenRejected` otherwise.
     """
     if (
         not isinstance(raw, str)
@@ -663,23 +700,22 @@ def authenticate_token(
     ):
         raise TokenRejected
     digest = token_hash(raw)
-    token = session.scalar(select(AccessToken).where(AccessToken.token_hash == digest))
-    if token is None or not hmac.compare_digest(token.token_hash, digest):
+    if raw.startswith(TOKEN_PREFIXES["oauth"]):
+        token = _oauth_connection(session, digest, audience)
+    else:
+        token = session.scalar(select(AccessToken).where(AccessToken.token_hash == digest))
+        if token is not None and not hmac.compare_digest(token.token_hash or "", digest):
+            token = None
+    if token is None:
         raise TokenRejected
     # populate_existing: a long-lived session (a stdio agent process) must see a revocation
     # committed elsewhere, not the grant it loaded on an earlier call.
     grant = session.get(DataGrant, token.grant_id, populate_existing=True)
-    now = datetime.now(UTC)
-    if (
-        grant is None
-        or (farm_id is not None and grant.farm_id != farm_id)
-        or grant.revoked_at is not None
-        or (grant.valid_from is not None and grant.valid_from > now)
-        or (grant.valid_to is not None and grant.valid_to <= now)
-        or not set(grant.scopes or ()) <= TOKEN_SCOPES
-        or not is_farm_owner(session, token.created_by_identity_id, grant.farm_id)
-    ):
+    if grant is None or not grant_usable(session, grant, token.created_by_identity_id):
         raise TokenRejected
+    if farm_id is not None and grant.farm_id != farm_id:
+        raise TokenRejected
+    now = datetime.now(UTC)
     if token.last_used_at is None or now - token.last_used_at >= LAST_USED_EVERY:
         token.last_used_at = now
         session.flush()
@@ -691,6 +727,19 @@ def authenticate_token(
         purpose=grant.purpose,
         grant_view=True,
         private_member=True,
+    )
+
+
+def grant_usable(session: Session, grant: DataGrant, issuer_id: int) -> bool:
+    """Whether an agent's grant may still be used: not revoked, inside its validity, within
+    what an agent token may hold, and its issuer still an owner of the farm."""
+    now = datetime.now(UTC)
+    return (
+        grant.revoked_at is None
+        and (grant.valid_from is None or grant.valid_from <= now)
+        and (grant.valid_to is None or grant.valid_to > now)
+        and set(grant.scopes or ()) <= TOKEN_SCOPES
+        and is_farm_owner(session, issuer_id, grant.farm_id)
     )
 
 
