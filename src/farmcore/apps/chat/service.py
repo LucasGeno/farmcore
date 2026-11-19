@@ -398,7 +398,7 @@ def log_summary(log: Log, tz: ZoneInfo) -> str:
     """The same line for a stored log: a spray's rate quantities, or a fact's validated props."""
     if log.type in ("irrigate", "observation"):
         if log.type == "irrigate":
-            fact = facts.irrigation(log.props)
+            fact = facts.irrigation(log)
             detail = (
                 irrigation_detail(fact.amount, fact.unit, fact.basis)
                 if fact is not None

@@ -1,11 +1,12 @@
-"""Validated app data of confirmed field observations and irrigation facts (`log.props`).
+"""Validated app data of confirmed field observations and irrigation facts.
 
 An irrigation is a depth (mm) or an entered volume (m3, L), not a product rate: the canonical
-`quantity` rows stay empty for `irrigate` and `observation` logs, and the fact lives in the log's
-`props` (the canonical model's slot for app data). Capture also stores an irrigation's amount as
-one entered `typed_quantity` (`logs.EnteredQuantity`); these props stay what the pages show.
-These models are the only writer's shape and the reader's guard: a row whose props do not
-validate is not shown as a fact, never guessed.
+`quantity` rows stay empty for `irrigate` and `observation` logs. An irrigation's amount and unit
+have one reader, its one entered `typed_quantity` (core_0017 backfilled the irrigations confirmed
+before capture wrote one); `log.props["irrigation"]` keeps the same fact with the gross/net basis,
+which only props carry. `record_irrigation` is the one writer of both copies, for capture and any
+correction. These models are the writer's shape and the reader's guard: a record whose facts do
+not validate is not shown as a fact, never guessed.
 
 No efficiency is stored or derived: `basis` is only the gross/net word the farmer said, and an
 absent basis stays absent. No irrigation advice and no spray stock follow from these records.
@@ -17,8 +18,11 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import delete, select
+from sqlalchemy.orm import Session, object_session
 
 from farmcore.core.models.canonical import Log
+from farmcore.core.models.catalog import TypedQuantity, enter_quantity
 
 IRRIGATION = "irrigation"
 OBSERVATION = "observation"
@@ -63,14 +67,34 @@ def amount_text(value: float | Decimal | str) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
-def irrigation(props: dict[str, Any] | None) -> IrrigationFact | None:
-    raw = (props or {}).get(IRRIGATION)
-    if not isinstance(raw, dict):
+def irrigation(log: Log) -> IrrigationFact | None:
+    """The irrigation's amount and unit from its one entered quantity, with the basis from props;
+    None when there is no single entered quantity or the fact does not validate."""
+    session = object_session(log)
+    entered = (
+        session.scalars(select(TypedQuantity).where(TypedQuantity.log_id == log.id).limit(2)).all()
+        if session is not None
+        else []
+    )
+    if len(entered) != 1:
         return None
+    raw = (log.props or {}).get(IRRIGATION)
+    basis = raw.get("basis") if isinstance(raw, dict) else None
     try:
-        return IrrigationFact.model_validate(raw)
+        return IrrigationFact(
+            amount=format(entered[0].entered_value, "f"), unit=entered[0].entered_unit, basis=basis
+        )
     except ValueError:
         return None
+
+
+def record_irrigation(session: Session, log: Log, fact: IrrigationFact) -> None:
+    """Write an irrigation's amount to both copies, its entered quantity and `props`, replacing
+    what it had: inside a savepoint, so a failure leaves neither changed."""
+    with session.begin_nested():
+        session.execute(delete(TypedQuantity).where(TypedQuantity.log_id == log.id))
+        enter_quantity(session, log_id=log.id, value=Decimal(fact.amount), unit=fact.unit)
+        log.props = {**(log.props or {}), IRRIGATION: fact.model_dump(exclude_none=True)}
 
 
 def observation(props: dict[str, Any] | None) -> ObservationFact | None:
@@ -91,7 +115,7 @@ def label(log: Log) -> str | None:
 def summary(log: Log) -> str | None:
     """One line of the confirmed fact for record lists, or None when the type carries none."""
     if log.type == "irrigate":
-        fact = irrigation(log.props)
+        fact = irrigation(log)
         if fact is None:
             return "Irrigation (details unavailable)"
         basis = f" {fact.basis}" if fact.basis else " (basis not stated)"

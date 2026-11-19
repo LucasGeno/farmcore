@@ -2,6 +2,7 @@
 
 import json
 import uuid
+from decimal import Decimal
 
 import pytest
 from alembic import command
@@ -787,5 +788,67 @@ def test_chat_pending_logs_become_drafts_and_clarifications_are_cleared_with_cou
         command.downgrade(cfg, "core_0010")
         command.upgrade(cfg, "head")
         command.check(cfg)
+    finally:
+        engine.dispose()
+
+
+def test_irrigations_confirmed_before_entered_quantities_are_backfilled_once(scratch_db_url):
+    """core_0017: a done irrigation with only `props.irrigation` (before #92) gets its amount as
+    one entered typed quantity, exactly as capture now writes it; an irrigation that already has
+    one, a pending one and one whose props do not validate are left alone. A downgrade and a
+    second upgrade write nothing twice."""
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "core_0016")
+    engine = create_engine(scratch_db_url)
+
+    def irrigation(db, farm, props, status="done"):
+        return db.execute(
+            text(
+                "INSERT INTO log(farm_id,type,status,name,ts_start,props) VALUES "
+                "(:farm,'irrigate',:status,'x','2024-04-10T05:00:00+02:00',CAST(:props AS jsonb))"
+                " RETURNING id"
+            ),
+            {"farm": farm, "status": status, "props": json.dumps({"irrigation": props})},
+        ).scalar_one()
+
+    def typed(db):
+        return db.execute(
+            text(
+                "SELECT log_id, entered_value, entered_unit, measure, value, unit, label, "
+                "catalog_item_id FROM typed_quantity ORDER BY log_id, id"
+            )
+        ).all()
+
+    try:
+        with engine.begin() as db:
+            farm = db.execute(text("INSERT INTO farm(name) VALUES ('f') RETURNING id")).scalar()
+            depth = irrigation(db, farm, {"amount": "20", "unit": "mm", "basis": "gross"})
+            volume = irrigation(db, farm, {"amount": "12.50", "unit": "m3"})
+            after_92 = irrigation(db, farm, {"amount": "300", "unit": "L"})
+            db.execute(
+                text(
+                    "INSERT INTO typed_quantity(log_id,entered_value,entered_unit,measure,value,"
+                    "unit) VALUES (:log,300,'L','volume',300,'l')"
+                ),
+                {"log": after_92},
+            )
+            irrigation(db, farm, {"amount": "abc", "unit": "mm"})
+            irrigation(db, farm, {"amount": "-5", "unit": "mm"})
+            irrigation(db, farm, {"amount": "5", "unit": "gal"})
+            irrigation(db, farm, {"amount": "20", "unit": "mm"}, status="pending")
+        command.upgrade(cfg, "head")
+        with engine.connect() as db:
+            backfilled = typed(db)
+        assert backfilled == [
+            (depth, Decimal("20"), "mm", None, None, None, None, None),
+            (volume, Decimal("12.50"), "m3", "volume", Decimal("12500.00"), "l", None, None),
+            (after_92, Decimal("300"), "L", "volume", Decimal("300"), "l", None, None),
+        ]
+        command.downgrade(cfg, "core_0016")  # nothing lost: capture writes these rows too
+        with engine.connect() as db:
+            assert typed(db) == backfilled
+        command.upgrade(cfg, "head")
+        with engine.connect() as db:
+            assert typed(db) == backfilled
     finally:
         engine.dispose()
