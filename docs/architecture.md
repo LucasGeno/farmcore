@@ -65,8 +65,10 @@ database, a small core and installable apps, in the style of Odoo.
   providers, stations within 50 km ranked by great-circle distance with any station more than
   300 m above or below the farm down-ranked (the farm elevation is the owner's, never derived),
   every forecast provider, and backfill providers (`Capabilities.backfill`, ERA5 once its app
-  exists). The choice and its reasons live in `farm.props["weather_sources"]`; in Expert view
-  the owner overrides them on the location step.
+  exists). Discovery runs outside the farm's locks, at most 5 s per provider, and asks a
+  live-only provider (`Capabilities.live_only`) only in live clock mode; a provider that is not
+  configured or fails is noted. The choice and its reasons live in
+  `farm.props["weather_sources"]`; in Expert view the owner overrides them on the location step.
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
 

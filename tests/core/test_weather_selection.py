@@ -91,7 +91,11 @@ class FakeProvider:
         if self.broken:
             raise RuntimeError("catalogue down")
         self.asked.append(bbox)
-        return self.stations
+        return [
+            s
+            for s in self.stations
+            if bbox.west <= s.longitude <= bbox.east and bbox.south <= s.latitude <= bbox.north
+        ]
 
     def fetch_observations(self, station, range):
         raise NotImplementedError
@@ -134,3 +138,19 @@ def test_selection_takes_country_providers_always_the_forecast_and_backfill_when
     era5 = FakeProvider("era5", Capabilities(False, False, frozenset(), backfill=True))
     with_era5 = select([*providers, era5], FARM, "FR", Decimal(50))
     assert [b.provider for b in with_era5.backfill] == ["era5"]
+
+
+@pytest.mark.parametrize(
+    ("farm", "station"),
+    [
+        (Point(0.0, 179.9), Point(0.0, -179.9)),  # 22 km across the antimeridian
+        (Point(89.9, 0.0), Point(89.9, 180.0)),  # 22 km across the North Pole
+    ],
+)
+def test_a_station_just_across_the_antimeridian_or_a_pole_is_still_found(farm, station) -> None:
+    across = Station("x", "Across", station.latitude, station.longitude, Decimal(10))
+    provider = FakeProvider("obs", Capabilities(True, False, frozenset()), [across])
+
+    chosen = select([provider], farm, None, None)
+
+    assert [c.station.provider_station_id for c in chosen.stations] == ["x"]

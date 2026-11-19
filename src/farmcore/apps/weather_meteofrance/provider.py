@@ -46,6 +46,7 @@ from farmcore.core.weather.contract import (
     Capabilities,
     Fetched,
     Licence,
+    NotConfigured,
     ObservationValue,
     Point,
     Request,
@@ -161,6 +162,10 @@ def archive_values(text: str, range: TimeRange) -> list[ObservationValue]:
     return values
 
 
+class CredentialsMissing(PortalError, NotConfigured):
+    """The installation has no portal credentials."""
+
+
 class Portal:
     """Authorised calls to the portal within one deadline (`time.monotonic()` seconds).
 
@@ -240,7 +245,7 @@ class MeteoFranceLive:
     def portal(self) -> Portal:
         client_id, client_secret = self._credentials
         if not client_id or not client_secret:
-            raise PortalError("Météo-France portal credentials are not configured")
+            raise CredentialsMissing("Météo-France portal credentials are not configured")
         if self._portal is None:
             self._portal = Portal(
                 client_id,
@@ -356,6 +361,7 @@ class MeteoFranceLive:
                 BY_LEGACY[name].name for name in ("rr1_mm", "t_c", "rh_pct", "ff_kmh")
             ),
             countries=frozenset({"FR"}),
+            live_only=True,
         )
 
     def licence(self) -> Licence:

@@ -4,8 +4,9 @@
 apps (`registry.installed` over `registry.live_active`) and returns:
 
 - **stations**: every station the farm's country providers know within `SEARCH_RADIUS_M`,
-  ranked by `rank`. A provider bound to other countries is never asked; a provider whose
-  catalogue fails is named in `notes`, and the others still answer.
+  ranked by `rank`. A provider bound to other countries is never asked, nor a `live_only` one
+  unless `live`; a provider that is not configured or whose catalogue fails is named in `notes`,
+  and the others still answer.
 - **forecast**: every forecast provider serving the farm's country, always included.
 - **backfill**: every provider declaring `Capabilities.backfill` (ERA5 through Copernicus, when
   its app exists). None installed is said in `notes`, never filled from another source.
@@ -23,16 +24,17 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_DOWN, ROUND_UP, Decimal
 
-from farmcore.core.weather.contract import BBox, Point, Station, WeatherProvider
+from farmcore.core.weather.contract import BBox, NotConfigured, Point, Station, WeatherProvider
 
 # IUGG mean radius R1 of the WGS84 ellipsoid, metres (Moritz, Geodetic Reference System 1980).
 EARTH_RADIUS_M = 6_371_008.8
 # Assumed: a station further than this from the pin rarely describes the farm's weather.
 SEARCH_RADIUS_M = 50_000
-# Assumed from the ICAO standard atmosphere lapse rate (6.5 °C/km, ICAO Doc 7488): 300 m is
-# about 2 °C of mean temperature, enough to shift disease and frost thresholds.
+# The source-selection acceptance criterion (spec R2, ticket "Choose weather sources
+# automatically from the farm pin"). Rationale: at the ICAO standard atmosphere lapse rate
+# (6.5 °C/km, ICAO Doc 7488) 300 m is about 2 °C of mean temperature.
 ELEVATION_BAND_M = Decimal(300)
 
 
@@ -92,12 +94,14 @@ def _explain(distance_m: float, difference: Decimal | None, farm_known: bool, st
         return f"{away}; farm elevation unknown, so elevation was not compared", False
     if difference is None or station.elevation_m is None:
         return f"{away}; station elevation unknown", False
-    metres = abs(difference).quantize(Decimal(1))
-    if difference == 0:
+    over = abs(difference) > ELEVATION_BAND_M
+    # Whole metres, rounded away from the band's edge, so 300.4 m never reads "300 m ... over".
+    metres = abs(difference).quantize(Decimal(1), ROUND_UP if over else ROUND_DOWN)
+    if metres == 0:
         height = "at the farm's elevation"
     else:
         height = f"{metres} m {'higher' if difference > 0 else 'lower'} than the farm"
-    if abs(difference) > ELEVATION_BAND_M:
+    if over:
         return f"{away}, but {height} (over {ELEVATION_BAND_M} m): down-ranked", True
     return f"{away}, {height}", False
 
@@ -132,6 +136,8 @@ def select(
     point: Point,
     country: str | None,
     farm_elevation: Decimal | None,
+    *,
+    live: bool = True,
 ) -> Selection:
     notes: list[str] = []
     found: dict[tuple[str, str], tuple[str, Station]] = {}
@@ -147,10 +153,15 @@ def select(
             forecast.append(Source(provider.name, "Model forecast for the farm's point"))
         if not capabilities.observations:
             continue
+        if capabilities.live_only and not live:
+            notes.append(f"{provider.name}: live only, not asked in replay")
+            continue
         try:
             for box in search_boxes(point):
                 for station in provider.discover_stations(box):
                     found[(provider.name, station.provider_station_id)] = (provider.name, station)
+        except NotConfigured:
+            notes.append(f"{provider.name}: not configured")
         except Exception as exc:  # one provider down never blocks the others or the pin
             notes.append(f"{provider.name}: station list unavailable ({type(exc).__name__})")
     nearby = [

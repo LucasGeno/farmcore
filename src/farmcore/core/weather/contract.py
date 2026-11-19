@@ -27,6 +27,11 @@ from decimal import Decimal
 from typing import Any, Protocol, runtime_checkable
 
 
+class NotConfigured(RuntimeError):
+    """The provider lacks the installation settings it needs (credentials, endpoint): not an
+    outage, so callers say "not configured" rather than "unavailable"."""
+
+
 @dataclass(frozen=True)
 class BBox:
     west: float
@@ -71,6 +76,7 @@ class Capabilities:
     variables: frozenset[str]  # CF standard names
     countries: frozenset[str] | None = None  # ISO 3166-1 alpha-2; None: anywhere
     backfill: bool = False  # gridded history for any point (ERA5): joined as the farm's backfill
+    live_only: bool = False  # asked over the network in live clock mode only, never in replay
 
 
 @dataclass(frozen=True)

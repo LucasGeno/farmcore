@@ -7,11 +7,14 @@ provider under it raises instead of replacing the first.
 `installed(manifests, settings)` is the registry of an installation: the providers the given
 (active) apps declare in `Manifest.weather_providers`, each built from the settings (its data
 directory, endpoint and credentials). A disabled app's provider is not offered; the core imports
-no app module except through those declarations.
+no app module except through those declarations. `timeout` (seconds) is passed to every factory
+that takes a `timeout`, bounding all of that provider's calls; a factory without one makes none
+over the network.
 """
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Iterable, Iterator
 
 from farmcore.core.manifest import Manifest, import_string
@@ -49,9 +52,13 @@ class Registry:
         return iter(self._providers.values())
 
 
-def installed(manifests: Iterable[Manifest], settings: Settings) -> Registry:
+def installed(
+    manifests: Iterable[Manifest], settings: Settings, timeout: float | None = None
+) -> Registry:
     registry = Registry()
     for manifest in manifests:
-        for factory in manifest.weather_providers:
-            registry.register(import_string(factory)(settings))
+        for path in manifest.weather_providers:
+            factory = import_string(path)
+            bounded = timeout is not None and "timeout" in inspect.signature(factory).parameters
+            registry.register(factory(settings, timeout=timeout) if bounded else factory(settings))
     return registry

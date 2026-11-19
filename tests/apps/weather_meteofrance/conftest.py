@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -30,15 +31,19 @@ def _hour(text: str) -> datetime:
 class Portal:
     """Answers like the portal; `fail` names an endpoint (`token`, `archive`) that errs,
     `pending` how many polls the archive file is not ready for (the first answer a 429 with
-    Retry-After), `expired` how many data calls refuse a valid token (it expired)."""
+    Retry-After), `expired` how many data calls refuse a valid token (it expired), `stall` how
+    many seconds the token answer takes."""
 
-    def __init__(self, fail: str | None = None, pending: int = 2, expired: int = 0) -> None:
-        self.fail, self.pending, self.expired = fail, pending, expired
+    def __init__(
+        self, fail: str | None = None, pending: int = 2, expired: int = 0, stall: float = 0.0
+    ) -> None:
+        self.fail, self.pending, self.expired, self.stall = fail, pending, expired, stall
         self.tokens = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path, params = request.url.path, request.url.params
         if path == "/token":
+            time.sleep(self.stall)  # a slow portal
             basic = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
             if self.fail == "token" or request.headers.get("authorization") != f"Basic {basic}":
                 return httpx.Response(401, json={"error": "invalid_client"})

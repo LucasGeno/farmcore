@@ -9,7 +9,8 @@ and keeps the result in `props["weather_sources"]`: the ranked stations with the
 forecast and backfill providers and notes. The owner can override the station and forecast
 choices and give the farm's elevation (`props["elevation_m"]`, never derived), which re-ranks
 the stored stations without asking a provider again. Moving the pin drops both, since they
-described the old point.
+described the old point. `discover` runs before anything is written, so the route can call the
+providers outside the farm's locks; `store_sources` keeps the result after `store`.
 """
 
 from __future__ import annotations
@@ -36,6 +37,8 @@ from farmcore.core.models.canonical import Farm
 from farmcore.core.weather.contract import Point, Station, WeatherProvider
 from farmcore.core.weather.selection import Candidate, Selection, rank, select
 
+# Station discovery on a pin save waits at most this long per provider, then notes it.
+DISCOVERY_TIMEOUT_SECONDS = 5.0
 SOURCES_KEY = "weather_sources"
 ELEVATION_KEY = "elevation_m"
 # Bounds of a typed farm elevation, metres: the Dead Sea shore to above any farmed land.
@@ -115,10 +118,14 @@ def choose(
     )
 
 
+def _point(choice: Choice) -> dict[str, float]:
+    return {"latitude": choice.latitude, "longitude": choice.longitude}
+
+
 def store(farm: Farm, choice: Choice) -> None:
     """Write the coordinates, time zone and country into the farm's `props`."""
     props: dict[str, Any] = dict(farm.props or {})
-    point = {"latitude": choice.latitude, "longitude": choice.longitude}
+    point = _point(choice)
     if props.get(LOCATION_KEY) != point:  # the old point's elevation and overrides are stale
         props.pop(ELEVATION_KEY, None)
         props.pop(SOURCES_KEY, None)
@@ -168,18 +175,28 @@ def _store_ranked(farm: Farm, sources: dict[str, Any], ranked: Sequence[Candidat
     farm.props = props
 
 
-def choose_sources(farm: Farm, providers: Sequence[WeatherProvider]) -> Selection | None:
-    """Select the farm's weather sources from its stored point and country (None without a
-    point) and keep them, with any override the owner made for this point."""
-    point = farm_location(farm)
-    if point is None:
-        return None
-    chosen = select(
+def discover(
+    providers: Sequence[WeatherProvider], farm: Farm, choice: Choice, *, live: bool
+) -> Selection:
+    """The sources for the point the owner is saving, before anything is written: the caller
+    runs it outside the farm's locks, since providers may answer over the network."""
+    return select(
         providers,
-        Point(point["latitude"], point["longitude"]),
-        farm_country(farm),
-        farm_elevation(farm),
+        Point(choice.latitude, choice.longitude),
+        choice.country,
+        farm_elevation(farm) if farm_location(farm) == _point(choice) else None,
+        live=live,
     )
+
+
+def _rerank(farm: Farm, pairs: Sequence[tuple[str, Station]]) -> list[Candidate]:
+    point = farm_location(farm) or {}
+    return rank(pairs, Point(point["latitude"], point["longitude"]), farm_elevation(farm))
+
+
+def store_sources(farm: Farm, chosen: Selection) -> None:
+    """Keep `chosen` for the farm's stored point (after `store`), with any override the owner
+    made for this point, ranked by the farm's elevation as it is now."""
     previous = (farm.props or {}).get(SOURCES_KEY) or {}
     sources = {
         "forecast": [{"provider": f.provider, "reason": f.reason} for f in chosen.forecast],
@@ -187,8 +204,7 @@ def choose_sources(farm: Farm, providers: Sequence[WeatherProvider]) -> Selectio
         "notes": list(chosen.notes),
         "override": previous.get("override", {}),
     }
-    _store_ranked(farm, sources, chosen.stations)
-    return chosen
+    _store_ranked(farm, sources, _rerank(farm, [(c.provider, c.station) for c in chosen.stations]))
 
 
 def sources_of(farm: Farm) -> dict[str, Any] | None:
@@ -199,20 +215,18 @@ def sources_of(farm: Farm) -> dict[str, Any] | None:
         return None
     override = sources.get("override") or {}
     stations, forecast = sources.get("stations", []), sources.get("forecast", [])
-    station = next(
-        (s for s in stations if f"{s['provider']}:{s['id']}" == override.get("station")),
-        stations[0] if stations else None,
+    # An override whose station or forecast is no longer listed (its app switched off) is not
+    # in effect: the automatic choice is shown, not labelled as the owner's.
+    picked = next(
+        (s for s in stations if f"{s['provider']}:{s['id']}" == override.get("station")), None
     )
-    model = next(
-        (f for f in forecast if f["provider"] == override.get("forecast")),
-        forecast[0] if forecast else None,
-    )
+    model = next((f for f in forecast if f["provider"] == override.get("forecast")), None)
     return {
         **sources,
-        "station": station,
-        "station_overridden": "station" in override,
-        "model": model,
-        "model_overridden": "forecast" in override,
+        "station": picked or (stations[0] if stations else None),
+        "station_overridden": picked is not None,
+        "model": model or (forecast[0] if forecast else None),
+        "model_overridden": model is not None,
         "farm_elevation_m": farm_elevation(farm),
     }
 
@@ -251,8 +265,8 @@ def override_sources(farm: Farm, *, station: str, forecast: str, elevation: str)
     else:
         props[ELEVATION_KEY] = float(height) if height % 1 else int(height)
     farm.props = props
-    point = farm_location(farm) or {}
-    ranked = rank(
+    ranked = _rerank(
+        farm,
         [
             (
                 s["provider"],
@@ -266,8 +280,6 @@ def override_sources(farm: Farm, *, station: str, forecast: str, elevation: str)
             )
             for s in stations
         ],
-        Point(point["latitude"], point["longitude"]),
-        height,
     )
     chosen = {"station": station, "forecast": forecast}
     _store_ranked(farm, {**sources, "override": {k: v for k, v in chosen.items() if v}}, ranked)

@@ -8,7 +8,9 @@ address search (only when `GEOCODER_BASE_URL` is configured; owner only, one req
 submit, with a descriptive User-Agent).
 
 Saving the point also chooses the farm's weather sources from the providers of the apps that are
-on now (`service.choose_sources`); the step shows them with their reasons. In Expert view the
+on now (`service.discover`, outside the farm's locks, each provider bounded by
+`service.DISCOVERY_TIMEOUT_SECONDS`; live-only providers only in live clock mode); the step shows
+them with their reasons. In Expert view the
 owner can override them: `POST /onboarding/weather-sources` (owner only).
 """
 
@@ -23,6 +25,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from farmcore.apps.onboarding import geocode, service
 from farmcore.core.access import Repo, ScopedRepository, require_farm_owner
+from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.farm_location import (
     Located,
     country_options,
@@ -30,6 +33,7 @@ from farmcore.core.farm_location import (
     location_needed,
 )
 from farmcore.core.identity import principal_for
+from farmcore.core.logs import lock_farm
 from farmcore.core.models.canonical import Farm
 from farmcore.core.registry import live_active
 from farmcore.core.tour import is_tour
@@ -156,12 +160,24 @@ def save_location(
             "mode": "manual",
         }
         return _page(request, repo, form=proposed, located=located, status=422)
-    farm = _farm(repo)
-    service.store(farm, choice)
+    settings = request.app.state.settings
     providers = weather_registry.installed(
-        live_active(repo.session, request.app.state.manifests), request.app.state.settings
+        live_active(repo.session, request.app.state.manifests),
+        settings,
+        timeout=service.DISCOVERY_TIMEOUT_SECONDS,
     )
-    service.choose_sources(farm, list(providers))
+    live = isinstance(get_clock(repo.session, settings), LiveClock)
+    farm = _farm(repo)
+    # Providers may answer over the network: end the request transaction first, so its farm
+    # locks (`get_repo`) never wait on them, then take them again and re-check the owner.
+    repo.session.commit()
+    chosen = service.discover(list(providers), farm, choice, live=live)
+    lock_farm(repo.session, repo.farm_id)
+    require_farm_owner(request, repo)
+    farm = _farm(repo)
+    repo.session.refresh(farm, with_for_update=True)
+    service.store(farm, choice)
+    service.store_sources(farm, chosen)
     return RedirectResponse(context_url(request, "/today/"), status_code=303)
 
 

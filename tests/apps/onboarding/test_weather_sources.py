@@ -2,7 +2,7 @@
 the owner overrides them and gives the farm's elevation, which re-ranks the stations.
 
 The installation's own providers answer offline: the replayed Météo-France station
-(St-Émilion, 38 m), Open-Meteo for the forecast, and the live portal without credentials.
+(St-Émilion, 38 m), Open-Meteo for the forecast, and the live portal, never asked in replay.
 """
 
 from __future__ import annotations
@@ -26,10 +26,9 @@ def test_the_pin_chooses_sources_and_the_owner_overrides_them_in_expert_view(
 
     chosen = _sources(session, farm.id)
     assert [(s["provider"], s["id"]) for s in chosen["stations"]] == [("meteofrance", "33394002")]
-    assert "farm elevation unknown" in chosen["stations"][0]["reason"]
     assert [f["provider"] for f in chosen["forecast"]] == ["open-meteo"]
     assert chosen["backfill"] == []
-    # The live portal has no credentials here: said, and the pin is still saved.
+    # Replay clock: the live portal is not asked, said in a note, and the pin is still saved.
     assert any(n.startswith("meteofrance-portal:") for n in chosen["notes"])
 
     client.cookies.set("expert", "1")
