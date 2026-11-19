@@ -5,7 +5,9 @@ Failure model (one owning test each; restore replay is owned by tests/instances/
 - a forged or mangled token authenticates, or the refusal echoes what was sent;
 - a token holds a scope its creator lacks (`*`, audit, writes), or a non-owner issues one;
 - a token reads another farm;
-- a revoked or expired token, or one whose creator lost ownership, still works on the next call.
+- a revoked or expired token, or one whose creator lost ownership, still works on the next call;
+- every call writes the token row (an HTTP agent makes many): `last_used_at` moves at most once a
+  minute.
 """
 
 from __future__ import annotations
@@ -151,6 +153,21 @@ def test_sharing_lists_the_token_with_last_use_and_reads_and_revoke_ends_the_nex
     assert revoked.status_code == 303
     with pytest.raises(TokenRejected):
         authenticate_token(session, raw)
+
+
+@pytest.mark.parametrize(("seconds_ago", "rewritten"), [(30, False), (90, True)])
+def test_last_use_is_written_at_most_once_a_minute(
+    session, demo, owner, seconds_ago, rewritten
+) -> None:
+    grant, raw = _issue(session, demo.farm, owner)
+    token = session.scalar(select(AccessToken).where(AccessToken.grant_id == grant.id))
+    before = datetime.now(UTC) - timedelta(seconds=seconds_ago)
+    token.last_used_at = before
+    session.commit()
+
+    authenticate_token(session, raw)
+
+    assert (token.last_used_at != before) is rewritten
 
 
 def _expire(session, grant, creator):

@@ -137,6 +137,23 @@ class Settings(BaseSettings):
     openai_compatible_api_key: SecretStr | None = None
     openai_compatible_model: str = ""
     whisper_model: str = "small"
+    # `farmcore mcp --http`: the farm's tools for remote agents over MCP Streamable HTTP at
+    # /mcp, with agent tokens (issued on Sharing). Off unless turned on; loopback unless a host
+    # is set. Beyond loopback, put a TLS reverse proxy in front: the token is a bearer secret.
+    mcp_http_enabled: bool = False
+    mcp_http_host: str = "127.0.0.1"
+    mcp_http_port: int = Field(8001, ge=0, le=65535)
+    # Browser origins allowed to call /mcp (DNS-rebinding defence; JSON list, `:*` matches any
+    # port). Empty: any request carrying an Origin is refused. CORS stays closed regardless.
+    mcp_http_allowed_origins: list[str] = Field(default_factory=list)
+    # Host headers accepted; empty: the loopback names. Behind a proxy, its public host name.
+    mcp_http_allowed_hosts: list[str] = Field(default_factory=list)
+    # Assumed product limits: requests per minute per token and per client address, the
+    # largest request body, and concurrent connections (uvicorn answers 503 beyond it).
+    mcp_http_rate_per_token: int = Field(120, ge=1)
+    mcp_http_rate_per_ip: int = Field(300, ge=1)
+    mcp_http_max_body_bytes: int = Field(64 * 1024, ge=1024)
+    mcp_http_max_connections: int = Field(32, ge=1)
 
     @field_validator("database_url", mode="before")
     @classmethod

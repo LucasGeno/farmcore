@@ -125,6 +125,12 @@ the OS user or a shell-capable agent that can read the process's `DATABASE_URL`,
 every farm. Run it as `docker compose exec -T -e FARMCORE_TOKEN app farmcore mcp` (over `ssh`
 for a remote host) so `DATABASE_URL` stays in the container, and never hand stdio to anyone but
 the operator ([SECURITY.md](../SECURITY.md#mcp-over-stdio-is-an-operator-transport)).
+Remote agents use `farmcore mcp --http`: Streamable HTTP at `/mcp`, off unless
+`MCP_HTTP_ENABLED`, on loopback unless `MCP_HTTP_HOST` is set, stateless with JSON responses.
+Each request carries its own bearer token in `Authorization` (never the URL), passes `Host` and
+`Origin` allowlists, per-address and per-token rate limits and a body limit, and every list and
+call re-checks that token. Details: `core/mcp_http.py`,
+[SECURITY.md](../SECURITY.md#mcp-over-http-is-for-remote-agents).
 
 ## Stack
 

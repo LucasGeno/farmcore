@@ -125,7 +125,7 @@ read that URL, from a client's config file or the process environment, can read 
 tokens and rewrite the access log, and token scoping no longer applies.
 
 - Treat stdio as installation-operator access. Never give it to a farmer who is not the
-  operator, or to a third party; they get remote MCP over HTTP with a token once it ships.
+  operator, or to a third party; they get remote MCP over HTTP with a token (below).
 - Keep `DATABASE_URL` inside the container: point the client at
   `ssh <host> docker compose -f <path>/docker-compose.yml exec -T -e FARMCORE_TOKEN app
   farmcore mcp`, with only `FARMCORE_TOKEN` in the client's config, never `DATABASE_URL`. ssh
@@ -134,6 +134,33 @@ tokens and rewrite the access log, and token scoping no longer applies.
   and shell history show it.
 - Do not run a shell-capable agent on a machine whose files or environment hold `DATABASE_URL`.
 - Use the runtime role's URL, never the database owner's.
+
+### MCP over HTTP is for remote agents
+
+`farmcore mcp --http` serves the same tools over Streamable HTTP at `/mcp`. It is off unless
+`MCP_HTTP_ENABLED=true` and listens on `127.0.0.1` unless `MCP_HTTP_HOST` says otherwise. The
+process holds `DATABASE_URL` as the web app does; the agent holds only its token, so this is the
+transport for anyone who is not the operator. Each request is checked before any MCP message is
+read (`core/mcp_http.py`):
+
+- **Token.** `Authorization: Bearer <token>` only. A request with any query string is refused
+  (400) without being authenticated, so a token pasted into a URL never works and never reaches
+  a log. Missing or wrong: 401. Every tool list and call re-checks the request's own token, so a
+  revoked or expired token fails its next request; the server keeps no session to take over and
+  no response stream (stateless, JSON responses; GET and DELETE get 405).
+- **DNS rebinding.** `Origin` must be in `MCP_HTTP_ALLOWED_ORIGINS` when present (403) and `Host`
+  in `MCP_HTTP_ALLOWED_HOSTS` (421; the loopback names by default). The server never sends CORS
+  headers, so a browser page can neither read a response nor preflight a token-bearing request.
+- **Limits** (assumed product values): `MCP_HTTP_RATE_PER_IP` requests a minute per client
+  address (checked before any token lookup), `MCP_HTTP_RATE_PER_TOKEN` per token (429 with
+  `Retry-After`), `MCP_HTTP_MAX_BODY_BYTES` per request (413), `MCP_HTTP_MAX_CONNECTIONS`
+  concurrent connections (503). Counters live in the process: several processes multiply them.
+- **Logs.** uvicorn's access log is off; refusals log no header, URL or body.
+
+Beyond loopback, serve it only behind a TLS reverse proxy (the token is a bearer secret), set
+`MCP_HTTP_ALLOWED_HOSTS` to the public host name, `FORWARDED_ALLOW_IPS` to the proxy so the
+per-address limit sees clients, and let the proxy bound slow requests: slow-drip headers and
+bodies are bounded here only by the connection limit and a 5 s keep-alive timeout.
 
 ## Deployment checklist
 
