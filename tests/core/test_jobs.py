@@ -1,4 +1,4 @@
-"""Manifest jobs: replay `step_to`, `run_now`, live APScheduler registration."""
+"""Manifest jobs: replay `step_to`, `run_now`, and the live jobs `farmcore worker` runs."""
 
 from __future__ import annotations
 
@@ -120,51 +120,6 @@ def test_run_now_runs_one_named_job_at_the_current_clock(session_factory, settin
     assert jobs.run_now(session_factory, manifests, "chat.push_advice", settings) is None
 
 
-def _started_app(settings, session_factory, mode: str):
-    from fastapi.testclient import TestClient
-
-    from farmcore.main import create_app
-
-    manifests = [_manifest("a", "record"), _manifest("b", "record_b", timedelta(minutes=15))]
-    app = create_app(
-        settings.model_copy(update={"clock_mode": mode}),
-        manifests=manifests,
-        session_factory=session_factory,
-    )
-    return app, TestClient(app)
-
-
-def test_live_mode_registers_one_scheduler_job_per_jobspec(settings, session_factory) -> None:
-    app, client = _started_app(settings, session_factory, "live")
-    with client:
-        scheduler = app.state.scheduler
-        assert scheduler.running
-        scheduled = {j.id: j.trigger.interval for j in scheduler.get_jobs()}
-        assert scheduled == {"a.job": timedelta(hours=1), "b.job": timedelta(minutes=15)}
-    assert not scheduler.running  # shutdown on lifespan exit
-    assert fake_jobs.CALLS == []  # nothing ran at start
-
-
-def test_live_jobs_follow_the_shared_clock_mode(settings, session_factory) -> None:
-    """A step (web or CLI) switches clock_state to replay: live ticks then skip until live."""
-    from farmcore.core.clock import set_live, set_replay
-    from farmcore.db import session_scope
-
-    app, client = _started_app(settings, session_factory, "live")
-    with client:
-        job = app.state.scheduler.get_job("a.job")
-        with session_scope(session_factory) as s:
-            set_replay(s, T0, settings)
-        job.func(*job.args)
-        assert fake_jobs.CALLS == []
-
-        with session_scope(session_factory) as s:
-            set_live(s, settings)
-        job.func(*job.args)
-        ((label, now, _),) = fake_jobs.CALLS
-        assert label == "record" and abs(now - datetime.now(UTC)) < timedelta(seconds=5)
-
-
 def _fake_app_package(tmp_path, monkeypatch) -> str:
     """Importable package with one app `orchard` whose job records (`fake_jobs.record`)."""
     pkg = f"fake_job_apps_{uuid.uuid4().hex[:8]}"
@@ -246,37 +201,25 @@ def test_replay_command_skips_jobs_of_uninstalled_apps(
             s.commit()
 
 
-def test_replay_mode_starts_no_scheduler(settings, session_factory) -> None:
-    app, client = _started_app(settings, session_factory, "replay")
-    with client:
-        assert app.state.scheduler is None
-
-
-@pytest.mark.parametrize("trigger", ["run_now", "live_tick"])
-def test_immediate_jobs_wait_for_clock_coordinator_before_reading_time(
-    committed_session_factory, settings, trigger
+def test_run_now_waits_for_clock_coordinator_before_reading_time(
+    committed_session_factory, settings
 ):
     from sqlalchemy import text
 
-    from farmcore.core.clock import set_live, set_replay
+    from farmcore.core.clock import set_replay
     from farmcore.db import session_scope
 
     factory = committed_session_factory
     manifest = _manifest("a", "record")
     with session_scope(factory) as session:
         set_replay(session, T0, settings)
-        if trigger == "live_tick":
-            set_live(session, settings)
     started = threading.Event()
     errors = []
 
     def immediate():
         started.set()
         try:
-            if trigger == "run_now":
-                jobs.run_now(factory, [manifest], "a.job", settings)
-            else:
-                jobs._run_live(factory, manifest.jobs[0], settings)
+            jobs.run_now(factory, [manifest], "a.job", settings)
         except Exception as exc:
             errors.append(type(exc).__name__)
 
@@ -296,9 +239,91 @@ def test_immediate_jobs_wait_for_clock_coordinator_before_reading_time(
         assert not thread.is_alive()
         assert premature == []
         assert errors == []
-        if trigger == "run_now":
-            assert [c[1] for c in fake_jobs.CALLS] == [T0 + timedelta(days=1)]
-        else:
-            assert fake_jobs.CALLS == []  # tick sees replay after the coordinator released
+        assert [c[1] for c in fake_jobs.CALLS] == [T0 + timedelta(days=1)]
     finally:
         thread.join(timeout=5)
+
+
+def test_run_now_in_live_queues_the_farm_and_answers_within_its_wait(
+    committed_session_factory, settings
+) -> None:
+    """The chat confirm path must answer even when no worker runs: queued, not run in-process.
+    With a worker it reports the evaluation that began after the call."""
+    from sqlalchemy import text
+
+    from farmcore.core import clock
+    from farmcore.core.models.canonical import Farm
+    from farmcore.db import session_scope
+    from tests.task_drain import drain
+
+    spec = JobSpec(
+        "a.job", "tests.core.fake_jobs:record", timedelta(hours=1), "tests.core.fake_jobs:publish"
+    )
+    manifests = [Manifest(name="a", version="0.1.0", jobs=(spec,))]
+    with session_scope(committed_session_factory) as session:
+        farm = Farm(name="Live")
+        session.add(farm)
+        clock.set_live(session, settings)
+
+    pending = jobs.run_now(
+        committed_session_factory, manifests, "a.job", settings, farm_ids=(farm.id,), wait=0.2
+    )
+    assert pending is not None and not pending.ok and fake_jobs.CALLS == []
+    with committed_session_factory() as session:
+        queued = session.execute(text("SELECT count(*) FROM procrastinate_jobs")).scalar_one()
+    assert queued == 1
+    # An evaluation that began before the call (it may not see the new log) does not count.
+    assert drain(committed_session_factory, settings, manifests) == 1
+    stale = jobs.run_now(
+        committed_session_factory, manifests, "a.job", settings, farm_ids=(farm.id,), wait=0.2
+    )
+    assert stale is not None and not stale.ok
+
+    # A worker drains the queue while run_now waits: the answer is the evaluation it began after.
+    stop = threading.Event()
+
+    def worker() -> None:
+        while not stop.wait(0.02):
+            drain(committed_session_factory, settings, manifests)
+
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        done = jobs.run_now(
+            committed_session_factory, manifests, "a.job", settings, farm_ids=(farm.id,), wait=10
+        )
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+    assert done is not None and done.ok
+
+
+def test_the_worker_runs_each_live_job_once_per_interval_and_never_while_replaying(
+    session_factory, settings, monkeypatch
+) -> None:
+    """Installation-wide jobs (no `task`) run on the worker. Their schedule is persisted, so a
+    restarted or second worker neither repeats nor forgets one; a job is first due one interval
+    after the worker first sees it, as under the old in-process scheduler."""
+    from farmcore.core.clock import LiveClock, set_live, set_replay
+    from farmcore.db import session_scope
+
+    manifests = [_manifest("a", "record")]
+    wall = [datetime(2026, 11, 19, 8, 0, tzinfo=UTC)]
+    monkeypatch.setattr(LiveClock, "now", lambda self: wall[0])
+    with session_scope(session_factory) as session:
+        set_live(session, settings)
+
+    def ran(after: timedelta) -> list[str]:
+        wall[0] += after
+        return [r.name for r in jobs.run_due_live(session_factory, manifests, settings)]
+
+    assert ran(timedelta(0)) == []  # first seen
+    assert ran(timedelta(minutes=59)) == []
+    assert ran(timedelta(minutes=1)) == ["a.job"]
+    assert ran(timedelta(0)) == []  # another worker, or a restart, at the same time
+    with session_scope(session_factory) as session:
+        set_replay(session, T0, settings)
+    assert ran(timedelta(hours=2)) == []
+    assert [(label, now) for label, now, _ in fake_jobs.CALLS] == [
+        ("record", datetime(2026, 11, 19, 9, 0, tzinfo=UTC))
+    ]

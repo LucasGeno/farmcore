@@ -7,7 +7,7 @@
 | `db` | PostgreSQL 17 + PostGIS; no published port |
 | `migrate` | One-shot `farmcore migrate` as the database owner, then exits; see below |
 | `app` | The web app on `127.0.0.1:8000`; starts after `migrate` exits 0, never migrates |
-| `worker` | Durable live tasks (the live forecast fetch); also waits for `migrate`; idle in replay |
+| `worker` | All live background work (forecast fetch, station ingest, advice, push, draft expiry); also waits for `migrate`; idle in replay |
 | `bot` | Telegram long-polling bot; only with `--profile telegram`; also waits for `migrate` |
 | `backup` | Daily `farmcore backup`: one encrypted bundle into the `backups` volume, kept 7 days |
 

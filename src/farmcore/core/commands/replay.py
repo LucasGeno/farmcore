@@ -45,7 +45,7 @@ def register(cli: typer.Typer) -> None:
             if live:
                 with session_scope(factory) as session:
                     set_live(session, settings)
-                typer.echo("clock mode: live (restart web and bot to start the scheduler)")
+                typer.echo("clock mode: live (`farmcore worker` runs the live jobs)")
                 return
             try:
                 t = parse_local(to, settings.display_tz)

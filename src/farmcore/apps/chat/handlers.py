@@ -50,6 +50,8 @@ logger = logging.getLogger(__name__)
 SOURCE_APP = "chat"
 PURPOSE = "chat"
 ADVISOR_JOB = "advisor.evaluate"
+# Live mode: how long a confirm waits for the worker's new evaluation before answering anyway.
+ADVICE_WAIT_SECONDS = 3.0
 CONFIRM = "confirm"
 CANCEL = "cancel"
 # The signed-in farmer in the web assistant panel: the same draft → ✅ path as a Telegram chat,
@@ -641,12 +643,22 @@ def _on_callback(deps: ChatDeps, callback: Callback) -> Outgoing:
             if check_line
             else "\nChecks unavailable; review the register."
         )
-    # Committed above: the job opens its own session and must see the done log.
+    # Committed above: the evaluation (here in replay, the worker's task in live) must see the log.
     run = jobs.run_now(
-        deps.session_factory, deps.manifests, ADVISOR_JOB, deps.settings, farm_ids=(farm_id,)
+        deps.session_factory,
+        deps.manifests,
+        ADVISOR_JOB,
+        deps.settings,
+        farm_ids=(farm_id,),
+        wait=ADVICE_WAIT_SECONDS,
     )
     if run is not None:
-        text += " Advice updated." if run.ok else " Advice will update at the next step."
+        if run.ok:
+            text += " Advice updated."
+        elif run.error == jobs.QUEUED:
+            text += " Advice will update in a moment."
+        else:
+            text += " Advice will update at the next step."
     return _with_links(text, deps.settings.public_base_url, farm_id)
 
 

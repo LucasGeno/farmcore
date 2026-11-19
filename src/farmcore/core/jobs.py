@@ -1,4 +1,4 @@
-"""Manifest job runner: replay `step_to`, `run_now`, live APScheduler."""
+"""Manifest job runner: replay `step_to`, `run_now`, and the live jobs `farmcore worker` runs."""
 
 from __future__ import annotations
 
@@ -9,17 +9,21 @@ from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 
-from apscheduler.schedulers.background import BackgroundScheduler
-from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.orm import Session, sessionmaker
 
+from farmcore.core import tasks
 from farmcore.core.clock import LiveClock, clock_row, get_clock, set_replay
 from farmcore.core.manifest import JobContext, JobSpec, Manifest, import_string
 from farmcore.db import session_scope
 from farmcore.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+# `clock_state.job_runs` key: when each installation-wide job last ran live.
+LIVE_LAST_RUN = "live_last_run"
+# `JobRun.error` of a live `run_now` whose queued task did not publish within its wait.
+QUEUED = "queued"
 
 # pg_advisory_xact_lock key serialising `step_to` across processes (web, bot, CLI): "farm".
 STEP_LOCK_KEY = 0x6661726D
@@ -167,11 +171,28 @@ def run_now(
     settings: Settings,
     *,
     farm_ids: tuple[int, ...] | None = None,
+    wait: float = 0.0,
 ) -> JobRun | None:
-    """Run job `name` once at the current clock; None when no manifest declares it."""
+    """Run job `name` once at the current clock; None when no manifest declares it.
+
+    In live mode a durable job (`JobSpec.task`) for given farms is queued for `farmcore worker`
+    instead, never run here: the call then waits at most `wait` seconds for an evaluation that
+    began after it to publish for every farm, and is not ok ("queued") if none did in time."""
     spec = next((s for m in manifests for s in m.jobs if s.name == name), None)
     if spec is None:
         return None
+    if spec.task is not None and farm_ids:
+        started = time.perf_counter()
+        with session_scope(session_factory) as session:
+            live = isinstance(get_clock(session, settings), LiveClock)
+            if live:
+                since = session.scalar(text("SELECT now()"))
+                for farm_id in farm_ids:
+                    tasks.enqueue(session, spec.name, farm_id)
+        if live:
+            ok = tasks.wait_published(session_factory, spec.name, farm_ids, since, wait)
+            ms = round((time.perf_counter() - started) * 1000)
+            return JobRun(name=spec.name, ok=ok, error=None if ok else QUEUED, ms=ms)
     with session_scope(session_factory) as coordinator:
         coordinator.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": STEP_LOCK_KEY})
         with session_factory() as session:
@@ -179,50 +200,36 @@ def run_now(
         return _execute(session_factory, spec, now, settings, farm_ids=farm_ids)
 
 
-def _run_live(session_factory: sessionmaker[Session], spec: JobSpec, settings: Settings) -> None:
-    """One live tick. Re-reads the shared mode: after a step (web or CLI) switched clock_state
-    to replay, ticks skip until it is live again, so jobs never run at a different "now"."""
+def run_due_live(
+    session_factory: sessionmaker[Session], manifests: Sequence[Manifest], settings: Settings
+) -> list[JobRun]:
+    """What `farmcore worker` does each tick for jobs without a durable task: in live mode, run
+    each one whose interval has passed since its last live run, in manifest order, at the wall
+    time. The step lock is held throughout, so the mode cannot change under a job and two
+    workers never both run one; the schedule is kept in `clock_state`, so a restart forgets
+    nothing. A job is first due one interval after a worker first sees it (the replay schedule
+    is separate). Only a successful run moves its schedule on, as in `step_to`."""
     with session_scope(session_factory) as coordinator:
         coordinator.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": STEP_LOCK_KEY})
-        with session_factory() as session:
+        with session_scope(session_factory) as session:
             clock = get_clock(session, settings)
-        if not isinstance(clock, LiveClock):
-            logger.debug("job %s skipped: clock is in replay mode", spec.name)
-            return
-        _execute(session_factory, spec, clock.now(), settings)
-
-
-def start(app: FastAPI) -> None:
-    """Live mode (per `clock_state`): one APScheduler interval job per JobSpec without a durable
-    task (`farmcore worker` runs those), first run one interval after start; each tick skips
-    while clock_state is replay. Replay mode schedules nothing; `step_to` drives the jobs."""
-    settings: Settings = app.state.settings
-    session_factory: sessionmaker[Session] = app.state.session_factory
-    app.state.scheduler = None
-    with session_factory() as session:
-        live = isinstance(get_clock(session, settings), LiveClock)
-    if not live:
-        return
-    scheduler = BackgroundScheduler(timezone=UTC)
-    for manifest in app.state.manifests:
-        for spec in manifest.jobs:
-            if spec.task is not None:
-                continue  # durable: `farmcore worker` plans and runs it (core/tasks.py)
-            scheduler.add_job(
-                _run_live,
-                "interval",
-                seconds=spec.interval.total_seconds(),
-                id=spec.name,
-                name=spec.name,
-                args=(session_factory, spec, settings),
-                max_instances=1,
-                coalesce=True,
-            )
-    scheduler.start()
-    app.state.scheduler = scheduler
-
-
-def shutdown(app: FastAPI) -> None:
-    scheduler: BackgroundScheduler | None = getattr(app.state, "scheduler", None)
-    if scheduler is not None and scheduler.running:
-        scheduler.shutdown(wait=False)
+            if not isinstance(clock, LiveClock):
+                return []
+            now = clock.now()
+            last_runs = dict(clock_row(session, settings).job_runs.get(LIVE_LAST_RUN, {}))
+        runs = []
+        for spec in (s for m in manifests for s in m.jobs if s.task is None):
+            prev = last_runs.get(spec.name)
+            if prev is None:
+                last_runs[spec.name] = now.isoformat()
+                continue
+            if not _is_due(spec, datetime.fromisoformat(prev), now):
+                continue
+            run = _execute(session_factory, spec, now, settings)
+            runs.append(run)
+            if run.ok:
+                last_runs[spec.name] = now.isoformat()
+        with session_scope(session_factory) as session:
+            row = clock_row(session, settings)
+            row.job_runs = {**row.job_runs, LIVE_LAST_RUN: last_runs}
+        return runs

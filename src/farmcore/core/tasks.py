@@ -2,7 +2,10 @@
 
 A manifest job with a `task` (`JobSpec.task`) is durable: in live mode its job function plans,
 enqueueing one task per farm in the caller's transaction (`enqueue`), and `farmcore worker`
-processes run those tasks. Replay never enqueues; `step_to` stays in-process and deterministic.
+processes run those tasks. A planner usually queues only farms that are due (`enqueue_due`).
+Replay never enqueues; `step_to` stays in-process and deterministic. The worker also runs the
+installation-wide jobs (no `task`) when they are due (`jobs.run_due_live`): nothing runs live work
+in the web process.
 
 The queue is Procrastinate (MIT), and this is the only module that imports it, so swapping it for
 a plain `SKIP LOCKED` table changes nothing else. FarmCore does not trust the library's job status
@@ -26,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -56,6 +60,8 @@ TICK_SECONDS = 15.0
 # minute by default) lets planning queue the farm again: one fetch per crash, not two.
 STALLED_SECONDS = 20.0
 HEARTBEAT_SECONDS = 5.0
+# How often `wait_published` looks for a published attempt.
+POLL_SECONDS = 0.05
 # Enqueue only: with `connection=` the manager never opens a pool of its own.
 _ENQUEUE = JobManager(procrastinate.SyncPsycopgConnector())
 
@@ -135,6 +141,54 @@ def in_flight(session: Session, task_name: str) -> set[int]:
             {"n": task_name},
         ).scalars()
     )
+
+
+def enqueue_due(
+    session: Session, task_name: str, interval: timedelta, farm_ids: Sequence[int]
+) -> list[int]:
+    """Queue `task_name` for each of `farm_ids` that is due, in the session's transaction; the
+    farms queued. Due: no attempt published within `interval` in the current clock generation
+    (a run before a live/replay switch does not count) and none in flight. Only persisted state
+    decides, so a restarted worker plans exactly what the stopped one would have."""
+    done = set(
+        session.execute(
+            text(
+                "SELECT a.farm_id FROM task_attempt a JOIN clock_state c "
+                "ON c.id = 1 AND c.generation = a.clock_generation "
+                "WHERE a.task_name = :n AND a.farm_id = ANY(:f) "
+                "AND a.finished_at > now() - :i"
+            ),
+            {"n": task_name, "f": list(farm_ids), "i": interval},
+        ).scalars()
+    )
+    skip = done | in_flight(session, task_name)
+    return [f for f in farm_ids if f not in skip and enqueue(session, task_name, f)]
+
+
+def wait_published(
+    session_factory: sessionmaker[Session],
+    task_name: str,
+    farm_ids: Sequence[int],
+    since: datetime,
+    wait: float,
+) -> bool:
+    """Whether, within `wait` seconds, an attempt of `task_name` that began at or after `since`
+    has published for every farm of `farm_ids`."""
+    deadline = time.monotonic() + wait
+    while True:
+        with session_factory() as session:
+            published = session.execute(
+                text(
+                    "SELECT count(DISTINCT farm_id) FROM task_attempt WHERE task_name = :n "
+                    "AND farm_id = ANY(:f) AND started_at >= :s AND finished_at IS NOT NULL"
+                ),
+                {"n": task_name, "f": list(farm_ids), "s": since},
+            ).scalar_one()
+        if published == len(set(farm_ids)):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
 
 
 def begin_attempt(
@@ -285,6 +339,27 @@ async def _housekeeping(
         await asyncio.sleep(tick)
 
 
+async def _live_jobs(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    manifests: Sequence[Manifest],
+    tick: float,
+) -> None:
+    """The installation-wide jobs, in their own loop: a long one (the weekly catalog download)
+    never delays planning or the stalled-task check."""
+    from farmcore.core import jobs  # jobs imports this module
+
+    while True:
+        try:
+            for run in await asyncio.to_thread(
+                jobs.run_due_live, session_factory, manifests, settings
+            ):
+                logger.info("job %s %s", run.name, "ok" if run.ok else f"failed ({run.error})")
+        except Exception as exc:  # the database may be briefly unreachable: next tick
+            logger.error("live jobs failed (%s)", type(exc).__name__)
+        await asyncio.sleep(tick)
+
+
 def run_worker(
     settings: Settings,
     session_factory: sessionmaker[Session],
@@ -295,16 +370,20 @@ def run_worker(
     stalled: float = STALLED_SECONDS,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> None:
-    """Run tasks until SIGTERM or SIGINT, planning due work and retrying stalled tasks every
-    `tick` seconds. `concurrency` tasks run at once: more than the farms expected to be slow at
-    the same time, so one farm's slow provider never holds up another farm's task."""
+    """Run tasks until SIGTERM or SIGINT, planning due work, retrying stalled tasks and running
+    the due installation-wide jobs (`jobs.run_due_live`) every `tick` seconds. `concurrency`
+    tasks run at once: more than the farms expected to be slow at the same time, so one farm's
+    slow provider never holds up another farm's task."""
     app = make_app(settings, session_factory, manifests)
 
     async def main() -> None:
         async with app.open_async():
-            housekeeping = asyncio.create_task(
-                _housekeeping(app, session_factory, settings, manifests, tick, stalled)
-            )
+            housekeeping = [
+                asyncio.create_task(
+                    _housekeeping(app, session_factory, settings, manifests, tick, stalled)
+                ),
+                asyncio.create_task(_live_jobs(session_factory, settings, manifests, tick)),
+            ]
             try:
                 await app.run_worker_async(
                     queues=[QUEUE],
@@ -314,7 +393,8 @@ def run_worker(
                     install_signal_handlers=True,
                 )
             finally:
-                housekeeping.cancel()
+                for loop in housekeeping:
+                    loop.cancel()
 
     logger.info("worker %s: %d task slot(s)", os.getpid(), concurrency)
     asyncio.run(main())

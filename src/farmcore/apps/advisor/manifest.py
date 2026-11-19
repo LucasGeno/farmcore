@@ -1,6 +1,7 @@
 """Manifest of app `advisor`: the `advisor.evaluate` job, advice rows, the parcel advice card.
 
-The job name `advisor.evaluate` is a contract: chat calls `jobs.run_now` with it after a confirm.
+The job name `advisor.evaluate` is a contract: chat calls `jobs.run_now` with it after a confirm
+(in live mode that queues the farm's durable task and waits briefly for it).
 """
 
 from datetime import timedelta
@@ -24,6 +25,7 @@ MANIFEST = Manifest(
             name=JOB_NAME,
             func="farmcore.apps.advisor.job:evaluate",
             interval=EVALUATION_INTERVAL,
+            task="farmcore.apps.advisor.job:evaluate_live",
         ),
     ),
     routes=(

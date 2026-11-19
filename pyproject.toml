@@ -18,7 +18,6 @@ dependencies = [
     "jinja2",
     "python-multipart",
     "httpx",
-    "apscheduler>=3,<4",
     "python-telegram-bot>=21,<23",
     "faster-whisper",
     "typer",

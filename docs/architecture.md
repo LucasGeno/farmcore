@@ -37,7 +37,8 @@ database, a small core and installable apps, in the style of Odoo.
 - **Clock and jobs.** A `Clock` with live and replay modes. The station feed, the advisor and
   the advice push are jobs declared by manifests; ISOXML files are imported by upload or CLI
   through the same `ext_id` / `log_source` pipeline. In replay, a step advances the clock and runs
-  due jobs in manifest order; this is how the demo replays the 2024 season.
+  due jobs in manifest order; this is how the demo replays the 2024 season. In live mode no job
+  runs in the web process: `farmcore worker` runs them ([durable live tasks](#durable-live-tasks)).
 - **Access.** Farm data is read through `ScopedRepository(farm, grant)`: it checks the farm and
   consent scopes (`fields:read`, `logs:read`, `register:read`, …) and writes an `access_log` row
   for each read. Third-party grants are read-only, cannot read the audit log, and are revocable;
@@ -105,7 +106,7 @@ explicit confirm.
 ## Stack
 
 Python 3.12, FastAPI, SQLAlchemy 2 + GeoAlchemy2, Alembic, Pydantic, Jinja + HTMX + Tailwind,
-MapLibre GL, PostgreSQL 17 + PostGIS, APScheduler (live mode), Procrastinate (durable live tasks), python-telegram-bot,
+MapLibre GL, PostgreSQL 17 + PostGIS, Procrastinate (live background work), python-telegram-bot,
 faster-whisper, Docker. Front-end libraries and fonts are bundled
 ([inventory](../src/farmcore/core/static/vendor/README.md)); map tiles come from IGN and
 OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
@@ -113,8 +114,8 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 ## Deliberately simple, with upgrade paths
 
 - One linear migration chain (per-app branches later).
-- An in-process scheduler for most jobs; live forecast fetching is already a durable task
-  (Procrastinate, with a plain `SKIP LOCKED` table as the documented exit).
+- Live background work runs on one Postgres-backed queue (Procrastinate, with a plain
+  `SKIP LOCKED` table as the documented exit); no broker, no in-process scheduler.
 - A plain `observation` table (a TimescaleDB hypertable has the same schema).
 - One administrator per installation: grants show the consent model but are not yet
   authenticated multi-tenant access.
@@ -167,13 +168,23 @@ service keeps the full archive.
 
 ### Durable live tasks
 
-A manifest job with a `task` (`JobSpec.task`) is durable live work; today only
-`forecast.fetch_live`. In live mode its job function only enqueues, in the caller's transaction
-(a rolled-back request queues nothing): request handlers and the worker's tick never fetch.
+A manifest job with a `task` (`JobSpec.task`) is durable live work, one task per farm:
+`forecast.fetch_live`, `stations.ingest_meteofrance` and `advisor.evaluate`. In live mode its job
+function only enqueues, in the caller's transaction (a rolled-back request queues nothing):
+request handlers and the worker's tick never fetch, ingest or evaluate. A farm is due when no
+attempt published within the job's interval in the current clock generation, so a restarted
+worker forgets nothing and switching replay → live makes every farm due at once.
 `farmcore worker` (the Compose `worker` service) plans due work every 15 seconds, runs the
 queued tasks (four at once by default, so one farm's slow provider does not hold up another's)
-and retries the tasks of a worker whose heartbeat stopped, at most three runs in all. Replay
-never enqueues: `step_to` stays in-process and deterministic.
+and retries the tasks of a worker whose heartbeat stopped, at most three runs in all.
+
+`jobs.run_now` for given farms (after a chat confirm, a correction or a completed job) queues
+their task instead of evaluating in the request; the chat confirm waits up to three seconds
+for the new advice, then answers anyway. The jobs without a task (`drafts.expire`,
+`chat.push_advice`, `catalog_fr_ephy.import`) run on the worker too, under the step lock, when
+their interval has passed since their last live run (kept in `clock_state`; a job is first due
+one interval after a worker first sees it). Replay never enqueues: `step_to` and `run_now` stay
+in-process and deterministic.
 
 The queue is [Procrastinate](https://procrastinate.readthedocs.io/) (MIT, tables in `public`,
 schema applied from a checksummed vendored copy by revision `core_0009`); only

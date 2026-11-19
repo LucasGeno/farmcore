@@ -7,9 +7,11 @@ import httpx
 import pytest
 from sqlalchemy import select
 
+from farmcore.apps.forecast.manifest import MANIFEST
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.core import clock
-from tests.apps.forecast.conftest import drain, fetch_live_now, provider_client
+from tests.apps.forecast.conftest import fetch_live_now, provider_client
+from tests.task_drain import drain
 
 JOB = "forecast.fetch_live"
 
@@ -699,7 +701,7 @@ def test_scoped_live_job_cannot_fetch_or_write_health_for_unselected_farm(
     targets = (farm.id,) if select_farm else ()
     fetch_live(JobContext(session, datetime.now(UTC), settings, farm_ids=targets))
     session.commit()
-    drain(session_factory, settings)
+    drain(session_factory, settings, [MANIFEST])
     session.expire_all()
     assert len(calls) == int(select_farm)
     if select_farm:

@@ -154,6 +154,17 @@ def _health(factory, farm_id: int) -> dict:
         return session.get(Farm, farm_id).props.get("forecast_health") or {}
 
 
+def _others_published(factory, farm_id: int) -> bool:
+    with factory() as session:
+        return session.execute(
+            text(
+                "SELECT count(*) > 0 AND bool_and(finished_at IS NOT NULL) FROM task_attempt "
+                "WHERE task_name <> :n AND farm_id = :f"
+            ),
+            {"n": JOB, "f": farm_id},
+        ).scalar_one()
+
+
 def _receipts(factory, farm_id: int) -> int:
     with factory() as session:
         return len(session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm_id)).all())
@@ -196,6 +207,9 @@ def test_a_stalled_worker_s_fetch_is_retried_and_its_late_result_is_rejected(
     (farm,) = _live_farms(committed_session_factory, settings, 30.0)
     first = start_worker("first")
     _until(lambda: provider.requests_for(30.0), "the first worker's request")
+    # Only the fetch is in flight: the farm's other live tasks (advice) have published, so the
+    # stopped worker holds no farm row lock the retry would wait on.
+    _until(lambda: _others_published(committed_session_factory, farm), "the farm's other tasks")
     first.send_signal(signal.SIGSTOP)  # no heartbeat from now on: presumed dead
 
     start_worker("second")
@@ -210,7 +224,8 @@ def test_a_stalled_worker_s_fetch_is_retried_and_its_late_result_is_rejected(
     with committed_session_factory() as session:
         assert (
             session.execute(
-                text("SELECT attempt FROM task_attempt WHERE farm_id = :f"), {"f": farm}
+                text("SELECT attempt FROM task_attempt WHERE task_name = :n AND farm_id = :f"),
+                {"n": JOB, "f": farm},
             ).scalar_one()
             == 2
         )
