@@ -1,14 +1,16 @@
-"""Owner-only CAP map; selection is refetched before proposing a parcel draft."""
+"""Owner-only CAP map; signed selections become parcel drafts without outbound POST work."""
 
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
+from starlette.concurrency import run_in_threadpool
 
 from farmcore.apps.onboarding import registries
 from farmcore.apps.onboarding.import_routes import BoundedImportRoute
 from farmcore.apps.onboarding.importers import service
+from farmcore.apps.onboarding.registries import candidates as snapshots
 from farmcore.core import drafts
 from farmcore.core.access import Repo, require_farm_owner
 from farmcore.core.farm_location import farm_location
@@ -38,22 +40,33 @@ def registry_page(request: Request, repo: Repo):
     return page(request, repo)
 
 
-async def candidates(repo, value):
+def lookup_context(repo, value):
     farm = repo.session.get(Farm, repo.farm_id)
     bbox = registries.bounding_box(value, farm_location(farm) or {})
-    rows = await registries.lookup((farm.props or {}).get("country"), bbox)
+    country = (farm.props or {}).get("country")
+    # Finish the read/audit transaction before waiting on the public service.
+    repo.session.commit()
+    return country, bbox
+
+
+def validate_candidates(request, repo, rows):
+    require_farm_owner(request, repo)
     if not rows:
         return []
-    # Reuse all file-import geometry, area and country checks before exposing a boundary.
     return service.validate(repo.session, repo.farm_id, {"parcels": rows})["parcels"]
 
 
 @router.get("/registry/features")
 async def features(request: Request, repo: Repo, bbox: str = ""):
     try:
-        rows = await candidates(repo, bbox)
+        country, bounds = await run_in_threadpool(lookup_context, repo, bbox)
+        rows = await registries.lookup(country, bounds)
+        rows = await run_in_threadpool(validate_candidates, request, repo, rows)
         return {
             "type": "FeatureCollection",
+            "candidates": await run_in_threadpool(
+                snapshots.sign, rows, repo.farm_id, request_actor(request)
+            ),
             "features": [
                 {
                     "type": "Feature",
@@ -75,16 +88,23 @@ async def features(request: Request, repo: Repo, bbox: str = ""):
 
 @router.post("/registry/claim")
 async def claim(request: Request, repo: Repo):
+    async with request.form(max_fields=205) as form:
+        token = form.get("candidates", "")
+        selected = form.getlist("selected")
+    # Repo and require_farm_owner already locked the farm and rechecked authority.
+    return await run_in_threadpool(propose_selection, request, repo, token, selected)
+
+
+def propose_selection(request, repo, token, selected):
     try:
-        async with request.form(max_fields=205) as form:
-            bbox = form.get("bbox", "")
-            selected = set(form.getlist("selected"))
-        if not isinstance(bbox, str) or not selected or len(selected) > 200:
+        if not selected or len(selected) > 200 or not all(isinstance(v, str) for v in selected):
             raise ValueError("Select your parcels first.")
-        rows = await candidates(repo, bbox)
+        selected = set(selected)
+        rows = snapshots.verify(token, repo.farm_id, request_actor(request))
         chosen = [row for row in rows if row["source_ref"] in selected]
         if {row["source_ref"] for row in chosen} != selected:
             raise ValueError("The public map changed. Load the parcels again before selecting.")
+        chosen = service.validate(repo.session, repo.farm_id, {"parcels": chosen})["parcels"]
         existing = list(
             repo.execute(
                 select(Parcel).where(Parcel.farm_id == repo.farm_id),
@@ -103,7 +123,7 @@ async def claim(request: Request, repo: Repo):
             kind="parcels",
             payload={"parcels": chosen},
             provenance={
-                "source_type": "manual",
+                "source_type": "registry",
                 "registry_ref": chosen[0]["source_scope"],
                 "details": {"method": "public CAP map selection"},
             },

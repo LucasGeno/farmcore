@@ -1,6 +1,7 @@
 """FEGA SIGPAC boundaries joined to declared crops by the public recinto code."""
 
 from shapely.geometry import shape
+from starlette.concurrency import run_in_threadpool
 
 from farmcore.apps.onboarding.importers.parsers import normalise
 
@@ -20,14 +21,18 @@ async def fetch(client, bbox):
     base = "https://sigpac-hubcloud.es/ogcapi/collections/"
     boundaries = await document(client, base + "recintos/items", params)
     declarations = await document(client, base + "cultivo_declarado/items", params)
+    return await run_in_threadpool(normalise_features, boundaries, declarations)
+
+
+def normalise_features(boundaries, declarations):
     crops = {}
-    for feature in declarations:
+    for feature in declarations["features"]:
         props = feature["properties"]
         code = props.get("parc_producto")
         if code is not None:
             crops.setdefault(reference(props), set()).add(str(code))
     rows = []
-    for feature in boundaries:
+    for feature in boundaries["features"]:
         ref = reference(feature["properties"])
         codes = crops.get(ref, set())
         # Several declarations can share a recinto: never pick an arbitrary crop.
@@ -46,6 +51,7 @@ async def fetch(client, bbox):
                     "attribution": ATTRIBUTION,
                     "licence": LICENCE,
                     "year": None,
+                    "retrieved_at": boundaries["timeStamp"],
                 },
                 len(rows) + 1,
             )

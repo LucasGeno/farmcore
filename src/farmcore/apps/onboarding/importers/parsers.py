@@ -59,6 +59,7 @@ def normalise(geometry, properties, index):
         "attribution": str(properties.get("attribution") or "")[:255],
         "licence": str(properties.get("licence") or "")[:100],
         "year": properties.get("year"),
+        "retrieved_at": properties.get("retrieved_at", ""),
         "messages": list(dict.fromkeys(messages)),
     }
 
@@ -272,7 +273,7 @@ def parse(data, filename, *, name_field="", crop_field="", layer=""):
                         raise ValueError(f"Column {override!r} is missing.")
                     attrs[target] = attrs[override]
             # Review notices and registry metadata are authored by the server only.
-            for field in ("messages", "attribution", "licence", "year"):
+            for field in ("messages", "attribution", "licence", "year", "retrieved_at"):
                 attrs.pop(field, None)
             attrs["source_scope"] = Path(filename or "").name
             out.append(normalise(geometry, attrs, index))

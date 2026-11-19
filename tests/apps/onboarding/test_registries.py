@@ -7,7 +7,7 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from farmcore.core.models.canonical import Parcel
+from farmcore.core.models.canonical import ExtId, Parcel, Source
 from farmcore.core.models.drafts import Draft
 from farmcore.core.seed import ensure_default_farm
 
@@ -51,14 +51,34 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
     assert row["properties"]["crop_code"] == code
     assert row["properties"]["licence"] == licence
     assert not session.scalars(select(Parcel).where(Parcel.farm_id == farm.id)).all()
+    signed = found.json()["candidates"]
+    calls_before_claim = len(requests)
+    # A signed snapshot is data, not authority; altered and expired maps cannot propose.
+    tampered = ("0" if signed[0] != "0" else "1") + signed[1:]
+    rejected = client.post(
+        "/onboarding/registry/claim", data={"candidates": tampered, "selected": reference}
+    )
+    assert rejected.status_code == 200 and "Reload the public map" in rejected.text
+    assert not session.scalars(select(Draft).where(Draft.farm_id == farm.id)).all()
+    from farmcore.apps.onboarding.registries import candidates as snapshots
+
+    with monkeypatch.context() as clock:
+        clock.setattr(snapshots.time, "time", lambda: 99999999999)
+        expired = client.post(
+            "/onboarding/registry/claim", data={"candidates": signed, "selected": reference}
+        )
+    assert expired.status_code == 200 and "Reload the public map" in expired.text
+    assert not session.scalars(select(Draft).where(Draft.farm_id == farm.id)).all()
     claimed = client.post(
         "/onboarding/registry/claim",
-        data={"bbox": bbox, "selected": reference},
+        data={"candidates": signed, "selected": reference},
         follow_redirects=False,
     )
     assert claimed.status_code == 303, claimed.text
+    assert len(requests) == calls_before_claim
     draft = session.scalar(select(Draft).where(Draft.farm_id == farm.id))
     assert draft.kind == "parcels"
+    assert draft.provenance["source_type"] == "registry"
     assert len(draft.payload["parcels"]) == 1
     item = draft.payload["parcels"][0]
     assert item["source_ref"] == reference and item["crop_code"] == code
@@ -66,6 +86,10 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
     assert item["year"] == (2024 if country == "FR" else None)
     review = client.get(f"/onboarding/import/review?draft={draft.id}")
     assert licence in review.text
+    if country == "ES":
+        timestamp = json.loads((FIXTURES / "recintos.json").read_text())["timeStamp"]
+        assert item["retrieved_at"] == timestamp
+        assert timestamp in review.text
     assert (
         client.post(
             f"/drafts/{draft.id}/confirm", data={"revision": 1}, follow_redirects=False
@@ -74,13 +98,22 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
     )
     session.expire_all()
     parcel = session.scalar(select(Parcel).where(Parcel.farm_id == farm.id))
+    assert parcel.iacs_id == reference
+    source_scope = "ign-rpg-2024" if country == "FR" else "sigpac-current"
+    ext = session.scalar(select(ExtId).where(ExtId.res_id == parcel.id, ExtId.model == "parcel"))
+    assert (ext.source, ext.key) == (source_scope, f"farm:{farm.id}:{reference}")
+    source = session.scalar(select(Source).where(Source.code == source_scope))
+    assert (source.name, source.kind, source.licence) == (item["attribution"], "geodata", licence)
     assert parcel.props["registry"]["licence"] == licence
     assert parcel.props["import_source_ref"] == reference
-    again = client.post("/onboarding/registry/claim", data={"bbox": bbox, "selected": reference})
+    again = client.post(
+        "/onboarding/registry/claim", data={"candidates": signed, "selected": reference}
+    )
     assert again.status_code == 200 and "already imported" in again.text
     assert len(session.scalars(select(Parcel).where(Parcel.farm_id == farm.id)).all()) == 1
     for request in requests:
         assert request.method == "GET" and not request.content
+        assert request.headers["accept-encoding"] == "identity"
         assert request.url.host in {"apicarto.ign.fr", "sigpac-hubcloud.es"}
         assert set(request.url.params) <= {"geom", "annee", "bbox", "limit", "f"}
         if country == "FR":
@@ -92,7 +125,9 @@ def test_registry_selection_reviews_then_confirms_with_provenance(
     )
 
 
-@pytest.mark.parametrize("failure", ["redirect", "oversize", "deadline", "malformed", "distant"])
+@pytest.mark.parametrize(
+    "failure", ["redirect", "oversize", "deadline", "malformed", "distant", "bad_geometry"]
+)
 def test_registry_failure_offers_file_import_without_a_draft(
     client, session, settings, monkeypatch, failure
 ):
@@ -122,6 +157,10 @@ def test_registry_failure_offers_file_import_without_a_draft(
             return httpx.Response(200, content=b"x" * (registries.MAX_BYTES + 1))
         if failure == "deadline":
             return httpx.Response(200, stream=StalledBody())
+        if failure == "bad_geometry":
+            data = json.loads((FIXTURES / "rpg.json").read_text())
+            data["features"][0]["geometry"] = {"type": "Foo"}
+            return httpx.Response(200, json=data)
         return httpx.Response(200, json={"features": "bad"})
 
     if failure == "deadline":
@@ -139,7 +178,7 @@ def test_registry_failure_offers_file_import_without_a_draft(
     assert claim.status_code == 200
     assert "import a file instead" in claim.text.lower()
     assert not session.scalars(select(Draft).where(Draft.farm_id == farm.id)).all()
-    assert len(requests) == (0 if failure == "distant" else 2)
+    assert len(requests) == (0 if failure == "distant" else 1)
     assert all(r.url.host == "apicarto.ign.fr" for r in requests)
 
 

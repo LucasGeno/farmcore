@@ -7,4 +7,4 @@
 
 {% for p in draft.payload.parcels %}{% for message in p.messages %}<p role="status" class="mt-2">{{ p.name }}: {{ message }}</p>{% endfor %}{% endfor %}
 
-{% for p in draft.payload.parcels %}{% if p.attribution %}<p class="mt-2 text-sm">{{ p.name }}: {{ p.attribution }} · {{ p.licence }} · {{ p.year or "Year not published" }} · {{ p.source_ref }}</p>{% endif %}{% endfor %}
+{% for p in draft.payload.parcels %}{% if p.attribution %}<p class="mt-2 text-sm">{{ p.name }}: {{ p.attribution }} · {{ p.licence }} · {% if p.year %}{{ p.year }}{% elif p.retrieved_at %}Retrieved {{ p.retrieved_at }}{% else %}Year not published{% endif %} · {{ p.source_ref }}</p>{% endif %}{% endfor %}

@@ -19,7 +19,7 @@
 <p class="mt-2 text-sm text-muted">France: IGN RPG · Etalab 2.0. Spain: FEGA SIGPAC · CC BY 4.0. Only the bounding box is sent to the registry.</p>
 <form id="registry-selection" action="{{ farm_url('/onboarding/registry/claim') }}" method="post" class="mt-4">
 {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
-<input type="hidden" name="bbox" id="registry-bbox">
+<input type="hidden" name="candidates" id="registry-candidates">
 <fieldset><legend class="font-semibold">Your parcels</legend><div id="registry-options"></div></fieldset>
 <button id="registry-review" disabled class="mt-2 min-h-[48px] rounded-lg border border-line px-4" type="submit">Review selected parcels</button>
 </form>

@@ -7,7 +7,7 @@
   var load = document.getElementById("registry-load");
   var review = document.getElementById("registry-review");
   var options = document.getElementById("registry-options");
-  var bbox = document.getElementById("registry-bbox");
+  var candidates = document.getElementById("registry-candidates");
   var selected = new Set();
   var inputs = new Map();
   if (!window.maplibregl) {
@@ -51,13 +51,14 @@
     map.getSource("cap").setData({type: "FeatureCollection", features: []});
     status.textContent = "Loading public parcels…";
     var bounds = map.getBounds();
-    bbox.value = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].join(",");
+    var bbox = [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()].join(",");
     try {
       var url = new URL(el.dataset.url, window.location.origin);
-      url.searchParams.set("bbox", bbox.value);
+      url.searchParams.set("bbox", bbox);
       var response = await fetch(url);
       if (!response.ok) throw new Error("Unavailable");
       var data = await response.json();
+      candidates.value = data.candidates || "";
       map.getSource("cap").setData(data);
       data.features.forEach(function (feature) {
         var label = document.createElement("label");

@@ -13,6 +13,7 @@ from shapely.geometry import MultiPolygon, box, shape
 from sqlalchemy import select
 
 from farmcore.apps.onboarding.importers.parsers import MAX_PARCELS, MAX_VERTICES, normalise
+from farmcore.core import ext_ids
 from farmcore.core.models.canonical import ExtId, Farm, Parcel
 
 
@@ -25,6 +26,7 @@ class ParcelInput(BaseModel):
     attribution: str = Field(default="", max_length=255)
     licence: str = Field(default="", max_length=100)
     year: int | None = Field(default=None, ge=2000, le=2100)
+    retrieved_at: str = Field(default="", max_length=100)
     geometry: dict
     area_ha: float = 0  # Always recomputed; never trust a proposed area.
     messages: list[str] = Field(default_factory=list, max_length=10)
@@ -122,6 +124,7 @@ def confirm(session, draft, *, actor, now, services):
                 name=item["name"],
                 alias=f"I-{uuid4().hex[:12]}",
                 area_ha=item["area_ha"],
+                iacs_id=item["source_ref"] if item["licence"] else None,
                 geom=from_shape(
                     MultiPolygon([geom]) if geom.geom_type == "Polygon" else geom, srid=4326
                 ),
@@ -130,16 +133,27 @@ def confirm(session, draft, *, actor, now, services):
                     "import_source_ref": item["source_ref"],
                     "import_source_scope": item["source_scope"],
                     "crop_code": item["crop_code"],
-                    "registry": {k: item[k] for k in ("attribution", "licence", "year")},
+                    "registry": {
+                        k: item[k] for k in ("attribution", "licence", "year", "retrieved_at")
+                    },
                 },
             )
             session.add(row)
             session.flush()
             key = hashlib.sha256(json.dumps(item["geometry"], sort_keys=True).encode()).hexdigest()
+            source = "parcel-file"
+            key = f"{draft.farm_id}:{key}"
+            if item["licence"]:
+                source = item["source_scope"]
+                ext_ids.ensure_source(
+                    session, source, item["attribution"], "geodata", item["licence"]
+                )
+                # ExtId uniqueness is installation-wide; claims belong to one farm.
+                key = f"farm:{draft.farm_id}:{item['source_ref']}"
             session.add(
                 ExtId(
-                    source="parcel-file",
-                    key=f"{draft.farm_id}:{key}",
+                    source=source,
+                    key=key,
                     model="parcel",
                     res_id=row.id,
                 )
