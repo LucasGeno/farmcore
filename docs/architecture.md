@@ -58,7 +58,8 @@ database, a small core and installable apps, in the style of Odoo.
   providers of its enabled apps. Providers write one normalised schema (`weather_receipt`,
   `weather_station`, `weather_observation`, `weather_forecast`: CF variables, licence and
   attribution per receipt), which the station and forecast views and the advisor read. The
-  replayed Météo-France station and Open-Meteo are the two providers today; the legacy
+  replayed Météo-France station, live Météo-France observations (`weather_meteofrance`, DPObs
+  and the DPClim archive, under the same station) and Open-Meteo are the providers today; the legacy
   `observation` and `forecast_value` rows are still written beside them until the contract step.
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
@@ -74,6 +75,7 @@ database, a small core and installable apps, in the style of Odoo.
 | Crop protection | Downy/powdery mildew rules (3-10 rule, Goidanich incubation, Gubler–Thomas, wash-off, intervals): spray / wait / protected, with reasons |
 | Planned jobs | Persistent spray jobs from stored advice: parcels, product, duration, revisions and cancellation; never completed work or stock movement |
 | Weather | Météo-France station ingest, spray conditions, charts |
+| Météo-France live | Optional: live hourly observations of the farm's Météo-France station (DPObs, gaps from the DPClim archive) with the installation's portal credentials |
 | Forecast | Saved forecast runs and live Open-Meteo receipts ranked into a spray plan |
 | Sharing | Grants, revoke, access log, NGSI-LD export, grantee view |
 | Season & impact | Model replay vs a spray calendar and the Agreste 2019 reference |
