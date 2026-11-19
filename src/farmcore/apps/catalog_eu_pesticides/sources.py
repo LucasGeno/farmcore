@@ -95,12 +95,19 @@ def _date(value: str | None) -> date | None:
         raise InvalidRow(f"malformed date {value!r}") from None
 
 
+def _later_expiry(candidate: SubstanceRow, previous: SubstanceRow) -> bool:
+    if candidate.expiry_date is None:
+        return False
+    if previous.expiry_date is None:
+        return True
+    return candidate.expiry_date > previous.expiry_date
+
+
 def parse(raw: bytes) -> Parsed:
     """Parse the NDJSON download. Lines are deduplicated by key, so the source's repeated rows
     (one per national authorisation) collapse onto one substance."""
-    rows: list[SubstanceRow] = []
+    rows: dict[str, SubstanceRow] = {}
     reasons: list[str] = []
-    seen: set[str] = set()
     for line_no, line in enumerate(raw.splitlines(), start=1):
         line = line.strip()
         if not line:
@@ -109,6 +116,9 @@ def parse(raw: bytes) -> Parsed:
             record = json.loads(line)
         except json.JSONDecodeError as exc:
             reasons.append(f"line {line_no}: malformed JSON ({exc.msg})")
+            continue
+        if not isinstance(record, dict):
+            reasons.append(f"line {line_no}: expected an object")
             continue
         name = (record.get("substance_name") or "").strip()
         if not name:
@@ -137,21 +147,26 @@ def parse(raw: bytes) -> Parsed:
             "micro_organism": (record.get("as_micro_org") or "").strip() or None,
             "classification": (record.get("classification_reg_1272") or "").strip() or None,
         }
-        if key in seen:
-            continue
-        seen.add(key)
-        rows.append(
-            SubstanceRow(
-                key=key,
-                name=name,
-                cas_number=cas,
-                status=status,
-                approval_date=approval,
-                expiry_date=expiry,
-                props=props,
-            )
+        candidate = SubstanceRow(
+            key=key,
+            name=name,
+            cas_number=cas,
+            status=status,
+            approval_date=approval,
+            expiry_date=expiry,
+            props=props,
         )
-    return Parsed(tuple(rows), len(reasons), tuple(reasons))
+        # The source repeats a substance once per national authorisation; collapse them, keeping
+        # the latest expiry date when the repeats disagree (a few substances do).
+        previous = rows.get(key)
+        if previous is None or _later_expiry(candidate, previous):
+            rows[key] = candidate
+    if not rows or len(reasons) > len(rows):
+        raise SourceError(
+            f"the active-substances download yielded {len(rows)} rows and {len(reasons)} "
+            "skipped: not a usable EU Pesticides Database file"
+        )
+    return Parsed(tuple(rows.values()), len(reasons), tuple(reasons))
 
 
 def download(dest: Path) -> tuple[Path, SourceMeta]:

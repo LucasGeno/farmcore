@@ -48,6 +48,24 @@ class CatalogSubstance(Base):
     props: Mapped[dict[str, Any]] = _props()
 
 
+class CatalogSubstanceAlias(Base):
+    """A key that resolves to a `catalog_substance`, for the join from a country catalog's product
+    link: the exact key, the key with trailing parenthesised qualifiers stripped, and the
+    `(aka X)` / `(formerly X)` names. Ambiguous aliases (a key that would resolve to two
+    substances) are not stored. See `substances.build_alias_map`."""
+
+    __tablename__ = "catalog_substance_alias"
+    __table_args__ = (
+        CheckConstraint("length(btrim(alias_key)) BETWEEN 1 AND 200", name="alias_key"),
+        Index("ix_catalog_substance_alias_substance_key", "substance_key"),
+    )
+
+    alias_key: Mapped[str] = mapped_column(Text, primary_key=True)
+    substance_key: Mapped[str] = mapped_column(
+        ForeignKey("catalog_substance.substance_key", ondelete="CASCADE")
+    )
+
+
 class CatalogItemSubstance(Base):
     __tablename__ = "catalog_item_substance"
     __table_args__ = (

@@ -24,11 +24,15 @@ from sqlalchemy.orm import Session
 from farmcore.apps.catalog_eu_pesticides.service import upsert_substance_links
 from farmcore.apps.catalog_eu_pesticides.substances import substance_key
 from farmcore.apps.catalog_fr_ephy import sources
-from farmcore.apps.catalog_fr_ephy.models import CatalogImport, CatalogUse
-from farmcore.core.models.catalog import CatalogAuthorisation, CatalogItem
+from farmcore.apps.catalog_fr_ephy.models import CatalogUse
+from farmcore.core.models.catalog import CatalogAuthorisation, CatalogImport, CatalogItem
 
 COUNTRY = "FR"
 REASON_CAP = 100
+# Bumped when the importer's stored shape changes: it is hashed into both fingerprints, so an
+# existing installation relinks once after an upgrade instead of waiting for each product's row to
+# change upstream.
+IMPORT_VERSION = 2
 # Rows per use-upsert statement: 4000 rows x ~16 columns stays under PostgreSQL's 65,535 bind
 # limit. A full first import (about 80k uses) runs in under a minute; an unchanged re-run is a
 # no-op.
@@ -72,6 +76,7 @@ def _use_key(use: sources.UseRow) -> str:
 
 def _product_fingerprint(row: sources.ProductRow, uses: list[sources.UseRow]) -> str:
     payload = {
+        "version": IMPORT_VERSION,
         "name": row.name,
         "withdrawn": row.withdrawn,
         "holder": row.holder,
@@ -193,7 +198,7 @@ def import_ephy(
     """Import the two E-Phy CSV files, keyed on the FR AMM, idempotent on the content hash."""
     products_raw = Path(products_path).read_bytes()
     uses_raw = Path(uses_path).read_bytes()
-    fingerprint = sources.content_hash(products_raw, uses_raw)
+    fingerprint = sources.content_hash(products_raw, uses_raw, IMPORT_VERSION)
     if (
         session.scalar(
             select(CatalogImport.id).where(
@@ -258,13 +263,20 @@ def import_ephy(
         use_rows.extend((item.id, use) for use in uses_for)
     uses_written = _upsert_uses(session, use_rows)
 
-    for item, _uses_for, substances in changed:
-        links = [
-            (substance_key(ref), ref)
-            for ref in (s.get("ref") or s.get("name", "") for s in substances)
-            if ref.strip()
-        ]
-        upsert_substance_links(session, item.id, links)
+    upsert_substance_links(
+        session,
+        [
+            (
+                item.id,
+                [
+                    (substance_key(ref), ref)
+                    for ref in (s.get("ref") or s.get("name", "") for s in substances)
+                    if ref.strip()
+                ],
+            )
+            for item, _uses_for, substances in changed
+        ],
+    )
 
     source_use_count = sum(
         len({_use_key(use) for use in uses_for}) for uses_for in uses_by_amm.values()

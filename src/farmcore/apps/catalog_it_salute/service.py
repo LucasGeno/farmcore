@@ -19,9 +19,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.catalog_eu_pesticides.service import upsert_substance_links
-from farmcore.apps.catalog_fr_ephy.models import CatalogImport
 from farmcore.apps.catalog_it_salute import sources
-from farmcore.core.models.catalog import CatalogAuthorisation, CatalogItem
+from farmcore.core.models.catalog import CatalogAuthorisation, CatalogImport, CatalogItem
 
 COUNTRY = "IT"
 REASON_CAP = 100
@@ -71,13 +70,14 @@ def _props(row: sources.ProductRow, fingerprint: str) -> dict[str, object]:
     return props
 
 
-def _existing_items(session: Session, numbers: list[str]) -> dict[str, CatalogItem]:
-    if not numbers:
-        return {}
+def _existing_items(session: Session) -> dict[str, CatalogItem]:
     rows = session.execute(
         select(CatalogAuthorisation.number, CatalogItem)
         .join(CatalogItem, CatalogItem.id == CatalogAuthorisation.catalog_item_id)
-        .where(CatalogAuthorisation.country == COUNTRY, CatalogAuthorisation.number.in_(numbers))
+        .where(
+            CatalogAuthorisation.country == COUNTRY,
+            CatalogItem.props["source"].astext == sources.SOURCE,
+        )
     ).all()
     return {number: item for number, item in rows}
 
@@ -111,13 +111,15 @@ def import_salute(
     parsed = sources.parse(raw)
     reasons = list(parsed.reasons)
 
-    existing = _existing_items(session, [row.number for row in parsed.rows])
+    existing = _existing_items(session)
     new_items: list[tuple[str, CatalogItem]] = []
     changed: list[tuple[CatalogItem, sources.ProductRow]] = []
     for row in parsed.rows:
         product_hash = _fingerprint(row)
         item = existing.get(row.number)
         if item is not None and item.props.get("content_hash") == product_hash:
+            if "missing_upstream" in item.props:
+                item.props = {k: v for k, v in item.props.items() if k != "missing_upstream"}
             continue
         if item is None:
             item = CatalogItem(name=row.name)
@@ -133,8 +135,14 @@ def import_salute(
         session.add(CatalogAuthorisation(catalog_item_id=item.id, country=COUNTRY, number=number))
     session.flush()
 
-    for item, row in changed:
-        upsert_substance_links(session, item.id, list(row.substances))
+    missing_numbers = set(existing) - {row.number for row in parsed.rows}
+    if missing_numbers:
+        for number in missing_numbers:
+            item = existing[number]
+            item.props = {**item.props, "missing_upstream": at.date().isoformat()}
+        reasons.append(f"{len(missing_numbers)} products missing upstream")
+
+    upsert_substance_links(session, [(item.id, list(row.substances)) for item, row in changed])
 
     session.add(
         CatalogImport(

@@ -92,9 +92,15 @@ def content_hash(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
-def _date(value: str) -> date | None:
-    value = value.strip()
-    if not value or value == "-":
+def _text(value: str | None) -> str:
+    """The source's `-` is its null value."""
+    value = (value or "").strip()
+    return "" if value == "-" else value
+
+
+def _date(value: str | None) -> date | None:
+    value = _text(value)
+    if not value:
         return None
     try:
         return datetime.strptime(value, "%d/%m/%Y").date()
@@ -105,7 +111,7 @@ def _date(value: str) -> date | None:
 def _substances(text: str) -> tuple[tuple[str, str], ...]:
     result: list[tuple[str, str]] = []
     for name in text.split("|"):
-        name = name.strip()
+        name = _text(name)
         if not name:
             continue
         result.append((substance_key(name), name))
@@ -117,42 +123,63 @@ def parse(raw: bytes) -> Parsed:
         records = json.loads(raw.decode("utf-8"))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SourceError(f"the Fitosanitari download is not valid JSON: {exc}") from None
+    if not isinstance(records, list):
+        raise SourceError("the Fitosanitari download is not a product array")
     rows: list[ProductRow] = []
     reasons: list[str] = []
     for index, record in enumerate(records, start=1):
-        number = (record.get("num_registrazione") or "").strip()
-        name = (record.get("denominazione_prodotto") or "").strip()
+        if not isinstance(record, dict):
+            reasons.append(f"record {index}: expected an object")
+            continue
+        number = _text(record.get("num_registrazione"))
+        name = _text(record.get("denominazione_prodotto"))
         if not number or not name:
             reasons.append(f"record {index}: missing or invalid registration number/product name")
             continue
-        raw_state = (record.get("stato_amministrativo") or "").strip()
+        raw_state = _text(record.get("stato_amministrativo"))
         state = _STATE.get(raw_state)
         if state is None:
             reasons.append(f"record {index}: unknown administrative state {raw_state!r}")
             continue
         try:
-            expiry = _date(record.get("data_scadenza_autorizzazione") or "")
+            expiry = _date(record.get("data_scadenza_autorizzazione"))
+            registration = _date(record.get("data_registrazione"))
+            revocation_decree = _date(record.get("data_decreto_revoca"))
+            revocation_effective = _date(record.get("data_decorrenza_revoca"))
         except InvalidRow as exc:
             reasons.append(f"record {index}: {exc}")
             continue
         substances = _substances(record.get("sostanze_attive") or "")
         props: dict[str, str] = {
-            "hazard": (record.get("indicazioni_di_pericolo") or "").strip(),
-            "activity": (record.get("attivita") or "").strip(),
-            "formulation": (record.get("descrizione_formulazione") or "").strip(),
-            "parallel_import": (record.get("importazione_parallela") or "").strip(),
+            "hazard": _text(record.get("indicazioni_di_pericolo")),
+            "activity": _text(record.get("attivita")),
+            "formulation": _text(record.get("descrizione_formulazione")),
+            "parallel_import": _text(record.get("importazione_parallela")),
+            "concentration": _text(record.get("contenuto_per_100g_di_prodotto")),
+            "revocation_reason": _text(record.get("motivo_della revoca")),
         }
+        if registration is not None:
+            props["registration_date"] = registration.isoformat()
+        if revocation_decree is not None:
+            props["revocation_decree_date"] = revocation_decree.isoformat()
+        if revocation_effective is not None:
+            props["revocation_effective_date"] = revocation_effective.isoformat()
         rows.append(
             ProductRow(
                 number=number,
                 name=name,
-                holder=(record.get("ragione_sociale") or "").strip(),
+                holder=_text(record.get("ragione_sociale")),
                 state=state,
                 raw_state=raw_state,
                 expiry=expiry,
                 substances=substances,
                 props=props,
             )
+        )
+    if not rows or len(reasons) > len(rows):
+        raise SourceError(
+            f"the Fitosanitari download yielded {len(rows)} products and {len(reasons)} "
+            "skipped: not a usable Fitosanitari file"
         )
     return Parsed(tuple(rows), len(reasons), tuple(reasons))
 
@@ -166,14 +193,9 @@ def resource_url() -> tuple[str, SourceMeta]:
         raise SourceError("dati.salute.gov.it lists no JSON download for the Fitosanitari dataset")
     name = match.group(1)
     archive_date = f"{name[-8:-4]}-{name[-4:-2]}-{name[-2:]}"
-    return (
-        f"https://www.dati.salute.gov.it/sites/default/files/opendata/{name}.json",
-        SourceMeta(
-            resource_url=f"https://www.dati.salute.gov.it/sites/default/files/opendata/{name}.json",
-            archive_name=f"{name}.json",
-            archive_date=archive_date,
-        ),
-    )
+    url = f"https://www.dati.salute.gov.it/sites/default/files/opendata/{name}.json"
+    meta = SourceMeta(resource_url=url, archive_name=f"{name}.json", archive_date=archive_date)
+    return meta.resource_url, meta
 
 
 def download(dest: Path) -> tuple[Path, SourceMeta]:

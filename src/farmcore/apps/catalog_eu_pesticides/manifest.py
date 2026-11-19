@@ -13,7 +13,7 @@ from farmcore.core.manifest import JobSpec, Manifest
 MANIFEST = Manifest(
     name="catalog_eu_pesticides",
     version="0.1.0",
-    summary="The EU's register of plant-protection active substances and their approval status.",
+    summary="EU plant-protection active substances and their approval status.",
     models=("farmcore.apps.catalog_eu_pesticides.models",),
     jobs=(
         JobSpec(

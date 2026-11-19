@@ -2,10 +2,11 @@
 
 Adds `catalog_substance` (one row per EU-listed active substance, keyed on the normalised
 `substance_key`: reference name, CAS number, approval status and approval/expiry dates, with the
-remaining source fields in `props`) and `catalog_item_substance` (the link a country catalog
-writes for each product's substance, keyed on `(catalog_item_id, substance_key)`). Additive: the
-neutral `catalog_item` table comes from core_0006 and the shared import fingerprint
-`catalog_import` from catalog_fr_0001.
+remaining source fields in `props`), `catalog_substance_alias` (the exact, stripped and
+`(aka …)`/`(formerly …)` keys that resolve to a substance) and `catalog_item_substance` (the link
+a country catalog writes for each product's substance, keyed on `(catalog_item_id,
+substance_key)`). Additive: the neutral `catalog_item` table comes from core_0006 and the shared
+import fingerprint `catalog_import` from catalog_fr_0001.
 
 Revision ID: catalog_eu_0001
 Revises: core_0014
@@ -51,6 +52,28 @@ def upgrade() -> None:
         sa.UniqueConstraint("substance_key", name=op.f("uq_catalog_substance_substance_key")),
     )
     op.create_table(
+        "catalog_substance_alias",
+        sa.Column("alias_key", sa.Text(), nullable=False),
+        sa.Column("substance_key", sa.Text(), nullable=False),
+        sa.CheckConstraint(
+            "length(btrim(alias_key)) BETWEEN 1 AND 200",
+            name=op.f("ck_catalog_substance_alias_alias_key"),
+        ),
+        sa.ForeignKeyConstraint(
+            ["substance_key"],
+            ["catalog_substance.substance_key"],
+            name=op.f("fk_catalog_substance_alias_substance_key_catalog_substance"),
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("alias_key", name=op.f("pk_catalog_substance_alias")),
+    )
+    op.create_index(
+        "ix_catalog_substance_alias_substance_key",
+        "catalog_substance_alias",
+        ["substance_key"],
+        unique=False,
+    )
+    op.create_table(
         "catalog_item_substance",
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("catalog_item_id", sa.BigInteger(), nullable=False),
@@ -87,4 +110,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_catalog_item_substance_substance_key", table_name="catalog_item_substance")
     op.drop_table("catalog_item_substance")
+    op.drop_index("ix_catalog_substance_alias_substance_key", table_name="catalog_substance_alias")
+    op.drop_table("catalog_substance_alias")
     op.drop_table("catalog_substance")

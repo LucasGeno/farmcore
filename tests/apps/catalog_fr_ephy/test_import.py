@@ -9,13 +9,18 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from farmcore.apps.catalog_eu_pesticides.models import CatalogItemSubstance
 from farmcore.apps.catalog_fr_ephy import service
-from farmcore.apps.catalog_fr_ephy.models import CatalogImport, CatalogUse
+from farmcore.apps.catalog_fr_ephy.models import CatalogUse
 from farmcore.core.models.canonical import Farm, Log
-from farmcore.core.models.catalog import CatalogAuthorisation, CatalogItem, enter_quantity
+from farmcore.core.models.catalog import (
+    CatalogAuthorisation,
+    CatalogImport,
+    CatalogItem,
+    enter_quantity,
+)
 
 WITHDRAWN_AMM = "8800006"  # DIMATE BF 400
 AUTHORISED_AMM = "2180347"  # APPLAUD STAR (the fixture's first product)
@@ -199,6 +204,22 @@ def test_products_link_their_substances_by_key(session, ephy):
         )
     ).all()
     assert ("buprofezin", "Buprofezin") in links
+
+
+def test_import_version_relinks_existing_products(session, ephy, monkeypatch):
+    service.import_ephy(session, products_path=ephy["products"], uses_path=ephy["uses"])
+    # An installation that imported before the substance-link step has no links; bumping the
+    # importer version rewrites every product once, which relinks them.
+    session.execute(delete(CatalogItemSubstance))
+    session.flush()
+    assert session.scalar(select(func.count()).select_from(CatalogItemSubstance)) == 0
+
+    monkeypatch.setattr(service, "IMPORT_VERSION", 3)
+    report = service.import_ephy(session, products_path=ephy["products"], uses_path=ephy["uses"])
+
+    assert report.changed
+    assert report.products == 202  # every product rewritten once, not just the changed ones
+    assert session.scalar(select(func.count()).select_from(CatalogItemSubstance)) > 0
 
 
 def test_use_upsert_chunks_across_batch_boundary(session, ephy, monkeypatch):

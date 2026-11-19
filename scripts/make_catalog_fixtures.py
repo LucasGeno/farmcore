@@ -26,12 +26,13 @@ from pathlib import Path
 EU_FIXTURES = Path("tests/apps/catalog_eu_pesticides/fixtures")
 IT_FIXTURES = Path("tests/apps/catalog_it_salute/fixtures")
 
-# EU substances selected by id; one id is repeated to pin the exact-duplicate collapse.
-EU_SUBSTANCE_IDS = (811, 486, 1028, 194, 1280, 811)
+# EU substances selected by id; one id is repeated to pin the exact-duplicate collapse, and 472
+# (Boscalid, a `(formerly …)` name) pins the alias lookup.
+EU_SUBSTANCE_IDS = (811, 486, 1028, 194, 1280, 472, 811)
 # Italian products selected by registration number: an authorised product whose substance links
-# to the EU register (Buprofezin), one with a `|`-separated pair, a provisional, a revoked, an
-# expired and a suspended.
-IT_NUMBERS = ("000001", "000017", "015230", "012498", "004662", "010128")
+# to the EU register (Buprofezin), one with a `|`-separated pair, one with a `(formerly …)`
+# qualifier, a provisional, a revoked, an expired and a suspended.
+IT_NUMBERS = ("000001", "000017", "015230", "012862", "012498", "004662", "010128")
 
 
 def main(eu_path: str, it_path: str) -> None:

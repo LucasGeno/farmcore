@@ -27,8 +27,10 @@ from sqlalchemy import (
     ARRAY,
     BigInteger,
     CheckConstraint,
+    DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     Text,
     UniqueConstraint,
@@ -93,6 +95,36 @@ class CatalogAuthorisation(Base):
     )
     country: Mapped[str] = mapped_column(Text)  # ISO 3166-1 alpha-2
     number: Mapped[str] = mapped_column(Text)
+
+
+class CatalogImport(Base):
+    """One import run's fingerprint and provenance, shared by every catalog import module.
+
+    `source` names the module (`ephy-fr`, `eu-pesticides`, `it-salute`); `content_hash` is the
+    whole-file hash, so an unchanged source has the same hash and the next run writes nothing.
+    `product_count`/`use_count` are the module's own meaning of the two counts (a substance
+    register stores its substances in `product_count` and 0 in `use_count`)."""
+
+    __tablename__ = "catalog_import"
+    __table_args__ = (
+        UniqueConstraint("source", "content_hash"),
+        CheckConstraint("content_hash ~ '^[0-9a-f]{64}$'", name="content_hash"),
+    )
+
+    id: Mapped[int] = _pk()
+    source: Mapped[str] = mapped_column(Text)
+    licence: Mapped[str] = mapped_column(Text)
+    licence_id: Mapped[str] = mapped_column(Text)
+    attribution: Mapped[str] = mapped_column(Text)
+    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    content_hash: Mapped[str] = mapped_column(Text)
+    resource_url: Mapped[str] = mapped_column(Text)
+    archive_name: Mapped[str] = mapped_column(Text)
+    archive_date: Mapped[str] = mapped_column(Text)
+    product_count: Mapped[int] = mapped_column(Integer)
+    use_count: Mapped[int] = mapped_column(Integer)
+    skipped: Mapped[int] = mapped_column(Integer)
+    reasons: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
 
 
 class CropProtectionItem(Base):
