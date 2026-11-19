@@ -365,6 +365,7 @@ def shared_advice(row) -> dict[str, Any]:
         "products",
         "passes",
         "treatments",
+        "model_validation",
     )
     data = {key: stored[key] for key in allowed}
     props = row.props or {}

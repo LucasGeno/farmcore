@@ -4,6 +4,21 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- Every agronomic model declares a `ModelSpec` (`core/model_spec.py`): method and citation,
+  EPPO codes, BBCH window, inputs, sourced parameters, validation level and provenance. App
+  authors: `AssessmentKind.models` is now required. A loaded kind that names no `ModelSpec`, or
+  a spec missing a declaration, fails the start with `ModelSpecInvalid`.
+- Advice JSON (the card's `.json`, grantee `advice.json`, review assessment JSON, the
+  assistant/MCP `advisor_today`, `advisor_parcel_status` and review facts, the fields
+  `parcels.geojson`) gains `model_validation`: `{level, label, models, about}`. The level is
+  stamped on the assessment envelope (`config_version.model_validation`) when the advice is
+  computed. Advice stored before this release reads as `unvalidated`. A badge with the level sits
+  beside every advice result in the UI.
+- New pages `GET /models` (`?kind=`) and `GET /models/{key}`: "About this model", generated from
+  the spec. Any signed-in principal, a grant recipient included, may read them (no farm data).
+- Citation corrections in the advisor config: the 3-10 rule is via Velasquez-Camacho et al. 2023
+  (not "Gessi et al. 2022"), and the Gubler–Thomas, Arrêté, Genève, Goidanich, copper and sulphur
+  sources are corrected or qualified. New advice reasons carry the corrected text.
 - With `MCP_OAUTH_ENABLED`, agents register themselves: an https `client_id` that is the URL of
   their Client ID Metadata Document (fetched with SSRF fences and cached), or open Dynamic
   Client Registration at `/oauth/register` (RFC 7591, public clients, rate-limited). Loopback

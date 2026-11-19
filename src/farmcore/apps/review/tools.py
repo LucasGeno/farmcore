@@ -12,6 +12,7 @@ from datetime import datetime
 from farmcore.apps.advisor import service as advisor
 from farmcore.apps.fields import tools as fields_tools
 from farmcore.apps.review import recommendations
+from farmcore.core.model_spec import validation_words
 from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 CARD = "/advisor/parcels/{id}"
@@ -94,6 +95,7 @@ def status(ctx: ToolContext, parcel: str = "") -> ToolResult:
         "decision": row.decision,
         "assessment_status": status,
         "headline": props.get("headline"),
+        "model_validation": advisor.model_validation(row),
         "requested": asked is not None,
         "requested_by": asked_payload.get("requested_by"),
         "requested_at": asked.occurred_at.isoformat() if asked else None,
@@ -114,9 +116,11 @@ def status(ctx: ToolContext, parcel: str = "") -> ToolResult:
         )
     else:
         lines.append(
-            f"{label} : évaluation enregistrée le {_when(row.evaluated_at, ctx)} · {row.decision}."
+            f"{label} : évaluation enregistrée le {_when(row.evaluated_at, ctx)} · {row.decision}"
+            f" ({validation_words(facts['model_validation'], 'fr')})."
             if fr
-            else f"{label}: saved check {_when(row.evaluated_at, ctx)} · {row.decision}."
+            else f"{label}: saved check {_when(row.evaluated_at, ctx)} · {row.decision}"
+            f" ({validation_words(facts['model_validation'])})."
         )
     if answered is not None:
         opinion = (

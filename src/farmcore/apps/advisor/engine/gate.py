@@ -9,6 +9,7 @@ from farmcore.apps.advisor.engine.config import AdvisorConfig
 from farmcore.apps.advisor.engine.types import RuleResult
 
 RULE = "season_gate"
+THRESHOLDS = ("season_gate",)
 
 
 def local_midnight_utc(day: date, tz: str) -> datetime:

@@ -33,6 +33,11 @@ class PrivacyMiddleware:
                     path,
                 )
             )
+            # "About this model" pages are static spec data (no farm data), linked from the
+            # validation badge on every result, including a share recipient's view.
+            spec_path = path == "/models" or bool(
+                re.fullmatch(r"/models/[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*", path)
+            )
             request.state.principal = resolve_principal(request)
             if request.state.principal is not None:
                 restricted = (
@@ -59,6 +64,7 @@ class PrivacyMiddleware:
                     and path not in PUBLIC_PATHS | {"/logout"}
                     and not path.startswith("/static/")
                     and not recipient_path
+                    and not spec_path
                 ):
                     try:
                         with request.app.state.session_factory() as session:

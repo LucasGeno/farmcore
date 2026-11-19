@@ -4,6 +4,7 @@
    supplies its own identity. History and the Operations feed are separate views there.
    Keep the existing fact/rule hooks; density follows the explicit preference. #}
 {% from "core/_ui.html" import decision_chip, card, pill, priority_badge, priority_why %}
+{% from "core/_validation.html" import validation_badge with context %}
 {% from "core/_icons.html" import icon %}
 {% from "core/_fragment.html" import fragment_slot %}
 {% macro h2(id, text) %}<h2 id="{{ id }}" class="text-[13px] font-semibold uppercase tracking-wider text-muted">{{ text }}</h2>{% endmacro %}
@@ -14,7 +15,7 @@
 {% call card("border-l-[6px] " ~ band, {"aria-labelledby": "parcel-title"}) %}
   <div class="flex flex-wrap items-center justify-between gap-2">
     {% if workspace %}<h2 id="parcel-title" class="text-lg font-semibold">Current protection</h2>{% else %}<div class="flex min-w-0 items-center gap-3">{{ parcel_shape(parcel.id, "large") }}<h1 id="parcel-title" class="min-w-0 break-words text-xl font-semibold tracking-tight">{{ parcel.alias }} · {{ parcel.name }}</h1></div>{% endif %}
-    <span id="decision-badge" data-decision="{{ advice.decision }}">{{ decision_chip(advice.decision, advice.chip_label) }}</span>
+    <span class="flex flex-wrap items-center gap-2"><span id="decision-badge" data-decision="{{ advice.decision }}">{{ decision_chip(advice.decision, advice.chip_label) }}</span>{% if advice.id is not none %}{{ validation_badge("advisor.spray", stored=advice.model_validation) }}{% endif %}</span>
   </div>
   <p id="lead" class="mt-3 text-[18px] font-semibold sm:text-[20px] leading-snug">{{ advice.lead }}</p>
   <p id="headline" class="mt-2 text-[13px] text-muted">{{ advice.headline }}</p>

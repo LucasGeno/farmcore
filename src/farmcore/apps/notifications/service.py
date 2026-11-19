@@ -29,10 +29,22 @@ class Item:
     priority_label: str | None = None
     priority_why: str | None = None
     priority_assumption: bool = False
+    # What the models behind an advice item could claim (`core/model_spec.py`); never in the key.
+    model_validation: dict | None = None
 
 
 def item(
-    kind, entity, severity, title, detail, href, observed_at=None, *, state=None, priority=None
+    kind,
+    entity,
+    severity,
+    title,
+    detail,
+    href,
+    observed_at=None,
+    *,
+    state=None,
+    priority=None,
+    model_validation=None,
 ):
     # Evaluation ids/timestamps deliberately do not determine read state.
     material = json.dumps(
@@ -47,7 +59,8 @@ def item(
         detail,
         href,
         observed_at,
-        *((p.level, p.label, p.why, p.assumption) if p else ()),
+        *((p.level, p.label, p.why, p.assumption) if p else (None, None, None, False)),
+        model_validation,
     )
 
 
@@ -167,6 +180,7 @@ def crop_protection_items(repo, now, tz, farm):
                             with_farm(f"/advisor/parcels/{parcel.id}", repo.farm_id),
                             advice.evaluated_at,
                             priority=of_advice(advice),
+                            model_validation=advisor.model_validation(advice),
                         ),
                     )
                 )

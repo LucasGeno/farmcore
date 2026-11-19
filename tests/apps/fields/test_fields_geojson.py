@@ -74,6 +74,7 @@ def test_geojson_lists_parcels_in_alias_order_with_their_fields(client, seeded):
         "decision": "none",
         "advised": False,
         "assessment_status": "unavailable",
+        "model_validation": None,
         "last_spray": None,
         "card_url": f"/advisor/parcels/{parcel.id}",
         "label_point": ten["properties"]["label_point"],

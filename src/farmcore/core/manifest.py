@@ -437,12 +437,16 @@ class AssessmentKind:
     - key: ``<app>.<name>``, stored on every envelope of this kind;
     - version: the result shape's version; an envelope is read only by the same version;
     - result: ``module:Model``, a Pydantic model that validates the result when it is stored and
-      types it when it is read.
+      types it when it is read;
+    - models: ``module:SPEC`` paths to the `core.model_spec.ModelSpec` of every model that computes
+      it, so its validation level travels with each result. Required for a loaded kind
+      (checked at load by `model_spec.collect_model_specs`).
     """
 
     key: str
     version: int
     result: str
+    models: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not _ASSESSMENT_KIND.fullmatch(self.key):
@@ -452,6 +456,8 @@ class AssessmentKind:
         if not self.result:
             raise ValueError(f"assessment kind {self.key!r}: result model path is required")
         _check_provider(self.result, f"assessment kind {self.key!r}")
+        for path in self.models:
+            _check_provider(path, f"assessment kind {self.key!r} model")
 
 
 @dataclass(frozen=True)

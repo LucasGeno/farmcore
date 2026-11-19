@@ -257,9 +257,9 @@ def test_details_keep_every_rule_and_its_published_sources_without_team_notes(
     for reason in reasons:
         assert f'data-rule="{reason["rule"]}"' in why
     # Published citations stay, each once; web addresses are links.
-    for citation in ("Baldacci 1947", "Gessi et al. 2022", "Arrêté du 4 mai 2017"):
+    for citation in ("Baldacci 1947", "Velasquez-Camacho et al. 2023", "Arrêté du 4 mai 2017"):
         assert citation in why
-    assert why.count("Thomas, Gubler et al. 1994") == 1
+    assert why.count("Leavitt 1994, Phytopathology 84:1070") == 1
     assert why.count("3-10 rule (Baldacci 1947)") == 1
     assert 'href="https://ge.ch/document/2937/annexe/22"' in why
     assert ">assumed</span>" in why

@@ -25,12 +25,13 @@ REGION_DATES = {
 REGION_NAMES = {"ITH55": "Bologna", "ES418": "Valladolid"}
 
 # sha256 of `for_region_year(...).model_dump_json()`, sources included. A deliberate FRI12 /
-# default change updates these with its own review.
+# default change updates these with its own review. Last: citation text only (model contract
+# review), every value unchanged.
 BEFORE = {
-    ("FRI12", 2024): "fa138f926806fcf14980e6765b94594c9f696ee60d03de03fd86c32a5e122ec2",
-    ("FRI12", 2025): "a3ef352572adcebc3d8edfb6532b5ffb839e6f1dd5e82e78f2e8f7c0a5b7bbcd",
-    ("FRI12", 2019): "3ad86db18a79d5cf0e0717de78687d9009a1bcf3b4e942734d53280f11a82d79",
-    ("ZZ999", 2024): "7f279565c0a78f4dda8da88f613a47551b4136dc9bb862d85bca8401f920dd1e",
+    ("FRI12", 2024): "9d4ea73ca4f61e6136572bf25864d3d61182904a0521fee1e09e2c8a23dd2e72",
+    ("FRI12", 2025): "0fcbb2c52d7f2819db1ed681479395a0f6205d97211bbc238adf983a5a0f3a62",
+    ("FRI12", 2019): "38e294b71f82de0868615e473ee65b70ce5f2164d2b70be717d56fb0d87ada2a",
+    ("ZZ999", 2024): "f29a86b52d4b042cc99379dc4913833600d031f35828bacb762bf0a9fec41d75",
 }
 
 

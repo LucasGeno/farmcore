@@ -1,0 +1,16 @@
+{# The validation badge beside an assessment result: the M2 level its models could claim,
+   linking to "About this model" (`/models`). `stored` is the result's own `model_validation`
+   (stamped when it was computed) when the page has it; without it, the loaded models' weakest
+   level. Import with context so it can read the loaded apps:
+   {% from "core/_validation.html" import validation_badge with context %}.
+   `link=False` inside a row that is already a link (no nested anchors). #}
+{% from "core/_icons.html" import icon %}
+{% macro validation_badge(kind, link=True, stored=None) -%}
+{%- set v = model_validation(kind) -%}
+{%- if v -%}
+{%- set level = stored.level if stored else v.validation.level -%}
+{%- set label = stored.label if stored else v.validation.label -%}
+{%- set tag = "a" if link else "span" -%}
+<{{ tag }}{% if link %} href="/models?kind={{ kind }}"{% endif %} data-validation="{{ level }}" data-kind="{{ kind }}" title="Model validation: {{ label }}" class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-line px-2 py-0.5 text-xs font-semibold text-muted">{{ icon("info", "h-3.5 w-3.5") }}{{ label }}</{{ tag }}>
+{%- endif -%}
+{%- endmacro %}

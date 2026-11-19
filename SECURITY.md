@@ -30,6 +30,10 @@ explicitly bound to the grant. This also applies to intentionally public demo fa
 | Agent token (personal access token) | Its grant's scopes on its grant's farm: ordinary grant reads and `drafts:propose`; never `*`, writes or audit |
 | Numeric grantee URL | No authority without a valid authenticated recipient session |
 
+Any signed-in principal, a grant recipient included, may read "About this model" (`/models`,
+`/models/{key}`): it is static model specification (method, sources, validation level) with no
+farm data, and the validation badge beside every shared result links to it.
+
 One member may propose, approve and activate their own parameter version: small farms often
 have a single owner, so a second reviewer is not required. History is append-only and records
 who did each step and when (`created_by` on the version, `reviewer` on each opinion, `actor` on

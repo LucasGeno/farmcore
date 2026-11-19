@@ -1,4 +1,5 @@
 {% extends "share/recipient_base.html" %}
+{% from "core/_validation.html" import validation_badge with context %}
 {% block title %}Viewing as {{ grant.grantee }} · farmcore{% endblock %}
 {% block shared_content %}
 <section class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
@@ -45,7 +46,7 @@
 
 {% if 'advice:read' in grant.scopes|map(attribute='scope')|list %}
 <section class="mt-6 rounded-lg border border-line bg-surface p-4">
-  <h2 class="text-lg font-semibold">Current advice</h2>
+  <h2 class="flex flex-wrap items-center gap-2 text-lg font-semibold">Current advice {{ validation_badge("advisor.spray") }}</h2>
   {% if advice_reason %}<p>{{ advice_reason }}</p>{% endif %}
   <p class="mt-2 text-sm text-muted">Latest evaluation per parcel, withheld when stale or unavailable or when weather licences prevent sharing. Weather inputs are redacted. Evaluations do not assert field accuracy.</p>
   <a href="/share/as/{{ grant.id }}/advice.json" class="mt-2 flex min-h-[44px] items-center font-semibold text-brand-700 underline">Download current advice JSON</a>

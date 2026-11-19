@@ -13,6 +13,7 @@ from typing import Any
 
 from farmcore.apps.advisor import service
 from farmcore.apps.fields import tools as fields_tools
+from farmcore.core.model_spec import VALIDATION_LEVELS, validation_words
 from farmcore.core.models.canonical import Advice
 from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
@@ -29,6 +30,7 @@ TODAY_FACTS = frozenset(
         "assessment_status",
         "config_version",
         "attribution",
+        "model_validation",
     }
 )
 STATUS_FACTS = frozenset(
@@ -44,6 +46,7 @@ STATUS_FACTS = frozenset(
         "flags",
         "assessment_status",
         "config_version",
+        "model_validation",
     }
 )
 
@@ -218,6 +221,14 @@ def _unavailable(ctx: ToolContext) -> ToolResult | None:
     return ToolResult({"unavailable": reason}, reason) if reason else None
 
 
+def _trust(validations: list[dict], fr: bool) -> str:
+    """How far the models behind these results are checked: the weakest stamped level."""
+    order = list(VALIDATION_LEVELS)
+    weakest = min(validations, key=lambda v: order.index(v["level"]))
+    words = validation_words(weakest, "fr" if fr else "en")
+    return f"Fiabilité : {words}." if fr else f"Trust: {words}."
+
+
 def today(ctx: ToolContext) -> ToolResult:
     """The farm's advice in at most three lines. A parcel without advice up to now is
     `advised: false` and "awaiting advice", never counted as nothing to spray: "Nothing to
@@ -238,6 +249,7 @@ def today(ctx: ToolContext) -> ToolResult:
                 else "unavailable",
                 "config_version": _version(a) if a else None,
                 "headline": (a.props or {}).get("headline") if a else None,
+                "model_validation": service.model_validation(a) if a else None,
                 **(
                     {"attribution": (a.props or {}).get("attribution", []) if a else []}
                     if ctx.repo.grant_view
@@ -308,6 +320,8 @@ def today(ctx: ToolContext) -> ToolResult:
     if others and evaluated:
         parts = [f"{counts[d]} {words[d]}" for d in others]
         lines.append(("Autres : " if fr else "Others: ") + ", ".join(parts) + ".")
+    if evaluated:  # on the last line: the answer stays at most three lines
+        lines[-1] += " " + _trust([service.model_validation(a) for _, a in evaluated], fr)
     if len(acting) > MAX_CARD_BUTTONS:
         links: tuple[tuple[str, str], ...] = (("Open map", MAP_PATH),)
     else:
@@ -346,15 +360,19 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
         ),
         "products": [p.get("name") for p in row.products or []],
         "flags": list(props.get("flags") or []),
+        "model_validation": service.model_validation(row),
     }
+    trust = _trust([facts["model_validation"]], fr)
     if props.get("assessment_status") in ("limited", "unavailable") and row.decision in (
         "none",
         "protected",
     ):
-        return ToolResult(facts=facts, text=f"{label}: {props.get('headline')}", links=links)
+        text = f"{label}: {props.get('headline')}\n{trust}"
+        return ToolResult(facts=facts, text=text, links=links)
     plain = PLAIN["fr" if fr else "en"].get(row.decision, row.decision)
     lines = [f"{label} : {plain}." if fr else f"{label}: {plain}."]
     detail = _fr_detail(row, ctx) if fr else facts["headline"]
     if detail:
         lines.append(detail)
+    lines.append(trust)
     return ToolResult(facts=facts, text="\n".join(lines), links=links)

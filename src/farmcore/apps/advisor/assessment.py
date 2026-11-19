@@ -16,7 +16,15 @@ from pydantic import BaseModel, ConfigDict, Field
 from farmcore.apps.advisor.engine.types import Decision, Disease, Flag, ProductType
 from farmcore.core.manifest import AssessmentKind
 
-KIND = AssessmentKind("advisor.spray", 1, "farmcore.apps.advisor.assessment:SprayResult")
+KIND = AssessmentKind(
+    "advisor.spray",
+    1,
+    "farmcore.apps.advisor.assessment:SprayResult",
+    models=tuple(
+        f"farmcore.apps.advisor.specs:{name}"
+        for name in ("DOWNY_3_10", "DOWNY_INCUBATION", "POWDERY_GUBLER_THOMAS", "SPRAY_DECISION")
+    ),
+)
 
 
 class _Strict(BaseModel):

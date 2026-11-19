@@ -80,4 +80,6 @@ def test_status_tool_quotes_a_limited_no_action_advice(session, farm, parcels, a
         _repo(session, farm), NOW, ZoneInfo("Europe/Paris"), lang="en", member_role="owner"
     )
     result = tools.parcel_status(ctx, parcel=parcels[0].alias)
-    assert result.text == f"{parcels[0].alias} {parcels[0].name}: Limited"
+    assert (
+        result.text == f"{parcels[0].alias} {parcels[0].name}: Limited\nTrust: model not validated."
+    )

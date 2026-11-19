@@ -199,7 +199,8 @@ def test_french_evaluated_no_action_needs_no_invented_second_line(session, setti
 
     result = advisor_tools.parcel_status(ctx_at(session, settings, NOW, lang="fr"), parcel="P1")
 
-    assert result.text == "P1 Le Plateau : rien à faire."
+    # The trust line is the stored result's validation level, not an invented detail.
+    assert result.text == "P1 Le Plateau : rien à faire.\nFiabilité : modèle non validé."
     assert result.facts["decision"] == "none"
     assert result.facts["headline"] == "Synthetic evaluated calm parcel"
     assert result.facts["next_window"] is None

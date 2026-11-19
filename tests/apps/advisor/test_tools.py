@@ -25,6 +25,8 @@ NOW = "2024-04-10 06:00"
 # allowlist is a test change.
 # Every advice also names its assessment status and parameter version (`id`, review `status`).
 VERSION_FACTS = {"assessment_status", "config_version", "id", "status"}
+# ... and what its models could claim (`model_validation`).
+VERSION_FACTS |= {"model_validation", "level", "label", "models", "about"}
 TODAY_FACTS = {"parcels", "parcel", "decision", "headline", "advised"} | VERSION_FACTS
 STATUS_FACTS = {"decision", "headline", "protected_until", "mm_since_spray", "next_window"}
 STATUS_FACTS |= {"products", "flags", "parcel"} | VERSION_FACTS
@@ -73,7 +75,7 @@ def test_today_lists_the_parcels_to_spray_with_the_advisors_headline(session, se
     assert len(lines) <= 3
     assert lines[0] == "8 parcels to spray: P1, P2, P3, P4, P7, P8, P9, P10."
     assert lines[1] == stored(session, "P1").props["headline"]
-    assert lines[2] == "Others: 2 protected."
+    assert lines[2] == "Others: 2 protected. Trust: model not validated."
     assert result.links == (("Open map", "/fields/"),)
 
 
@@ -84,7 +86,7 @@ def test_today_with_few_parcels_to_spray_gives_one_card_button_each(session, set
     result = tools.today(ctx)
 
     assert {p["decision"] for p in result.facts["parcels"]} == {"none"}
-    assert result.text.splitlines()[0] == "Nothing to spray today."
+    assert result.text.splitlines()[0] == "Nothing to spray today. Trust: model not validated."
     assert result.links == ()
 
 
@@ -97,7 +99,7 @@ def test_today_in_french(session, settings, hero):
     # The second line is built in French from the advice, not the stored English headline.
     assert lines[1] != stored(session, "P1").props["headline"]
     assert lines[1].startswith("À traiter") and "avr." in lines[1]
-    assert lines[2] == "Autres : 2 protégées."
+    assert lines[2] == "Autres : 2 protégées. Fiabilité : modèle non validé."
 
 
 def test_parcel_status_in_french_builds_the_detail_from_the_facts(session, settings, hero):
@@ -113,6 +115,7 @@ def test_parcel_status_in_french_builds_the_detail_from_the_facts(session, setti
         "P6 Peyrot : protégée.",
         f"Protégée jusqu'au {until.day} avr. {until:%H:%M} · {mm} mm de pluie depuis le "
         "traitement.",
+        "Fiabilité : modèle non validé.",
     ]
     assert result.facts["headline"] == row.props["headline"]  # the facts are unchanged
 
@@ -143,7 +146,11 @@ def test_parcel_status_quotes_the_stored_advice(session, settings, hero, said):
     assert result.facts["mm_since_spray"] == row.props["mm_since_spray"]
     assert result.facts["flags"] == row.props["flags"]
     assert keys(result.facts) <= STATUS_FACTS
-    assert result.text.splitlines() == ["P6 Peyrot: protected.", row.props["headline"]]
+    assert result.text.splitlines() == [
+        "P6 Peyrot: protected.",
+        row.props["headline"],
+        "Trust: model not validated.",
+    ]
     assert result.links == (("Open card P6", f"/advisor/parcels/{row.parcel_id}"),)
 
 
@@ -260,19 +267,25 @@ def test_advice_evaluated_after_the_clock_counts_as_no_advice(session, settings,
 def test_evaluated_none_everywhere_keeps_nothing_to_spray(session, settings, hero):
     result = tools.today(ctx_at(session, settings, "2024-04-09 06:00"))
 
-    assert result.text == "Nothing to spray today."
+    assert result.text == "Nothing to spray today. Trust: model not validated."
     assert all(p["advised"] for p in result.facts["parcels"])
 
 
 @pytest.mark.parametrize(
     ("lang", "lines"),
     [
-        ("en", ["No spray advised on the 8 evaluated parcels.", "Others: 2 awaiting advice."]),
+        (
+            "en",
+            [
+                "No spray advised on the 8 evaluated parcels.",
+                "Others: 2 awaiting advice. Trust: model not validated.",
+            ],
+        ),
         (
             "fr",
             [
                 "Aucun traitement conseillé sur les 8 parcelles évaluées.",
-                "Autres : 2 sans conseil.",
+                "Autres : 2 sans conseil. Fiabilité : modèle non validé.",
             ],
         ),
     ],
@@ -295,7 +308,7 @@ def test_spraying_with_some_parcels_missing_counts_them(session, settings, hero)
     lines = tools.today(ctx_at(session, settings, NOW)).text.splitlines()
 
     assert lines[0] == "6 parcels to spray: P1, P2, P3, P4, P7, P8."
-    assert lines[2] == "Others: 2 protected, 2 awaiting advice."
+    assert lines[2] == "Others: 2 protected, 2 awaiting advice. Trust: model not validated."
 
 
 ALL = "P1, P2, P3, P4, P5, P6, P7, P8, P9, P10"

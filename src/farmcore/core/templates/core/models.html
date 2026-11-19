@@ -1,0 +1,40 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, card, pill %}
+{% block title %}About this model · farmcore{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl">
+{{ page_header("About this model" if specs|length == 1 else "About these models", "What each model is, where its numbers come from, and how far it has been checked.") }}
+{% for s in specs %}
+{% call card("mt-4", {"id": s.key, "data-model-spec": s.key}) %}
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    <h2 class="text-lg font-semibold">{{ s.title }}</h2>
+    <span data-validation="{{ s.validation.level }}">{{ pill(s.validation.label, "warn" if s.validation.level == "unvalidated" else "ok") }}</span>
+  </div>
+  <dl class="mt-3 space-y-3 text-[15px]">
+    <div data-spec="method"><dt class="font-semibold">Method</dt>
+      <dd>{{ s.method.name }}<br><span class="break-words text-sm text-muted">Source: {{ s.method.citation }}{% if s.method.doi %} · DOI <a class="underline" href="https://doi.org/{{ s.method.doi }}">{{ s.method.doi }}</a>{% endif %}</span></dd></div>
+    <div data-spec="codes"><dt class="font-semibold">Crop and disease (EPPO codes)</dt>
+      <dd>Host {{ s.host }} · {{ s.pests|join(", ") }}</dd></div>
+    <div data-spec="stages"><dt class="font-semibold">Growth stages (BBCH)</dt>
+      <dd>From BBCH {{ s.stages.start }}{% if s.stages.end is not none %} to BBCH {{ s.stages.end }}{% endif %}{% if s.stages.note %} · {{ s.stages.note }}{% endif %}</dd></div>
+    <div data-spec="inputs"><dt class="font-semibold">Inputs</dt>
+      <dd><ul class="list-disc pl-5">{% for i in s.inputs %}<li>{{ i.variable }} ({{ i.unit }}, {{ i.resolution }}, {{ i.origin }})</li>{% endfor %}</ul></dd></div>
+    <div data-spec="validation"><dt class="font-semibold">How far it has been checked</dt>
+      <dd>{{ s.validation.label }}{% if s.validation.detail %}: {{ s.validation.detail }}{% endif %}.</dd></div>
+    <div data-spec="provenance"><dt class="font-semibold">Provenance</dt><dd>{{ s.provenance }}</dd></div>
+  </dl>
+  <h3 class="mt-4 font-semibold">Parameters</h3>
+  <ul class="mt-2 space-y-3" data-spec="parameters">
+    {% for p in s.parameters %}
+    <li class="text-[15px]" data-parameter="{{ p.name }}" data-status="{{ p.status }}">
+      <strong>{{ p.name }}</strong> · {% if p.value is none %}{{ p.region or "set per use" }}{% else %}{{ p.value }}{% if p.unit %} {{ p.unit }}{% endif %}{% endif %}
+      {% if p.status != "sourced" %} {{ pill(p.status, "warn") }}{% endif %}
+      {% if p.region and p.value is not none %}<span class="text-sm text-muted"> · {{ p.region }}</span>{% endif %}
+      <br><span class="break-words text-sm text-muted">{% if p.status == "unsourced" %}Source unknown.{% else %}Source: {{ p.source }}{% if p.page %}, p. {{ p.page }}{% endif %}{% if p.doi %} · DOI <a class="underline" href="https://doi.org/{{ p.doi }}">{{ p.doi }}</a>{% endif %}{% endif %}{% if p.note %} · {{ p.note }}{% endif %}</span>
+    </li>
+    {% endfor %}
+  </ul>
+{% endcall %}
+{% endfor %}
+</div>
+{% endblock %}
