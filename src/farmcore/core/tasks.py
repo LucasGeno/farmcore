@@ -39,7 +39,7 @@ from procrastinate import exceptions as queue_errors
 from procrastinate.jobs import Status
 from procrastinate.manager import JobManager
 from procrastinate.tasks import configure_task
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -216,11 +216,13 @@ def begin_attempt(
 
 
 def publish_if_current(session: Session, attempt: Attempt) -> bool:
-    """The first statement of the transaction that writes `attempt`'s result. True when the
-    attempt may publish: it is still current and before its deadline, its farm exists, and the
-    clock is live in the attempt's generation. The rows stay locked until that transaction ends,
-    so a newer attempt or a clock switch waits for it rather than interleaving. True also marks
-    the attempt finished (in the same transaction). On False the caller writes nothing."""
+    """Run before anything the transaction writes for `attempt` (a task may take its own locks
+    first). True when the attempt may publish: it is still current and before its deadline
+    (judged now, not when the transaction began, which may have waited on a lock), its farm
+    exists, and the clock is live in the attempt's generation. The rows stay locked until that
+    transaction ends, so a newer attempt or a clock switch waits for it rather than interleaving.
+    True also marks the attempt finished (in the same transaction). On False the caller writes
+    nothing."""
     current = session.execute(
         text(
             "SELECT 1 FROM task_attempt a "
@@ -228,7 +230,7 @@ def publish_if_current(session: Session, attempt: Attempt) -> bool:
             "AND c.generation = a.clock_generation "
             "JOIN farm f ON f.id = a.farm_id "
             "WHERE a.task_name = :n AND a.farm_id = :f AND a.attempt = :a "
-            "AND a.finished_at IS NULL AND a.deadline_at > now() "
+            "AND a.finished_at IS NULL AND a.deadline_at > clock_timestamp() "
             "FOR UPDATE OF a FOR SHARE OF c FOR KEY SHARE OF f"
         ),
         {"n": attempt.task_name, "f": attempt.farm_id, "a": attempt.number},
@@ -243,7 +245,7 @@ def publish_if_current(session: Session, attempt: Attempt) -> bool:
         return False
     session.execute(
         text(
-            "UPDATE task_attempt SET finished_at = now() "
+            "UPDATE task_attempt SET finished_at = clock_timestamp() "
             "WHERE task_name = :n AND farm_id = :f AND attempt = :a"
         ),
         {"n": attempt.task_name, "f": attempt.farm_id, "a": attempt.number},
@@ -254,12 +256,28 @@ def publish_if_current(session: Session, attempt: Attempt) -> bool:
 def run_task(
     session_factory: sessionmaker[Session], settings: Settings, spec: JobSpec, farm_id: int
 ) -> None:
-    """One run of `spec.task` for `farm_id`: what a worker does with a queued task."""
+    """One run of `spec.task` for `farm_id`: what a worker does with a queued task. A task that
+    raises keeps its farm in flight until one `spec.interval` after it began, so a failure that
+    repeats (bad farm data) is retried once per interval, as a published run would be, rather
+    than at every deadline. It publishes nothing; `run_now` can still queue the farm at once."""
     attempt = begin_attempt(session_factory, spec.name, farm_id, spec.deadline)
     if attempt is None:
         logger.info("task %s for farm %s skipped: clock not live or farm gone", spec.name, farm_id)
         return
-    import_string(spec.task)(TaskContext(session_factory, settings, farm_id, attempt))
+    try:
+        import_string(spec.task)(TaskContext(session_factory, settings, farm_id, attempt))
+    except Exception:
+        with session_scope(session_factory) as session:
+            session.execute(
+                text(
+                    "UPDATE task_attempt SET deadline_at = "
+                    "greatest(deadline_at, started_at + :i) "
+                    "WHERE task_name = :n AND farm_id = :f AND attempt = :a "
+                    "AND finished_at IS NULL"
+                ),
+                {"n": spec.name, "f": farm_id, "a": attempt.number, "i": spec.interval},
+            )
+        raise
 
 
 def plan(
@@ -307,15 +325,35 @@ def conninfo(settings: Settings) -> str:
     return url.render_as_string(hide_password=False)
 
 
+def bounded_sessions(session_factory: sessionmaker[Session], idle: timedelta) -> sessionmaker:
+    """Sessions like `session_factory`'s whose transactions Postgres ends once idle for `idle`
+    (at least a second), releasing their locks. A worker paused or frozen inside a task (it holds
+    the farm's operations lock and row lock while it evaluates) then blocks that farm's writes,
+    web requests included, for about one deadline, not until it resumes."""
+    factory = sessionmaker(class_=session_factory.class_, **session_factory.kw)
+    timeout = f"{max(1000, round(idle.total_seconds() * 1000))}ms"
+
+    @event.listens_for(factory, "after_begin")
+    def _bound(session: Session, transaction, connection) -> None:
+        connection.execute(
+            text("SELECT set_config('idle_in_transaction_session_timeout', :t, true)"),
+            {"t": timeout},
+        )
+
+    return factory
+
+
 def make_app(
     settings: Settings, session_factory: sessionmaker[Session], manifests: Sequence[Manifest]
 ) -> procrastinate.App:
-    """A queue app whose tasks are the durable jobs of `manifests`."""
+    """A queue app whose tasks are the durable jobs of `manifests`. Each task's transactions are
+    ended by Postgres once idle for its deadline (`bounded_sessions`)."""
     app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=conninfo(settings)))
     for spec in durable_specs(manifests):
+        factory = bounded_sessions(session_factory, spec.deadline)
 
-        def run(farm_id: int, spec: JobSpec = spec) -> None:
-            run_task(session_factory, settings, spec, farm_id)
+        def run(farm_id: int, spec: JobSpec = spec, factory=factory) -> None:
+            run_task(factory, settings, spec, farm_id)
 
         app.task(name=spec.name, queue=QUEUE)(run)
     return app

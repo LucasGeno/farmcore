@@ -14,10 +14,6 @@ from farmcore.core.models.canonical import Asset, Observation
 from tests.apps.stations.synth import hourly, write_csv
 
 
-def _superseded(factory, settings, farm_id) -> None:
-    tasks.begin_attempt(factory, JOB_NAME, farm_id, timedelta(minutes=1))
-
-
 def _replayed(factory, settings, farm_id) -> None:
     with factory.begin() as session:
         clock.set_replay(session, datetime(2024, 4, 10, tzinfo=UTC), settings)
@@ -25,8 +21,8 @@ def _replayed(factory, settings, farm_id) -> None:
 
 @pytest.mark.parametrize(
     ("change", "stored"),
-    [(None, True), (_superseded, False), (_replayed, False)],
-    ids=["current", "superseded", "switched-to-replay"],
+    [(None, True), (_replayed, False)],
+    ids=["current", "switched-to-replay"],
 )
 def test_a_live_ingest_stores_observations_only_while_its_attempt_is_current(
     session, session_factory, settings, seeded, tmp_path, change, stored

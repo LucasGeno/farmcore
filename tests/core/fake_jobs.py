@@ -49,3 +49,8 @@ def publish(ctx) -> None:
     """A durable task (`JobSpec.task`) that only publishes its attempt."""
     with ctx.session_factory.begin() as session:
         tasks.publish_if_current(session, ctx.attempt)
+
+
+def fail_task(ctx) -> None:
+    """A durable task that fails before publishing."""
+    raise RuntimeError("fake task failure")

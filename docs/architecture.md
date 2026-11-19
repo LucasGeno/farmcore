@@ -194,7 +194,21 @@ writes the result first checks, under row locks, that the attempt is still the c
 its task and farm, before its deadline, that the farm exists and that the clock is live in the
 generation the attempt began in. A retry, a live/replay switch (`clock_state.generation`) and a
 restore (which loads no queue table and starts a new generation) therefore reject every older
-attempt. No transaction is open while a task waits on the network.
+attempt. No transaction is open while a task waits on the network. The deadline is judged
+when the check runs, so a task that waited on a farm lock past its deadline writes nothing. A
+task that fails holds its farm until one interval after it began, so a repeating failure is
+retried once per interval.
+
+Known limits:
+
+- A worker paused or frozen inside a task keeps that task's locks. For the advisor these are
+  the farm's operations lock and row lock, so every write to that farm, web requests included,
+  waits. Task transactions end once idle for the task's deadline (one minute by default), which
+  bounds the wait to about that, not to when the worker resumes.
+- The jobs without a task run under the global step lock, network calls included (the weekly
+  catalog download, the Telegram push): a replay step waits for them.
+- Their schedule is saved once all due jobs of a tick have run: a worker that dies mid-tick runs
+  that tick's earlier jobs again on restart (the push is cursor-based, so it sends nothing twice).
 
 ### Drafts
 
