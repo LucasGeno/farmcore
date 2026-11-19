@@ -1,4 +1,5 @@
-"""Stations pages: `/stations/` (stations + connector health), `/stations/{id}` (hourly chart).
+"""Stations pages: `/stations/` (stations, connector health and every weather source's
+attribution, from its receipts), `/stations/{id}` (hourly chart).
 
 The chart spans clock now - 72 h .. now + 72 h on a full hourly grid (missing values are
 gaps, never 0); in replay the hours after now are observed weather shown as the forecast.
@@ -18,6 +19,7 @@ from farmcore.apps.stations.connector import REPLAY_HORIZON, VARIABLES
 from farmcore.core.access import Repo, ScopedRepository
 from farmcore.core.clock import ReplayClock, get_clock
 from farmcore.core.models.canonical import Asset
+from farmcore.core.weather import attribution
 from farmcore.web import LOCAL_FORMAT, render
 
 router = APIRouter()
@@ -93,6 +95,7 @@ def station_list(request: Request, repo: Repo) -> HTMLResponse:
         request,
         "stations/list.html",
         stations=[{"station": s, "health": _health(repo, s, now)} for s in stations],
+        sources=attribution.sources(repo),
     )
 
 

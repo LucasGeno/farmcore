@@ -46,11 +46,12 @@ from farmcore.core.models.canonical import (
     DataGrant,
     Farm,
     LlmAudit,
-    Observation,
     Parcel,
 )
 from farmcore.core.models.identity import AccessToken, LocalIdentity
+from farmcore.core.models.weather import WeatherObservation
 from farmcore.core.routes_clock import require_admin
+from farmcore.core.weather import attribution
 from farmcore.db import get_session
 from farmcore.web import context_url, is_admin, operator_authenticated, render
 
@@ -455,15 +456,41 @@ def _banner(grant: DataGrant, tz: str) -> dict[str, Any]:
 
 
 def _observations(repo: ScopedRepository, now: datetime, limit: int) -> list[dict[str, Any]]:
-    """The farm's latest station observations up to `now` (`stations:read`)."""
+    """The farm's latest station observations up to `now` (`stations:read`): on a grant, only
+    those whose licence allows redistribution (the repository's licence gate)."""
     rows = repo.list(
-        Observation,
-        Observation.ts <= now,
+        WeatherObservation,
+        WeatherObservation.period_end <= now,
         scope=STATIONS_SCOPE,
-        order_by=Observation.ts.desc(),
+        order_by=(WeatherObservation.period_end.desc(), WeatherObservation.variable),
         limit=limit,
     )
-    return [{"ts": o.ts.isoformat(), "variable": o.variable, "value": o.value} for o in rows]
+    return [
+        {
+            "ts": o.period_end.isoformat(),
+            "variable": o.variable,
+            "unit": o.unit,
+            "value": float(o.value),
+        }
+        for o in rows
+    ]
+
+
+def _weather_sources(repo: ScopedRepository) -> dict[str, list[dict[str, Any]]]:
+    """What the grant shares (with attribution) and what the licence gate withheld, and why."""
+    rows = attribution.sources(repo)
+    return {
+        "sources": [s.as_json() for s in attribution.shared(rows)],
+        "withheld": [
+            {
+                "provider": s.provider,
+                "dataset": s.dataset,
+                "licence": s.licence,
+                "reason": s.withheld_reason,
+            }
+            for s in attribution.withheld(rows)
+        ],
+    }
 
 
 def _audit(request: Request, repo: ScopedRepository, limit: int) -> list[dict[str, Any]]:
@@ -553,6 +580,11 @@ def grantee_page(request: Request, repo: GrantRepo) -> HTMLResponse:
         register_denied=NOT_SHARED["register"],
         rows=[[row[name] for name, _label in GRANTEE_COLUMNS] for row in rows or []],
         probes=probes,
+        weather=(
+            _weather_sources(repo)
+            if any(p["key"] == "stations" and p["shared"] for p in probes)
+            else None
+        ),
     )
 
 
@@ -592,7 +624,8 @@ def grantee_ngsi(
 @router.get("/as/{grant_id}/observations.json")
 def grantee_observations(request: Request, repo: GrantRepo) -> JSONResponse:
     try:
-        return JSONResponse(_observations(repo, _clock_now(request, repo), PROBE_LIMIT))
+        observations = _observations(repo, _clock_now(request, repo), PROBE_LIMIT)
+        return JSONResponse({"observations": observations, **_weather_sources(repo)})
     except ScopeDenied as exc:
         raise _denied("stations") from exc
 

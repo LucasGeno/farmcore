@@ -172,7 +172,8 @@ def test_a_station_grant_reads_observations_but_not_the_register(
     obs = grantee_client.get(f"/share/as/{g.id}/observations.json")
     page = grantee_client.get(f"/share/as/{g.id}/").text
 
-    assert obs.status_code == 200 and [o["value"] for o in obs.json()] == [OBS_VALUE]
+    # The legacy row states no licence, so the licence gate keeps it in (test_weather_licence).
+    assert obs.status_code == 200 and str(OBS_VALUE) not in obs.text
     assert grantee_client.get(f"/share/as/{g.id}/register.json").status_code == 403
     assert "Shared: this grant includes weather station data." in page
     assert "Not shared: this grant does not include the spray register." in page
