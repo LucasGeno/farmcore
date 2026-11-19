@@ -13,16 +13,19 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import uuid4
 
 from sqlalchemy import select
 
 from farmcore.apps.fields import tools as fields_tools
 from farmcore.apps.operations import spray_items
 from farmcore.apps.operations.spray_items import SprayDose, SprayItem
+from farmcore.core import drafts
 from farmcore.core.models.canonical import Log, LogParcel, LogSource
 from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
 SCOPE = "logs:read"
+DRAFTS_SCOPE = "drafts:propose"
 REGISTER_PATH = "/operations/register"
 CARD_PATH = "/advisor/parcels/{id}"  # advisor's card URL (a Telegram button already)
 LAST_SPRAY_FACTS = frozenset(
@@ -76,6 +79,35 @@ TOOLS = (
             "quelles parcelles ai je traitees",
             "derniers traitements",
         ),
+    ),
+    ToolSpec(
+        name="propose_record",
+        description=(
+            "Propose a record as a draft for the farmer to confirm: spray, irrigation or "
+            "observation, with its parcels, date and amounts. It never records on its own."
+        ),
+        params=object_schema(
+            {
+                "type": {"type": "string", "enum": ["spray", "irrigation", "observation"]},
+                "parcel_ids": {"type": "array", "items": {"type": "integer"}},
+                "ts_start": {"type": "string"},
+                "ts_end": {"type": "string"},
+                "doses": {"type": "array", "items": {"type": "object"}},
+                "fact": {"type": "object"},
+            },
+            required=("type", "parcel_ids", "ts_start"),
+        ),
+        effect="propose",
+        func="farmcore.apps.operations.tools:propose_record",
+        scope=DRAFTS_SCOPE,
+    ),
+    ToolSpec(
+        name="get_draft",
+        description="Read one of your own proposed drafts by id, with its status and review link.",
+        params=object_schema({"draft_id": {"type": "integer"}}, required=("draft_id",)),
+        effect="read",
+        func="farmcore.apps.operations.tools:get_draft",
+        scope=DRAFTS_SCOPE,
     ),
 )
 RECENT_FACTS = frozenset({"season", "parcels", "sprays", "date", "products"})
@@ -235,3 +267,53 @@ def recent_sprays(ctx: ToolContext) -> ToolResult:
 def _product_name(products: dict[int, SprayItem], q: SprayDose) -> str:
     product = products.get(q.item_id) if q.item_id is not None else None
     return product.name if product is not None else (q.label or "?")
+
+
+def propose_record(
+    ctx: ToolContext,
+    type: str,
+    parcel_ids: list[int],
+    ts_start: str,
+    ts_end: str | None = None,
+    doses: list[dict[str, Any]] | None = None,
+    fact: dict[str, Any] | None = None,
+) -> ToolResult:
+    """Propose a spray, irrigation or observation as a draft (`operations.drafts` validates)."""
+    payload: dict[str, Any] = {"parcel_ids": parcel_ids, "ts_start": ts_start}
+    if ts_end:
+        payload["ts_end"] = ts_end
+    if doses:
+        payload["doses"] = doses
+    if fact is not None:
+        payload["fact"] = fact
+    draft, _ = drafts.propose(
+        ctx.repo.session,
+        ctx.manifests,
+        farm_id=ctx.repo.farm_id,
+        actor=ctx.repo.actor,
+        kind=type,
+        payload=payload,
+        provenance={"source_type": "agent"},
+        request_key=uuid4().hex,
+    )
+    text = f"Proposed a {type} record; the farmer reviews and confirms it."
+    return ToolResult(
+        facts={"draft_id": draft.id, "type": type},
+        text=text,
+        links=(("Review record", f"/drafts/{draft.id}"),),
+    )
+
+
+def get_draft(ctx: ToolContext, draft_id: int) -> ToolResult:
+    """The agent's own draft (its token's farm and actor); another farm's id is not found."""
+    draft = drafts.get(
+        ctx.repo.session, farm_id=ctx.repo.farm_id, draft_id=draft_id, actor=ctx.repo.actor
+    )
+    facts = {
+        "draft_id": draft.id,
+        "kind": draft.kind,
+        "status": draft.status,
+        "revision": draft.revision,
+    }
+    text = f"Draft {draft.id} ({draft.kind}) is {draft.status}."
+    return ToolResult(facts=facts, text=text, links=(("Review draft", f"/drafts/{draft.id}"),))

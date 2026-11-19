@@ -28,16 +28,31 @@ VERTEX_BEFORE = {
 }
 
 
-def test_every_tool_is_a_read_tool_with_a_valid_json_schema(manifests):
-    tools = [*collect_tools(manifests), PLAN]
-    assert {t.name for t in tools} == set(VERTEX_BEFORE)
+def test_every_tool_declares_an_effect_and_a_valid_json_schema(manifests):
+    tools = collect_tools(manifests)
+    assert {t.name for t in tools} == {
+        "advisor_today",
+        "advisor_parcel_status",
+        "fertilization_season",
+        "fields_list_parcels",
+        "operations_last_spray",
+        "operations_recent_sprays",
+        "review_assessment_status",
+        "stations_weather",
+        "propose_parcels",
+        "propose_crop_assignments",
+        "propose_record",
+        "list_import_candidates",
+        "get_draft",
+    }
     for tool in tools:
         Draft202012Validator.check_schema(tool.params)
-        assert tool.effect == "read", tool.name
+        assert tool.effect in ("read", "propose"), tool.name
 
 
-def test_vertex_declarations_of_existing_tools_are_unchanged(manifests):
-    sent = {d["name"]: d.get("parameters") for d in declarations([*collect_tools(manifests), PLAN])}
+def test_vertex_declarations_of_existing_read_tools_are_unchanged(manifests):
+    read = [t for t in collect_tools(manifests) if t.effect == "read" and t.name in VERTEX_BEFORE]
+    sent = {d["name"]: d.get("parameters") for d in declarations([*read, PLAN])}
     assert sent == VERTEX_BEFORE
 
 

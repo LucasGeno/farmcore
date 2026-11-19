@@ -1,0 +1,3 @@
+<h2 class="text-lg font-semibold">Proposed crops</h2>
+<p>Season starts {{ draft.payload.starts_on }}. Parcels with a covering season keep their existing crop.</p>
+<ul>{% for parcel, crop in choices %}<li>{{ parcel.name }}: {{ crop.name }}</li>{% endfor %}</ul>

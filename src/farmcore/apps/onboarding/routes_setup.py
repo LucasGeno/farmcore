@@ -213,3 +213,18 @@ def choose_bundle(key: str, request: Request, session: Session = Depends(get_ses
         return _bundles_page(request, session, error=refusal.detail, status=409)
     session.commit()
     return RedirectResponse(context_url(request, f"/onboarding/bundles?enabled={key}"), 303)
+
+
+@router.get("/crops/review", dependencies=[Depends(require_farm_owner)])
+def review_crops(request: Request, repo: Repo, draft: int):
+    from farmcore.core.models.canonical import Parcel
+    from farmcore.core.routes_drafts import load
+
+    row = load(request, repo, draft)
+    if row.kind != "crop-assignments":
+        raise HTTPException(404, "Crop draft not found.")
+    choices = [
+        (repo.session.get(Parcel, int(parcel_id)), crops.CROPS[key])
+        for parcel_id, key in row.payload["assignments"].items()
+    ]
+    return render(request, "onboarding/_crop_review.html", draft=row, choices=choices)
