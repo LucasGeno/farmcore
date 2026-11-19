@@ -5,14 +5,18 @@ Failure model (one owning test each):
   none (`unknown`), through the repository every grantee and token read goes through;
 - the owner loses their own non-redistributable data to the gate (it only applies to grant and
   token views; the backup bundle is a whole-database dump and never reads through it);
-- a grant or token reads around the gate: a caller-built statement on the weather values, or
-  the legacy `observation` rows, which carry no licence at all;
+- a grant or token reads around the gate: a caller-built statement on the weather values (even
+  under another resource label), the receipts of blocked sources, or the legacy `observation`
+  rows, which carry no licence at all;
 - the grantee export drops blocked data silently, or its notice leaks the blocked values;
 - a weather view shows no attribution, or not which endpoint served the data.
 
-Known limits: the NGSI-LD export and the grantee register carry no weather (the owner register's
-saved spray weather is the farmer's own copy); stored advice is derived, not redistributed data.
-Synthetic values only.
+Latent leaks, owned by the follow-up 'Gate weather in derived exports' (it blocks the first
+non-redistributable observation provider): stored advice shared under `advice:read` carries raw
+hourly inputs in its reasons, and the register CSV linked from the Sharing page carries saved
+spray weather whose licence was not kept. Today's only observation provider (Météo-France,
+etalab-2.0) is redistributable, so neither can carry blocked data yet. The NGSI-LD export and the
+grantee register carry no weather. Synthetic values only.
 """
 
 from __future__ import annotations
@@ -27,7 +31,12 @@ from farmcore.apps.share import service
 from farmcore.core.access import ScopeDenied, authenticate_token
 from farmcore.core.models.canonical import Asset, Observation
 from farmcore.core.models.identity import FarmMembership, LocalIdentity
-from farmcore.core.models.weather import WeatherForecast, WeatherObservation
+from farmcore.core.models.weather import (
+    WeatherForecast,
+    WeatherObservation,
+    WeatherReceipt,
+    WeatherStation,
+)
 from farmcore.core.weather import store
 from farmcore.core.weather.contract import (
     Fetched,
@@ -140,9 +149,11 @@ def test_grants_and_tokens_read_only_redistributable_weather(
 
     observed = {o.value for o in repo.list(WeatherObservation, scope="stations:read")}
     forecast = {f.value for f in repo.list(WeatherForecast, scope="stations:read")}
+    receipts = {r.provider for r in repo.list(WeatherReceipt, scope="stations:read")}
 
     assert observed == expected
     assert forecast == expected
+    assert receipts == {provider for provider, _, _, value in SOURCES if value in expected}
 
 
 @pytest.mark.parametrize(
@@ -154,9 +165,14 @@ def test_grants_and_tokens_read_only_redistributable_weather(
         lambda repo: repo.execute_unaudited(
             select(WeatherForecast), scope="stations:read", resource="weather_forecast"
         ),
+        lambda repo: repo.execute(
+            select(WeatherObservation.value).join(WeatherStation),
+            scope="stations:read",
+            resource="weather_station",
+        ),
         lambda repo: repo.list(Observation, scope="stations:read"),
     ],
-    ids=["statement", "unaudited-statement", "legacy-rows"],
+    ids=["statement", "unaudited-statement", "mislabelled-statement", "legacy-rows"],
 )
 def test_a_grant_cannot_read_weather_around_the_licence_gate(
     read, session, station_grant, weather
