@@ -321,8 +321,7 @@ class MeteoFranceLive:
                 break
             if file.status_code != 204:
                 raise PortalError(f"archive file: HTTP {file.status_code}")
-            portal.remaining("archive file")
-            time.sleep(POLL_SECONDS)
+            time.sleep(min(POLL_SECONDS, portal.remaining("archive file")))
         return Fetched(
             request=Request(dataset=f"{CLIM}/commande-station/horaire", url=url, params=params),
             fetched_at=datetime.now(UTC),
