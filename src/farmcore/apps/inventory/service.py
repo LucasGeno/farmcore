@@ -19,6 +19,13 @@ irrigation's entered volume (`typed_quantity`, no product) never consumes a liqu
   never shown as the stock.
 
 `on_hand = purchased − used`; `low` when `on_hand <= low_stock` (the farmer's own number).
+
+`item_stock_rows(repo, now, tz)` does the same for rows of a neutral catalog item (a fertiliser):
+used is the sum of the `typed_quantity` rows that name the item (`catalog_item_id`, never a
+measure) on the farm's *done* records of any type this season, as entered, converted with the
+factors the record's author entered (`log.props["factors"]`: a treated area, a density; else the
+parcels' summed area and no density). A rate with no area, a volume against a mass stock with no
+density, or an unknown unit makes that record not computable: no factor is ever assumed.
 """
 
 from __future__ import annotations
@@ -35,8 +42,9 @@ from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.operations.catalogue import products_for_farm
 from farmcore.core import units
 from farmcore.core.access import ScopedRepository
+from farmcore.core.logs import FACTORS
 from farmcore.core.models.canonical import Log, LogParcel, Parcel, Product
-from farmcore.core.models.catalog import legacy_typed_quantity
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity, legacy_typed_quantity
 
 LOGS_SCOPE = "logs:read"
 FIELDS_SCOPE = "fields:read"
@@ -171,3 +179,106 @@ def _log_areas(repo: ScopedRepository, log_ids: set[int]) -> dict[int, Decimal]:
     for link in links:
         out[link.log_id] += areas.get(link.parcel_id, Decimal(0))
     return dict(out)
+
+
+@dataclass(frozen=True)
+class ItemStockRow:
+    stock: InventoryStock
+    name: str
+    purchased: Decimal
+    used: Decimal | None  # None: a record of this item does not convert into the stock unit
+    on_hand: Decimal | None
+    records: int  # done records of this item counted this season
+    not_computable: int
+    low: bool
+
+
+def _factor(props: dict, key: str) -> Decimal | None:
+    raw = ((props or {}).get(FACTORS) or {}).get(key)
+    return None if raw is None else Decimal(str(raw))
+
+
+def item_used(typed: TypedQuantity, log: Log, parcel_area_ha: Decimal, stock_unit: str):
+    """The amount of `typed` in `stock_unit`, or None when no entered factor converts it."""
+    if typed.measure is None:
+        return None
+    area = _factor(log.props, "area_ha")
+    if area is None and parcel_area_ha > 0:  # a parcel without a known area is no factor
+        area = parcel_area_ha
+    try:
+        quantity = units.Measured(
+            typed.measure,
+            units.decimal_value(typed.value),
+            typed.unit,
+            typed.entered_value,
+            typed.entered_unit,
+        )
+        return units.convert(
+            quantity,
+            stock_unit,
+            area_ha=area,
+            density_kg_per_l=_factor(log.props, "density_kg_per_l"),
+        )
+    except units.UnitError:
+        return None
+
+
+def item_stock_rows(repo: ScopedRepository, *, now: datetime, tz: str) -> list[ItemStockRow]:
+    season, start = season_start(now, tz)
+    stocks = repo.list(
+        InventoryStock,
+        InventoryStock.season == season,
+        InventoryStock.catalog_item_id.is_not(None),
+        scope=LOGS_SCOPE,
+        order_by=InventoryStock.id,
+    )
+    if not stocks:
+        return []
+    item_ids = [s.catalog_item_id for s in stocks]
+    names = dict(
+        repo.execute(
+            select(CatalogItem.id, CatalogItem.name).where(CatalogItem.id.in_(item_ids)),
+            scope=LOGS_SCOPE,
+            resource="catalog_item",
+        ).all()
+    )
+    typed = repo.list(TypedQuantity, TypedQuantity.catalog_item_id.in_(item_ids), scope=LOGS_SCOPE)
+    logs = {
+        log.id: log
+        for log in repo.list(
+            Log,
+            Log.id.in_({t.log_id for t in typed}),
+            Log.status == "done",
+            Log.ts_start >= start,
+            Log.ts_start <= now,
+            scope=LOGS_SCOPE,
+        )
+    }
+    area = _log_areas(repo, set(logs))
+    rows = []
+    for s in stocks:
+        total, counted, bad = Decimal(0), set(), set()
+        for t in typed:
+            if t.catalog_item_id != s.catalog_item_id or t.log_id not in logs:
+                continue
+            counted.add(t.log_id)
+            amount = item_used(t, logs[t.log_id], area.get(t.log_id, Decimal(0)), s.unit)
+            if amount is None:
+                bad.add(t.log_id)
+            else:
+                total += amount
+        used = None if bad else units.plain(total)
+        on_hand = None if used is None else s.purchased - used
+        rows.append(
+            ItemStockRow(
+                stock=s,
+                name=names.get(s.catalog_item_id, ""),
+                purchased=s.purchased,
+                used=used,
+                on_hand=on_hand,
+                records=len(counted),
+                not_computable=len(bad),
+                low=on_hand is not None and s.low_stock is not None and on_hand <= s.low_stock,
+            )
+        )
+    return rows

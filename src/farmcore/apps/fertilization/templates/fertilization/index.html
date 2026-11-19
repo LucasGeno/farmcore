@@ -1,0 +1,22 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header, empty_state %}
+{% block title %}Fertilization · farmcore{% endblock %}
+{% block content %}
+{% call page_header("Fertilization", "What fertiliser went on which parcel this season, as you confirmed it.") %}{% endcall %}
+{% if is_farm_owner %}<p class="mt-2"><a href="{{ resolved_farm_url('/fertilization/new') }}" class="inline-flex min-h-[44px] items-center rounded-lg border border-line bg-surface px-4 font-semibold hover:bg-ground">Record an application</a></p>{% endif %}
+{% if not rows %}
+{{ empty_state("No fertiliser application is recorded this season yet.") }}
+{% else %}
+<ul class="mt-4 space-y-3">
+{% for r in rows %}
+<li data-application="{{ r.log_id }}" class="rounded-xl border border-line bg-surface p-4">
+  <p class="font-semibold break-words"><a href="{{ resolved_farm_url('/fertilization/records/' ~ r.log_id) }}">{{ r.fertiliser }}</a> · {{ r.amount }}</p>
+  <p class="mt-1 text-[13px] text-muted">{{ r.local_start.strftime('%Y-%m-%d %H:%M') }} · {{ r.parcel_names|join(', ') }}</p>
+  {% if r.composition %}<p class="mt-1 text-[13px] text-muted break-words">Declared: {% for n, share in r.composition.nutrients.items() %}{{ n }} {{ share }} %{% if not loop.last %}, {% endif %}{% endfor %} ({{ r.composition.source }}{% if r.composition.reference %}: {{ r.composition.reference }}{% endif %})</p>{% endif %}
+  <p data-per-ha class="mt-1 text-[13px] tabular-nums">{% if r.per_ha %}Per hectare: {% for n, kg in r.per_ha.items() %}{{ n }} {{ kg }} kg{% if not loop.last %}, {% endif %}{% endfor %}{% else %}Nutrients per hectare: not computable from what was entered.{% endif %}</p>
+</li>
+{% endfor %}
+</ul>
+{% endif %}
+<p class="mt-4 max-w-[70ch] text-[13px] text-muted">Composition is what the label, an analysis, the supplier or you declared; it is never read from a product name. This page records applications; it gives no rate advice.</p>
+{% endblock %}

@@ -19,6 +19,7 @@ VERTEX_BEFORE = {
     "advisor_today": None,
     "advisor_parcel_status": VERTEX_PARCEL,
     "assistant_plan": None,
+    "fertilization_season": None,
     "fields_list_parcels": None,
     "operations_last_spray": VERTEX_PARCEL,
     "operations_recent_sprays": None,

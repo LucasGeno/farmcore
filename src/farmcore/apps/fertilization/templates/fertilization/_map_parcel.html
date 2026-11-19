@@ -1,0 +1,6 @@
+{# Map panel, one parcel (fertilization): this season's confirmed applications. A fragment. #}
+<section class="flex flex-col gap-2" data-map-section="fertilization-parcel">
+  <h3 class="text-[13px] font-semibold uppercase tracking-wider text-muted">Fertilization</h3>
+  {% if not rows %}<p class="text-[15px]">No application recorded this season</p>{% endif %}
+  <ul class="space-y-1 text-[15px]">{% for r in rows %}<li class="break-words">{{ r.local_start.strftime('%Y-%m-%d') }} · {{ r.fertiliser }} {{ r.amount }}</li>{% endfor %}</ul>
+</section>

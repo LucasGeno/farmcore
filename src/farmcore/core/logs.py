@@ -68,11 +68,19 @@ class QuantityInput:
 @dataclass(frozen=True)
 class EnteredQuantity:
     """An amount on a record that is not a spray, kept exactly as entered (`20 mm`, `12.5 m3`);
-    `core.units` adds the standard value when it knows the unit, else it stays null."""
+    `core.units` adds the standard value when it knows the unit, else it stays null. With a
+    `catalog_item_id` the amount is of that item (a fertiliser), and its stock counts it."""
 
     value: Decimal
     unit: str
     label: str | None = None
+    catalog_item_id: int | None = None
+
+
+# `log.props` key of the conversion factors a record's author entered for its quantities
+# (`{"area_ha": "1.5", "density_kg_per_l": "1.32"}`, decimal strings): stock reads use them
+# instead of the parcels' area, and never assume a density that is absent.
+FACTORS = "factors"
 
 
 @dataclass(frozen=True)
@@ -108,7 +116,14 @@ def _split(
 
 def _enter(session: Session, log: Log, entered: Sequence[EnteredQuantity]) -> None:
     for q in entered:
-        enter_quantity(session, log_id=log.id, value=q.value, unit=q.unit, label=q.label)
+        enter_quantity(
+            session,
+            log_id=log.id,
+            value=q.value,
+            unit=q.unit,
+            label=q.label,
+            catalog_item_id=q.catalog_item_id,
+        )
 
 
 def _quantities(items: Sequence[QuantityLike]) -> list[Quantity]:

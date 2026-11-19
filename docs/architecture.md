@@ -77,7 +77,8 @@ database, a small core and installable apps, in the style of Odoo.
 | Forecast | Saved forecast runs and live Open-Meteo receipts ranked into a spray plan |
 | Sharing | Grants, revoke, access log, NGSI-LD export, grantee view |
 | Season & impact | Model replay vs a spray calendar and the Agreste 2019 reference |
-| Activity, Inventory, Notifications | Farm timeline, product stock, in-app alerts |
+| Activity, Inventory, Notifications | Farm timeline, product and fertiliser stock, in-app alerts |
+| Fertilization | Optional: fertiliser applications as drafts the owner confirms or corrects, with the declared composition and its source; never infers a composition, density or area |
 | Assistant | Web panel and Telegram: voice/text → draft spray → ✅; answers questions from read-only app tools |
 | Spanish archive (`demo_es`) | Optional: SIGPAC parcels and an InfoRiego station archive from local files; no advice |
 
@@ -238,6 +239,13 @@ a wall-clock expiry (seven days by default, an assumed product choice).
   turn revises it, and it expires 15 minutes after its last turn. Telegram's ✅ / ❌ carry the
   draft id and the revision the farmer saw, and confirm through the same service as
   `/drafts/<id>`; the web panel's draft answer links there.
+- Fertilization's kinds (`fertilization`, `fertilization-correction`) write one `fertilise` log
+  whose entered amount names the fertiliser's catalog item; Inventory counts done records of that
+  item (`inventory_0002`: a stock row names a product or a catalog item), so stock is computed,
+  never decremented, and moves once. A draft that lacks a composition, a density (litres) or an
+  area (a per-hectare amount on a parcel of unknown area) names it and cannot be confirmed. A
+  correction is refused if the record changed since it was proposed, and keeps an
+  `operation_correction` receipt with the original values, reason and actors.
 - `drafts.expire` (every 15 minutes, wall time) marks open drafts past their expiry. A restored
   copy loads drafts as farm data; drafts that expired meanwhile are refused at once.
 
