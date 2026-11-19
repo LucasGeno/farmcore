@@ -231,6 +231,17 @@ def collect_draft_kinds(manifests):
     return kinds
 
 
+def collect_assessment_kinds(manifests):
+    """Assessment kind key -> (manifest, kind); a duplicate key across loaded apps is an error."""
+    kinds = {}
+    for m in manifests:
+        for kind in m.assessment_kinds:
+            if kind.key in kinds:
+                raise ValueError(f"duplicate assessment kind key {kind.key!r} across manifests")
+            kinds[kind.key] = (m, kind)
+    return kinds
+
+
 def collect_record_types(manifests):
     """Record types in load order; a duplicate key across loaded apps is a configuration error."""
     types = [(m, rt) for m in manifests for rt in m.record_types]
@@ -407,6 +418,33 @@ class DraftKind:
         _check_path(self.review, "draft kind")
 
 
+_ASSESSMENT_KIND = re.compile(r"[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*")
+
+
+@dataclass(frozen=True)
+class AssessmentKind:
+    """A typed assessment result an app stores in the shared envelope (`core/assessments.py`).
+
+    - key: ``<app>.<name>``, stored on every envelope of this kind;
+    - version: the result shape's version; an envelope is read only by the same version;
+    - result: ``module:Model``, a Pydantic model that validates the result when it is stored and
+      types it when it is read.
+    """
+
+    key: str
+    version: int
+    result: str
+
+    def __post_init__(self) -> None:
+        if not _ASSESSMENT_KIND.fullmatch(self.key):
+            raise ValueError(f"assessment kind: expected '<app>.<name>', got {self.key!r}")
+        if not isinstance(self.version, int) or self.version < 1:
+            raise ValueError(f"assessment kind {self.key!r}: version must be a positive int")
+        if not self.result:
+            raise ValueError(f"assessment kind {self.key!r}: result model path is required")
+        _check_provider(self.result, f"assessment kind {self.key!r}")
+
+
 @dataclass(frozen=True)
 class Manifest:
     name: str
@@ -449,6 +487,7 @@ class Manifest:
     search: str = ""  # provider "module:func" returning typed results
     record_types: tuple[RecordType, ...] = ()  # facts the Record sheet can capture
     draft_kinds: tuple[DraftKind, ...] = ()  # validator + review fragment per draft kind
+    assessment_kinds: tuple[AssessmentKind, ...] = ()  # typed results kept in the envelope
     attention: str = ""  # provider "module:func" returning at most N home-strip items
     # Weather providers (core.weather): "module:factory", factory(settings) -> WeatherProvider.
     weather_providers: tuple[str, ...] = ()

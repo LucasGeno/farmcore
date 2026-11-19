@@ -337,6 +337,17 @@ class Advice(Base):
         CheckConstraint(_in("decision", ADVICE_DECISIONS), name="decision"),
         # Target of farm-scoped composite foreign keys (planning_0001).
         UniqueConstraint("id", "farm_id"),
+        # The envelope this row projects (core_0012): same farm, parcel and evaluation time.
+        UniqueConstraint("assessment_id"),
+        ForeignKeyConstraint(
+            ("assessment_id", "farm_id", "parcel_id", "evaluated_at"),
+            (
+                "assessment.id",
+                "assessment.farm_id",
+                "assessment.parcel_id",
+                "assessment.evaluated_at",
+            ),
+        ),
     )
 
     id: Mapped[int] = _pk()
@@ -351,6 +362,15 @@ class Advice(Base):
     products: Mapped[list[Any]] = _jsonb_list()
     props: Mapped[dict[str, Any]] = _props()
     created_at: Mapped[datetime] = _now()
+    # Crop protection's typed result and its evidence (`core/assessments.py`); None on rows
+    # saved before core_0012, whose evidence stays in `props`.
+    assessment_id: Mapped[int | None] = mapped_column(BigInteger)
+    assessment: Mapped[Any] = relationship(
+        "Assessment",
+        primaryjoin="Advice.assessment_id == Assessment.id",
+        foreign_keys=[assessment_id],
+        lazy="raise",
+    )
 
 
 Index("ix_advice_parcel_id_evaluated_at", Advice.parcel_id, Advice.evaluated_at.desc())

@@ -117,6 +117,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "advice": frozenset({"advice:read"}),
     "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
+    # The assessment envelope (`core/assessments.py`). Crop protection is its only kind today;
+    # a per-kind read scope comes with the neutral core contract.
+    "assessment": frozenset({"advice:read"}),
     "clock_state": frozenset({"audit:read"}),
     "crop_season": frozenset({"fields:read"}),
     "data_grant": frozenset({"audit:read"}),

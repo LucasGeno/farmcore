@@ -29,6 +29,7 @@ import pytest
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 
+from farmcore.apps.advisor import service as advisor
 from farmcore.apps.forecast import store as forecast_store
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.apps.forecast.models import ForecastValue as LegacyForecastValue
@@ -124,11 +125,25 @@ def _semantics(session, settings) -> dict:
             Advice.next_window_end,
             Advice.protected_until,
             Advice.products,
-            Advice.props,
+            Advice,
         )
         .join(Parcel, Parcel.id == Advice.parcel_id)
         .order_by(Advice.evaluated_at, Parcel.alias)
     ).all()
+
+    def evidence(row):
+        """The advice's props with the evidence it was evaluated from, wherever it is saved (its
+        envelope since core_0012), so the frozen digest proves that evidence unchanged."""
+        saved = advisor.saved_evidence(repo, row)
+        return {
+            **row.props,
+            "input_snapshot": saved["input_snapshot"],
+            **(
+                {"effective_config": saved["effective_config"]} if saved["effective_config"] else {}
+            ),
+        }
+
+    advice = [(*row[:-1], evidence(row[-1])) for row in advice]
     events = session.execute(
         select(Event.kind, Event.occurred_at, Event.body, Event.payload).order_by(
             Event.occurred_at, Event.id

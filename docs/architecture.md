@@ -215,3 +215,19 @@ a wall-clock expiry (seven days by default, an assumed product choice).
   `/drafts/<id>`; the web panel's draft answer links there.
 - `drafts.expire` (every 15 minutes, wall time) marks open drafts past their expiry. A restored
   copy loads drafts as farm data; drafts that expired meanwhile are refused at once.
+
+### Assessments
+
+A module's computed result is saved in one shared envelope (`core/assessments.py`, revision
+`core_0012`): farm and optional parcel, evaluation time, status (`evaluable`, `limited`,
+`unavailable`), the parameter version (or, without one, the configuration itself), the input
+snapshot and the typed result. The result belongs to a kind an app declares
+(`Manifest.assessment_kinds`: key, version and a Pydantic model); the kind's model validates it
+when it is saved and types it when it is read, and an envelope is never read as another kind. The
+database refuses any update to a saved envelope (it is immutable; deletable only with its advice
+or by a demo reset), so a review or a replay always refers to the evidence that was evaluated.
+
+Crop protection saves kind `advisor.spray` (spray / wait / protected / none with its reasons,
+products and windows). Its `advice` row stays the public representation every reader uses and
+points at its envelope (`advice.assessment_id`, same farm, parcel and time); advice saved before
+`core_0012` keeps its evidence in `advice.props` and has no envelope.

@@ -228,13 +228,11 @@ def _evaluated(session, settings, parcel, station):
     )
 
 
-def test_stored_series_version_and_sprays_reproduce_the_assessment(session, settings):
+def test_stored_series_version_and_sprays_reproduce_the_assessment(client, session, settings):
     from decimal import Decimal
 
     from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, Spray
     from farmcore.apps.advisor.engine import evaluate as engine_evaluate
-    from farmcore.apps.advisor.service import saved_config
-    from farmcore.core.access import repo_for_job
     from farmcore.core.models.canonical import Log, Product, Quantity
     from tests.apps.advisor.review_fixtures import complete_station
     from tests.apps.stations.synth import correct
@@ -266,11 +264,11 @@ def test_stored_series_version_and_sprays_reproduce_the_assessment(session, sett
     # a later station correction must not change the saved evidence
     correct(session, station, rainy_at, "rr1_mm", 0.0)
 
-    snapshot = row.props["input_snapshot"]
-    config, verification = saved_config(
-        repo_for_job(session, parcel.farm_id, "advisor.evaluate"), row
-    )
-    assert verification == "verified"
+    saved = client.get(
+        f"/advisor/parcels/{parcel.id}/assessments/{row.id}.json", params={"farm": parcel.farm_id}
+    ).json()
+    snapshot, config = saved["input_snapshot"], saved["effective_config"]
+    assert saved["config_verification"] == "verified"
 
     def value(v):
         return float(v["raw"]) if isinstance(v, dict) else v

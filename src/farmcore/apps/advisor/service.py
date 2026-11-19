@@ -30,6 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from farmcore.apps.advisor import priority
+from farmcore.apps.advisor.assessment import KIND as SPRAY_KIND
 from farmcore.apps.advisor.engine import Advice as EngineAdvice
 from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, Spray
 from farmcore.apps.advisor.engine.config import DEFAULT_REGION
@@ -37,7 +38,9 @@ from farmcore.apps.advisor.engine.types import floor_hour
 from farmcore.apps.advisor.engine.window import forecast_span
 from farmcore.apps.fields.seasons import season_evidence
 from farmcore.apps.stations import service as stations
+from farmcore.core import assessments
 from farmcore.core.access import ScopeDenied, ScopedRepository
+from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.canonical import (
     Advice,
     Farm,
@@ -393,41 +396,95 @@ def advice_row(
     effective=None,
     input_snapshot: dict | None = None,
 ) -> Advice:
-    """`ignored_sprays` > 0 (done spray logs without a known product) adds `spray_without_product`
+    """The advice row (crop protection's public representation) linked to its new envelope
+    (`advisor.assessment.KIND`), which keeps the evidence: status, parameter version (or the
+    configuration itself when there is none) and the input snapshot. Adding the row adds both.
+    `ignored_sprays` > 0 (done spray logs without a known product) adds `spray_without_product`
     to the flags."""
     window = advice.next_window
     flags = set(advice.flags) | ({SPRAY_WITHOUT_PRODUCT} if ignored_sprays else set())
+    version = (
+        effective.identity()
+        if effective
+        else {"id": None, "status": "unreviewed", "accuracy_claim": False}
+    )
+    result = {
+        "decision": advice.decision,
+        "headline": headline(advice, series, config, now, tz),
+        "reasons": [jsonable(r) for r in advice.reasons],
+        "products": [_product(p) for p in advice.products_recommended],
+        "next_window": jsonable(window),
+        "protected_until": jsonable(advice.protected_until),
+        "flags": sorted(flags),
+        "mm_since_spray": advice.mm_since_spray,
+        "incubation_pct": incubation_pct(advice),
+        "passes": advice.passes,
+        "treatments": advice.treatments,
+    }
+    envelope = assessments.envelope(
+        SPRAY_KIND,
+        farm_id=farm_id,
+        parcel_id=parcel_id,
+        evaluated_at=now,
+        status=advice.assessment_status,
+        config_version=version,
+        # The version row is immutable and holds the configuration; copy it only when there
+        # is no version to point at.
+        effective_config=(
+            None if effective and effective.version else config.model_dump(mode="json")
+        ),
+        input_snapshot=input_snapshot or {},
+        result=result,
+    )
     return Advice(
         farm_id=farm_id,
         parcel_id=parcel_id,
         evaluated_at=now,
         decision=advice.decision,
-        reasons=[jsonable(r) for r in advice.reasons],
+        reasons=result["reasons"],
         next_window_start=window[0] if window else None,
         next_window_end=window[1] if window else None,
         protected_until=advice.protected_until,
-        products=[_product(p) for p in advice.products_recommended],
+        products=result["products"],
         props={
-            "headline": headline(advice, series, config, now, tz),
+            "headline": result["headline"],
             "assessment_status": advice.assessment_status,
-            # The version row is immutable and holds the configuration; copy it only
-            # when there is no version to point at.
-            **(
-                {}
-                if effective and effective.version
-                else {"effective_config": config.model_dump(mode="json")}
-            ),
-            "config_version": effective.identity()
-            if effective
-            else {"id": None, "status": "unreviewed", "accuracy_claim": False},
-            "input_snapshot": input_snapshot or {},
-            "flags": sorted(flags),
+            "config_version": version,
+            "flags": result["flags"],
             "mm_since_spray": advice.mm_since_spray,
-            "incubation_pct": incubation_pct(advice),
+            "incubation_pct": result["incubation_pct"],
             "passes": advice.passes,
             "treatments": advice.treatments,
         },
+        assessment=envelope,
     )
+
+
+class EvidenceUnavailable(LookupError):
+    """The advice names an envelope this repository cannot read; its evidence is never guessed."""
+
+
+def saved_evidence(repo: ScopedRepository, row: Advice) -> dict[str, Any]:
+    """The evidence an advice row was evaluated from: `config_version`, `effective_config`
+    (None when a version is named) and `input_snapshot`. Rows saved since core_0012 read it from
+    their envelope (`EvidenceUnavailable` when it cannot be read: never the row's own props,
+    which no longer hold it); older rows from their own `props` (a `config_version` missing
+    there is `None`)."""
+    if row.assessment_id is not None:
+        envelope = repo.get(Assessment, row.assessment_id, scope=SCOPE)
+        if envelope is None:
+            raise EvidenceUnavailable(f"assessment {row.assessment_id} of advice {row.id}")
+        return {
+            "config_version": envelope.config_version,
+            "effective_config": envelope.effective_config,
+            "input_snapshot": envelope.input_snapshot,
+        }
+    props = row.props or {}
+    return {
+        "config_version": props.get("config_version"),
+        "effective_config": props.get("effective_config"),
+        "input_snapshot": props.get("input_snapshot"),
+    }
 
 
 def advice_json(row: Advice) -> dict[str, Any]:
@@ -632,7 +689,9 @@ def _fresh_statuses(repo, now) -> list[tuple[str, str]] | None:
     return [(status, text) for _, status, text in rows]
 
 
-def saved_config(repo: ScopedRepository, row: Advice) -> tuple[dict | None, str]:
+def saved_config(
+    repo: ScopedRepository, row: Advice, evidence: dict[str, Any] | None = None
+) -> tuple[dict | None, str]:
     """(configuration, verification) of a saved assessment.
 
     Rows saved before configurations were stored by version carry their own copy
@@ -641,10 +700,10 @@ def saved_config(repo: ScopedRepository, row: Advice) -> tuple[dict | None, str]
     that digest (`"verified"`); a missing version or a different digest is `"unverifiable"`
     and no configuration is returned.
     """
-    props = row.props or {}
-    if "effective_config" in props:
-        return props["effective_config"], "saved copy"
-    named = props.get("config_version") or {}
+    evidence = evidence or saved_evidence(repo, row)
+    if evidence["effective_config"] is not None:
+        return evidence["effective_config"], "saved copy"
+    named = evidence["config_version"] or {}
     if named.get("id") is None or not named.get("hash"):
         return None, "unverifiable"
     from farmcore.apps.review.models import ParameterVersion

@@ -45,6 +45,7 @@ from farmcore.core.access import register_resource_scopes
 from farmcore.core.app_manifest import MANIFEST as CORE
 from farmcore.core.manifest import (
     Manifest,
+    collect_assessment_kinds,
     collect_draft_kinds,
     collect_parcel_views,
     collect_record_types,
@@ -110,6 +111,7 @@ def resolve_order(manifests: list[Manifest]) -> list[Manifest]:
     collect_parcel_views(manifests)
     collect_record_types(manifests)
     collect_draft_kinds(manifests)
+    collect_assessment_kinds(manifests)
     by_name: dict[str, Manifest] = {}
     for m in manifests:
         if m.name in by_name and by_name[m.name] is not m:

@@ -5,6 +5,7 @@ The job name `advisor.evaluate` is a contract: chat calls `jobs.run_now` with it
 
 from datetime import timedelta
 
+from farmcore.apps.advisor.assessment import KIND
 from farmcore.apps.advisor.tools import TOOLS
 from farmcore.core.manifest import JobSpec, Manifest, MapLayer, ParcelView, Widget
 
@@ -80,5 +81,6 @@ MANIFEST = Manifest(
         "farmcore.apps.advisor.demo:SEASON_2024",
     ),
     tools=TOOLS,
+    assessment_kinds=(KIND,),
     maturity="alpha",
 )
