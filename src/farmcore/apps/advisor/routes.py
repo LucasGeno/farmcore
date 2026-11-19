@@ -770,7 +770,10 @@ def saved_assessment(parcel_id: int, advice_id: int, request: Request, repo: Rep
     row = repo.get(Advice, advice_id, scope=service.SCOPE)
     if row is None or row.parcel_id != parcel.id or row.evaluated_at > _now(request, repo):
         raise HTTPException(404, "Assessment unavailable")
-    evidence = service.saved_evidence(repo, row)
+    try:
+        evidence = service.saved_evidence(repo, row)
+    except service.EvidenceUnavailable:
+        raise HTTPException(404, "Assessment unavailable") from None
     config, verification = service.saved_config(repo, row, evidence)
     body = service.advice_json(row)
     if verification == "unverifiable":

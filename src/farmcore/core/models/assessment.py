@@ -3,8 +3,8 @@
 One row is one module's computed result with the evidence it was computed from: the subject
 (farm, optional parcel), the evaluation time, the availability status, the configuration version
 and the inputs it read. The typed result belongs to its kind (`Manifest.assessment_kinds`); the
-envelope never interprets it. Rows are append-only (a trigger refuses UPDATE), so a saved
-assessment stays reproducible; a demo reset may still delete them.
+envelope never interprets it. Rows are immutable (a trigger refuses UPDATE), so a saved
+assessment stays reproducible; a row is deletable only with its advice or by a demo reset.
 """
 
 from datetime import datetime

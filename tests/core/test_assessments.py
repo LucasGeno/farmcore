@@ -123,7 +123,7 @@ def test_saved_assessment_evidence_cannot_be_rewritten(session):
     row = _envelope(SPRAY, farm_id=farm.id, parcel_id=parcel.id, result=SPRAY_RESULT)
     session.add(row)
     session.flush()
-    with pytest.raises(DBAPIError, match="append-only"), session.begin_nested():
+    with pytest.raises(DBAPIError, match="immutable"), session.begin_nested():
         session.execute(
             update(Assessment)
             .where(Assessment.id == row.id)

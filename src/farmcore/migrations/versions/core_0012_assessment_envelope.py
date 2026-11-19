@@ -3,7 +3,8 @@
 Adds `assessment`: one module's typed result (`kind`, `kind_version`, `result`) with its evidence
 (farm, optional parcel of that farm, evaluation time, status, configuration version or
 configuration, input snapshot). A trigger refuses every UPDATE, so saved evidence is never
-rewritten; DELETE stays possible (a demo reset clears its farm's assessments).
+rewritten: it is immutable, deletable only with its advice (whose foreign key holds it) or by a
+demo reset of its farm.
 
 Adds `advice.assessment_id` (unique, nullable): advice written from now on points at its
 envelope, which holds its input snapshot and unversioned configuration instead of `props`. The
@@ -99,7 +100,7 @@ def upgrade() -> None:
         LANGUAGE plpgsql AS $$
         BEGIN
             RAISE EXCEPTION USING ERRCODE = '23000',
-                MESSAGE = 'Assessment evidence is append-only';
+                MESSAGE = 'Assessment evidence is immutable';
         END;
         $$
     """)

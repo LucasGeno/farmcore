@@ -224,8 +224,8 @@ A module's computed result is saved in one shared envelope (`core/assessments.py
 snapshot and the typed result. The result belongs to a kind an app declares
 (`Manifest.assessment_kinds`: key, version and a Pydantic model); the kind's model validates it
 when it is saved and types it when it is read, and an envelope is never read as another kind. The
-database refuses any update to a saved envelope, so a review or a replay always refers to the
-evidence that was evaluated.
+database refuses any update to a saved envelope (it is immutable; deletable only with its advice
+or by a demo reset), so a review or a replay always refers to the evidence that was evaluated.
 
 Crop protection saves kind `advisor.spray` (spray / wait / protected / none with its reasons,
 products and windows). Its `advice` row stays the public representation every reader uses and

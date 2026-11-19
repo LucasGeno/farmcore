@@ -8,8 +8,9 @@ Pydantic model validates it on the way in and types it on the way out, so a modu
 map its result onto another module's vocabulary (no frost result becomes a spray decision), and
 the envelope never relaxes a kind's validation to fit another.
 
-Rows are append-only: the database refuses any UPDATE (core_0012), so a saved assessment, and a
-human review of it, always refer to the evidence that was actually evaluated.
+Rows are immutable: the database refuses any UPDATE (core_0012), so a saved assessment, and a
+human review of it, always refer to the evidence that was actually evaluated. A row is deletable
+only after its advice is (the advice's foreign key), or by a demo reset of its farm.
 """
 
 from __future__ import annotations

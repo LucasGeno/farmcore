@@ -460,19 +460,25 @@ def advice_row(
     )
 
 
+class EvidenceUnavailable(LookupError):
+    """The advice names an envelope this repository cannot read; its evidence is never guessed."""
+
+
 def saved_evidence(repo: ScopedRepository, row: Advice) -> dict[str, Any]:
     """The evidence an advice row was evaluated from: `config_version`, `effective_config`
     (None when a version is named) and `input_snapshot`. Rows saved since core_0012 read it from
-    their envelope; older rows from their own `props` (a `config_version` missing there is
-    `None`)."""
+    their envelope (`EvidenceUnavailable` when it cannot be read: never the row's own props,
+    which no longer hold it); older rows from their own `props` (a `config_version` missing
+    there is `None`)."""
     if row.assessment_id is not None:
         envelope = repo.get(Assessment, row.assessment_id, scope=SCOPE)
-        if envelope is not None:
-            return {
-                "config_version": envelope.config_version,
-                "effective_config": envelope.effective_config,
-                "input_snapshot": envelope.input_snapshot,
-            }
+        if envelope is None:
+            raise EvidenceUnavailable(f"assessment {row.assessment_id} of advice {row.id}")
+        return {
+            "config_version": envelope.config_version,
+            "effective_config": envelope.effective_config,
+            "input_snapshot": envelope.input_snapshot,
+        }
     props = row.props or {}
     return {
         "config_version": props.get("config_version"),
