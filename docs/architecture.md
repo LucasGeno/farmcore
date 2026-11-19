@@ -304,6 +304,8 @@ so switching an app off takes effect within one request or worker tick, without 
 
 - web: every app router is gated (404 while off, pages and writes alike); nav, widgets, map
   layers and the assistant's tools follow the same rule;
+- Telegram bot: with Chat off it answers allowed users with a fixed line before any transcription,
+  extraction or draft work;
 - drafts: a switched-off app's draft kinds can be neither proposed, revised nor confirmed, from
   any process (the bot included);
 - worker: it loads every discovered app and, each tick, plans and runs only the apps that are on;
@@ -327,8 +329,15 @@ Known limits:
 
 - An app that was off when a web process started mounts its routes at that process's next start;
   the worker picks it up at once.
-- If the state cannot be read, the web shell and route gate count every loaded app as on (the
-  route then fails on the same database anyway); the worker's fence fails closed.
-- The Telegram bot keeps polling while Chat is off; its question tools and draft confirms follow
-  the live state.
-- Settings are validated when an app is switched on; there is no settings editor yet.
+- If the state cannot be read, the web shell and nav count every loaded app as on, so the page
+  frame still renders, but an app's own routes answer 503; the worker's fence fails closed.
+- The Telegram bot keeps polling while Chat is off and answers every allowed message with one
+  fixed line; nothing is transcribed, extracted, drafted or confirmed.
+- Settings are validated when an app is switched on, not at start: an upgrade whose settings
+  model rejects the stored settings leaves the app on until it is switched off and on again.
+  There is no settings editor yet.
+- The task fence and the outbox check the app's own row only. A switch never leaves a dependant on
+  while its dependency is off; a dependency switched off by hand in SQL stops planning (live
+  rule) but not an attempt or intent already admitted.
+- Two concurrent switches (on for an app, off for its dependency) read states without a lock and
+  can both pass; the dependant then counts as off everywhere.

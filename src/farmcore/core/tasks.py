@@ -104,8 +104,12 @@ def module_of(task_name: str) -> str:
 
 
 # The task's module row, locked against a state change until the transaction ends. No row reads
-# as installed at generation 0, as everywhere (`registry.read_states`); every process that runs
-# tasks creates the rows at start (`registry.sync_modules`).
+# as installed at generation 0, as everywhere (`registry.read_states`), and locks nothing: a
+# switch that inserts the row would not wait for a publication in progress. Web, bot and worker
+# create every row at start (`registry.sync_modules`), so that case needs an app no process has
+# started. Only the module's own row is checked: a switch never leaves a dependant on while its
+# dependency is off (`registry.switch_refusal`); a dependency switched off by hand in SQL is not
+# seen here (the planner's live rule does see it).
 _MODULE = text("SELECT state, generation FROM app_module WHERE name = :m FOR SHARE")
 
 

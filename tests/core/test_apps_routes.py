@@ -129,6 +129,17 @@ def test_a_switched_off_app_is_unreachable_at_once_and_back_when_switched_on(
     assert fake_client.post("/a/ping").json() == {"app": "a", "poked": "yes"}
 
 
+def test_an_app_route_fails_closed_when_its_state_cannot_be_read(fake_client: TestClient) -> None:
+    """`/a/ping` touches no database: only the gate stands between a read error and serving it."""
+    from sqlalchemy.exc import OperationalError
+
+    def unreachable():
+        raise OperationalError("SELECT", {}, Exception("database is down"))
+
+    fake_client.app.state.session_factory = unreachable
+    assert fake_client.get("/a/ping").status_code == 503
+
+
 def test_invalid_settings_refuse_the_switch_on_and_change_nothing(
     fake_client: TestClient, session_factory
 ) -> None:

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 
 from farmcore.core import clock, jobs, outbox, registry, tasks
 from farmcore.core.models.canonical import Farm
@@ -65,6 +66,45 @@ def test_a_switched_off_app_is_neither_planned_nor_run_by_the_worker(
     jobs.run_due_live(session_factory, ordered, settings)  # first seen
     jobs.run_due_live(session_factory, ordered, settings)
     assert SWEEPS == ["lamp"]
+
+
+def _publishing(factory, farm_id: int):
+    """An open transaction that has just passed the task fence for beacon."""
+    attempt = tasks.begin_attempt(factory, "beacon.ping", farm_id, timedelta(minutes=1))
+    session = factory()
+    assert tasks.publish_if_current(session, attempt)
+    return session
+
+
+def _claiming(factory, farm_id: int):
+    """An open transaction that has just admitted one of beacon's outbox intents."""
+    session = factory()
+    intent = outbox.Intent(0, farm_id, "beacon", "note", {}, 0)
+    assert outbox.may_dispatch(session, intent)
+    return session
+
+
+@pytest.mark.parametrize("holder", [_publishing, _claiming], ids=["publication", "claim"])
+def test_a_switch_off_waits_for_work_admitted_before_it(
+    committed_session_factory, settings, holder
+) -> None:
+    """Without the row lock a disable could commit between admission and the write, and the
+    attempt would publish (or the intent be sent) after the app is off."""
+    factory = committed_session_factory
+    farm_id = _live_farm(factory, settings)
+    admitted = holder(factory, farm_id)
+    switch = factory()
+    try:
+        switch.execute(text("SET LOCAL lock_timeout = '200ms'"))
+        with pytest.raises(OperationalError, match="lock timeout"):
+            switch.execute(
+                text("UPDATE app_module SET state = 'uninstalled' WHERE name = 'beacon'")
+            )
+    finally:
+        switch.rollback()
+        switch.close()
+        admitted.rollback()
+        admitted.close()
 
 
 @pytest.fixture

@@ -124,8 +124,9 @@ def add(
     return inserted is not None
 
 
-# The intent's app, locked against a switch until the claim commits. No row reads as installed.
-_SOURCE_OFF = text("SELECT 1 FROM app_module WHERE name = :a AND state <> 'installed' FOR SHARE")
+# The intent's app row, locked against a switch until the claim commits (a disable waits for it;
+# a claim after the disable reads the new state). No row reads as installed.
+_SOURCE = text("SELECT state FROM app_module WHERE name = :a FOR SHARE")
 
 
 def may_dispatch(session: Session, intent: Intent) -> bool:
@@ -135,7 +136,10 @@ def may_dispatch(session: Session, intent: Intent) -> bool:
     stays pending (and expires on time); the check runs again at the next dispatch."""
     if read_external_effects(session) != EFFECTS_ENABLED:
         return False
-    return session.execute(_SOURCE_OFF, {"a": intent.source_app}).first() is None
+    # Only the source app's own row: a switch never leaves a dependant on while its dependency is
+    # off (`registry.switch_refusal`); a dependency switched off by hand in SQL is not seen here.
+    state = session.execute(_SOURCE, {"a": intent.source_app}).scalar()
+    return state is None or state == "installed"
 
 
 _EXPIRE = text(

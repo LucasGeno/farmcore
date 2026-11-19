@@ -257,10 +257,15 @@ def load(
 
 def _module_gate(name: str):
     """A route dependency: 404 while app `name` is off (`visible_manifests`, this request's one
-    read), so a switched-off app's pages and writes are gone at once, not at the next start."""
+    read), so a switched-off app's pages and writes are gone at once, not at the next start;
+    503 when that read failed."""
 
     def gate(request: Request) -> None:
-        if all(m.name != name for m in visible_manifests(request)):
+        visible = visible_manifests(request)
+        if getattr(request.state, "module_states_unread", False):
+            # The shell renders with every app (fail-open); an app's own routes fail closed.
+            raise HTTPException(status_code=503, detail="App state unavailable")
+        if all(m.name != name for m in visible):
             raise HTTPException(status_code=404, detail="Not Found")
 
     return gate
@@ -298,7 +303,8 @@ def visible_manifests(request: Request) -> list[Manifest]:
     """The loaded apps (load order) whose `app_module` state is not `uninstalled`.
 
     One query per request, cached on `request.state`. With no session factory, or when the read
-    fails, every loaded app counts as visible: the shell still renders.
+    fails, every loaded app counts as visible: the shell still renders (the route gate refuses
+    an app's own routes with 503 when the read failed).
     """
     cached = getattr(request.state, "visible_manifests", None)
     if cached is not None:
@@ -314,6 +320,7 @@ def visible_manifests(request: Request) -> list[Manifest]:
                 )
         except SQLAlchemyError:
             off = set()
+            request.state.module_states_unread = True  # the route gate refuses (503)
     visible = visible_from_states(loaded, {name: UNINSTALLED for name in off})
     request.state.visible_manifests = visible
     return visible
