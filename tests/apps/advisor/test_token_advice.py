@@ -172,7 +172,7 @@ def test_stale_advice_never_reads_as_current(session):
 
     result = tools.parcel_status(_as_token(session, raw), "P1")
 
-    assert result.facts["decision"] != "spray"
+    assert result.facts["decision"] == "none"
     assert "out of date" in result.text
 
 

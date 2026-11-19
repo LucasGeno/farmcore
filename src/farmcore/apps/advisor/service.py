@@ -124,8 +124,8 @@ def _grant_reason(repo: ScopedRepository) -> str | None:
 
 def redact_inputs(repo: ScopedRepository, value: Any) -> Any:
     """`value`, a raw weather input of an advice row (`mm_since_spray`, a reason's `inputs`),
-    as a grant or token view may show it: None. The owner's view is unchanged. One helper for
-    every shared advice view."""
+    as a grant or token view may show it: None. The owner's view is unchanged. Used by the
+    advisor tools; the share `advice.json` does not use it yet (weather-providers 14)."""
     return None if repo.grant_view else value
 
 

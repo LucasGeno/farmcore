@@ -43,6 +43,7 @@ from farmcore.core.access import TokenRejected, authenticate_token, ensure_owner
 from farmcore.core.identity import hash_password
 from farmcore.core.models.canonical import Farm
 from farmcore.core.models.identity import FarmMembership, LocalIdentity, OAuthCode, OAuthToken
+from farmcore.core.oauth import service as oauth
 from farmcore.main import create_app
 from farmcore.settings import OAuthClient
 
@@ -212,6 +213,16 @@ def _accepted(session, raw: str, audience: str | None = RESOURCE) -> bool:
     except TokenRejected:
         return False
     return True
+
+
+def test_a_request_naming_no_scope_does_not_ask_for_advice_read(oauth_settings):
+    # An owner must choose to let an agent read stored advice; the default never includes it.
+    params = {k: v for k, v in _request().items() if k != "scope"}
+
+    asked = oauth.parse_request(oauth_settings, params)
+
+    assert "advice:read" not in asked.scopes
+    assert "fields:read" in asked.scopes
 
 
 def test_metadata_points_a_client_at_this_server_and_this_resource_only_when_on(
