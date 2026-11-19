@@ -64,9 +64,10 @@ AUTH = (
 OBS = "DPObs/v2"
 CLIM = "DPClim/v1"
 RECENT = timedelta(hours=24)  # what DPObs keeps
-# The portal's guide asks to wait a few seconds before fetching an order, then poll.
+# The portal's guide asks to wait a few seconds before fetching an order, then poll; 5 s keeps
+# one farm's polls at 12 of DPClim's 50 requests a minute. A 429 waits its Retry-After.
 FIRST_POLL_SECONDS = 3.0
-POLL_SECONDS = 2.0
+POLL_SECONDS = 5.0
 KELVIN = Decimal("273.15")
 MS_TO_KMH = Decimal("3.6")
 QC = {"0": "passed", "1": "passed", "2": "suspect"}
@@ -80,6 +81,18 @@ class PortalError(RuntimeError):
 
 def _iso(ts: datetime) -> str:
     return ts.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _iso_end(hour: datetime) -> str:
+    """The DPClim order's end for the last hour wanted: `hh:59:59Z`, its documented form."""
+    return hour.astimezone(UTC).strftime("%Y-%m-%dT%H:59:59Z")
+
+
+def _retry_after(response: httpx.Response) -> float:
+    try:
+        return max(0.0, float(response.headers.get("Retry-After", POLL_SECONDS)))
+    except ValueError:  # an HTTP date: wait the usual poll
+        return POLL_SECONDS
 
 
 def _decimal(text: object) -> Decimal | None:
@@ -149,7 +162,10 @@ def archive_values(text: str, range: TimeRange) -> list[ObservationValue]:
 
 
 class Portal:
-    """Authorised calls to the portal within one deadline (`time.monotonic()` seconds)."""
+    """Authorised calls to the portal within one deadline (`time.monotonic()` seconds).
+
+    The token is minted once per Portal and never refreshed on a clock: a Portal lives for one
+    run (`ingest.DEADLINE`, minutes), far inside the token's one hour. A 401 renews it once."""
 
     def __init__(
         self, client_id: str, client_secret: str, *, token_url: str, deadline: float
@@ -302,7 +318,7 @@ class MeteoFranceLive:
         params = {
             "id-station": station.provider_station_id,
             "date-deb-periode": _iso(range.start + timedelta(hours=1)),
-            "date-fin-periode": _iso(range.end),
+            "date-fin-periode": _iso_end(range.end),
         }
         portal = self.portal()
         response = portal.get("archive order", url, params)
@@ -312,16 +328,16 @@ class MeteoFranceLive:
             order = str(response.json()["elaboreProduitAvecDemandeResponse"]["return"])
         except (ValueError, KeyError, TypeError):
             raise PortalError("archive order: no order id in the response") from None
-        time.sleep(FIRST_POLL_SECONDS)
+        time.sleep(min(FIRST_POLL_SECONDS, portal.remaining("archive file")))
         while True:
             file = portal.get(
                 "archive file", f"{self.base_url}/{CLIM}/commande/fichier", {"id-cmde": order}
             )
             if file.status_code == 201:
                 break
-            if file.status_code != 204:
+            if file.status_code not in (204, 429):  # 204: still produced; 429: over quota
                 raise PortalError(f"archive file: HTTP {file.status_code}")
-            time.sleep(min(POLL_SECONDS, portal.remaining("archive file")))
+            time.sleep(min(_retry_after(file), portal.remaining("archive file")))
         return Fetched(
             request=Request(dataset=f"{CLIM}/commande-station/horaire", url=url, params=params),
             fetched_at=datetime.now(UTC),

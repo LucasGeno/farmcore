@@ -28,11 +28,13 @@ def _hour(text: str) -> datetime:
 
 
 class Portal:
-    """Answers like the portal; `fail` names an endpoint (`token`, `archive`) that errs."""
+    """Answers like the portal; `fail` names an endpoint (`token`, `archive`) that errs,
+    `pending` how many polls the archive file is not ready for (the first answer a 429 with
+    Retry-After), `expired` how many data calls refuse a valid token (it expired)."""
 
-    def __init__(self, fail: str | None = None) -> None:
-        self.fail = fail
-        self.pending = 1  # the archive file is not ready on the first poll
+    def __init__(self, fail: str | None = None, pending: int = 2, expired: int = 0) -> None:
+        self.fail, self.pending, self.expired = fail, pending, expired
+        self.tokens = 0
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path, params = request.url.path, request.url.params
@@ -40,15 +42,25 @@ class Portal:
             basic = base64.b64encode(f"{CLIENT_ID}:{CLIENT_SECRET}".encode()).decode()
             if self.fail == "token" or request.headers.get("authorization") != f"Basic {basic}":
                 return httpx.Response(401, json={"error": "invalid_client"})
+            self.tokens += 1
             return httpx.Response(200, content=(FIXTURES / "token.json").read_bytes())
         token = json.loads((FIXTURES / "token.json").read_text())["access_token"]
         if request.headers.get("authorization") != f"Bearer {token}":
+            return httpx.Response(401)
+        if self.expired:
+            self.expired -= 1
             return httpx.Response(401)
         if path == "/public/DPObs/v2/station/horaire":
             rows = json.loads((FIXTURES / "dpobs-station-horaire-33394002.json").read_text())
             rows[0]["validity_time"] = params["date"]
             return httpx.Response(200, json=rows)
         if path == "/public/DPClim/v1/commande-station/horaire":
+            # The documented forms: the start on the hour, the end at hh:59:59.
+            if not (
+                params["date-deb-periode"].endswith(":00:00Z")
+                and params["date-fin-periode"].endswith(":59:59Z")
+            ):
+                return httpx.Response(400)
             self.period = _hour(params["date-deb-periode"]), _hour(params["date-fin-periode"])
             return httpx.Response(
                 202, json={"elaboreProduitAvecDemandeResponse": {"return": ORDER}}
@@ -58,6 +70,8 @@ class Portal:
                 return httpx.Response(500)
             if self.pending:
                 self.pending -= 1
+                if self.pending == 1:
+                    return httpx.Response(429, headers={"Retry-After": "0"})
                 return httpx.Response(204)
             header, *rows = (
                 (FIXTURES / "dpclim-commande-horaire-33394002.csv").read_text().splitlines()
@@ -82,8 +96,8 @@ def portal(monkeypatch) -> Callable[..., Portal]:
     monkeypatch.setattr(ingest, "BACKFILL", timedelta(hours=26))
     real = httpx.Client
 
-    def install(fail: str | None = None) -> Portal:
-        fake = Portal(fail)
+    def install(**kw) -> Portal:
+        fake = Portal(**kw)
         monkeypatch.setattr(
             live.httpx, "Client", lambda **kw: real(transport=httpx.MockTransport(fake), **kw)
         )

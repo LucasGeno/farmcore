@@ -6,12 +6,21 @@ the stations seed gives the demo station), and `farmcore worker` runs `ingest_fa
 
 1. read the hours the farm holds for that station in the last week (no transaction stays open
    during the requests);
-2. fetch the windows `plan` names, oldest first, within the attempt's deadline; a failed window
-   ends the run, so nothing newer is stored over a gap the archive has not filled yet;
+2. fetch the windows `plan` names, the recent one first, within the attempt's deadline; each
+   stands alone, so a failing archive never holds back the live hours (`plan` finds the
+   archive gap again on the next run from the first missing hour);
 3. only if the attempt is current: store each response (legacy `observation` rows, which older
    readers still read, and the normalised receipt and observations, under the replay's station,
    `stations.connector.EXT_SOURCE`) and the station's `meteofrance_live` health:
-   `{last_attempt, error}`, the error being the step and HTTP status, never a credential.
+   `{last_attempt, error, archived_through}`: each failed step and its HTTP status (never a
+   credential), and the end of the last archive window answered, never ordered again.
+
+Known limits: the normalised station and its (station, variable, period) key are shared by
+every farm holding that station number, so a second farm with the same station sees the first
+farm's hours as held (the replay has the same limit; per-farm merging is the merge layer's).
+DPObs hours stay `unchecked`: the archive only fills missing hours and never upgrades a held
+hour's QC. Legacy `observation` rows are upserted (the last writer wins) while the normalised
+store keeps the first receipt, so they can differ where live and replay hours overlap.
 """
 
 from __future__ import annotations
@@ -53,17 +62,22 @@ RECENT = timedelta(hours=24)
 BACKFILL = timedelta(days=7)
 
 
-def plan(held: Collection[datetime], now: datetime) -> list[TimeRange]:
+def plan(
+    held: Collection[datetime], now: datetime, archived_through: datetime | None = None
+) -> list[TimeRange]:
     """The windows a run fetches, oldest first, each `(start, end]` on whole hours: the
     archive from just before the first hour the farm lacks (`held`: the ends of the hours it
-    holds) in the week before the recent window, if any; then the recent 24 hours after the
-    newest hour held in them (DPObs answers one hour per call). A gap left inside the recent
-    window is filled from the archive once it is older than 24 hours."""
+    holds) in the week before the recent window and after `archived_through` (the archive was
+    already asked up to it: an hour it lacked is not ordered again), if any; then the recent
+    24 hours after the newest hour held in them (DPObs answers one hour per call). A gap left
+    inside the recent window is ordered from the archive once it is older than 24 hours."""
     end = now.replace(minute=0, second=0, microsecond=0)
     newest = max((h for h in held if end - RECENT < h <= end), default=end - RECENT)
     recent = TimeRange(newest, end)
     archive_end = end - RECENT
     hour = end - BACKFILL + HOUR
+    if archived_through is not None:
+        hour = max(hour, archived_through + HOUR)
     while hour <= archive_end and hour in held:
         hour += HOUR
     windows = [TimeRange(hour - HOUR, archive_end)] if hour <= archive_end else []
@@ -88,7 +102,7 @@ def ingest(ctx: JobContext) -> None:
     tasks.enqueue_due(ctx.session, JOB_NAME, INTERVAL, farm_ids)
 
 
-def _held(session: Session, farm_id: int, now: datetime) -> tuple[int, Station, set] | None:
+def _held(session: Session, farm_id: int, now: datetime) -> tuple[Asset, Station, set] | None:
     repo = repo_for_job(session, farm_id, JOB_NAME)
     asset = service.station_for_farm(repo)
     if asset is None:
@@ -107,38 +121,58 @@ def _held(session: Session, farm_id: int, now: datetime) -> tuple[int, Station, 
         scope=service.SCOPE,
         resource="weather_observation",
     ).scalars()
-    return asset.id, station, set(held)
+    return asset, station, set(held)
+
+
+def _archived_through(health: object) -> datetime | None:
+    try:
+        return datetime.fromisoformat(health["archived_through"])  # type: ignore[index]
+    except (TypeError, KeyError, ValueError):
+        return None
 
 
 def ingest_farm(ctx: tasks.TaskContext) -> None:
-    """The durable task: fetch outside any transaction, store only if the attempt is current."""
+    """The durable task: fetch outside any transaction, store only if the attempt is current.
+    The recent window is fetched first and each window stands alone: a failing archive never
+    holds back the live hours, and its gap is ordered again on the next run."""
     with session_scope(ctx.session_factory) as session:
         now = get_clock(session, ctx.settings).now()
         found = _held(session, ctx.farm_id, now)
-    if found is None:
-        return
-    asset_id, station, held = found
+        if found is None:
+            return
+        asset, station, held = found
+        asset_id, health = asset.id, (asset.props or {}).get(HEALTH)
+    archived_through = _archived_through(health)
     live = provider.provider(ctx.settings, timeout=ctx.attempt.remaining())
     responses: list[Fetched] = []
-    error = None
-    try:
-        for window in plan(held, now):
+    errors = []
+    for window in reversed(plan(held, now, archived_through)):
+        try:
             responses.append(live.fetch_observations(station, window))
-    except provider.PortalError as exc:
-        error = str(exc)
-    except Exception as exc:  # recorded, never raised into a retry loop with a stale plan
-        error = type(exc).__name__
+        except provider.PortalError as exc:
+            errors.append(str(exc))
+            continue
+        except Exception as exc:  # recorded, never raised into a retry loop with a stale plan
+            errors.append(type(exc).__name__)
+            continue
+        if window.end <= now - RECENT:
+            archived_through = window.end
+    error = "; ".join(errors) or None
     if error is not None:
         logger.warning("%s farm %s: %s", JOB_NAME, ctx.farm_id, error)
     with session_scope(ctx.session_factory) as session:
         if not tasks.publish_if_current(session, ctx.attempt):
             return
         asset = session.get(Asset, asset_id, with_for_update=True)
-        for fetched in responses:  # the windows before any failure
+        for fetched in responses:
             store(session, asset, live, station, fetched)
         asset.props = {
-            **asset.props,
-            HEALTH: {"last_attempt": datetime.now(UTC).isoformat(), "error": error},
+            **(asset.props or {}),
+            HEALTH: {
+                "last_attempt": datetime.now(UTC).isoformat(),
+                "error": error,
+                "archived_through": archived_through.isoformat() if archived_through else None,
+            },
         }
 
 

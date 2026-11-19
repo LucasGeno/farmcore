@@ -9,17 +9,20 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from pydantic import SecretStr, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from farmcore.apps.stations import service
+from farmcore.apps.stations.provider import STATION
 from farmcore.apps.weather_meteofrance.ingest import JOB_NAME
 from farmcore.apps.weather_meteofrance.manifest import MANIFEST
+from farmcore.apps.weather_meteofrance.provider import MeteoFranceLive, PortalError
 from farmcore.core import clock
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.jobs import run_now
 from farmcore.core.models.canonical import Asset, Farm
 from farmcore.core.models.weather import WeatherObservation, WeatherReceipt
+from farmcore.core.weather.contract import TimeRange
 from farmcore.settings import Settings
 from tests.apps.weather_meteofrance.conftest import CLIENT_ID, CLIENT_SECRET
 from tests.task_drain import drain
@@ -80,16 +83,21 @@ def test_a_live_tick_stores_recent_hours_and_backfills_the_archive_under_the_rep
     assert len(service.load_hourly(repo, asset.id, now - timedelta(days=2), now)) == 26
 
 
-@pytest.mark.parametrize("fail", ["token", "archive"], ids=["token-refused", "archive-failed"])
-def test_a_failed_live_tick_stores_nothing_and_records_why_without_the_credentials(
-    session, session_factory, credentials, station, portal, caplog, fail
+@pytest.mark.parametrize(
+    ("fail", "stored"),
+    # A refused token stores nothing; a failed archive still stores the 24 recent hours (the
+    # archive gap is ordered again on the next tick).
+    [("token", 0), ("archive", 24 * 4)],
+    ids=["token-refused", "archive-failed"],
+)
+def test_a_failed_live_tick_records_why_without_the_credentials(
+    session, session_factory, credentials, station, portal, caplog, fail, stored
 ) -> None:
-    # An archive failure stores no recent hours either: the next tick still sees the gap.
-    portal(fail)
+    portal(fail=fail)
 
     asset = _tick(session, session_factory, credentials)
 
-    assert session.scalar(select(func.count(WeatherObservation.id))) == 0
+    assert session.scalar(select(func.count(WeatherObservation.id))) == stored
     health = asset.props["meteofrance_live"]
     assert health["error"]
     for secret in (CLIENT_ID, CLIENT_SECRET):
@@ -98,11 +106,40 @@ def test_a_failed_live_tick_stores_nothing_and_records_why_without_the_credentia
 
 
 def test_the_client_secret_is_refused_over_plain_http_without_echoing_it() -> None:
+    # Short, plain and last: pydantic prints the ends of its input beside the refusal.
     with pytest.raises(ValidationError) as refused:
         Settings(
-            _env_file=None,
-            meteofrance_client_id=SecretStr(CLIENT_ID),
-            meteofrance_client_secret=SecretStr(CLIENT_SECRET),
-            meteofrance_api_base_url="http://public-api.meteofrance.fr/public",
+            _env_file=None, meteofrance_token_url="http://x", meteofrance_client_secret="s3cr3t"
         )
-    assert CLIENT_SECRET not in str(refused.value)
+    assert "s3cr3t" not in str(refused.value)
+
+
+def _one_window(portal, **kw):
+    """The provider alone over the fake portal, for one window."""
+    fake = portal(**kw)
+    live = MeteoFranceLive(
+        client_id=CLIENT_ID,
+        client_secret=CLIENT_SECRET,
+        base_url="https://public-api.meteofrance.fr/public",
+        token_url="https://portail-api.meteofrance.fr/token",
+        timeout=0.2,
+    )
+    end = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    return fake, live, STATION, end
+
+
+def test_a_token_refused_by_a_data_call_is_renewed_once(portal) -> None:
+    fake, live, station, end = _one_window(portal, expired=1)
+
+    fetched = live.fetch_observations(station, TimeRange(end - timedelta(hours=1), end))
+
+    assert fake.tokens == 2
+    assert len(fetched.values) == 4
+
+
+def test_an_archive_order_that_is_never_ready_ends_out_of_time(portal) -> None:
+    fake, live, station, end = _one_window(portal, pending=10**9)
+    old = end - timedelta(hours=30)
+
+    with pytest.raises(PortalError, match="out of time"):
+        live.fetch_observations(station, TimeRange(old - timedelta(hours=2), old))

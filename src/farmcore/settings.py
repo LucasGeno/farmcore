@@ -79,10 +79,10 @@ class Settings(BaseSettings):
     # Météo-France portal application (live station observations, `weather_meteofrance`): the
     # OAuth client credentials, exchanged for a bearer token; never logged, stored or rendered.
     # No client: the live ingest stays off.
-    meteofrance_client_id: SecretStr | None = None
-    meteofrance_client_secret: SecretStr | None = None
     meteofrance_api_base_url: str = DEFAULT_METEOFRANCE_API_BASE_URL
     meteofrance_token_url: str = DEFAULT_METEOFRANCE_TOKEN_URL
+    meteofrance_client_id: SecretStr | None = None
+    meteofrance_client_secret: SecretStr | None = None
     # Optional address search on the location step: a Nominatim or Photon base URL. Empty (the
     # default) keeps the geocoder off; map, browser location and coordinates still work.
     geocoder_base_url: str = ""

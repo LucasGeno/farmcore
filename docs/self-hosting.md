@@ -293,13 +293,22 @@ The `weather_meteofrance` app fetches live hourly observations of a farm's Mét�
   nothing.
 - **Windows.** DPObs keeps the last 24 hours and answers one hour per call
   ([guide](https://confluence-meteofrance.atlassian.net/wiki/spaces/OpenDataMeteoFrance/pages/853639294)).
-  Each hourly run asks DPObs for the hours since the newest one held, and orders any hour missing
-  from the week before that window from the DPClim archive
+  Each hourly run first asks DPObs for the hours since the newest one held, then orders any hour
+  missing from the week before that window from the DPClim archive
   ([guide](https://confluence-meteofrance.atlassian.net/wiki/spaces/OpenDataMeteoFrance/pages/854261785)),
-  with its quality codes. A failed step stores nothing newer, so the gap is ordered again on the
-  next run; the station's `meteofrance_live` health holds the last error (step and HTTP status).
+  with its quality codes. Each window is stored on its own: a failing archive never holds back
+  the live hours, and its gap is ordered again on the next run. An hour the archive was already
+  asked for is not ordered again, even if the archive lacked it. The station's
+  `meteofrance_live` health holds the last errors (step and HTTP status) and `archived_through`.
+- **Known limits.** The normalised station is shared by every farm holding the same station
+  number: a second farm with that station sees the first farm's hours as held (the replay has
+  the same limit; per-farm merging belongs to the merge layer). Hours first stored from DPObs
+  stay `unchecked`: the archive fills missing hours only and never upgrades a held hour's
+  quality. Legacy `observation` rows take the last value written while the normalised schema
+  keeps the first receipt, so the two can differ where live and replayed hours overlap.
 - **Quotas.** DPObs allows 100 requests a minute, DPClim 50, per account; a first run on a new
-  farm takes up to 24 DPObs calls and one archive order.
+  farm takes up to 24 DPObs calls and one archive order. The archive file is polled every 5 s,
+  and a 429 waits its `Retry-After`, within the run's three-minute deadline.
 - **Licence.** Licence Ouverte / Etalab 2.0, attributed to Météo-France on every receipt.
 
 ## Backups and restore
