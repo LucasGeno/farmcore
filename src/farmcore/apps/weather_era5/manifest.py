@@ -11,7 +11,7 @@ from farmcore.core.manifest import JobSpec, Manifest
 MANIFEST = Manifest(
     name="weather_era5",
     version="0.1.0",
-    summary="Season history for your farm's pin from ERA5 (Copernicus), flagged as model data.",
+    summary="Season history for your farm's pin from ERA5 (Copernicus), marked as model data.",
     depends=("core", "stations"),
     scopes=("stations:read",),
     jobs=(
