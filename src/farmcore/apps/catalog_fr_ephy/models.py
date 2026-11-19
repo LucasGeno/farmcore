@@ -1,6 +1,7 @@
 """France's E-Phy catalog (migration `catalog_fr_0001`): registered uses beside the neutral
-catalog items and per-country authorisations, and the import fingerprint that makes a re-import
-of an unchanged source a no-op.
+catalog items and per-country authorisations. The import fingerprint (`catalog_import`) that
+makes a re-import of an unchanged source a no-op lives in `core/models/catalog.py`, shared by
+every catalog import module.
 
 The neutral rows (one `catalog_item` per product, one `catalog_authorisation(country='FR',
 number=AMM)`) live in `core/models/catalog.py`. This app adds:
@@ -17,22 +18,17 @@ number=AMM)`) live in `core/models/catalog.py`. This app adds:
   and unit), never converted: most E-Phy dose units are not FarmCore measures. `state` is
   normalised (`authorised` / `withdrawn` / `provisional`); a withdrawn product is flagged, never
   deleted.
-- `catalog_import`: one row per import run — the source, its licence, attribution, the resource
-  URL and archive date, and a content hash. An unchanged source has the same hash, so the next
-  run writes nothing.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import (
-    ARRAY,
     BigInteger,
     CheckConstraint,
     Date,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -43,6 +39,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from farmcore.core.models.base import Base
+from farmcore.core.models.catalog import CatalogImport  # noqa: F401  # re-export
 
 # Normalised use states (the source spells them in French).
 USE_STATES = ("authorised", "withdrawn", "provisional")
@@ -83,26 +80,3 @@ class CatalogUse(Base):
     znt_arthropods: Mapped[Decimal | None] = mapped_column(Numeric)
     znt_plants: Mapped[Decimal | None] = mapped_column(Numeric)
     state: Mapped[str] = mapped_column(Text)
-
-
-class CatalogImport(Base):
-    __tablename__ = "catalog_import"
-    __table_args__ = (
-        UniqueConstraint("source", "content_hash"),
-        CheckConstraint("content_hash ~ '^[0-9a-f]{64}$'", name="content_hash"),
-    )
-
-    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    source: Mapped[str] = mapped_column(Text)
-    licence: Mapped[str] = mapped_column(Text)
-    licence_id: Mapped[str] = mapped_column(Text)
-    attribution: Mapped[str] = mapped_column(Text)
-    retrieved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    content_hash: Mapped[str] = mapped_column(Text)
-    resource_url: Mapped[str] = mapped_column(Text)
-    archive_name: Mapped[str] = mapped_column(Text)
-    archive_date: Mapped[str] = mapped_column(Text)
-    product_count: Mapped[int] = mapped_column(Integer)
-    use_count: Mapped[int] = mapped_column(Integer)
-    skipped: Mapped[int] = mapped_column(Integer)
-    reasons: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)

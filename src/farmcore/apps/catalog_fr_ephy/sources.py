@@ -138,8 +138,10 @@ def decode(raw: bytes) -> str:
         return raw.decode("cp1252")
 
 
-def content_hash(products_raw: bytes, uses_raw: bytes) -> str:
-    return hashlib.sha256(products_raw + b"\n" + uses_raw).hexdigest()
+def content_hash(products_raw: bytes, uses_raw: bytes, version: int = 1) -> str:
+    return hashlib.sha256(
+        products_raw + b"\n" + uses_raw + f"\nversion={version}".encode()
+    ).hexdigest()
 
 
 def _read_rows(raw: bytes) -> tuple[list[str], list[list[str]], list[str]]:
