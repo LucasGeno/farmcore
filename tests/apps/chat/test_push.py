@@ -1,6 +1,7 @@
 """`chat.push_advice`: one Telegram digest per farm per run from `advice.changed` events.
 
-Driven through the chat manifest with `jobs.run_now`, a fake sender (`set_sender`) and inserted
+Driven through the chat manifest with `jobs.run_now` then one outbox dispatch (what the worker
+does next), a fake sender (`set_sender`) and inserted
 fake events (the push does not need the advisor app; a stub `advisor.evaluate` checks the step
 order). Synthetic parcels only.
 """
@@ -24,7 +25,7 @@ from sqlalchemy import select
 from farmcore.apps.chat import push
 from farmcore.apps.chat.manifest import MANIFEST
 from farmcore.apps.chat.telegram import FakeTelegramSender, HttpxTelegramSender, TelegramSendError
-from farmcore.core import jobs, registry
+from farmcore.core import jobs, outbox, registry
 from farmcore.core.clock import set_replay
 from farmcore.core.manifest import JobSpec
 from farmcore.core.models.canonical import Farm, Parcel
@@ -97,8 +98,10 @@ def cursor(session, farm_id: int) -> int | None:
 
 
 def run(session_factory, settings):
+    """The push job, then the worker's next outbox dispatch."""
     result = jobs.run_now(session_factory, [MANIFEST], "chat.push_advice", settings)
     assert result is not None and result.ok, result
+    outbox.dispatch(session_factory, settings, [MANIFEST])
     return result
 
 
@@ -268,7 +271,7 @@ def test_a_chat_that_refuses_the_send_does_not_block_the_others_or_the_cursor(
         ids = seed(session, bot_settings, chats=(BLOCKED, CHAT))
         last = changed(session, ids["farm"], ids["P5"], "P5", "Les Granges", "spray", "Spray now")
 
-        with caplog.at_level(logging.WARNING, logger=push.__name__):
+        with caplog.at_level(logging.WARNING, logger=outbox.__name__):
             run(session_factory, bot_settings)
         run(session_factory, bot_settings)
     finally:
@@ -277,7 +280,7 @@ def test_a_chat_that_refuses_the_send_does_not_block_the_others_or_the_cursor(
     assert [m.chat_id for m in blocked.sent] == [CHAT]
     assert cursor(session, ids["farm"]) == last.id
     logged = caplog.text
-    assert str(BLOCKED) in logged and "TelegramSendError" in logged
+    assert "refused" in logged
     assert "Spray now" not in logged and "Les Granges" not in logged
 
 
@@ -393,6 +396,7 @@ def test_a_replay_step_pushes_the_advice_its_own_evaluate_just_changed(
     seed(session, bot_settings)
 
     runs = jobs.step_to(session_factory, ordered, NOW_LOCAL, bot_settings)
+    outbox.dispatch(session_factory, bot_settings, ordered)
 
     assert [(r.name, r.ok) for r in runs] == [
         ("advisor.evaluate", True),

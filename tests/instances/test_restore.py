@@ -241,6 +241,15 @@ def test_a_restored_copy_pushes_no_advice_until_the_owner_enables_effects(
         "WHERE id = 1 RETURNING id",
         chat=CHAT,
     )
+    # A digest A recorded but had not sent when it was backed up: A sends it, C never does.
+    dbs.query(
+        source["name"],
+        "INSERT INTO outbox (farm_id, source_app, kind, dedupe_key, payload, expires_at) "
+        "VALUES (1, 'chat', 'telegram.message', 'inherited', jsonb_build_object('chat_id', "
+        ":chat, 'text', 'from A', 'url_buttons', jsonb_build_array()), now() + interval '1 day') "
+        "RETURNING id",
+        chat=CHAT,
+    )
     target = dbs.create()
     c = dbs.installation(target)
     assert restore(backup(source, recipient, tmp_path / "a.age"), key, c).exit_code == 0
@@ -255,7 +264,8 @@ def test_a_restored_copy_pushes_no_advice_until_the_owner_enables_effects(
     # A (effects enabled) pushes the same pending changes: the gate, not a lack of events.
     stepped = run_cli("replay", "--to", "2024-04-11 06:00", env={**a, "TELEGRAM_BOT_TOKEN": TOKEN})
     assert stepped.exit_code == 0, stepped.output
-    assert [s.chat_id for s in telegram.sent] == [CHAT]
+    assert [s.chat_id for s in telegram.sent] == [CHAT, CHAT]
+    assert telegram.sent[0].text == "from A"
     telegram.sent.clear()
 
     # The runtime role (what the app and bot use) cannot switch effects on, and is named.
@@ -264,12 +274,17 @@ def test_a_restored_copy_pushes_no_advice_until_the_owner_enables_effects(
     assert denied.exit_code == 1 and c["RUNTIME_DATABASE_ROLE"] in denied.output
     assert effects(c) == "external effects: paused"
 
-    # The owner enables them; the next push goes out. Pausing stops them again.
+    # The owner enables them; the digests held while paused go out, never A's inherited one,
+    # which is listed for the operator. Pausing stops them again.
     assert run_cli("effects", "enable", env=c).exit_code == 0
     assert effects(runtime) == "external effects: enabled"
     stepped = run_cli("replay", "--to", "2024-04-12 06:00", env={**c, "TELEGRAM_BOT_TOKEN": TOKEN})
     assert stepped.exit_code == 0, stepped.output
-    assert [s.chat_id for s in telegram.sent] == [CHAT]
+    [(inherited, held), *own] = dbs.query(target, "SELECT id, state FROM outbox ORDER BY id")
+    assert held == "ambiguous" and own and {state for _, state in own} == {"sent"}
+    assert [s.chat_id for s in telegram.sent] == [CHAT] * len(own)
+    assert "from A" not in [s.text for s in telegram.sent]
+    assert f"{inherited}  farm 1" in run_cli("outbox", env=runtime).output
     assert run_cli("effects", "pause", env=c).exit_code == 0
     telegram.sent.clear()
     run_cli("replay", "--to", "2024-04-13 06:00", env={**c, "TELEGRAM_BOT_TOKEN": TOKEN})

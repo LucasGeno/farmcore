@@ -187,6 +187,21 @@ their interval has passed since their last live run (kept in `clock_state`; a jo
 one interval after a worker first sees it). Replay never enqueues: `step_to` and `run_now` stay
 in-process and deterministic.
 
+### Outbox
+
+Deliveries outside the installation go through `core/outbox.py`. The cause's transaction
+records an intent (`outbox` table; today `chat.push_advice` writes one Telegram digest per
+bound chat together with its cursor), so a rollback leaves none and a committed one outlives
+any worker. The worker dispatches them every tick in a loop of its own, in either clock mode,
+outside the step lock; `farmcore replay` dispatches once after its step. Apps declare the
+providers (`Manifest.delivery_providers`). Each send is claimed in a committed transaction
+first (`SKIP LOCKED`), so no intent is sent twice once the provider accepted it: a refusal the
+provider answered is retried (three claims at most), a send with no answer or whose worker died
+becomes `ambiguous` and is listed by `farmcore outbox` until the operator settles it
+(`farmcore outbox resolve ID sent|resend|drop`). Nothing is claimed while external effects are
+paused (`outbox.may_dispatch`); intents expire on the wall clock (a digest after six hours), so
+enabling never sends a stale backlog. A restore marks the intents it inherits ambiguous.
+
 The queue is [Procrastinate](https://procrastinate.readthedocs.io/) (MIT, tables in `public`,
 schema applied from a checksummed vendored copy by revision `core_0009`); only
 `core/tasks.py` imports it. What may be written is decided by FarmCore's own fence, not by the

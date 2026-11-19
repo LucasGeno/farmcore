@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 import typer
 from sqlalchemy.orm import Session, sessionmaker
 
-from farmcore.core import jobs, registry
+from farmcore.core import jobs, outbox, registry
 from farmcore.core.clock import get_clock, parse_local, set_live
 from farmcore.core.manifest import Manifest
 from farmcore.db import make_engine, make_session_factory, session_scope
@@ -51,7 +51,11 @@ def register(cli: typer.Typer) -> None:
                 t = parse_local(to, settings.display_tz)
             except ValueError as exc:
                 raise typer.BadParameter(str(exc), param_hint="--to") from exc
-            runs = jobs.step_to(factory, _manifests(factory, tuple(app_package)), t, settings)
+            manifests = _manifests(factory, tuple(app_package))
+            runs = jobs.step_to(factory, manifests, t, settings)
+            # What the step's jobs recorded for the outside world, sent now (the step lock is
+            # released); a running worker would send it at its next tick.
+            delivered = outbox.dispatch(factory, settings, manifests)
             with factory() as session:
                 now = get_clock(session, settings).now()
         finally:
@@ -65,5 +69,7 @@ def register(cli: typer.Typer) -> None:
             typer.echo(f"{line}  {run.error}" if run.error else line)
         failed = sum(not r.ok for r in runs)
         typer.echo(f"{len(runs)} job(s) ran, {failed} failed")
+        if delivered:
+            typer.echo("deliveries: " + ", ".join(f"{n} {o}" for o, n in sorted(delivered.items())))
         if failed:
             raise typer.Exit(code=1)

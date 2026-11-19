@@ -8,9 +8,7 @@ import pytest
 
 from farmcore.apps.chat import service
 from farmcore.apps.chat.extractor.base import DraftOperation, fact_fields
-from farmcore.apps.chat.push import push_advice
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.manifest import JobContext
 from tests.apps.planning.conftest import NOW
 
 
@@ -56,24 +54,6 @@ def test_an_irrigation_with_an_unknown_basis_is_refused(session, farm, parcels):
     )
     with pytest.raises(service.Unclear, match="gross or net"):
         service.check(draft, ctx)
-
-
-def test_advice_push_skips_while_external_effects_are_paused(session, farm, settings, caplog):
-    from pydantic import SecretStr
-    from sqlalchemy import text
-
-    name = session.execute(text("SELECT current_database()")).scalar()
-    assert name
-    session.execute(text(f"ALTER DATABASE \"{name}\" SET farmcore.external_effects = 'paused'"))
-    configured = settings.model_copy(update={"telegram_bot_token": SecretStr("synthetic-token")})
-    try:
-        with caplog.at_level("INFO", logger="farmcore.apps.chat.push"):
-            push_advice(
-                JobContext(session=session, now=NOW, settings=configured, farm_ids=(farm.id,))
-            )
-    finally:
-        session.execute(text(f'ALTER DATABASE "{name}" RESET farmcore.external_effects'))
-    assert "external effects are paused; advice push skipped" in caplog.text
 
 
 def test_the_bot_pause_loop_announces_once_and_resumes(

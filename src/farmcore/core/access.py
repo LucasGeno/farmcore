@@ -145,6 +145,8 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "login_bucket": frozenset({"audit:read"}),
     "observation": frozenset({"stations:read"}),
     "operation_correction": frozenset({"corrections:read"}),
+    # Operational: deliveries outside the installation and their receipts (core/outbox.py).
+    "outbox": frozenset({"audit:read"}),
     "parameter_activation": frozenset({"parameters:read"}),
     "parameter_review": frozenset({"parameters:read"}),
     "parameter_version": frozenset({"parameters:read"}),

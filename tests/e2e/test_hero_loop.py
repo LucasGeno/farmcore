@@ -40,7 +40,7 @@ from farmcore.apps.chat.handlers import ChatDeps
 from farmcore.apps.chat.telegram import FakeTelegramSender
 from farmcore.apps.chat.transcribe import FakeTranscriber, Transcript
 from farmcore.apps.operations import seed as ops_seed
-from farmcore.core import ext_ids, jobs
+from farmcore.core import ext_ids, jobs, outbox
 from farmcore.core.access import default_farm
 from farmcore.core.models.canonical import Parcel, Product
 from farmcore.core.models.drafts import Draft
@@ -161,6 +161,7 @@ class Demo:
         """The navbar replay step (`farmcore replay --to <local>`): every due job succeeds."""
         runs = jobs.step_to(self.session_factory, self.manifests, local(to), self.settings)
         assert all(r.ok for r in runs), runs
+        outbox.dispatch(self.session_factory, self.settings, self.manifests)  # as the CLI does
 
     def start(self) -> None:
         asyncio.run(self.runtime.on_start(start_update(), self.context))

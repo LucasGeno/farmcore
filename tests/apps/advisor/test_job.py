@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from farmcore.apps.chat import push
 from farmcore.apps.chat.telegram import FakeTelegramSender
-from farmcore.core import jobs
+from farmcore.core import jobs, outbox
 from farmcore.core import seed as core_seed
 from farmcore.core.models.canonical import Advice, Event, Parcel
 from tests.apps.advisor import scenes
@@ -222,6 +222,7 @@ def test_the_chat_push_turns_real_advice_changes_into_one_digest(
     try:
         runs = jobs.step_to(session_factory, manifests, local("2024-04-10 06:00"), bot)
         assert all(r.ok for r in runs), runs
+        outbox.dispatch(session_factory, bot, manifests)  # what the worker sends next
         [first] = fake.sent
         assert first.chat_id == 4242
         assert first.text.splitlines()[0] == "10 parcels → spray"
@@ -238,6 +239,7 @@ def test_the_chat_push_turns_real_advice_changes_into_one_digest(
         confirm_spray(session, settings, "P1", local("2024-04-10 05:30"), "copper-contact")
         assert jobs.run_now(session_factory, manifests, "advisor.evaluate", bot).ok
         assert jobs.run_now(session_factory, manifests, "chat.push_advice", bot).ok
+        outbox.dispatch(session_factory, bot, manifests)
         [second] = fake.sent[1:]
         assert second.text == "1 parcel → protected"
         assert second.url_buttons == []

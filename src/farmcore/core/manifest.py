@@ -491,6 +491,9 @@ class Manifest:
     attention: str = ""  # provider "module:func" returning at most N home-strip items
     # Weather providers (core.weather): "module:factory", factory(settings) -> WeatherProvider.
     weather_providers: tuple[str, ...] = ()
+    # Outbox deliveries (core.outbox): (intent kind, "module:factory"), factory(settings) ->
+    # a provider, or None when unconfigured (its intents then wait, and expire).
+    delivery_providers: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         keys = [view.key for view in self.parcel_views]
@@ -523,6 +526,8 @@ class Manifest:
             raise ValueError(f"app {self.name!r}: weather_providers must be a tuple of paths")
         for path in self.weather_providers:
             _check_provider(path, f"app {self.name!r} weather provider")
+        for kind, path in self.delivery_providers:
+            _check_provider(path, f"app {self.name!r} delivery provider {kind!r}")
         for locale, words in self.keywords.items():
             if not re.fullmatch(r"[a-z]{2}(-[A-Za-z]{2,4})?", locale):
                 raise ValueError(f"app {self.name!r}: invalid keyword locale {locale!r}")

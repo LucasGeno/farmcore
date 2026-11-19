@@ -43,6 +43,7 @@ from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
+from farmcore.core import outbox
 from farmcore.core.clock import LiveClock, get_clock
 from farmcore.core.manifest import JobContext, JobSpec, Manifest, import_string
 from farmcore.db import session_scope
@@ -377,6 +378,22 @@ async def _housekeeping(
         await asyncio.sleep(tick)
 
 
+async def _deliveries(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    manifests: Sequence[Manifest],
+    tick: float,
+) -> None:
+    """The outbox (`core/outbox.py`), in its own loop and in either clock mode: a slow provider
+    never delays the jobs, and no send happens under the step lock."""
+    while True:
+        try:
+            await asyncio.to_thread(outbox.dispatch, session_factory, settings, manifests)
+        except Exception as exc:  # the database may be briefly unreachable: next tick
+            logger.error("outbox dispatch failed (%s)", type(exc).__name__)
+        await asyncio.sleep(tick)
+
+
 async def _live_jobs(
     session_factory: sessionmaker[Session],
     settings: Settings,
@@ -408,8 +425,9 @@ def run_worker(
     stalled: float = STALLED_SECONDS,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> None:
-    """Run tasks until SIGTERM or SIGINT, planning due work, retrying stalled tasks and running
-    the due installation-wide jobs (`jobs.run_due_live`) every `tick` seconds. `concurrency`
+    """Run tasks until SIGTERM or SIGINT, planning due work, retrying stalled tasks, running
+    the due installation-wide jobs (`jobs.run_due_live`) and dispatching the outbox every `tick`
+    seconds. `concurrency`
     tasks run at once: more than the farms expected to be slow at the same time, so one farm's
     slow provider never holds up another farm's task."""
     app = make_app(settings, session_factory, manifests)
@@ -421,6 +439,7 @@ def run_worker(
                     _housekeeping(app, session_factory, settings, manifests, tick, stalled)
                 ),
                 asyncio.create_task(_live_jobs(session_factory, settings, manifests, tick)),
+                asyncio.create_task(_deliveries(session_factory, settings, manifests, tick)),
             ]
             try:
                 await app.run_worker_async(
