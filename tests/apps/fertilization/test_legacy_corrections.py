@@ -93,3 +93,50 @@ def test_corrected_amount_is_shown_and_counted_once_with_original_evidence_kept(
     assert (
         len(session.scalars(select(TypedQuantity).where(TypedQuantity.log_id == log_id)).all()) == 2
     )
+
+    # Multiple entered amounts must all survive the current-summary projection.
+    enter_quantity(
+        session,
+        log_id=log_id,
+        value=Decimal("2.50"),
+        unit="kg",
+        catalog_item_id=case.item,
+        label="CAN 27",
+    )
+    session.commit()
+    page = client.get(f"/operations/{farm}")
+    line = re.search(rf'<li[^>]*data-record="{log_id}">.*?</li>', page.text, re.S)[0]
+    assert "180 kg" in line and "2.50 kg" in line
+    assert not re.search(r"200(?:\.0+)?\s+kg/ha", line)
+
+
+def test_post92_fertilization_index_line_is_unchanged(session, settings, client):
+    case = seed(session, settings)
+    log = Log(
+        farm_id=case.farm_id,
+        type="fertilise",
+        status="done",
+        name="CAN 27",
+        ts_start=APPLIED,
+        parcels=[session.get(Parcel, case.A)],
+    )
+    session.add(log)
+    session.commit()
+
+    def index_line():
+        response = client.get(f"/operations/?farm={case.farm_id}")
+        assert response.status_code == 200
+        return re.search(rf'<li[^>]*data-record="{log.id}">.*?</li>', response.text, re.S)[0]
+
+    # Main ignores entered-only amounts in this summary: keep the complete record line intact.
+    before = index_line()
+    enter_quantity(
+        session,
+        log_id=log.id,
+        value=Decimal("180"),
+        unit="kg",
+        catalog_item_id=case.item,
+        label="CAN 27",
+    )
+    session.commit()
+    assert index_line() == before
