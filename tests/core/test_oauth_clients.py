@@ -7,27 +7,36 @@ Failure model (written before the code; one owning test each):
   or to a mix of public and internal ones (CIMD §10.7, RFC 6890); DNS rebinding between the
   check and the connection (the fetch connects to the address it checked, resolving once); a
   redirect (CIMD §6: never followed); a non-200 answer, a body over 5 KB with or without a
-  Content-Length (CIMD §10.11), a body dribbled past the deadline, a type other than JSON
-  (fetch tests);
+  Content-Length (CIMD §10.11), a body dribbled past the deadline, a type other than JSON,
+  a non-ASCII host (a homograph), whitespace or port 0 in the URL (fetch table);
+- a slow server holding threads: headers dribbled one byte at a time under every per-read
+  timeout, or more fetches at once than the cap (real TLS test); the same URL failing again and
+  again, or one address (an IPv6 host by its /64) asking for fetch after fetch (repeat test);
 - spoofed metadata: a document whose `client_id` is not the URL it came from byte for byte (no
   normalisation, CIMD §3 and §4), that holds a secret or a shared-secret method (§4.1), lacks a
-  name or redirect URIs, or offers a wildcard, fragment, custom-scheme or plain-http
-  non-loopback redirect URI, or no code flow (§6) (document table);
+  name or redirect URIs, or offers a wildcard, fragment, custom-scheme, plain-http
+  non-loopback or non-ASCII-host redirect URI, or no code flow (§6), or a name of only
+  invisible or bidi control characters (document table);
 - a redirect URI matched loosely: a loopback one may change only its port (RFC 8252 §7.3,
   RFC 9700 §4.1.3); another host spelling, path, query or scheme, or a port change off loopback,
   is refused (redirect table);
 - cache poisoning: a failed or invalid document is never cached (CIMD §6.2); a cached one is
-  used only while fresh, within bounds whatever its Cache-Control says; one that turns invalid
-  leaves the cache, a transient failure keeps the last good one (§6.1) (cache test);
+  used only while fresh, within bounds whatever its Cache-Control or its stored row says; one
+  that turns invalid leaves the cache, a transient failure keeps the last good one (§6.1); a
+  client ID on this server's own host, trailing dot or not, is never fetched (§10.1) (cache
+  test);
 - open-registration abuse: a public client gets no secret, a shared-secret method or a bad
   redirect URI is refused (RFC 7591 §3.2.2), a software statement is not trusted (§3.1.1: its
-  claims never override), registrations are capped per address and while unused, an issued ID
+  claims never override), registrations are capped per address (an IPv6 host by its /64) and
+  while unused, an issued ID
   never looks like a metadata URL (CIMD §9.1), a replayed registration is just another
   unapproved client (registration test);
 - consent phishing: a registered or metadata client's name is shown as self-reported with the
   metadata host and the redirect host, a loopback redirect warns (MCP authorization security
   considerations), scopes are said in plain words, no logo is shown; unreachable metadata is an
   error page that redirects nowhere (CIMD §6.1); a denial creates no code and no grant (journey).
+- a downgrade that would orphan connected agents: refused while `oauth_client` has rows
+  (test_schema round trip).
 Not committed: real-client runs (later ticket); TLS to a live host (smoke-tested by hand);
 ending a connection whose client's document turned invalid (CIMD §6.1 SHOULD; its refresh is
 refused instead, as the client is unknown).
@@ -37,11 +46,20 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import timedelta
+import socket
+import ssl
+import threading
+import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 
@@ -161,6 +179,10 @@ def _unreachable(world: World, request: httpx.Request) -> httpx.Response:
         ("dot-segments", "https://agent.example/a/../c.json", None, None, False),
         ("encoded-dots", "https://agent.example/a/%2e%2e/c.json", None, None, False),
         ("root-path", "https://agent.example/", None, None, False),
+        ("homograph-host", "https://\u0430gent.example/c.json", None, None, False),
+        ("trailing-space", "https://agent.example/c.json ", None, None, False),
+        ("tab-in-path", "https://agent.example/c\t.json", None, None, False),
+        ("port-zero", "https://agent.example:0/c.json", None, None, False),
         ("loopback", CLIENT_URL, ["127.0.0.1"], None, False),
         ("private", CLIENT_URL, ["10.0.0.5"], None, False),
         ("link-local-metadata-service", CLIENT_URL, ["169.254.169.254"], None, False),
@@ -170,6 +192,8 @@ def _unreachable(world: World, request: httpx.Request) -> httpx.Response:
         ("ipv6-unique-local", CLIENT_URL, ["fd00::1"], None, False),
         ("ipv4-mapped-loopback", CLIENT_URL, ["::ffff:127.0.0.1"], None, False),
         ("nat64-to-private", CLIENT_URL, ["64:ff9b::a00:1"], None, False),
+        ("ipv4-compatible-loopback", CLIENT_URL, ["::7f00:1"], None, False),
+        ("ipv4-translated-loopback", CLIENT_URL, ["::ffff:0:7f00:1"], None, False),
         ("public-and-private", CLIENT_URL, [PUBLIC_IP, "10.0.0.5"], None, False),
         ("ip-literal-loopback", "https://127.0.0.1/c.json", None, None, False),
         ("no-address", CLIENT_URL, [], None, True),
@@ -206,9 +230,10 @@ def _unreachable(world: World, request: httpx.Request) -> httpx.Response:
 def test_a_metadata_fetch_that_could_reach_inside_or_hang_is_refused(
     name, url, dns, answer, transient
 ) -> None:
-    """CIMD §3 (the URL), §6 (no redirects, 200 only), §10.7 (no special-use address, RFC
-    6890), §10.11 (5 KB); a deadline over the whole fetch; JSON only. Refused before any
-    connection when the URL or an address is wrong; transient only when retrying may help."""
+    """CIMD §3 (the URL; ASCII only, so no homograph host), §6 (no redirects, 200 only), §10.7
+    (no special-use address, RFC 6890), §10.11 (5 KB); a body dribbled past the deadline (slow
+    headers need a real socket: the TLS test); JSON only. Refused before any connection when
+    the URL or an address is wrong; transient only when retrying may help."""
     world = World()
     if dns is not None:
         world.dns["agent.example"] = [dns]
@@ -221,6 +246,136 @@ def test_a_metadata_fetch_that_could_reach_inside_or_hang_is_refused(
     assert failed.value.transient is transient
     if answer is None:
         assert world.requests == []  # nothing left this server
+
+
+def _tls_contexts(host: str, folder: Path) -> tuple[ssl.SSLContext, ssl.SSLContext]:
+    """A server context with a fresh self-signed certificate for `host`, and a client context
+    that trusts only it."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)])
+    now = datetime.now(UTC)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), critical=False)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .sign(key, hashes.SHA256())
+    )
+    pem = cert.public_bytes(serialization.Encoding.PEM)
+    (folder / "cert.pem").write_bytes(pem)
+    (folder / "key.pem").write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    server = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server.load_cert_chain(folder / "cert.pem", folder / "key.pem")
+    return server, ssl.create_default_context(cadata=pem.decode())
+
+
+def test_a_server_dribbling_its_headers_cannot_hold_a_fetch_or_every_thread(tmp_path) -> None:
+    """Real TLS on a local socket (a mock transport cannot dribble): headers sent one line
+    every 0.1 s pass every per-read timeout, yet the fetch ends at its deadline; meanwhile a
+    fetch past the concurrency cap is refused at once, as transient, so slow servers cannot
+    take the threads every request shares."""
+    server_tls, client_tls = _tls_contexts("agent.example", tmp_path)
+    listener = socket.create_server(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    asked, stop = threading.Event(), threading.Event()
+
+    def serve() -> None:
+        conn, _ = listener.accept()
+        with server_tls.wrap_socket(conn, server_side=True) as tls:
+            request = b""
+            while b"\r\n\r\n" not in request:
+                request += tls.recv(1024)
+            asked.set()
+            tls.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                try:
+                    tls.sendall(b"X-Slow: 1\r\n")
+                except OSError:
+                    return
+
+    server = threading.Thread(target=serve, daemon=True)
+    server.start()
+    fetcher = fetch.MetadataFetcher(
+        resolve=lambda host, port: ["127.0.0.1"],
+        allow=lambda address: True,  # the one public-address check this test steps around
+        transport=httpx.HTTPTransport(verify=client_tls),
+        deadline=0.8,
+        concurrency=1,
+    )
+    url = f"https://agent.example:{port}/oauth/client.json"
+    outcome: list[BaseException | None] = []
+
+    def first() -> None:
+        try:
+            fetcher(url)
+            outcome.append(None)
+        except fetch.FetchFailed as exc:
+            outcome.append(exc)
+
+    started = time.monotonic()
+    slow = threading.Thread(target=first)
+    slow.start()
+    try:
+        assert asked.wait(2.0)
+        second = time.monotonic()
+        with pytest.raises(fetch.FetchFailed) as busy:
+            fetcher("https://other.example/oauth/client.json")
+        waited = time.monotonic() - second
+        slow.join(2.5)
+        took = time.monotonic() - started
+    finally:
+        stop.set()
+        server.join(1.0)
+        listener.close()
+
+    assert busy.value.transient and waited < 0.3  # refused without waiting its turn
+    [failed] = outcome
+    assert isinstance(failed, fetch.FetchFailed) and failed.transient
+    assert took < 2.0  # deadline 0.8 s; the server would have dribbled on for ever
+
+
+def test_a_client_id_url_cannot_make_this_server_fetch_again_and_again() -> None:
+    """Anyone can name a client ID URL before signing in (CIMD §10.7), so each is a fetch
+    someone else chose: a URL that failed is not fetched again for a minute, and one address
+    (an IPv6 host by its /64, which it can rotate through) gets a bounded number a minute."""
+    world = World()
+    world.dns = {"agent.example": [[PUBLIC_IP]], "down.example": [[PUBLIC_IP]]}
+    world.answer = lambda request: httpx.Response(
+        503 if request.headers["host"] == "down.example" else 200, json=_document()
+    )
+    fetcher = world.fetcher()
+    down = "https://down.example/oauth/client.json"
+
+    for _ in range(2):
+        with pytest.raises(fetch.FetchFailed) as failed:
+            fetcher(down, peer="198.51.100.1")
+        assert failed.value.transient
+    assert len(world.requests) == 1  # the second failure came from memory
+    world.now += 61
+    with pytest.raises(fetch.FetchFailed):
+        fetcher(down, peer="198.51.100.2")
+    assert len(world.requests) == 2
+
+    for n in range(fetch.FETCHES_PER_PEER):
+        fetcher(f"https://agent.example/c{n}.json", peer=f"2001:db8:5:6::{n + 1:x}")
+    with pytest.raises(fetch.FetchFailed) as limited:
+        fetcher(CLIENT_URL, peer="2001:db8:5:6::ffff")
+    assert limited.value.transient
+    assert len(world.requests) == 2 + fetch.FETCHES_PER_PEER
+    fetcher(CLIENT_URL, peer="2001:db8:5:7::1")  # another network is not held back
+    world.now += 61
+    fetcher(CLIENT_URL, peer="2001:db8:5:6::ffff")  # nor this one, a minute later
 
 
 @pytest.mark.parametrize(
@@ -249,17 +404,22 @@ def test_a_metadata_fetch_that_could_reach_inside_or_hang_is_refused(
         ("http-redirect", CLIENT_URL, _document(redirect_uris=["http://agent.example/cb"])),
         ("custom-scheme", CLIENT_URL, _document(redirect_uris=["cursor://anysphere/cb"])),
         ("userinfo-redirect", CLIENT_URL, _document(redirect_uris=["https://a@evil.example/cb"])),
+        ("homograph-redirect", CLIENT_URL, _document(redirect_uris=["https://claude.\u0430i/cb"])),
+        ("invisible-name", CLIENT_URL, _document(client_name="\u202e\u200b\u2066")),
         ("no-code-flow", CLIENT_URL, _document(response_types=["token"])),
     ],
 )
 def test_a_metadata_document_that_spoofs_or_overreaches_is_refused(name, url, document) -> None:
     """CIMD §4 (`client_id` equals the URL, compared as strings, §3: never normalised), §4.1 (no
     secret, no shared-secret method), §4.2 and the MCP spec (name and redirect URIs required,
-    https or loopback, RFC 6749 §3.1.2 no fragment), §6 (a code flow to offer)."""
+    https or loopback, RFC 6749 §3.1.2 no fragment), §6 (a code flow to offer), §10.6 (the
+    consent page's hosts are ASCII, and a name cannot reorder or hide what follows it)."""
     with pytest.raises(clients.Unacceptable):
         clients.from_document(url, json.dumps(document).encode())
 
-    accepted = clients.from_document(CLIENT_URL, json.dumps(_document()).encode())
+    accepted = clients.from_document(
+        CLIENT_URL, json.dumps(_document(client_name="Cl\u202eau\u200bde\n")).encode()
+    )
     assert (accepted.client_name, accepted.self_reported) == ("Claude", True)
 
 
@@ -292,8 +452,9 @@ def test_a_metadata_document_is_cached_only_when_valid_and_only_while_fresh(
     settings, session
 ) -> None:
     """CIMD §6.2: errors and invalid documents are never cached, Cache-Control is honoured
-    within a minimum and a maximum; §6.1: a transient failure keeps the last good document,
-    a document that turns invalid is dropped."""
+    within a minimum and a maximum (also when reading a row back); §6.1: a transient failure
+    keeps the last good document, a document that turns invalid is dropped; §10.1: never a
+    client ID on this server's own host."""
     calls: list[str] = []
     answers: list[object] = []
 
@@ -339,11 +500,20 @@ def test_a_metadata_document_is_cached_only_when_valid_and_only_while_fresh(
     assert session.scalar(select(func.count()).select_from(RegisteredClient)) == 0
     answers += [good(None)]
     assert look().client_name == "Claude"
+    session.execute(  # a row fresh for a year (a hand edit, a forged bundle) is not believed
+        update(RegisteredClient).values(fresh_until=datetime.now(UTC) + timedelta(days=365))
+    )
+    answers += [good(None)]
+    assert look().client_name == "Claude"
     age(25 * 3600)
     answers += [fetch.FetchFailed("gone", transient=False)]
     assert look() is None
     assert session.scalar(select(func.count()).select_from(RegisteredClient)) == 0
-    assert len(calls) == 8
+    assert len(calls) == 9
+    issuer_host = urlsplit(settings.oauth_issuer).hostname
+    for own in (f"https://{issuer_host}/c.json", f"https://{issuer_host}./c.json"):
+        assert clients.resolve(session, settings, fetcher, own) is None
+    assert len(calls) == 9  # this server never fetches from itself
 
 
 # --- over HTTP: registration and consent ---------------------------------------------------
@@ -412,8 +582,10 @@ def test_open_registration_issues_a_public_client_within_limits(agent, monkeypat
     remote_http = _register(agent, redirect_uris=["http://agent.example/cb"])
     implicit = _register(agent, response_types=["token"])
     monkeypatch.setattr(clients, "REGISTRATIONS_PER_PEER", 2)
-    monkeypatch.setattr(clients, "UNUSED_REGISTRATIONS", 3)
+    monkeypatch.setattr(clients, "UNUSED_REGISTRATIONS", 5)
     peer_capped = _register(agent)
+    # One IPv6 host can take any address in its /64: it is one peer.
+    rotating = [_register(agent, peer=f"2001:db8:7:9::{n}") for n in (1, 2, 3)]
     elsewhere = _register(agent, peer="198.51.100.9")
     all_capped = _register(agent, peer="192.0.2.44")
 
@@ -431,6 +603,7 @@ def test_open_registration_issues_a_public_client_within_limits(agent, monkeypat
     assert (remote_http.status_code, remote_http.json()["error"]) == (400, "invalid_redirect_uri")
     assert (implicit.status_code, implicit.json()["error"]) == (400, "invalid_client_metadata")
     assert peer_capped.status_code == 429
+    assert [r.status_code for r in rotating] == [201, 201, 429]
     assert elsewhere.status_code == 201
     assert all_capped.status_code == 429
     page = agent.get(

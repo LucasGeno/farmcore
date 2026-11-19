@@ -217,6 +217,11 @@ farm.example.org {
 If the proxy runs in another container or host, set `FORWARDED_ALLOW_IPS` to its address so
 uvicorn trusts its `X-Forwarded-*` headers. Limit request body size and rate at the proxy.
 
+Sign-in throttling and the limits on agents that register themselves or name a metadata URL
+count by the client address uvicorn reports. uvicorn takes it from `X-Forwarded-For` only
+when proxy headers are on (`--proxy-headers`, its default) and the proxy's address is in
+`FORWARDED_ALLOW_IPS`; otherwise every visitor shares the proxy's address, and so one limit.
+
 ## 4. Telegram bot (optional)
 
 1. Create a bot with [@BotFather](https://t.me/BotFather); set `TELEGRAM_BOT_TOKEN` and

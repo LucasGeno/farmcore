@@ -125,7 +125,7 @@ def authorize(request: Request) -> Response:
     settings = _settings(request)
     params = request.query_params
     try:
-        asked = _parse(request.app, settings, params)
+        asked = _parse(request, settings, params)
     except service.Refused as exc:
         return _refused(settings, exc, params)
     principal = principal_for(request)
@@ -158,7 +158,7 @@ async def consent(request: Request) -> Response:
     settings = _settings(request)
     form = await request.form()
     try:
-        asked = await anyio.to_thread.run_sync(_parse, request.app, settings, form)
+        asked = await anyio.to_thread.run_sync(_parse, request, settings, form)
     except service.Refused as exc:
         return _refused(settings, exc, form)
     principal = principal_for(request)
@@ -194,11 +194,18 @@ async def consent(request: Request) -> Response:
     return RedirectResponse(url, status_code=303, headers=NO_STORE)
 
 
-def _parse(app: Any, settings: Settings, params: Any) -> service.AuthorizationRequest:
+def _fetch(request: Request) -> Callable[[str], Fetched]:
+    """The metadata fetch, counted against the address that asked (`fetch.MetadataFetcher`)."""
+    return partial(
+        request.app.state.oauth_fetch, peer=request.client.host if request.client else ""
+    )
+
+
+def _parse(request: Request, settings: Settings, params: Any) -> service.AuthorizationRequest:
     """`service.parse_request`, its client looked up (and its metadata fetched) in a session."""
-    with session_scope(app.state.session_factory) as session:
+    with session_scope(request.app.state.session_factory) as session:
         return service.parse_request(
-            settings, params, partial(clients.resolve, session, settings, app.state.oauth_fetch)
+            settings, params, partial(clients.resolve, session, settings, _fetch(request))
         )
 
 
@@ -339,7 +346,7 @@ async def token(request: Request) -> Response:
             status_code=400,
             headers=NO_STORE,
         )
-    provider = Provider(request.app.state.session_factory, settings, request.app.state.oauth_fetch)
+    provider = Provider(request.app.state.session_factory, settings, _fetch(request))
     handler = TokenHandler(provider, ClientAuthenticator(provider))  # type: ignore[arg-type]
     return await handler.handle(request)
 
@@ -357,7 +364,7 @@ async def revoke(request: Request) -> Response:
 
     def end(session: Session) -> str | None:
         """The error to answer with, or None (done, or nothing to do)."""
-        if clients.resolve(session, settings, request.app.state.oauth_fetch, client_id) is None:
+        if clients.resolve(session, settings, _fetch(request), client_id) is None:
             return "invalid_client"
         found = service.find_token(session, raw)
         if found is None:

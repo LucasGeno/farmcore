@@ -69,9 +69,16 @@ def bundles(shared_source, owner_key, tmp_path_factory) -> dict[str, Path]:
 
 # --- E: the copy, effects and identity ----------------------------------------------------------
 
-# Tables a restore changes on purpose: sessions and access tokens are dropped; sign-in
-# throttling starts afresh.
-RESET_TABLES = {"local_session", "login_bucket", "access_token", "oauth_code", "oauth_token"}
+# Tables a restore changes on purpose: sessions, access tokens and self-registered or fetched
+# OAuth clients are dropped; sign-in throttling starts afresh.
+RESET_TABLES = {
+    "local_session",
+    "login_bucket",
+    "access_token",
+    "oauth_code",
+    "oauth_token",
+    "oauth_client",
+}
 
 
 def _agent_token(installation: dict[str, str], login: str) -> int:

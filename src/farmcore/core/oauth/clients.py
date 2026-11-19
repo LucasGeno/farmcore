@@ -24,6 +24,7 @@ import hashlib
 import json
 import re
 import secrets
+import unicodedata
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -35,7 +36,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from farmcore.core.models.identity import AccessToken, RegisteredClient
-from farmcore.core.oauth.fetch import Fetched, FetchFailed, url_problem
+from farmcore.core.oauth.fetch import Fetched, FetchFailed, peer_bucket, plain_host, url_problem
 from farmcore.settings import Settings
 
 OPERATOR, DYNAMIC, METADATA = "operator", "dynamic", "metadata"
@@ -55,7 +56,10 @@ DYNAMIC_PREFIX = "fc_dcr_"
 _REGISTER_LOCK = 0x6663_6463_7200  # pg_advisory_xact_lock key: one registration at a time
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "[::1]", "localhost"})
 _NETLOC = re.compile(r"(\[[^\]]*\]|[^:\[\]@]*)(?::([0-9]{1,5}))?")
-_UNSAFE = re.compile(r"[\x00-\x20\x7f*#]")
+_UNSAFE = re.compile(r"[^\x21-\x7e]|[*#]")  # whitespace, controls, non-ASCII, wildcards
+# Characters a name could use to hide or reorder what the consent page shows after it: controls
+# and format characters (bidi overrides and isolates, zero-width), line and paragraph breaks.
+_INVISIBLE = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 @dataclass(frozen=True)
@@ -118,8 +122,9 @@ def redirect_matches(registered: str, presented: str) -> bool:
 
 
 def valid_redirect_uri(uri: object) -> bool:
-    """https with a host, or http to a loopback host (MCP authorization spec, RFC 8252 §7.3);
-    no fragment (RFC 6749 §3.1.2), wildcard, credentials or whitespace."""
+    """https with a plain ASCII host, or http to a loopback host (MCP authorization spec, RFC
+    8252 §7.3); no fragment (RFC 6749 §3.1.2), wildcard, credentials, whitespace or non-ASCII
+    character (the consent page shows the host: no homograph)."""
     if not isinstance(uri, str) or len(uri) > REDIRECT_URI_MAX or _UNSAFE.search(uri):
         return False
     try:
@@ -130,7 +135,7 @@ def valid_redirect_uri(uri: object) -> bool:
     if "@" in parts.netloc:
         return False
     if parts.scheme == "https":
-        return bool(parts.hostname)
+        return plain_host(parts.hostname)
     return _loopback(uri) is not None
 
 
@@ -150,7 +155,9 @@ def check_metadata(meta: Mapping[str, Any], *, name_required: bool) -> tuple[str
             "without fragments or wildcards.",
         )
     name = meta.get("client_name", None if name_required else UNNAMED)
-    if not isinstance(name, str) or not name.strip():
+    if isinstance(name, str):
+        name = "".join(c for c in name if unicodedata.category(c) not in _INVISIBLE).strip()
+    if not isinstance(name, str) or not name:
         raise Unacceptable("invalid_client_metadata", "A client_name is required.")
     if "client_secret" in meta or "client_secret_expires_at" in meta:
         raise Unacceptable("invalid_client_metadata", "Clients here hold no secret.")
@@ -168,7 +175,7 @@ def check_metadata(meta: Mapping[str, Any], *, name_required: bool) -> tuple[str
         offered = meta.get(field, [needed])
         if not isinstance(offered, list) or needed not in offered:
             raise Unacceptable("invalid_client_metadata", f"{field} must include {needed}.")
-    return name.strip()[:NAME_MAX], tuple(uris)
+    return name[:NAME_MAX], tuple(uris)
 
 
 def from_document(url: str, body: bytes) -> Client:
@@ -207,7 +214,9 @@ def resolve(
     row = session.scalar(select(RegisteredClient).where(RegisteredClient.client_id == client_id))
     if not client_id.startswith("https://"):
         return _client(row) if row is not None else None
-    if row is not None and row.fresh_until is not None and row.fresh_until > datetime.now(UTC):
+    now = datetime.now(UTC)
+    # Fresh, and never longer than this code would have cached it (a hand edit, a bad bundle).
+    if row is not None and row.fresh_until is not None and now < row.fresh_until <= now + CACHE_MAX:
         return _client(row)
     if url_problem(client_id) is not None or _own_host(settings, client_id):
         return None
@@ -238,12 +247,13 @@ def resolve(
 
 
 def _own_host(settings: Settings, url: str) -> bool:
-    """A client ID on this installation's own hosts (CIMD §10.1: never this server itself)."""
-    host = urlsplit(url).hostname
-    return host in {
-        urlsplit(settings.oauth_issuer).hostname,
-        urlsplit(settings.mcp_resource_url).hostname,
-    }
+    """A client ID on this installation's own hosts (CIMD §10.1: never this server itself),
+    however spelt: `host.` is the same name as `host`."""
+
+    def host(of: str) -> str:
+        return (urlsplit(of).hostname or "").rstrip(".")
+
+    return host(url) in {host(settings.oauth_issuer), host(settings.mcp_resource_url)}
 
 
 def _forget(session: Session, client_id: str) -> None:
@@ -251,8 +261,8 @@ def _forget(session: Session, client_id: str) -> None:
 
 
 def _peer_slot(peer: str) -> int:
-    """A coarse bucket for the address (the address itself is never stored)."""
-    return int.from_bytes(hashlib.sha256(peer.encode()).digest()[:4]) % 1024
+    """A coarse bucket for the address, an IPv6 one by its /64 (the address is never stored)."""
+    return int.from_bytes(hashlib.sha256(peer_bucket(peer).encode()).digest()[:4]) % 1024
 
 
 def register(

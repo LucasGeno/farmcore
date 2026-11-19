@@ -1,9 +1,10 @@
 """core: OAuth clients registered without the operator (RFC 7591, client ID metadata documents)
 
 Adds `oauth_client`: clients that registered themselves (`dynamic`) and the last valid client ID
-metadata document fetched for a URL client ID (`metadata`, a cache). Additive. A downgrade drops
-it: connections of those clients can no longer refresh (their client is unknown) and their
-access tokens expire within the hour.
+metadata document fetched for a URL client ID (`metadata`, a cache). Additive. A downgrade is
+refused while any row exists: it would forget the clients, leaving their connections active on
+Sharing with nothing able to use or refresh them. Disconnect those agents and remove the rows
+first.
 
 Revision ID: core_0016
 Revises: catalog_eu_0001
@@ -51,4 +52,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    count = op.get_bind().execute(sa.text("SELECT count(*) FROM oauth_client")).scalar_one()
+    if count:
+        raise RuntimeError(
+            f"core_0016 downgrade refused: {count} OAuth client(s) registered themselves or "
+            "were fetched; disconnect their agents and remove them first"
+        )
     op.drop_table("oauth_client")

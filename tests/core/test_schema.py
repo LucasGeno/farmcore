@@ -104,6 +104,22 @@ def test_downgrade_to_core_0001_and_upgrade_again(scratch_db_url: str) -> None:
     cfg = alembic_config(scratch_db_url)
     command.upgrade(cfg, "head")
     assert _public_tables(scratch_db_url) >= CANONICAL_TABLES | IDENTITY_TABLES
+    # A downgrade past core_0016 would leave connected agents' grants active with no client.
+    eng = create_engine(scratch_db_url)
+    try:
+        with eng.begin() as db:
+            db.execute(
+                text(
+                    "INSERT INTO oauth_client(client_id, registration, client_name, redirect_uris)"
+                    " VALUES ('fc_dcr_x', 'dynamic', 'Codex', ARRAY['http://127.0.0.1/cb'])"
+                )
+            )
+        with pytest.raises(RuntimeError, match="downgrade refused"):
+            command.downgrade(cfg, "core_0001")
+        with eng.begin() as db:
+            db.execute(text("DELETE FROM oauth_client"))
+    finally:
+        eng.dispose()
 
     command.downgrade(cfg, "core_0001")
     left = _public_tables(scratch_db_url)
