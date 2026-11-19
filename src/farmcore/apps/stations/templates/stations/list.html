@@ -17,4 +17,14 @@
   </li>
   {% endfor %}
 </ul>
+{% if sources %}
+<section data-weather-sources class="mt-4 rounded-xl border border-line bg-surface p-4">
+  <h2 class="font-medium">Weather data sources</h2>
+  <ul class="mt-1 space-y-1 text-sm text-muted">
+    {% for s in sources %}
+    <li>{{ s.attribution or s.provider }} · {{ s.dataset }} · licence {{ s.licence }}{% if s.endpoint_kind %} · {{ s.endpoint_kind }} endpoint{% endif %}{% if not s.redistribution %} · Not shared with third parties: {{ s.withheld_reason }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 {% endblock %}

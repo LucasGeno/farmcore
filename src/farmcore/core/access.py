@@ -13,6 +13,12 @@ A repository is bound to one farm, one grant, an actor and a purpose. Each read:
    `weather_receipt` (weather observations and forecasts); a weather station is the farm's own
    or public (no owner); shared reference tables (product, source, catalog_item) are not
    farm-owned; any other table has no farm path and is read only through `execute`;
+   a grant or agent-token view (`grant_view`) reads only weather values and receipts whose
+   receipt allows redistribution (the licence gate); a caller-built statement labelled as, or
+   selecting FROM, a weather value table is refused, and so are the legacy `observation` rows,
+   which carry no licence. Receipt metadata of every source (never a value) is read through
+   `execute(..., resource="weather_receipt")` by `core/weather/attribution.sources` only, so a
+   grant can say what it withheld;
 4. writes exactly one `access_log` row (actor, farm, grant, resource, scope, purpose).
 
 `execute(stmt, scope, resource)` runs a caller-built statement as-is (the caller scopes it); it is
@@ -34,6 +40,7 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import Select, or_, select
 from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.util import find_tables
 
 from farmcore.core import ext_ids
 from farmcore.core.identity import token_hash
@@ -102,6 +109,8 @@ _VIA_PARENT: dict[type[Base], tuple[Any, type[Base]]] = {
     WeatherObservation: (WeatherObservation.receipt_id, WeatherReceipt),
     WeatherForecast: (WeatherForecast.receipt_id, WeatherReceipt),
 }
+# Weather values a grant or token view reads only from redistributable receipts.
+_LICENCE_GATED = frozenset({"weather_observation", "weather_forecast"})
 # Rows a farm owns or every farm shares (null owner: a public network station).
 _OWNED_OR_PUBLIC: dict[type[Base], Any] = {WeatherStation: WeatherStation.owner_farm_id}
 # Reference data shared by every farm (product catalogue, data sources).
@@ -259,7 +268,10 @@ class ScopedRepository:
                     "product",
                     "source",
                     "asset",
-                    "observation",
+                    "weather_station",
+                    "weather_receipt",
+                    "weather_observation",
+                    "weather_forecast",
                     "log",
                     "quantity",
                     "log_parcel",
@@ -324,6 +336,7 @@ class ScopedRepository:
 
     def execute(self, stmt: Any, *, scope: str, resource: str) -> Result[Any]:
         """Run `stmt` unchanged (the caller filters it) after the scope check; logs `resource`."""
+        self._refuse_ungated(stmt, resource)
         self._authorise(scope, resource)
         return self.session.execute(stmt)
 
@@ -331,8 +344,20 @@ class ScopedRepository:
         """`execute` without the access_log row: the scope and grant are still checked. Only for
         decorative reads of data the same viewer already reads through an audited path (the
         parcel silhouettes: the map's layer already logs the geometry read)."""
+        self._refuse_ungated(stmt, resource)
         self.check(scope, resource)
         return self.session.execute(stmt)
+
+    def _refuse_ungated(self, stmt: Any, resource: str) -> None:
+        """A caller-built statement cannot be held to the licence gate: refused for grant views
+        when labelled as a weather value table or selecting FROM one (a join or a subquery
+        included; an EXISTS in its WHERE is not a FROM)."""
+        if not self.grant_view:
+            return
+        froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
+        tables = {t.name for f in froms for t in find_tables(f)}
+        if resource in _LICENCE_GATED or tables & _LICENCE_GATED:
+            raise ScopeDenied("Weather values are shared only through the licence gate.")
 
     def _scoped[M: Base](self, model: type[M]) -> Select[tuple[M]]:
         stmt = select(model)
@@ -346,11 +371,16 @@ class ScopedRepository:
             )
         if model is Farm:
             return stmt.where(Farm.id == self.farm_id)
+        if model is WeatherReceipt and self.grant_view:
+            return stmt.where(WeatherReceipt.farm_id == self.farm_id, WeatherReceipt.redistribution)
         if "farm_id" in model.__table__.c:
             return stmt.where(model.__table__.c.farm_id == self.farm_id)
         if model in _VIA_PARENT:
             fk, parent = _VIA_PARENT[model]
-            return stmt.where(fk.in_(select(parent.id).where(parent.farm_id == self.farm_id)))
+            owned = select(parent.id).where(parent.farm_id == self.farm_id)
+            if self.grant_view and parent is WeatherReceipt:
+                owned = owned.where(WeatherReceipt.redistribution)
+            return stmt.where(fk.in_(owned))
         if model in _OWNED_OR_PUBLIC:
             owner = _OWNED_OR_PUBLIC[model]
             return stmt.where(or_(owner == self.farm_id, owner.is_(None)))

@@ -60,4 +60,17 @@
   {% endfor %}
 </section>
 {% endif %}
+{% if weather %}
+<section data-weather-sources class="mt-6 rounded-lg border border-line bg-surface p-4 text-sm">
+  <h2 class="font-semibold">Weather sources</h2>
+  {% for s in weather.sources %}
+  <p class="mt-1">{{ s.attribution or s.provider }} · {{ s.licence }}</p>
+  {% else %}
+  <p class="mt-1 text-muted">No weather source shared.</p>
+  {% endfor %}
+  {% for w in weather.withheld %}
+  <p data-withheld class="mt-2 rounded-lg border border-stone-300 bg-stone-100 px-4 py-3 text-stone-700">Not shared: data from {{ w.provider }} ({{ w.dataset }}, licence {{ w.licence }}), because {{ w.reason }}.</p>
+  {% endfor %}
+</section>
+{% endif %}
 {% endblock %}
