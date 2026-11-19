@@ -14,7 +14,7 @@
 <label for="name">Agent name (shown on Sharing)</label>
 <input id="name" name="name" value="{{ asked.client.client_name }}" maxlength="80" required class="min-h-[44px] border border-line rounded-lg bg-surface px-3">
 <fieldset class="grid gap-2"><legend>It may</legend>
-{% for scope in asked.scopes %}<label class="flex items-center gap-2"><input type="checkbox" name="allow" value="{{ scope }}" checked> <code>{{ scope }}</code></label>
+{% for scope in asked.scopes %}<label class="flex items-center gap-2"><input type="checkbox" name="allow" value="{{ scope }}"{% if scope != 'advice:read' %} checked{% endif %}> <code>{{ scope }}</code></label>
 {% endfor %}
 </fieldset>
 <div class="flex gap-3">

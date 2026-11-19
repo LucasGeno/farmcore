@@ -151,22 +151,6 @@ def test_a_tool_reading_beyond_the_token_fails_closed_and_the_call_is_still_audi
     assert calls == ["mcp:operations_last_spray"]
 
 
-@pytest.mark.parametrize(
-    ("tool", "args"), [("advisor_today", {}), ("advisor_parcel_status", {"parcel": "P1"})]
-)
-def test_advice_is_withheld_from_a_token_as_on_every_web_surface(
-    session, session_factory, settings, manifests, tool, args
-):
-    # A token cannot read the advisor's inputs, so the advisor page shows it no decision.
-    _farm, _id, raw = _token(session, ["advice:read", "fields:read"])
-    tools = farm_mcp.FarmTools(session_factory, settings, manifests)
-
-    result = tools.call(raw, tool, args)
-
-    assert set(result.facts) == {"unavailable"}
-    assert result.text.startswith("Assessment limited")
-
-
 def test_the_cli_refuses_to_start_without_a_valid_token_and_never_echoes_it(
     settings, monkeypatch, tmp_path
 ):

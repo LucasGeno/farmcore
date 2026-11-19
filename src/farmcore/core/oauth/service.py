@@ -97,6 +97,10 @@ def client(settings: Settings, client_id: str) -> OAuthClient | None:
     return next((c for c in settings.mcp_oauth_clients if c.client_id == client_id), None)
 
 
+# What a request naming no scope asks for. Never `advice:read`: an owner grants it explicitly.
+DEFAULT_SCOPES = GRANT_READ_SCOPES - {"advice:read"}
+
+
 def parse_request(settings: Settings, params: Mapping[str, Any]) -> AuthorizationRequest:
     """Check an authorization request (RFC 6749 §4.1.1): a registered client, one of its
     `redirect_uri`s exactly (OAuth 2.1 §4.1.1: no prefix or pattern), `response_type=code`, an
@@ -130,7 +134,7 @@ def parse_request(settings: Settings, params: Mapping[str, Any]) -> Authorizatio
     if text("resource") != settings.mcp_resource_url:
         raise Refused("invalid_target", "Tokens are issued only for this installation's MCP.")
     requested = text("scope").split()
-    scopes = tuple(sorted(set(requested) or GRANT_READ_SCOPES))
+    scopes = tuple(sorted(set(requested) or DEFAULT_SCOPES))
     if not set(scopes) <= TOKEN_SCOPES:
         raise Refused("invalid_scope", "An agent may only read or propose drafts.")
     return AuthorizationRequest(

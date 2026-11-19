@@ -168,7 +168,7 @@ def _fr_detail(row: Advice, ctx: ToolContext) -> str | None:
         line = "Protégée"
         if row.protected_until is not None:
             line += f" jusqu'au {_fr_when(row.protected_until, ctx)}"
-        mm = props.get("mm_since_spray")
+        mm = service.redact_inputs(ctx.repo, props.get("mm_since_spray"))
         if mm is not None:
             mm_s = f"{float(mm):.1f}".replace(".", ",")
             line += f" · {mm_s} mm de pluie depuis le traitement"
@@ -322,7 +322,7 @@ def parcel_status(ctx: ToolContext, parcel: str = "") -> ToolResult:
         "decision": row.decision,
         "headline": props.get("headline"),
         "protected_until": _local(row.protected_until, ctx),
-        "mm_since_spray": props.get("mm_since_spray"),
+        "mm_since_spray": service.redact_inputs(ctx.repo, props.get("mm_since_spray")),
         "next_window": (
             [_local(row.next_window_start, ctx), _local(row.next_window_end, ctx)]
             if row.next_window_start

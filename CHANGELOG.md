@@ -4,6 +4,12 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- Agent tokens and OAuth connections that hold `advice:read` can now read the farm's stored spray
+  advice through the advisor tools (it was a no-op before). Existing ones start doing so on
+  upgrade: review Sharing and remove `advice:read` from any you do not want to read advice. A
+  new OAuth connection no longer gets it by default; the owner ticks it on the consent page.
+  Advice is withheld while the farm holds weather whose licence bars redistribution, and when
+  it is out of date.
 - Sharing gains a "Connect your agent" page (`/share/connect`): the MCP URL, token creation, and
   copy-paste setup for Codex (and Claude Desktop over stdio, shown to the operator only). The
   Expert view probes the URL without a token and says whether it is up, and whether it is

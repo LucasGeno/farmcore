@@ -43,6 +43,7 @@ from farmcore.core.access import ScopeDenied, ScopedRepository
 from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.canonical import (
     Advice,
+    Asset,
     Farm,
     Log,
     LogParcel,
@@ -50,11 +51,13 @@ from farmcore.core.models.canonical import (
     Product,
     Quantity,
 )
+from farmcore.core.models.weather import WeatherReceipt
 
 SCOPE = "advice:read"
 LOGS_SCOPE = "logs:read"
 NO_ADVICE = "none"
 SPRAY_WITHOUT_PRODUCT = "spray_without_product"
+NO_STATION = "Assessment unavailable: no weather station attached to this farm"
 CARD_PATH = "/advisor/parcels/{id}"
 SEASON_START = (3, 1)  # (month, day): weather history from 1 Mar of the year
 
@@ -62,22 +65,68 @@ SEASON_START = (3, 1)  # (month, day): weather history from 1 Mar of the year
 # --- engine inputs -------------------------------------------------------------------------
 
 
+LIMITED = (
+    "Assessment limited: current weather/configuration inputs are not authorized by this grant"
+)
+LICENCE_WITHHELD = (
+    "Assessment withheld: it relies on weather data whose licence does not allow redistribution"
+)
+STALE = "Advice is out of date: the advisor has not evaluated this farm recently"
+
+
 def unavailable_reason(repo: ScopedRepository) -> str | None:
+    if repo.grant_view:
+        return _grant_reason(repo)
     try:
         repo.check("stations:read", "observation")
         repo.check("parameters:read", "parameter_version")
     except ScopeDenied:
-        return (
-            "Assessment limited: current weather/configuration inputs "
-            "are not authorized by this grant"
-        )
+        return LIMITED
+    return _farm_reason(repo)
+
+
+def _farm_reason(repo: ScopedRepository) -> str | None:
     farm = repo.get(Farm, repo.farm_id, scope=SCOPE)
     reason = (farm.props or {}).get("advisor_unavailable_reason") if farm else None
     if reason:
         return reason
     if stations.station_for_farm(repo) is None:
-        return "Assessment unavailable: no weather station attached to this farm"
+        return NO_STATION
     return None
+
+
+def _grant_reason(repo: ScopedRepository) -> str | None:
+    """`unavailable_reason` for a grant or token view. Stored advice is read only when the grant
+    itself holds `advice:read` (checked on the grant, never implied by `stations:read` or any
+    other scope), and never when the farm holds weather whose receipt bars redistribution: the
+    advice was derived from it. Both questions read receipt and station metadata, never a
+    value, so they run under `advice:read` alone."""
+    try:
+        repo.check(SCOPE, "advice")
+    except ScopeDenied:
+        return LIMITED
+    farm = repo.get(Farm, repo.farm_id, scope=SCOPE)
+    reason = (farm.props or {}).get("advisor_unavailable_reason") if farm else None
+    if reason:
+        return reason
+    has_station = repo.session.scalar(
+        select(Asset.id).where(Asset.farm_id == repo.farm_id, Asset.kind == "station").limit(1)
+    )
+    if has_station is None:
+        return NO_STATION
+    barred = repo.session.scalar(
+        select(WeatherReceipt.id)
+        .where(WeatherReceipt.farm_id == repo.farm_id, WeatherReceipt.redistribution.is_(False))
+        .limit(1)
+    )
+    return LICENCE_WITHHELD if barred is not None else None
+
+
+def redact_inputs(repo: ScopedRepository, value: Any) -> Any:
+    """`value`, a raw weather input of an advice row (`mm_since_spray`, a reason's `inputs`),
+    as a grant or token view may show it: None. The owner's view is unchanged. Used by the
+    advisor tools; the share `advice.json` does not use it yet (weather-providers 14)."""
+    return None if repo.grant_view else value
 
 
 def config_for(farm: Farm, now: datetime, tz: str) -> AdvisorConfig:
@@ -650,6 +699,13 @@ def current_availability(repo, now, tz):
     if reason:
         return ("limited" if "not authorized" in reason else "unavailable"), reason
     fresh = _fresh_statuses(repo, now)
+    if repo.grant_view:
+        # No re-evaluation for a grant: it reads no weather. Stored advice is current or it is
+        # withheld as out of date.
+        if fresh is None:
+            return "unavailable", STALE
+        missing = [text for status, text in fresh if status == "unavailable"]
+        return ("unavailable", missing[0]) if missing else ("evaluable", None)
     if fresh is not None:
         missing = [text for status, text in fresh if status == "unavailable"]
         return ("unavailable", missing[0]) if missing else ("evaluable", None)
