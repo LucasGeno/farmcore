@@ -1,0 +1,16 @@
+{% macro facts(r) -%}
+{% if r.local_start %}<p class="mt-1 break-words">{{ r.local_start.strftime('%Y-%m-%d %H:%M') }}</p>{% endif %}
+<p class="mt-1 break-words">Parcels: {{ r.parcels|join(', ') or 'not given' }}</p>
+{% if r.fertiliser %}<p class="mt-1 break-words">{{ r.fertiliser.name }}{% if r.amount %} · {{ r.amount.value }} {{ r.amount.unit }}{% endif %}</p>{% endif %}
+{% if r.composition %}<p class="mt-1 break-words">Declared: {% for n, share in r.composition.nutrients.items() %}{{ n }} {{ share }} %{% if not loop.last %}, {% endif %}{% endfor %} ({{ r.composition.source }}{% if r.composition.reference %}: {{ r.composition.reference }}{% endif %})</p>{% endif %}
+{% if r.density_kg_per_l %}<p class="mt-1">Density {{ r.density_kg_per_l.value }} kg/l ({{ r.density_kg_per_l.source }})</p>{% endif %}
+{% if r.area_ha %}<p class="mt-1">Area fertilised {{ r.area_ha.value }} ha ({{ r.area_ha.source }})</p>{% endif %}
+{%- endmacro %}
+<section class="min-w-0 rounded-xl border border-line bg-surface p-4" data-draft-kind="{{ draft.kind }}">
+<h2 class="text-lg font-semibold">{% if before %}Fertilization correction{% else %}Fertilization{% endif %}</h2>
+{% if missing %}<p class="mt-2 break-words">Still needs {{ missing }}; nothing can be recorded yet.{% if draft.status == 'open' and not before %} <a href="{{ resolved_farm_url('/fertilization/drafts/' ~ draft.id ~ '/edit') }}" class="font-semibold">Answer</a>{% endif %}</p>{% endif %}
+{% if before %}<p class="mt-2 break-words">Reason: {{ reason }}</p>
+<h3 class="mt-2 font-semibold">Before</h3>{{ facts(before) }}
+<h3 class="mt-2 font-semibold">After</h3>{% endif %}
+{{ facts(record) }}
+</section>

@@ -1,0 +1,53 @@
+{% extends "core/base.html" %}
+{% from "core/_ui.html" import page_header %}
+{% block title %}Fertilization · farmcore{% endblock %}
+{% macro field(name, label, value="", type="text", mode="") -%}
+<label class="block text-[13px] text-muted">{{ label }}
+<input name="{{ name }}" type="{{ type }}"{% if mode %} inputmode="{{ mode }}"{% endif %} value="{{ value if value is not none else '' }}" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-[15px] text-ink"></label>
+{%- endmacro %}
+{% block content %}
+{% if record %}
+{% call page_header(facts.fertiliser.name if facts.fertiliser else "Fertilization", "Confirmed application on " ~ parcel_names|join(', ') ~ ".") %}{% endcall %}
+<section class="mt-2 rounded-xl border border-line bg-surface p-4">
+<h2 class="text-lg font-semibold">Corrections</h2>
+{% if not corrections %}<p class="mt-1 text-[13px] text-muted">None yet.</p>{% endif %}
+<ul class="mt-2 space-y-1">{% for c in corrections %}<li data-correction="{{ c.id }}" class="break-words text-[13px]">{{ c.finalized_at.strftime('%Y-%m-%d %H:%M') }} UTC · {{ c.actor_label }}: {{ c.reason }} (was {{ c.before_snapshot.amount.value }} {{ c.before_snapshot.amount.unit }}, now {{ c.after_snapshot.amount.value }} {{ c.after_snapshot.amount.unit }})</li>{% endfor %}</ul>
+</section>
+{% elif revision %}
+{% call page_header("Answer the draft", "Nothing is recorded until you confirm it.") %}{% endcall %}
+{% if missing %}<p class="mt-2 font-semibold">Still needs {{ missing }}.</p>{% endif %}
+{% else %}
+{% call page_header("Record a fertilization", "Nothing is recorded until you confirm it on the next page.") %}{% endcall %}
+{% endif %}
+{% if problem %}<p role="alert" class="mt-2 rounded-xl border border-line bg-surface p-3 font-semibold">{{ problem }}</p>{% endif %}
+{% if not record or is_farm_owner %}
+<form method="post" action="{{ resolved_farm_url(action) }}" class="mt-4 grid grid-cols-1 gap-3 rounded-xl border border-line bg-surface p-4">
+{% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% endif %}
+<input type="hidden" name="request_key" value="{{ request_key }}">
+{% if revision %}<input type="hidden" name="revision" value="{{ revision }}">{% endif %}
+{% if record %}{{ field("reason", "Why it is corrected (kept with the record)") }}{% endif %}
+<fieldset><legend class="text-[13px] text-muted">Parcels</legend>
+{% set chosen = values.get('parcel_ids') or [] %}
+{% for p in parcels %}<label class="mt-1 flex items-center gap-2 text-[15px]"><input type="checkbox" name="parcel_ids" value="{{ p.id }}"{% if p.id in chosen or p.id|string in chosen %} checked{% endif %}> {{ p.alias }} {{ p.name }}</label>{% endfor %}
+</fieldset>
+{{ field("applied_at", "Date and time applied", values.get('applied_at'), "datetime-local") }}
+{{ field("fertiliser", "Fertiliser", values.get('fertiliser')) }}
+<label class="block text-[13px] text-muted">From your stock (optional)
+<select name="catalog_item_id" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-[15px] text-ink"><option value="">Not from a counted stock</option>{% for id, name in items %}<option value="{{ id }}"{% if values.get('catalog_item_id')|string == id|string %} selected{% endif %}>{{ name }}</option>{% endfor %}</select></label>
+{{ field("amount", "Amount", values.get('amount'), mode="decimal") }}
+{{ field("unit", "Unit (kg/ha, l/ha, kg, t, l)", values.get('unit')) }}
+<fieldset><legend class="text-[13px] text-muted">Declared composition, % by mass</legend>
+{% for n in nutrients %}{{ field("nutrient_" ~ n, n, values.get("nutrient_" ~ n), mode="decimal") }}{% endfor %}
+<label class="block text-[13px] text-muted">Where it comes from
+<select name="source" class="mt-1 block min-h-[44px] w-full rounded-lg border border-line bg-surface px-3 text-[15px] text-ink"><option value="">Not said</option>{% for s in sources %}<option value="{{ s }}"{% if values.get('source') == s %} selected{% endif %}>{{ s }}</option>{% endfor %}</select></label>
+{{ field("reference", "Reference (lot, analysis number)", values.get('reference')) }}
+</fieldset>
+{{ field("density", "Density, kg/l (for litres)", values.get('density'), mode="decimal") }}
+<input type="hidden" name="density_source" value="{{ values.get('density_source') or '' }}">
+{{ field("area_ha", "Area fertilised, ha (if not the whole parcels)", values.get('area_ha'), mode="decimal") }}
+<input type="hidden" name="area_ha_source" value="{{ values.get('area_ha_source') or '' }}">
+{{ field("notes", "Notes", values.get('notes')) }}
+<button type="submit" class="min-h-[44px] rounded-lg border border-line bg-surface px-4 font-semibold hover:bg-ground">{% if record %}Preview correction{% else %}Preview{% endif %}</button>
+</form>
+{% endif %}
+{% endblock %}

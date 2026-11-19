@@ -11,8 +11,8 @@ A repository is bound to one farm, one grant, an actor and a purpose. Each read:
 3. filters rows to the farm: directly (`farm_id`), via `log` (quantity, log_source,
    log_parcel), via `asset` (observation), via `data_grant` (access_token) or via
    `weather_receipt` (weather observations and forecasts); a weather station is the farm's own
-   or public (no owner); shared reference tables (product, source) are not farm-owned; any
-   other table has no farm path and is read only through `execute`;
+   or public (no owner); shared reference tables (product, source, catalog_item) are not
+   farm-owned; any other table has no farm path and is read only through `execute`;
 4. writes exactly one `access_log` row (actor, farm, grant, resource, scope, purpose).
 
 `execute(stmt, scope, resource)` runs a caller-built statement as-is (the caller scopes it); it is
@@ -52,7 +52,7 @@ from farmcore.core.models.canonical import (
     Quantity,
     Source,
 )
-from farmcore.core.models.catalog import TypedQuantity
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIdentity
 from farmcore.core.models.weather import (
     WeatherForecast,
@@ -105,7 +105,7 @@ _VIA_PARENT: dict[type[Base], tuple[Any, type[Base]]] = {
 # Rows a farm owns or every farm shares (null owner: a public network station).
 _OWNED_OR_PUBLIC: dict[type[Base], Any] = {WeatherStation: WeatherStation.owner_farm_id}
 # Reference data shared by every farm (product catalogue, data sources).
-_SHARED: frozenset[type[Base]] = frozenset({Product, Source})
+_SHARED: frozenset[type[Base]] = frozenset({Product, Source, CatalogItem})
 
 _ANY = SCOPES
 _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
@@ -117,6 +117,7 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "advice": frozenset({"advice:read"}),
     "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
+    "catalog_item": _ANY,  # shared reference (a fertiliser's name), like `product`
     # The assessment envelope (`core/assessments.py`). Crop protection is its only kind today;
     # a per-kind read scope comes with the neutral core contract.
     "assessment": frozenset({"advice:read"}),

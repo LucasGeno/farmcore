@@ -1,5 +1,6 @@
-"""Inventory table (migration `inventory_0001`): one `inventory_stock` row per farm, product and
-season (calendar year, as the register's season checks count it).
+"""Inventory table (migrations `inventory_0001`, `inventory_0002`): one `inventory_stock` row per
+farm, item and season (calendar year, as the register's season checks count it). The item is a
+crop-protection `product` or a neutral `catalog_item` (a fertiliser), exactly one of them.
 
 The row holds only what the farmer knows from the invoice: `purchased` (everything bought for the
 season, in `unit`), the current `lot`, the `last_purchase_on` date and an optional `low_stock`
@@ -37,6 +38,8 @@ class InventoryStock(Base):
     __tablename__ = "inventory_stock"
     __table_args__ = (
         UniqueConstraint("farm_id", "product_id", "season"),
+        UniqueConstraint("farm_id", "catalog_item_id", "season"),
+        CheckConstraint("num_nonnulls(product_id, catalog_item_id) = 1", name="item"),
         CheckConstraint("unit IN ('kg', 'l')", name="unit"),
         CheckConstraint("purchased >= 0", name="purchased"),
         CheckConstraint("low_stock IS NULL OR low_stock >= 0", name="low_stock"),
@@ -44,7 +47,8 @@ class InventoryStock(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     farm_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("farm.id"))
-    product_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("product.id"))
+    product_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("product.id"))
+    catalog_item_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("catalog_item.id"))
     season: Mapped[int] = mapped_column(Integer)
     unit: Mapped[str] = mapped_column(Text)
     purchased: Mapped[Decimal] = mapped_column(Numeric)

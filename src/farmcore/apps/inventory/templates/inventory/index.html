@@ -63,4 +63,17 @@
 </div>
 <p class="mt-4 max-w-[70ch] text-[13px] text-muted">Used is computed from the sprays in your diary (done, this season, up to now): a dose per hectare times the sprayed parcels' area. It is never typed in twice. The low-stock number is yours to set; it is not advice.</p>
 {% endif %}
+{% if item_rows %}
+<h2 class="mt-4 text-lg font-semibold">Fertilisers</h2>
+<ul class="mt-2 space-y-3">
+  {% for r in item_rows %}
+  <li data-item-stock="{{ r.stock.catalog_item_id }}" class="rounded-xl border border-line bg-surface p-4">
+    <p class="font-semibold break-words">{{ r.name }}{% if r.low %} · Low stock{% endif %}</p>
+    <p class="mt-1 tabular-nums">{% if r.on_hand is none %}On hand: not computable{% else %}On hand: {{ num(r.on_hand) }} {{ unit(r.stock.unit) }}{% endif %}</p>
+    <p class="mt-1 text-[13px] text-muted tabular-nums">Bought {{ num(r.purchased) }} {{ unit(r.stock.unit) }} · used {% if r.used is none %}not computable{% else %}{{ num(r.used) }} {{ unit(r.stock.unit) }}{% endif %} (from {{ r.records }} confirmed record{{ "s" if r.records != 1 }})</p>
+    {% if r.not_computable %}<p class="mt-1 text-[13px] text-wait">{{ r.not_computable }} record{{ "s" if r.not_computable != 1 }} of this fertiliser lack{{ "s" if r.not_computable == 1 }} a factor to convert into {{ unit(r.stock.unit) }}; on hand is not guessed.</p>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
 {% endblock %}

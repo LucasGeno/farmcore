@@ -58,6 +58,7 @@ def _page(
         request,
         "inventory/index.html",
         rows=service.stock_rows(repo, now=now, tz=settings.display_tz),
+        item_rows=service.item_stock_rows(repo, now=now, tz=settings.display_tz),
         catalogue=catalogue,
         season=season,
         now=now,
