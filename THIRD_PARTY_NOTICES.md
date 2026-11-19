@@ -98,3 +98,20 @@ database server, not linked into FarmCore).
 - **Time-zone boundary data.** `timezonefinder-data` is ODbL-1.0 and is built by the
   [timezone-boundary-builder](https://github.com/evansiroky/timezone-boundary-builder) project
   from OpenStreetMap data; attribution: © OpenStreetMap contributors, ODbL.
+
+## Parcel file import libraries
+
+Pinned direct dependencies: [pyogrio 0.13.0](https://github.com/geopandas/pyogrio)
+(MIT), [defusedxml 0.7.1](https://github.com/tiran/defusedxml/blob/main/LICENSE)
+(PSF-2.0, copyright Christian Heimes), Shapely 2.2.0 (BSD-3-Clause), and pyproj 3.8.0
+(MIT, including PROJ). Installed distributions retain their licence files.
+GeoPandas and pandas are not runtime dependencies; pyogrio's raw WKB reader is used.
+
+Pyogrio's bundled **libgdal shared object statically links GEOS 3.14.1
+(LGPL-2.1)**, as well as libkml, libxml2, curl and SQLite. Shapely also bundles
+GEOS. These libraries are distributed unmodified, not copied into FarmCore source.
+GDAL itself is [MIT/X](https://gdal.org/en/stable/license.html); that licence does
+not replace the licences of linked components. Binary distributors must preserve
+the [GEOS LGPL-2.1 licence and notices](https://github.com/libgeos/geos/blob/main/COPYING)
+and comply with its corresponding-source and relinking requirements, alongside
+all other third-party notices shipped in the wheels. No external parser code is copied.

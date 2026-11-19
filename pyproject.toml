@@ -28,6 +28,10 @@ dependencies = [
     "packaging>=24",
     "mcp==2.3.0",
     "jsonschema>=4.20",
+    "pyogrio==0.13.0",
+    "defusedxml==0.7.1",
+    "shapely==2.2.0",
+    "pyproj==3.8.0",
 ]
 
 [project.urls]
