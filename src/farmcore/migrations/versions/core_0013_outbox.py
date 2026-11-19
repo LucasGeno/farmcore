@@ -3,9 +3,9 @@
 Adds `outbox`: one row per delivery intent (today a Telegram advice digest to one chat), written
 in the transaction of its cause and dispatched by `farmcore worker` (`core/outbox.py`): farm,
 source app, kind, a unique dedupe key naming the cause, payload, state (pending, sending, sent,
-failed, ambiguous, expired), claim count, wall-clock availability and expiry, claim and finish
-times, the provider's receipt and an error type. Additive: no existing row changes, and a
-downgrade drops the table with whatever it holds.
+failed, ambiguous, expired), claim and refusal counts, wall-clock availability and expiry,
+claim and finish times, the provider's receipt and an error type. Additive: no existing row
+changes, and a downgrade drops the table with whatever it holds.
 
 Revision ID: core_0013
 Revises: inventory_0002
@@ -35,6 +35,7 @@ def upgrade() -> None:
         sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("state", sa.String(16), server_default="pending", nullable=False),
         sa.Column("attempts", sa.Integer(), server_default="0", nullable=False),
+        sa.Column("refusals", sa.Integer(), server_default="0", nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

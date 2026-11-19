@@ -32,7 +32,12 @@ class TelegramSender(Protocol):
 
 
 class TelegramSendError(RuntimeError):
-    """A send failed. The message never contains the bot token."""
+    """A send failed. The message never contains the bot token. `retry_after`: the seconds
+    Telegram asked to wait before sending again (its flood limit, HTTP 429), if it said."""
+
+    def __init__(self, message: str = "", *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class TelegramOutcomeUnknown(TelegramSendError):
@@ -82,11 +87,14 @@ class HttpxTelegramSender:
             raise TelegramOutcomeUnknown(f"sendMessage failed: HTTP {response.status_code}")
         if response.status_code != 200:
             try:
-                description = str(response.json().get("description", ""))
-            except ValueError:
-                description = ""
+                answer = response.json()
+                description = str(answer.get("description", ""))
+                retry_after = (answer.get("parameters") or {}).get("retry_after")
+            except (ValueError, AttributeError):
+                description, retry_after = "", None
             raise TelegramSendError(
-                f"sendMessage failed: HTTP {response.status_code} {description}".rstrip()
+                f"sendMessage failed: HTTP {response.status_code} {description}".rstrip(),
+                retry_after=retry_after if isinstance(retry_after, int | float) else None,
             )
         try:
             message_id = response.json()["result"]["message_id"]

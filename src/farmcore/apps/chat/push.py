@@ -18,8 +18,9 @@ run before the clock was stepped back) are skipped but still move the cursor.
 The job does nothing when `telegram_bot_token` is unset, so replay steps in tests and the CLI
 record nothing for Telegram. While the installation's external effects are paused it still
 records intents; the outbox holds them, and they expire after `DIGEST_TTL`. `delivery_provider`
-is the outbox's Telegram adapter: a refusal Telegram answered is `Undelivered` (retried), no
-answer is `OutcomeUnknown` (listed for reconciliation). Tests inject a sender with `set_sender`.
+is the outbox's Telegram adapter: a refusal Telegram answered is `Undelivered` (retried, after
+its `retry_after` when it gives one), no answer is `OutcomeUnknown` (listed for
+reconciliation). Tests inject a sender with `set_sender`.
 """
 
 from __future__ import annotations
@@ -236,7 +237,7 @@ class TelegramDelivery:
         except TelegramOutcomeUnknown as exc:
             raise outbox.OutcomeUnknown(str(exc)) from None
         except TelegramSendError as exc:
-            raise outbox.Undelivered(str(exc)) from None
+            raise outbox.Undelivered(str(exc), retry_after=exc.retry_after) from None
         return None if message_id is None else {"message_id": message_id}
 
     def close(self) -> None:

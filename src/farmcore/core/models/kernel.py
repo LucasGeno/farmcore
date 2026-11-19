@@ -104,6 +104,8 @@ class OutboxIntent(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     state: Mapped[str] = mapped_column(String(16), server_default="pending")
     attempts: Mapped[int] = mapped_column(Integer, server_default="0")
+    # Definite refusals (a wait the provider asked for is not one): `MAX_ATTEMPTS` fails it.
+    refusals: Mapped[int] = mapped_column(Integer, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     available_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

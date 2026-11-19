@@ -12,7 +12,9 @@ competing dispatchers never take one intent twice), and only then sent. So no in
 once its provider accepted it; the price is that a send whose outcome is unknown is never retried:
 - accepted: `sent`, with the provider's receipt;
 - refused, and the provider says so (`Undelivered`: an HTTP answer, a connection never made):
-  `pending` again after `RETRY_SECONDS`, `failed` after `MAX_ATTEMPTS` claims;
+  `pending` again after `RETRY_SECONDS` (or the delay the provider asked for: `retry_after`),
+  `failed` after `MAX_ATTEMPTS` refusals; a refusal that only asks to wait (Telegram's flood
+  limit) is not counted, the intent's expiry bounds it;
 - unknown (`OutcomeUnknown`, any other error, or a claim older than `CLAIM_SECONDS` whose worker
   died): `ambiguous`, listed by `ambiguous` and `farmcore outbox` until the operator settles it
   (`resolve`). Never reported as delivered, never resent on its own.
@@ -21,14 +23,16 @@ A pending intent past its expiry is marked `expired` and never sent.
 Nothing is claimed while the installation's external effects are paused (a restored copy until
 its owner runs `farmcore effects enable`): intents wait, and expire on time, so enabling sends
 the fresh ones and never a stale backlog. `may_dispatch` is the admission check for each intent;
-module lifecycle extends it. A restore turns the intents it inherits from the source, which the
-source may have sent, into `ambiguous` (`HOLD_INHERITED`).
+module lifecycle extends it. A restore turns the unexpired intents it inherits from the source,
+which the source may have sent, into `ambiguous`, and the expired ones into `expired`
+(`HOLD_INHERITED`). A worker stopping sets `dispatch`'s `stop`: no claim is taken after it.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -47,7 +51,7 @@ from farmcore.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-# Claims of one intent, the first included, before a refused one is failed for good.
+# Counted refusals of one intent before it is failed for good.
 MAX_ATTEMPTS = 3
 # A refused intent is offered again after this long.
 RETRY_SECONDS = 60
@@ -72,7 +76,12 @@ class Intent:
 
 class Undelivered(Exception):
     """The provider definitely did not deliver (it answered with a refusal, or was never
-    reached). The message must not quote the payload."""
+    reached). The message must not quote the payload. `retry_after`: seconds the provider asked
+    to wait; such a refusal is not counted against `MAX_ATTEMPTS`."""
+
+    def __init__(self, message: str = "", *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 class OutcomeUnknown(Exception):
@@ -145,10 +154,11 @@ _SENT = text(
     "finished_at = clock_timestamp() "
     "WHERE id = :id AND attempts = :a AND state IN ('sending', 'ambiguous')"
 )
+# `:counted` is 1 for a refusal, 0 for one that only asks to wait.
 _REFUSED = text(
-    "UPDATE outbox SET error = :e, claimed_at = NULL, "
-    "state = CASE WHEN attempts >= :max THEN 'failed' ELSE 'pending' END, "
-    "finished_at = CASE WHEN attempts >= :max THEN clock_timestamp() END, "
+    "UPDATE outbox SET error = :e, claimed_at = NULL, refusals = refusals + :counted, "
+    "state = CASE WHEN refusals + :counted >= :max THEN 'failed' ELSE 'pending' END, "
+    "finished_at = CASE WHEN refusals + :counted >= :max THEN clock_timestamp() END, "
     "available_at = clock_timestamp() + make_interval(secs => :retry) "
     "WHERE id = :id AND attempts = :a AND state IN ('sending', 'ambiguous')"
 )
@@ -158,7 +168,11 @@ _UNKNOWN = text(
 )
 # Run by `farmcore restore` on the copy: what the source had not settled, it may still send.
 HOLD_INHERITED = (
-    "UPDATE outbox SET state = 'ambiguous', error = 'restored' "
+    "UPDATE outbox SET error = 'restored', "
+    "state = CASE WHEN state = 'pending' AND expires_at <= clock_timestamp() "
+    "THEN 'expired' ELSE 'ambiguous' END, "
+    "finished_at = CASE WHEN state = 'pending' AND expires_at <= clock_timestamp() "
+    "THEN clock_timestamp() END "
     "WHERE state IN ('pending', 'sending')"
 )
 
@@ -197,11 +211,15 @@ def _deliver(session_factory: sessionmaker[Session], provider: Provider, intent:
     try:
         receipt = provider.deliver(intent)
     except Undelivered as exc:
-        statement, params, outcome = (
-            _REFUSED,
-            {**keys, "e": type(exc).__name__, "max": MAX_ATTEMPTS, "retry": RETRY_SECONDS},
-            "refused",
-        )
+        waits = exc.retry_after is not None
+        params = {
+            **keys,
+            "e": type(exc).__name__,
+            "max": MAX_ATTEMPTS,
+            "counted": 0 if waits else 1,
+            "retry": max(0.0, float(exc.retry_after)) if waits else RETRY_SECONDS,
+        }
+        statement, outcome = _REFUSED, "deferred" if waits else "refused"
     except Exception as exc:  # the message may have left: never resend it blindly
         statement, params, outcome = _UNKNOWN, {**keys, "e": type(exc).__name__}, "ambiguous"
     else:
@@ -221,9 +239,11 @@ def dispatch(
     manifests: Sequence[Manifest],
     *,
     limit: int = BATCH,
+    stop: threading.Event | None = None,
 ) -> Counter[str]:
     """One pass: expire what is past its expiry, mark lapsed claims ambiguous, then claim and
-    send up to `limit` intents one by one. Returns {outcome: count} (sent, refused, ambiguous)."""
+    send up to `limit` intents one by one, taking no new claim once `stop` is set. Returns
+    {outcome: count} (sent, refused, deferred, ambiguous)."""
     outcomes: Counter[str] = Counter()
     with session_scope(session_factory) as session:
         session.execute(_EXPIRE)
@@ -235,7 +255,7 @@ def dispatch(
         return outcomes
     held: list[int] = []
     try:
-        while outcomes.total() < limit:
+        while outcomes.total() < limit and not (stop is not None and stop.is_set()):
             intent = _claim(session_factory, list(providers), held)
             if intent is None:
                 break

@@ -232,27 +232,71 @@ def test_a_send_with_an_unknown_outcome_is_never_retried_and_is_listed_for_recon
 BLOCKED = 666
 
 
-def _flood_once_and_blocked(chat_id: int, n: int) -> httpx.Response:
+FLOODED = 777
+
+
+def _flood(retry_after: int) -> httpx.Response:
+    return httpx.Response(
+        429,
+        json={
+            "ok": False,
+            "description": "Too Many Requests",
+            "parameters": {"retry_after": retry_after},
+        },
+    )
+
+
+def _floods_and_blocked(chat_id: int, n: int) -> httpx.Response:
     if chat_id == BLOCKED:
         return httpx.Response(403, json={"ok": False, "description": "bot was blocked"})
-    if n == 1:
-        return httpx.Response(429, json={"ok": False, "description": "Too Many Requests"})
+    if chat_id == FLOODED:
+        return _flood(3600)
+    if n <= 4:  # more flood answers than refusals allowed: a flood is not a refusal
+        return _flood(0)
     return httpx.Response(200, json={"ok": True, "result": {"message_id": 7}})
 
 
-def test_a_refused_send_is_retried_and_a_chat_that_keeps_refusing_ends_failed(
+def test_a_refused_send_is_retried_a_flood_waits_as_told_and_a_refusing_chat_ends_failed(
     session_factory, bot_settings, telegram, monkeypatch
 ):
     monkeypatch.setattr(outbox, "RETRY_SECONDS", 0)
-    sent = telegram(_flood_once_and_blocked)
-    intents(session_factory, bot_settings, (CHAT, BLOCKED))
+    sent = telegram(_floods_and_blocked)
+    intents(session_factory, bot_settings, (CHAT, BLOCKED, FLOODED))
 
     for _ in range(5):
         dispatch(session_factory, bot_settings)
 
-    assert sent.requests.count(CHAT) == 2  # refused once, then delivered once
-    assert sent.requests.count(BLOCKED) == 3  # three attempts, then given up
-    assert states(session_factory) == {CHAT: "sent", BLOCKED: "failed"}
+    assert sent.requests.count(CHAT) == 5  # four floods, then delivered once
+    assert sent.requests.count(BLOCKED) == 3  # three refusals, then given up
+    assert sent.requests.count(FLOODED) == 1  # told to wait an hour: not asked again yet
+    assert states(session_factory) == {CHAT: "sent", BLOCKED: "failed", FLOODED: "pending"}
+    with session_factory() as s:
+        assert s.execute(
+            text(
+                "SELECT available_at > now() + interval '59 minutes' FROM outbox "
+                "WHERE payload @> :p"
+            ),
+            {"p": json.dumps({"chat_id": FLOODED})},
+        ).scalar_one()
+
+
+def test_a_stopping_worker_takes_no_new_claim_after_the_send_in_flight(
+    session_factory, bot_settings, telegram
+):
+    """Shutdown cancels the worker's loop but not a pass already running in its thread."""
+    stop = threading.Event()
+
+    def accept_then_stop(chat_id: int, n: int) -> httpx.Response:
+        stop.set()  # SIGTERM arrives while this send is in flight
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": chat_id}})
+
+    sent = telegram(accept_then_stop)
+    intents(session_factory, bot_settings, (1, 2, 3))
+
+    outbox.dispatch(session_factory, bot_settings, [MANIFEST], stop=stop)
+
+    assert sent.requests == [1]
+    assert states(session_factory) == {1: "sent", 2: "pending", 3: "pending"}
 
 
 def _set_effects(session, value: str | None) -> None:

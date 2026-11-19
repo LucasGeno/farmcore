@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -383,12 +384,16 @@ async def _deliveries(
     settings: Settings,
     manifests: Sequence[Manifest],
     tick: float,
+    stop: threading.Event,
 ) -> None:
     """The outbox (`core/outbox.py`), in its own loop and in either clock mode: a slow provider
-    never delays the jobs, and no send happens under the step lock."""
-    while True:
+    never delays the jobs, and no send happens under the step lock. Cancelling this loop does
+    not stop a pass already running in its thread; `stop` does, before its next claim."""
+    while not stop.is_set():
         try:
-            await asyncio.to_thread(outbox.dispatch, session_factory, settings, manifests)
+            await asyncio.to_thread(
+                outbox.dispatch, session_factory, settings, manifests, stop=stop
+            )
         except Exception as exc:  # the database may be briefly unreachable: next tick
             logger.error("outbox dispatch failed (%s)", type(exc).__name__)
         await asyncio.sleep(tick)
@@ -432,6 +437,8 @@ def run_worker(
     slow provider never holds up another farm's task."""
     app = make_app(settings, session_factory, manifests)
 
+    stopping = threading.Event()
+
     async def main() -> None:
         async with app.open_async():
             housekeeping = [
@@ -439,7 +446,9 @@ def run_worker(
                     _housekeeping(app, session_factory, settings, manifests, tick, stalled)
                 ),
                 asyncio.create_task(_live_jobs(session_factory, settings, manifests, tick)),
-                asyncio.create_task(_deliveries(session_factory, settings, manifests, tick)),
+                asyncio.create_task(
+                    _deliveries(session_factory, settings, manifests, tick, stopping)
+                ),
             ]
             try:
                 await app.run_worker_async(
@@ -450,6 +459,7 @@ def run_worker(
                     install_signal_handlers=True,
                 )
             finally:
+                stopping.set()  # an outbox pass in its thread takes no further claim
                 for loop in housekeeping:
                     loop.cancel()
 
