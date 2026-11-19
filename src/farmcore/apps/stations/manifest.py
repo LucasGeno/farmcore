@@ -1,7 +1,6 @@
 """Manifest of app `stations`: Météo-France replay ingest, hourly chart, connector health."""
 
-from datetime import timedelta
-
+from farmcore.apps.stations.jobs import INTERVAL
 from farmcore.apps.stations.tools import TOOLS
 from farmcore.core.manifest import JobSpec, Manifest, MapLayer, Widget
 
@@ -16,7 +15,8 @@ MANIFEST = Manifest(
         JobSpec(
             name="stations.ingest_meteofrance",
             func="farmcore.apps.stations.jobs:ingest_meteofrance",
-            interval=timedelta(hours=1),
+            interval=INTERVAL,
+            task="farmcore.apps.stations.jobs:ingest_live",
         ),
     ),
     routes=(

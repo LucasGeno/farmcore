@@ -10,6 +10,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime
 
+from farmcore.core import tasks
 from farmcore.core.clock import get_clock
 from farmcore.core.manifest import JobContext
 
@@ -42,3 +43,14 @@ def slow(ctx: JobContext) -> None:
     _record("slow", ctx)
     STARTED.set()
     RELEASE.wait(timeout=5)
+
+
+def publish(ctx) -> None:
+    """A durable task (`JobSpec.task`) that only publishes its attempt."""
+    with ctx.session_factory.begin() as session:
+        tasks.publish_if_current(session, ctx.attempt)
+
+
+def fail_task(ctx) -> None:
+    """A durable task that fails before publishing."""
+    raise RuntimeError("fake task failure")

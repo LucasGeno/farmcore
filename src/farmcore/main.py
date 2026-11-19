@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from farmcore import __version__
 from farmcore.composition import compose_spray_weather_reader
-from farmcore.core import errors, jobs, registry
+from farmcore.core import errors, registry
 from farmcore.core.cookie_scope import InstallationCookies
 from farmcore.core.identity import require_csrf
 from farmcore.core.manifest import Manifest
@@ -50,11 +50,9 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        jobs.start(app)
         try:
             yield
         finally:
-            jobs.shutdown(app)
             if engine is not None:
                 engine.dispose()
 

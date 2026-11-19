@@ -2,7 +2,10 @@
 
 A manifest job with a `task` (`JobSpec.task`) is durable: in live mode its job function plans,
 enqueueing one task per farm in the caller's transaction (`enqueue`), and `farmcore worker`
-processes run those tasks. Replay never enqueues; `step_to` stays in-process and deterministic.
+processes run those tasks. A planner usually queues only farms that are due (`enqueue_due`).
+Replay never enqueues; `step_to` stays in-process and deterministic. The worker also runs the
+installation-wide jobs (no `task`) when they are due (`jobs.run_due_live`): nothing runs live work
+in the web process.
 
 The queue is Procrastinate (MIT), and this is the only module that imports it, so swapping it for
 a plain `SKIP LOCKED` table changes nothing else. FarmCore does not trust the library's job status
@@ -26,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -35,7 +39,7 @@ from procrastinate import exceptions as queue_errors
 from procrastinate.jobs import Status
 from procrastinate.manager import JobManager
 from procrastinate.tasks import configure_task
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -56,6 +60,8 @@ TICK_SECONDS = 15.0
 # minute by default) lets planning queue the farm again: one fetch per crash, not two.
 STALLED_SECONDS = 20.0
 HEARTBEAT_SECONDS = 5.0
+# How often `wait_published` looks for a published attempt.
+POLL_SECONDS = 0.05
 # Enqueue only: with `connection=` the manager never opens a pool of its own.
 _ENQUEUE = JobManager(procrastinate.SyncPsycopgConnector())
 
@@ -137,6 +143,54 @@ def in_flight(session: Session, task_name: str) -> set[int]:
     )
 
 
+def enqueue_due(
+    session: Session, task_name: str, interval: timedelta, farm_ids: Sequence[int]
+) -> list[int]:
+    """Queue `task_name` for each of `farm_ids` that is due, in the session's transaction; the
+    farms queued. Due: no attempt published within `interval` in the current clock generation
+    (a run before a live/replay switch does not count) and none in flight. Only persisted state
+    decides, so a restarted worker plans exactly what the stopped one would have."""
+    done = set(
+        session.execute(
+            text(
+                "SELECT a.farm_id FROM task_attempt a JOIN clock_state c "
+                "ON c.id = 1 AND c.generation = a.clock_generation "
+                "WHERE a.task_name = :n AND a.farm_id = ANY(:f) "
+                "AND a.finished_at > now() - :i"
+            ),
+            {"n": task_name, "f": list(farm_ids), "i": interval},
+        ).scalars()
+    )
+    skip = done | in_flight(session, task_name)
+    return [f for f in farm_ids if f not in skip and enqueue(session, task_name, f)]
+
+
+def wait_published(
+    session_factory: sessionmaker[Session],
+    task_name: str,
+    farm_ids: Sequence[int],
+    since: datetime,
+    wait: float,
+) -> bool:
+    """Whether, within `wait` seconds, an attempt of `task_name` that began at or after `since`
+    has published for every farm of `farm_ids`."""
+    deadline = time.monotonic() + wait
+    while True:
+        with session_factory() as session:
+            published = session.execute(
+                text(
+                    "SELECT count(DISTINCT farm_id) FROM task_attempt WHERE task_name = :n "
+                    "AND farm_id = ANY(:f) AND started_at >= :s AND finished_at IS NOT NULL"
+                ),
+                {"n": task_name, "f": list(farm_ids), "s": since},
+            ).scalar_one()
+        if published == len(set(farm_ids)):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+
+
 def begin_attempt(
     session_factory: sessionmaker[Session], task_name: str, farm_id: int, deadline: timedelta
 ) -> Attempt | None:
@@ -162,11 +216,13 @@ def begin_attempt(
 
 
 def publish_if_current(session: Session, attempt: Attempt) -> bool:
-    """The first statement of the transaction that writes `attempt`'s result. True when the
-    attempt may publish: it is still current and before its deadline, its farm exists, and the
-    clock is live in the attempt's generation. The rows stay locked until that transaction ends,
-    so a newer attempt or a clock switch waits for it rather than interleaving. True also marks
-    the attempt finished (in the same transaction). On False the caller writes nothing."""
+    """Run before anything the transaction writes for `attempt` (a task may take its own locks
+    first). True when the attempt may publish: it is still current and before its deadline
+    (judged now, not when the transaction began, which may have waited on a lock), its farm
+    exists, and the clock is live in the attempt's generation. The rows stay locked until that
+    transaction ends, so a newer attempt or a clock switch waits for it rather than interleaving.
+    True also marks the attempt finished (in the same transaction). On False the caller writes
+    nothing."""
     current = session.execute(
         text(
             "SELECT 1 FROM task_attempt a "
@@ -174,7 +230,7 @@ def publish_if_current(session: Session, attempt: Attempt) -> bool:
             "AND c.generation = a.clock_generation "
             "JOIN farm f ON f.id = a.farm_id "
             "WHERE a.task_name = :n AND a.farm_id = :f AND a.attempt = :a "
-            "AND a.finished_at IS NULL AND a.deadline_at > now() "
+            "AND a.finished_at IS NULL AND a.deadline_at > clock_timestamp() "
             "FOR UPDATE OF a FOR SHARE OF c FOR KEY SHARE OF f"
         ),
         {"n": attempt.task_name, "f": attempt.farm_id, "a": attempt.number},
@@ -189,7 +245,7 @@ def publish_if_current(session: Session, attempt: Attempt) -> bool:
         return False
     session.execute(
         text(
-            "UPDATE task_attempt SET finished_at = now() "
+            "UPDATE task_attempt SET finished_at = clock_timestamp() "
             "WHERE task_name = :n AND farm_id = :f AND attempt = :a"
         ),
         {"n": attempt.task_name, "f": attempt.farm_id, "a": attempt.number},
@@ -200,12 +256,28 @@ def publish_if_current(session: Session, attempt: Attempt) -> bool:
 def run_task(
     session_factory: sessionmaker[Session], settings: Settings, spec: JobSpec, farm_id: int
 ) -> None:
-    """One run of `spec.task` for `farm_id`: what a worker does with a queued task."""
+    """One run of `spec.task` for `farm_id`: what a worker does with a queued task. A task that
+    raises keeps its farm in flight until one `spec.interval` after it began, so a failure that
+    repeats (bad farm data) is retried once per interval, as a published run would be, rather
+    than at every deadline. It publishes nothing; `run_now` can still queue the farm at once."""
     attempt = begin_attempt(session_factory, spec.name, farm_id, spec.deadline)
     if attempt is None:
         logger.info("task %s for farm %s skipped: clock not live or farm gone", spec.name, farm_id)
         return
-    import_string(spec.task)(TaskContext(session_factory, settings, farm_id, attempt))
+    try:
+        import_string(spec.task)(TaskContext(session_factory, settings, farm_id, attempt))
+    except Exception:
+        with session_scope(session_factory) as session:
+            session.execute(
+                text(
+                    "UPDATE task_attempt SET deadline_at = "
+                    "greatest(deadline_at, started_at + :i) "
+                    "WHERE task_name = :n AND farm_id = :f AND attempt = :a "
+                    "AND finished_at IS NULL"
+                ),
+                {"n": spec.name, "f": farm_id, "a": attempt.number, "i": spec.interval},
+            )
+        raise
 
 
 def plan(
@@ -253,15 +325,35 @@ def conninfo(settings: Settings) -> str:
     return url.render_as_string(hide_password=False)
 
 
+def bounded_sessions(session_factory: sessionmaker[Session], idle: timedelta) -> sessionmaker:
+    """Sessions like `session_factory`'s whose transactions Postgres ends once idle for `idle`
+    (at least a second), releasing their locks. A worker paused or frozen inside a task (it holds
+    the farm's operations lock and row lock while it evaluates) then blocks that farm's writes,
+    web requests included, for about one deadline, not until it resumes."""
+    factory = sessionmaker(class_=session_factory.class_, **session_factory.kw)
+    timeout = f"{max(1000, round(idle.total_seconds() * 1000))}ms"
+
+    @event.listens_for(factory, "after_begin")
+    def _bound(session: Session, transaction, connection) -> None:
+        connection.execute(
+            text("SELECT set_config('idle_in_transaction_session_timeout', :t, true)"),
+            {"t": timeout},
+        )
+
+    return factory
+
+
 def make_app(
     settings: Settings, session_factory: sessionmaker[Session], manifests: Sequence[Manifest]
 ) -> procrastinate.App:
-    """A queue app whose tasks are the durable jobs of `manifests`."""
+    """A queue app whose tasks are the durable jobs of `manifests`. Each task's transactions are
+    ended by Postgres once idle for its deadline (`bounded_sessions`)."""
     app = procrastinate.App(connector=procrastinate.PsycopgConnector(conninfo=conninfo(settings)))
     for spec in durable_specs(manifests):
+        factory = bounded_sessions(session_factory, spec.deadline)
 
-        def run(farm_id: int, spec: JobSpec = spec) -> None:
-            run_task(session_factory, settings, spec, farm_id)
+        def run(farm_id: int, spec: JobSpec = spec, factory=factory) -> None:
+            run_task(factory, settings, spec, farm_id)
 
         app.task(name=spec.name, queue=QUEUE)(run)
     return app
@@ -285,6 +377,27 @@ async def _housekeeping(
         await asyncio.sleep(tick)
 
 
+async def _live_jobs(
+    session_factory: sessionmaker[Session],
+    settings: Settings,
+    manifests: Sequence[Manifest],
+    tick: float,
+) -> None:
+    """The installation-wide jobs, in their own loop: a long one (the weekly catalog download)
+    never delays planning or the stalled-task check."""
+    from farmcore.core import jobs  # jobs imports this module
+
+    while True:
+        try:
+            for run in await asyncio.to_thread(
+                jobs.run_due_live, session_factory, manifests, settings
+            ):
+                logger.info("job %s %s", run.name, "ok" if run.ok else f"failed ({run.error})")
+        except Exception as exc:  # the database may be briefly unreachable: next tick
+            logger.error("live jobs failed (%s)", type(exc).__name__)
+        await asyncio.sleep(tick)
+
+
 def run_worker(
     settings: Settings,
     session_factory: sessionmaker[Session],
@@ -295,16 +408,20 @@ def run_worker(
     stalled: float = STALLED_SECONDS,
     heartbeat: float = HEARTBEAT_SECONDS,
 ) -> None:
-    """Run tasks until SIGTERM or SIGINT, planning due work and retrying stalled tasks every
-    `tick` seconds. `concurrency` tasks run at once: more than the farms expected to be slow at
-    the same time, so one farm's slow provider never holds up another farm's task."""
+    """Run tasks until SIGTERM or SIGINT, planning due work, retrying stalled tasks and running
+    the due installation-wide jobs (`jobs.run_due_live`) every `tick` seconds. `concurrency`
+    tasks run at once: more than the farms expected to be slow at the same time, so one farm's
+    slow provider never holds up another farm's task."""
     app = make_app(settings, session_factory, manifests)
 
     async def main() -> None:
         async with app.open_async():
-            housekeeping = asyncio.create_task(
-                _housekeeping(app, session_factory, settings, manifests, tick, stalled)
-            )
+            housekeeping = [
+                asyncio.create_task(
+                    _housekeeping(app, session_factory, settings, manifests, tick, stalled)
+                ),
+                asyncio.create_task(_live_jobs(session_factory, settings, manifests, tick)),
+            ]
             try:
                 await app.run_worker_async(
                     queues=[QUEUE],
@@ -314,7 +431,8 @@ def run_worker(
                     install_signal_handlers=True,
                 )
             finally:
-                housekeeping.cancel()
+                for loop in housekeeping:
+                    loop.cancel()
 
     logger.info("worker %s: %d task slot(s)", os.getpid(), concurrency)
     asyncio.run(main())

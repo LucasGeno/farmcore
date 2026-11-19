@@ -10,10 +10,13 @@ import pytest
 from sqlalchemy import text
 
 from farmcore.core import clock, tasks
+from farmcore.core.manifest import JobSpec
 from farmcore.core.models.canonical import Farm
 
 TASK = "test.fetch"
 MINUTE = timedelta(minutes=1)
+HOUR = timedelta(hours=1)
+ZERO = timedelta(0)
 
 
 def _jobs(session) -> list[tuple]:
@@ -129,3 +132,58 @@ def test_a_dead_workers_task_is_retried_or_failed_never_left_running(
     assert asyncio.run(sweep()) == {job: outcome}
     with committed_session_factory() as session:
         assert [status for _, status, _ in _jobs(session)] == statuses
+
+
+def _finished(ago: timedelta):
+    def change(factory, settings, farm_id) -> None:
+        attempt = tasks.begin_attempt(factory, TASK, farm_id, MINUTE)
+        with factory.begin() as session:
+            assert tasks.publish_if_current(session, attempt)
+            session.execute(
+                text("UPDATE task_attempt SET finished_at = now() - :ago WHERE farm_id = :f"),
+                {"ago": ago, "f": farm_id},
+            )
+
+    return change
+
+
+def _failed(factory, settings, farm_id) -> None:
+    # Its deadline already passed: only the failure itself keeps the farm from being planned.
+    spec = JobSpec(
+        TASK, "tests.core.fake_jobs:record", HOUR, "tests.core.fake_jobs:fail_task", ZERO
+    )
+    with pytest.raises(RuntimeError):
+        tasks.run_task(factory, settings, spec, farm_id)
+
+
+def _finished_then_switched(factory, settings, farm_id) -> None:
+    _finished(timedelta(0))(factory, settings, farm_id)
+    _switch_to_replay_and_back(factory, settings, farm_id)
+
+
+@pytest.mark.parametrize(
+    ("history", "queued"),
+    [
+        (None, True),  # never run: a fresh or restarted worker plans it
+        (_finished(timedelta(minutes=10)), False),  # ran within the interval
+        (_finished(timedelta(hours=2)), True),  # interval passed
+        (_finished_then_switched, True),  # ran in replay or before the switch back to live
+        (_supersede, False),  # in flight
+        (_failed, False),  # a failure waits for the interval, like a run, not just the deadline
+    ],
+    ids=["never-run", "recent", "interval-passed", "older-generation", "in-flight", "failed"],
+)
+def test_planning_queues_a_farm_once_when_its_last_published_run_is_due(
+    session_factory, settings, history, queued
+) -> None:
+    with session_factory.begin() as session:
+        farm = Farm(name="Planned")
+        session.add(farm)
+        clock.set_live(session, settings)
+    if history is not None:
+        history(session_factory, settings, farm.id)
+    for _ in range(2):  # every tick, every worker plans again
+        with session_factory.begin() as session:
+            tasks.enqueue_due(session, TASK, HOUR, [farm.id])
+    with session_factory() as session:
+        assert len(_jobs(session)) == (1 if queued else 0)

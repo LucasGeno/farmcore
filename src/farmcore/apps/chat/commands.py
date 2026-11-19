@@ -2,7 +2,7 @@
 
 Installed apps' manifests come from the registry, as for `farmcore replay`, so a confirmed spray
 re-runs `advisor.evaluate` with `run_now`. The advice digest push is a manifest job
-(`chat.push_advice`) run by replay steps and the web process's live scheduler, not here.
+(`chat.push_advice`) run by replay steps and, live, by `farmcore worker`, not here.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ logger = logging.getLogger("farmcore.bot")
 # How often a paused bot looks again whether the owner enabled external effects.
 EFFECTS_RECHECK_SECONDS = 30
 # These log every request URL at INFO, and Bot API URLs carry the token.
-_URL_LOGGERS = ("httpx", "httpcore", "telegram", "apscheduler")
+_URL_LOGGERS = ("httpx", "httpcore", "telegram")
 
 
 def _manifests(
