@@ -25,10 +25,12 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import select, update
 
+from farmcore.apps.fertilization.records import offered_items
 from farmcore.apps.inventory.models import InventoryStock
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import drafts
 from farmcore.core.models.canonical import CropSeason, Farm, Log
-from farmcore.core.models.catalog import CatalogItem, CropProtectionItem
+from farmcore.core.models.catalog import CatalogItem
 from farmcore.core.models.kernel import AppModule
 from tests.apps.fertilization.conftest import (
     APPLIED,
@@ -40,6 +42,7 @@ from tests.apps.fertilization.conftest import (
     seed,
     used,
 )
+from tests.spray_products import add_product
 
 
 @pytest.mark.parametrize(
@@ -126,7 +129,7 @@ def test_a_proposal_is_refused_with_its_reason(session, settings, case, kind, pa
         session.flush()
         session.add(
             CropProtectionItem(
-                catalog_item_id=pesticide.id, product_type="contact", targets=["downy"]
+                catalog_item_id=pesticide.id, authorisation_no="X-1", active_substance="copper"
             )
         )
         payload = application(case, fertiliser={"name": "Copper", "catalog_item_id": pesticide.id})
@@ -162,3 +165,26 @@ def test_a_process_loaded_before_the_switch_off_cannot_confirm_its_draft(session
     with pytest.raises(drafts.DraftInvalid):
         confirm(session, case, draft.id)
     assert session.scalar(select(Log.id).where(Log.type == "fertilise")) is None
+
+
+def test_a_stocked_plant_protection_product_is_never_offered_as_a_fertiliser(session, case):
+    """One dose, one stock (mode 3): since core_0018 every pesticide stock row names its catalog
+    item, and such an item is still not a fertiliser: neither offered nor accepted."""
+    pesticide = add_product(session, "Copper Shield 20 WP", active_substance="copper")
+    session.add(
+        InventoryStock(
+            farm_id=case.farm_id,
+            catalog_item_id=pesticide.id,
+            season=2024,
+            unit="kg",
+            purchased=20,
+        )
+    )
+    session.flush()
+
+    offered = session.execute(offered_items(case.farm_id)).all()
+
+    assert [name for _, name in offered] == ["CAN 27"]
+    fertiliser = {"name": "Copper", "catalog_item_id": pesticide.id}
+    with pytest.raises(drafts.DraftInvalid, match="not in the catalogue"):
+        propose(session, case, application(case, fertiliser=fertiliser))

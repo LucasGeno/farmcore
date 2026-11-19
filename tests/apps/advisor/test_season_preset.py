@@ -21,9 +21,8 @@ from farmcore.core.models.canonical import (
     Log,
     LogSource,
     Parcel,
-    Product,
-    Quantity,
 )
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from farmcore.main import create_app
 from tests.apps.advisor import scenes
 
@@ -90,11 +89,11 @@ def test_logs_are_the_advisors_own_passes_on_every_parcel(
     assert source.raw_payload["label"] == LABEL
     # products and doses come from the shortlist / existing demo doses
     doses = {
-        (q.product.name, float(q.value), q.unit)
+        (q.catalog_item.name, float(q.entered_value), q.entered_unit)
         for q in session.scalars(
-            select(Quantity)
+            select(TypedQuantity)
             .join(Log)
-            .where(Log.farm_id == farm.id, Quantity.product_id.is_not(None))
+            .where(Log.farm_id == farm.id, TypedQuantity.catalog_item_id.is_not(None))
         )
     }
     assert doses == {
@@ -209,10 +208,10 @@ def test_the_preset_keeps_the_telegram_binding_and_every_view_tells_the_same_sea
     inventory = " ".join(re.sub(r"<[^>]+>", " ", admin_client.get("/inventory/").text).split())
     p5_counts = dict(
         session.execute(
-            select(Quantity.label, func.count())
-            .join(Log, Log.id == Quantity.log_id)
-            .where(Log.parcels.contains(p5), Quantity.product_id.is_not(None))
-            .group_by(Quantity.label)
+            select(TypedQuantity.label, func.count())
+            .join(Log, Log.id == TypedQuantity.log_id)
+            .where(Log.parcels.contains(p5), TypedQuantity.catalog_item_id.is_not(None))
+            .group_by(TypedQuantity.label)
         ).all()
     )
     doses = {
@@ -268,11 +267,11 @@ def test_per_product_counts_and_kpi_passes_stay_equal(
     session.commit()
     p5 = session.scalar(select(Parcel).where(Parcel.alias == "P5"))
     names = [
-        q.product.name
+        q.catalog_item.name
         for q in session.scalars(
-            select(Quantity)
+            select(TypedQuantity)
             .join(Log)
-            .where(Log.parcels.contains(p5), Quantity.product_id.is_not(None))
+            .where(Log.parcels.contains(p5), TypedQuantity.catalog_item_id.is_not(None))
         )
     ]
     from collections import Counter
@@ -381,7 +380,8 @@ def test_no_pass_breaks_a_label_and_the_sixth_copper_is_left_out_with_a_note(
         if lg.notes == note
     )
     names = [
-        q.product.name for q in session.scalars(select(Quantity).where(Quantity.log_id == tank.id))
+        q.catalog_item.name
+        for q in session.scalars(select(TypedQuantity).where(TypedQuantity.log_id == tank.id))
     ]
     assert names == ["MICROTHIOL SPECIAL DISPERSS"]  # sulphur part only
     for item in SHORTLIST:
@@ -391,10 +391,12 @@ def test_no_pass_breaks_a_label_and_the_sixth_copper_is_left_out_with_a_note(
                 lg.ts_start
                 for lg in session.scalars(
                     select(Log)
-                    .join(Quantity)
-                    .join(Product, Product.id == Quantity.product_id)
+                    .join(TypedQuantity)
+                    .join(CatalogItem, CatalogItem.id == TypedQuantity.catalog_item_id)
                     .where(
-                        Log.farm_id == farm.id, Log.parcels.contains(p5), Product.name == item.name
+                        Log.farm_id == farm.id,
+                        Log.parcels.contains(p5),
+                        CatalogItem.name == item.name,
                     )
                 )
             }

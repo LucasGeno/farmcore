@@ -14,7 +14,8 @@ from sqlalchemy import select
 from farmcore.apps.operations import spray_items
 from farmcore.core import logs
 from farmcore.core.identity import principal_for
-from farmcore.core.models.canonical import Log, Parcel, Quantity
+from farmcore.core.models.canonical import Log, Parcel
+from farmcore.core.models.catalog import typed_quantity
 from farmcore.core.models.corrections import OperationCorrection
 from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 from farmcore.core.timeline import post_event
@@ -31,7 +32,7 @@ NEW_DOSE_TEXT_LIMIT = 4096
 
 class Dose(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    product_id: RecordId
+    catalog_item_id: RecordId
     measure: str = "rate"
     value: Decimal = Field(gt=0, allow_inf_nan=False)
     unit: str = Field(min_length=1, max_length=40)
@@ -153,9 +154,15 @@ def decimal_text(value: Decimal) -> str:
     return text.rstrip("0").rstrip(".") if "." in text else text
 
 
+# Version 2 (core_0018): doses are typed quantities naming catalog items. A pending correction
+# whose snapshot is version 1 no longer matches its record's fingerprint, so it is re-opened
+# (409), never applied.
+SNAPSHOT_VERSION = 2
+
+
 def snapshot(log):
     return {
-        "version": 1,
+        "version": SNAPSHOT_VERSION,
         "type": log.type,
         "status": log.status,
         "name": log.name,
@@ -168,13 +175,13 @@ def snapshot(log):
         "quantities": [
             {
                 "id": q.id,
-                "product_id": q.product_id,
-                "measure": q.measure,
-                "value": decimal_text(q.value),
-                "unit": q.unit,
+                "catalog_item_id": q.catalog_item_id,
+                "measure": q.entered_measure,
+                "value": decimal_text(q.entered_value),
+                "unit": q.entered_unit,
                 "label": q.label,
             }
-            for q in sorted(log.quantities, key=lambda q: q.id)
+            for q in sorted(log.typed_quantities, key=lambda q: q.id)
         ],
         "sources": [
             {
@@ -213,7 +220,7 @@ def _log(repo, log_id):
     )
     if log is None or log.type != "spray" or log.status != "done":
         raise HTTPException(404, "Confirmed spray not found.")
-    repo.session.expire(log, ["parcels", "quantities", "sources"])
+    repo.session.expire(log, ["parcels", "typed_quantities", "sources"])
     return log
 
 
@@ -251,13 +258,14 @@ def _after(repo, before, changes, *, replay=False):
                         if eligible is None:
                             shortlist = spray_items.items_for_farm(repo, scope="logs:write")
                             eligible = {p.id for p in shortlist}
-                        if dose.product_id not in eligible:
+                        if dose.catalog_item_id not in eligible:
                             raise HTTPException(422, "Product not found.")
                     validate_new_dose(dose.value)  # before fixed notation or persisted intent
                     row["value"] = decimal_text(dose.value)
                     if "label" not in dose.model_fields_set:
                         prior = next(
-                            (q for q in unused if q["product_id"] == dose.product_id), None
+                            (q for q in unused if q["catalog_item_id"] == dose.catalog_item_id),
+                            None,
                         )
                         row["label"] = prior["label"] if prior is not None else None
                 proposed.append(row)
@@ -401,11 +409,17 @@ def finalize(repo, actor, correction_id, action, now):
             repo.session.scalars(select(Parcel).where(Parcel.id.in_(after["parcel_ids"])))
         )
         if after["quantities"] != correction.before_snapshot["quantities"]:
-            existing = {q.id: q for q in log.quantities}
-            log.quantities = [
+            existing = {q.id: q for q in log.typed_quantities}
+            log.typed_quantities = [
                 existing[q["id"]]
                 if "id" in q
-                else Quantity(**{k: (Decimal(v) if k == "value" else v) for k, v in q.items()})
+                else typed_quantity(
+                    value=Decimal(q["value"]),
+                    unit=q["unit"],
+                    catalog_item_id=q["catalog_item_id"],
+                    label=q["label"],
+                    entered_measure=q["measure"],
+                )
                 for q in after["quantities"]
             ]
         log.ts_start = datetime.fromisoformat(after["ts_start"])

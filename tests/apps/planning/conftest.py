@@ -64,7 +64,7 @@ def job_payload(parcels, products, advice, **overrides):
         "name": "Spray block A",
         "parcel_ids": [parcels[0].id],
         "assessment_id": advice.id,
-        "product_id": products["copper-contact"].id,
+        "catalog_item_id": products["copper-contact"].id,
         "scheduled_start": (NOW + timedelta(hours=2)).isoformat(),
         "duration_minutes": 90,
         "notes": "Morning pass",

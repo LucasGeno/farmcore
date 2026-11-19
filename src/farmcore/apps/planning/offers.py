@@ -449,10 +449,10 @@ def _job_offers(
     ]
     # One read for every overlapping job's product, not one per job.
     refs = advisor_products.product_refs(
-        repo, {other.product_id for other in overlapping}, scope="logs:read"
+        repo, {other.catalog_item_id for other in overlapping}, scope="logs:read"
     )
     for other in overlapping:
-        ref = refs.get(other.product_id)
+        ref = refs.get(other.catalog_item_id)
         result, _, _, _, _ = _states(
             repo,
             other,

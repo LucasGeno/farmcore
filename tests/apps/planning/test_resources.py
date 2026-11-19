@@ -221,7 +221,7 @@ def test_owner_deactivates_a_machine_and_it_cannot_be_booked(
             "name": "Spray",
             "parcel_ids": [parcels[0].id],
             "assessment_id": advice.id,
-            "product_id": products["copper-contact"].id,
+            "catalog_item_id": products["copper-contact"].id,
             "scheduled_start": advice.next_window_start.isoformat(),
             "duration_minutes": 90,
             "notes": "",

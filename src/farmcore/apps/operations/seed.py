@@ -1,11 +1,13 @@
 """Operations seed: the demo product shortlist, and with `--scene B` the 9 May copper spray.
 
 Products upsert through ext_id `farmcore-demo-products`:<key> (stable keys, so re-seeding updates
-them in place). Names and AMM numbers are real French products authorised on vigne, each verified
-on its E-Phy page (`props.source`), so
-`props.placeholder` is false. Each product's vine label limits (`DemoProduct.label`, the E-Phy
-"Vigne, Trt Part.Aer." usage) go into its props for the register checks (`checks.Label`);
-the upsert replaces props, so a database seeded earlier gains them on the next seed.
+them in place) as catalog items with operations' `crop_protection_item` extension; crop
+protection's contact/penetrant type and targets go to its own table when it is installed. Names
+and AMM numbers are real French products authorised on vigne, each verified on its E-Phy page
+(`props.source`), so `props.placeholder` is false. Each product's vine label limits
+(`DemoProduct.label`, the E-Phy "Vigne, Trt Part.Aer." usage) go into its props for the register
+checks (`checks.Label`); the upsert replaces props, so a database seeded earlier gains them on
+the next seed.
 `active_substance` is lower-case: the chat regex extractor (06) maps spoken words through it.
 
 Scene B: one copper spray per parcel of the default farm at 2024-05-09 08:00 local, 2 kg/ha,
@@ -15,6 +17,7 @@ No 10 Apr spray: the live voice log covers 10 Apr, and a seed spray there would 
 
 from __future__ import annotations
 
+import importlib.util
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
@@ -23,11 +26,15 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from farmcore.apps.operations import spray_items
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import ext_ids, logs
 from farmcore.core.access import DEMO_SOURCE
-from farmcore.core.models.canonical import ExtId, Log, Parcel, Product
+from farmcore.core.models.canonical import ExtId, Log, Parcel
+from farmcore.core.models.catalog import CatalogItem
 from farmcore.core.seed import ensure_default_farm
 from farmcore.settings import get_settings
 
@@ -131,32 +138,47 @@ SCENE_B_DOSE = Decimal("2")
 SCENE_B_UNIT = "kg/ha"
 
 
-def ensure_products(session: Session) -> dict[str, Product]:
-    """Upsert the shortlist; returns key -> product."""
+def _crop_protection_writer() -> Any:
+    """Crop protection's writer of an item's attributes, or None when it is not installed."""
+    try:
+        if importlib.util.find_spec("farmcore.apps.advisor") is None:
+            return None
+        from farmcore.apps.advisor.products import ensure_ref
+    except ModuleNotFoundError:
+        return None
+    return ensure_ref
+
+
+def ensure_products(session: Session) -> dict[str, spray_items.SprayItem]:
+    """Upsert the shortlist; returns key -> item."""
     ext_ids.ensure_source(
         session, PRODUCT_SOURCE, "farmcore demo product shortlist", "seed", "Apache-2.0"
     )
+    write_ref = _crop_protection_writer()
     out = {}
     for p in SHORTLIST:
-        out[p.key], _ = ext_ids.upsert(
-            session,
-            source=PRODUCT_SOURCE,
-            key=p.key,
-            model=Product,
-            values={
-                "name": p.name,
-                "authorisation_no": p.authorisation_no,
-                "active_substance": p.active_substance,
-                "product_type": p.product_type,
-                "targets": list(p.targets),
-                "props": {
-                    "placeholder": p.placeholder,
-                    "source": p.source or None,
-                    **({"label_usage": LABEL_USAGE, **p.label} if p.label else {}),
-                    **({"organic": dict(p.organic)} if p.organic else {}),
-                },
-            },
+        catalog_item, _ = ext_ids.upsert(
+            session, source=PRODUCT_SOURCE, key=p.key, model=CatalogItem, values={"name": p.name}
         )
+        facts = {
+            "authorisation_no": p.authorisation_no,
+            "active_substance": p.active_substance,
+            "props": {
+                "placeholder": p.placeholder,
+                "source": p.source or None,
+                **({"label_usage": LABEL_USAGE, **p.label} if p.label else {}),
+                **({"organic": dict(p.organic)} if p.organic else {}),
+            },
+        }
+        session.execute(
+            pg_insert(CropProtectionItem)
+            .values(catalog_item_id=catalog_item.id, **facts)
+            .on_conflict_do_update(index_elements=["catalog_item_id"], set_=facts)
+        )
+        if write_ref is not None:
+            write_ref(session, catalog_item.id, product_type=p.product_type, targets=p.targets)
+        out[p.key] = spray_items.SprayItem(id=catalog_item.id, name=p.name, **facts)
+    session.flush()
     return out
 
 
@@ -170,7 +192,7 @@ def _map_log(session: Session, key: str, log_id: int) -> None:
     session.flush()
 
 
-def _scene_b(session: Session, farm_id: int, copper: Product, tz: str) -> int:
+def _scene_b(session: Session, farm_id: int, copper: spray_items.SprayItem, tz: str) -> int:
     ts = SCENE_B_LOCAL.replace(tzinfo=ZoneInfo(tz)).astimezone(ZoneInfo("UTC"))
     # Materialised: record_operation flushes and queries on this session inside the loop.
     parcels = list(
@@ -194,7 +216,7 @@ def _scene_b(session: Session, farm_id: int, copper: Product, tz: str) -> int:
                     measure="rate",
                     value=SCENE_B_DOSE,
                     unit=SCENE_B_UNIT,
-                    product_id=copper.id,
+                    catalog_item_id=copper.id,
                     label=copper.name,
                 )
             ],

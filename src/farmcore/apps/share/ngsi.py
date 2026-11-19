@@ -55,8 +55,11 @@ at the same commit (`$schemaVersion` 1.0.2) and `agrifood-schema.json` (AgriFood
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from typing import Any
+
+from sqlalchemy import select
 
 from farmcore.apps.operations import spray_items
 from farmcore.apps.operations.register import parcel_aliases, parcel_intervals, parcel_key
@@ -65,6 +68,7 @@ from farmcore.apps.share import config
 from farmcore.core import representations
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.canonical import Log, LogParcel, Parcel
+from farmcore.core.models.catalog import LegacyProductMap, LegacyQuantityMap
 
 SCOPE = "register:read"
 ENTITY_TYPE = "AgriParcelOperation"
@@ -72,14 +76,27 @@ PARCEL_TYPE = "AgriParcel"
 IACS_APPLICATION = "iacs-lpis"  # the parcel's IACS/LPIS reference (`parcel.iacs_id`)
 STATUS_DONE = "finished"
 MEDIA_TYPE = "application/ld+json"
-# v1: entity ids carry the dose's id and `hasAgriProductType` the item's (`quantity_ref`,
-# `product_ref`), as published since the first export.
+# v1, as published since the first export: an entity id ends with the dose's legacy quantity id
+# and `hasAgriProductType` names the legacy product id, both resolved through core_0018's frozen
+# maps; a dose or item written since has none and takes its v2 ref. Deprecated for one release
+# (the contract step sets its Sunset). v2: catalog-native refs everywhere, `tq<typed quantity
+# id>` and `ci<catalog item id>`, a namespace no v1 id uses.
+V1_DEPRECATED = date(2026, 11, 19)
 REPRESENTATION = representations.register(
-    representations.Representation("ngsi-ld", (representations.Version(1),), default=1)
+    representations.Representation(
+        "ngsi-ld",
+        (
+            representations.Version(
+                1, deprecated=V1_DEPRECATED, note="legacy product and quantity ids"
+            ),
+            representations.Version(2),
+        ),
+        default=1,
+    )
 )
 
 
-def urn(kind: str, *parts: int) -> str:
+def urn(kind: str, *parts: int | str) -> str:
     return f"urn:ngsi-ld:{kind}:farmcore-" + "-".join(str(p) for p in parts)
 
 
@@ -112,15 +129,62 @@ def _product_items(log: Log, quantities: list[SprayDose]) -> list[ProductItem]:
     return items or [(None, None)]
 
 
-def quantity_ref(q: SprayDose) -> int:
-    """The dose's id in v1 entity ids (`ngsi-ld` v1, `core/representations.py`): published,
-    so it must keep naming the same dose when doses move tables."""
-    return q.id
+@dataclass(frozen=True)
+class Refs:
+    """The published refs of one export's doses and items in one version (`quantity_ref`,
+    `product_ref`)."""
+
+    version: int
+    quantities: dict[int, int]  # typed quantity id -> legacy quantity id (v1 only)
+    products: dict[int, int]  # catalog item id -> legacy product id (v1 only)
 
 
-def product_ref(product: SprayItem) -> int:
-    """The item's id in v1 `AgriProductType` URNs; published, like `quantity_ref`."""
-    return product.id
+def refs(repo: ScopedRepository, doses: list[SprayDose], version: int) -> Refs:
+    """The legacy ids v1 still publishes, read from the frozen maps; none for v2."""
+    if version != 1 or not doses:
+        return Refs(version, {}, {})
+    dose_ids = [q.id for q in doses]
+    item_ids = list({q.item_id for q in doses if q.item_id is not None})
+    quantities = dict(
+        repo.execute(
+            select(LegacyQuantityMap.typed_quantity_id, LegacyQuantityMap.quantity_id).where(
+                LegacyQuantityMap.typed_quantity_id.in_(dose_ids)
+            ),
+            scope=SCOPE,
+            resource="legacy_quantity_map",
+        )
+        .tuples()
+        .all()
+    )
+    products = (
+        dict(
+            repo.execute(
+                select(LegacyProductMap.catalog_item_id, LegacyProductMap.product_id).where(
+                    LegacyProductMap.catalog_item_id.in_(item_ids)
+                ),
+                scope=SCOPE,
+                resource="legacy_product_map",
+            )
+            .tuples()
+            .all()
+        )
+        if item_ids
+        else {}
+    )
+    return Refs(version, quantities, products)
+
+
+def quantity_ref(refs: Refs, q: SprayDose) -> int | str:
+    """The dose's part of an entity id: published, so it keeps naming the same dose when doses
+    move tables (v1: its legacy quantity id when it has one)."""
+    legacy = refs.quantities.get(q.id)
+    return legacy if legacy is not None else f"tq{q.id}"
+
+
+def product_ref(refs: Refs, product: SprayItem) -> int | str:
+    """The item's part of its `AgriProductType` URN; published, like `quantity_ref`."""
+    legacy = refs.products.get(product.id)
+    return legacy if legacy is not None else f"ci{product.id}"
 
 
 def _entry_text(entry: dict[str, Any]) -> str | None:
@@ -150,12 +214,13 @@ def _description(
 
 
 def _entity(
+    refs: Refs,
     log: Log,
     parcel: Parcel,
     q: SprayDose | None,
     product: SprayItem | None,
     entry: dict[str, Any] | None,
-    suffix: tuple[int, ...],
+    suffix: tuple[int | str, ...],
     interval: tuple[datetime, datetime | None],
 ) -> dict[str, Any]:
     start, end = interval
@@ -174,7 +239,7 @@ def _entity(
     if ended:
         e["endedAt"] = ended
     if product is not None:
-        e["hasAgriProductType"] = urn("AgriProductType", product_ref(product))
+        e["hasAgriProductType"] = urn("AgriProductType", product_ref(refs, product))
     e["description"] = _description(log, q, product, entry)
     if q is not None:
         e["quantity"] = _number(q)
@@ -193,6 +258,7 @@ def operations(
     since: datetime | None = None,
     before: datetime | None = None,
     parcel_id: int | None = None,
+    version: int = REPRESENTATION.default,
 ) -> list[dict[str, Any]]:
     """The farm's done exported-type logs with `since ≤ ts_start ≤ now` (and `< before`) as
     entities, ordered by
@@ -219,6 +285,7 @@ def operations(
     products = spray_items.items_by_id(
         repo, {q.item_id for qs in quantities_of.values() for q in qs}, scope=SCOPE
     )
+    published = refs(repo, [q for qs in quantities_of.values() for q in qs], version)
     parcels_of: dict[int, list[Parcel]] = defaultdict(list)
     for link in links:
         parcels_of[link.log_id].append(parcels[link.parcel_id])
@@ -227,12 +294,12 @@ def operations(
     out = []
     for log in done:
         items = _product_items(log, quantities_of[log.id])
-        # Quantity id, else `0` (no product at all) or `0-<n>` (n-th quantity-less entry).
-        suffixes: list[tuple[int, ...]] = []
+        # Dose ref, else `0` (no product at all) or `0-<n>` (n-th quantity-less entry).
+        suffixes: list[tuple[int | str, ...]] = []
         n = 0
         for q, entry in items:
             if q is not None:
-                suffixes.append((quantity_ref(q),))
+                suffixes.append((quantity_ref(published, q),))
             elif entry is not None:
                 n += 1
                 suffixes.append((0, n))
@@ -244,7 +311,16 @@ def operations(
             for (q, entry), suffix in zip(items, suffixes, strict=True):
                 product = products.get(q.item_id) if q and q.item_id else None
                 out.append(
-                    _entity(log, parcel, q, product, entry, suffix, intervals[log.id, parcel.id])
+                    _entity(
+                        published,
+                        log,
+                        parcel,
+                        q,
+                        product,
+                        entry,
+                        suffix,
+                        intervals[log.id, parcel.id],
+                    )
                 )
     return out
 
@@ -304,9 +380,11 @@ def export(
     since: datetime | None = None,
     before: datetime | None = None,
     parcel_id: int | None = None,
+    version: int = REPRESENTATION.default,
 ) -> list[dict[str, Any]]:
-    """The NGSI-LD export: `operations`, then the `AgriParcel` of every parcel they reference."""
-    ops = operations(repo, now, since=since, before=before, parcel_id=parcel_id)
+    """The NGSI-LD export (`version` of its representation): `operations`, then the
+    `AgriParcel` of every parcel they reference."""
+    ops = operations(repo, now, since=since, before=before, parcel_id=parcel_id, version=version)
     referenced = list(dict.fromkeys(e["hasAgriParcel"] for e in ops))
     ids = [int(u.removeprefix(urn(PARCEL_TYPE))) for u in referenced]
     return ops + parcels(repo, ids)

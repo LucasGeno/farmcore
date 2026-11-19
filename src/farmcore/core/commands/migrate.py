@@ -28,6 +28,7 @@ from sqlalchemy.exc import DBAPIError
 
 from farmcore import __version__
 from farmcore.core import startup
+from farmcore.core.migration_refusal import MigrationRefused
 from farmcore.core.startup import (
     INSTALLATION_SETTING,
     MIGRATION_LOCK,
@@ -71,8 +72,9 @@ def ensure_installation_id(conn: Connection) -> str:
 # loads them from a bundle (the copy's own migration wrote them), and test fixtures that empty
 # the database keep them.
 MIGRATION_OWNED_TABLES = ("alembic_version", "unit_definition", "weather_variable")
-# Views over legacy tables that the runtime role only reads (a simple view is auto-updatable).
-READ_ONLY_VIEWS = ("legacy_catalog_item", "legacy_typed_quantity")
+# Instance data the runtime role only reads: the legacy spray tables core_0018 froze (kept for
+# its rollback) and the maps it wrote. Unlike the tables above they are backed up and restored.
+FROZEN_TABLES = ("product", "quantity", "legacy_product_map", "legacy_quantity_map")
 
 RUNTIME_ATTRIBUTES = (
     "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS "
@@ -370,17 +372,12 @@ def ensure_runtime_role(conn: Connection, role: str, password: str) -> None:
         statements.append(sql.SQL(statement).format(db=database, r=r, owner=owner))
     for table in [
         *MIGRATION_OWNED_TABLES,
+        *FROZEN_TABLES,
         *(t for (t,) in _rows(conn, role, _EXTENSION_RELATIONS)),
     ]:
         statements.append(
             sql.SQL("REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON {} FROM {}, PUBLIC").format(
                 sql.Identifier(table), r
-            )
-        )
-    for view in READ_ONLY_VIEWS:
-        statements.append(
-            sql.SQL("REVOKE INSERT, UPDATE, DELETE ON {} FROM {}, PUBLIC").format(
-                sql.Identifier(view), r
             )
         )
     _run(conn, role, statements)
@@ -544,7 +541,10 @@ def _mark(conn: Connection, value: str | None) -> None:
 
 
 def _failure(exc: Exception) -> str:
-    """The server's message for a failed migration, never its SQL or parameters."""
+    """The server's message for a failed migration, never its SQL or parameters; a migration's
+    own refusal (ids and counts, no row values) as it is."""
+    if isinstance(exc, MigrationRefused):
+        return str(exc)
     orig = getattr(exc, "orig", None)
     detail = getattr(getattr(orig, "diag", None), "message_primary", None)
     return detail or type(orig or exc).__name__

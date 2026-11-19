@@ -85,6 +85,7 @@ def _product_line(
             day=datetime.min.date(),
             parcel="",
             product_id=product.id,
+            product_ref=product.ref,
             product_name=product.name,
             substance=product.active_substance,
             dose_kg_ha=dose,

@@ -27,7 +27,7 @@
   <input type="hidden" name="duration_minutes" value="{{ completion_form.duration_minutes }}">
   <input type="hidden" name="notes" value="{{ completion_form.notes }}">
   {% for parcel_id in completion_form.parcel_ids %}<input type="hidden" name="parcel_ids" value="{{ parcel_id }}">{% endfor %}
-  {% for q in completion_form.quantities %}<input type="hidden" name="product_id" value="{{ q.product_id }}"><input type="hidden" name="dose_value" value="{{ q.value }}"><input type="hidden" name="dose_unit" value="{{ q.unit }}">{% endfor %}
+  {% for q in completion_form.quantities %}<input type="hidden" name="catalog_item_id" value="{{ q.catalog_item_id }}"><input type="hidden" name="dose_value" value="{{ q.value }}"><input type="hidden" name="dose_unit" value="{{ q.unit }}">{% endfor %}
   <button class="min-h-[44px] justify-self-start rounded-lg bg-brand-700 px-4 text-surface hover:bg-brand-900 focus-visible:ring-2 focus-visible:ring-brand-700" type="submit">Confirm completed work</button>
 </form>
 {% endcall %}

@@ -31,12 +31,14 @@ from sqlalchemy.dialects.postgresql import distinct_on
 
 from farmcore.apps.advisor import priority
 from farmcore.apps.advisor.assessment import KIND as SPRAY_KIND
+from farmcore.apps.advisor.catalog import AdvisorProduct
 from farmcore.apps.advisor.engine import Advice as EngineAdvice
 from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, Spray
 from farmcore.apps.advisor.engine.config import DEFAULT_REGION
 from farmcore.apps.advisor.engine.types import floor_hour
 from farmcore.apps.advisor.engine.window import forecast_span
 from farmcore.apps.fields.seasons import season_evidence
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.apps.stations import service as stations
 from farmcore.core import assessments
 from farmcore.core.access import ScopeDenied, ScopedRepository
@@ -49,9 +51,8 @@ from farmcore.core.models.canonical import (
     Log,
     LogParcel,
     LogSource,
-    Product,
-    Quantity,
 )
+from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from farmcore.core.models.weather import WeatherReceipt
 
 SCOPE = "advice:read"
@@ -165,17 +166,16 @@ def load_sprays(repo: ScopedRepository, parcel_id: int, now: datetime) -> tuple[
     if not logs:
         return [], 0
     stmt = (
-        select(Quantity.log_id, Product)
-        .join(Product, Product.id == Quantity.product_id)
-        .where(Quantity.log_id.in_([log.id for log in logs]))
-        .order_by(Quantity.id)
+        select(TypedQuantity.log_id, CatalogItem.name, AdvisorProduct)
+        .join(AdvisorProduct, AdvisorProduct.catalog_item_id == TypedQuantity.catalog_item_id)
+        .join(CatalogItem, CatalogItem.id == TypedQuantity.catalog_item_id)
+        .where(TypedQuantity.log_id.in_([log.id for log in logs]))
+        .order_by(TypedQuantity.id)
     )
     products: dict[int, list[ProductRef]] = {}
-    for log_id, product in repo.execute(stmt, scope=LOGS_SCOPE, resource="quantity"):
+    for log_id, name, ref in repo.execute(stmt, scope=LOGS_SCOPE, resource="typed_quantity"):
         products.setdefault(log_id, []).append(
-            ProductRef(
-                name=product.name, product_type=product.product_type, targets=product.targets
-            )
+            ProductRef(name=name, product_type=ref.product_type, targets=ref.targets)
         )
     sprays = [
         Spray(ts=log.ts_start, products=products[log.id]) for log in logs if log.id in products
@@ -653,6 +653,9 @@ def runs_to_forecast_edge(end: datetime | None, evaluated_at: datetime, horizon_
     return end is not None and edge is not None and end >= edge
 
 
+EVIDENCE_VERSION = 2
+
+
 def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
     """The exact hourly series the engine read, plus the spray evidence and crop season, with
     unknown receipt semantics stated explicitly. Station rows are not copied: `hourly_inputs` is
@@ -669,12 +672,19 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
     log_ids = [row.id for row in logs]
     quantities = (
         repo.execute(
-            select(Quantity, Product)
-            .outerjoin(Product, Product.id == Quantity.product_id)
-            .where(Quantity.log_id.in_(log_ids))
-            .order_by(Quantity.id),
+            select(TypedQuantity, CatalogItem, CropProtectionItem, AdvisorProduct)
+            .outerjoin(CatalogItem, CatalogItem.id == TypedQuantity.catalog_item_id)
+            .outerjoin(
+                CropProtectionItem,
+                CropProtectionItem.catalog_item_id == TypedQuantity.catalog_item_id,
+            )
+            .outerjoin(
+                AdvisorProduct, AdvisorProduct.catalog_item_id == TypedQuantity.catalog_item_id
+            )
+            .where(TypedQuantity.log_id.in_(log_ids))
+            .order_by(TypedQuantity.id),
             scope=LOGS_SCOPE,
-            resource="quantity",
+            resource="typed_quantity",
         ).all()
         if log_ids
         else []
@@ -721,8 +731,17 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
         "spray_logs": [columns(log) for log in logs],
         "log_sources": [columns(source) for source in sources],
         "hourly_units": {"rr1_mm": "mm", "t_c": "°C", "rh_pct": "%", "ff_kmh": "km/h"},
+        # Version 2 (core_0018): a dose is a typed quantity and its item's rows. Snapshots saved
+        # before it have no `evidence_version` and hold `{quantity, product}`; never rewritten.
+        "evidence_version": EVIDENCE_VERSION,
         "quantities": [
-            {"quantity": columns(q), "product": columns(p) if p else None} for q, p in quantities
+            {
+                "typed_quantity": columns(q),
+                "catalog_item": columns(item) if item else None,
+                "crop_protection_item": columns(facts) if facts else None,
+                "advisor_product": columns(ref) if ref else None,
+            }
+            for q, item, facts, ref in quantities
         ],
         "ignored_sprays": ignored,
         # The parcel's season on the local evaluation day, copied with its revision.

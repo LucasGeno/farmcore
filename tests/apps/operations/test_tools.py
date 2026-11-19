@@ -138,17 +138,18 @@ def _record_p5(session, settings, quantities) -> None:
 
     from farmcore.apps.operations import seed as ops_seed
     from farmcore.core import logs
-    from farmcore.core.models.canonical import Parcel, Product
+    from farmcore.core.models.canonical import Parcel
+    from farmcore.core.models.catalog import CatalogItem
     from farmcore.core.seed import ensure_default_farm
 
     farm = ensure_default_farm(session, settings)
     parcel = session.scalar(select(Parcel).where(Parcel.alias == "P5"))
 
-    def product_id(key: str | None) -> int | None:
+    def catalog_item_id(key: str | None) -> int | None:
         if key is None:
             return None
         name = next(p.name for p in ops_seed.SHORTLIST if p.key == key)
-        return session.scalar(select(Product.id).where(Product.name == name))
+        return session.scalar(select(CatalogItem.id).where(CatalogItem.name == name))
 
     ts = local("2024-04-10 05:30")
     logs.record_operation(
@@ -159,7 +160,7 @@ def _record_p5(session, settings, quantities) -> None:
         ts_start=ts,
         ts_end=None,
         quantities=[
-            logs.QuantityInput("rate", Decimal(v), unit, product_id(key), label)
+            logs.QuantityInput("rate", Decimal(v), unit, catalog_item_id(key), label)
             for v, unit, key, label in quantities
         ],
         source=logs.SourceInput("voice", "test:P5:rates", {}, 0.9, logs.RANK_VOICE),

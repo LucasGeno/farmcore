@@ -29,7 +29,8 @@ from farmcore.apps.stations.connector import read_hours
 from farmcore.core import ext_ids, logs
 from farmcore.core.access import DEMO_SOURCE
 from farmcore.core.demo import Preset
-from farmcore.core.models.canonical import Farm, Log, Parcel, Product
+from farmcore.core.models.canonical import Farm, Log, Parcel
+from farmcore.core.models.catalog import CatalogItem
 from farmcore.settings import get_settings
 
 UNTREATED = ("P5", "P6", "P7")
@@ -52,7 +53,7 @@ def apply_live_loop(session: Session, farm: Farm, now: datetime) -> None:
     if not isinstance(demo_farm, Farm) or farm.id != demo_farm.id:
         return
     copper = ext_ids.lookup(session, PRODUCT_SOURCE, SCENE_B_PRODUCT)
-    if not isinstance(copper, Product):
+    if not isinstance(copper, CatalogItem):
         raise ValueError("Seed the demo product shortlist before applying the live-loop scene")
     parcels = session.scalars(
         select(Parcel)
@@ -170,7 +171,7 @@ def apply_season_2024(session: Session, farm: Farm, now: datetime) -> None:
     products = {}
     for item in SHORTLIST:
         product = ext_ids.lookup(session, PRODUCT_SOURCE, item.key)
-        if not isinstance(product, Product):
+        if not isinstance(product, CatalogItem):
             raise ValueError("Seed the demo product shortlist before applying the season preset")
         products[item.key] = product
     cfg = AdvisorConfig.for_region_year(SEASON_REGION, SEASON_YEAR)

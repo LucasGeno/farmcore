@@ -564,10 +564,19 @@ def correction_receipt(correction_id: int, request: Request, repo: Repo):
     item = repo.get(OperationCorrection, correction_id, scope="corrections:read")
     if item is None or (item.status == "pending" and item.actor_key != _correction_actor(request)):
         raise HTTPException(404, "Correction not found.")
+    correction = corrections.view(item)
+    doses = [q for side in ("before", "after") for q in correction[side]["quantities"]]
+    # A version 1 snapshot (before core_0018) names legacy product ids: resolved, never guessed.
+    legacy = spray_items.legacy_item_ids(
+        repo.session, {q["product_id"] for q in doses if "product_id" in q}
+    )
+    for q in doses:
+        if "product_id" in q:
+            q["catalog_item_id"] = legacy.get(q["product_id"])
     return render(
         request,
         "operations/correction_receipt.html",
-        correction=corrections.view(item),
+        correction=correction,
         can_finalize=item.status == "pending" and item.actor_key == _correction_actor(request),
         parcel_names={p.id: f"{p.alias} {p.name}" for p in repo.list(Parcel, scope="fields:read")},
         product_names={p.id: p.name for p in spray_items.all_items(repo, scope="logs:read")},
@@ -581,7 +590,7 @@ def correction_form_preview(
     repo: Repo,
     request_key: Annotated[str, Form()] = "",
     reason: Annotated[str, Form()] = "",
-    product_id: Annotated[list[str] | None, Form()] = None,
+    catalog_item_id: Annotated[list[str] | None, Form()] = None,
     dose_value: Annotated[list[str] | None, Form()] = None,
     dose_unit: Annotated[list[str] | None, Form()] = None,
     parcel_ids: Annotated[list[str] | None, Form()] = None,
@@ -598,9 +607,9 @@ def correction_form_preview(
     corrections.target_id(log_id)
     try:
         doses = [
-            {"product_id": product, "value": value, "unit": unit}
+            {"catalog_item_id": product, "value": value, "unit": unit}
             for product, value, unit in zip(
-                product_id or [], dose_value or [], dose_unit or [], strict=True
+                catalog_item_id or [], dose_value or [], dose_unit or [], strict=True
             )
             if product
         ]
@@ -647,14 +656,16 @@ def draft_review(request: Request, repo: Repo, draft: Annotated[int, Query(ge=1,
     """The review fragment of a spray, irrigation or observation draft (`/drafts/<id>`)."""
     from zoneinfo import ZoneInfo
 
-    from farmcore.apps.operations.drafts import MODELS, incomplete
+    from farmcore.apps.operations.drafts import MODELS, incomplete, input_v2
     from farmcore.core import routes_drafts
 
     require_farm_owner(request, repo)
     item = routes_drafts.load(request, repo, draft)
     if item.kind not in MODELS:
         raise HTTPException(404, "Draft not found.")
-    record = MODELS[item.kind].model_validate(item.payload)
+    # A draft closed before core_0018 still holds v1 doses (legacy product ids).
+    payload = input_v2(repo.session, item.payload) if item.kind == "spray" else item.payload
+    record = MODELS[item.kind].model_validate(payload)
     parcels = {
         p.id: p for p in repo.list(Parcel, Parcel.id.in_(record.parcel_ids), scope=PARCEL_SCOPE)
     }
@@ -662,7 +673,7 @@ def draft_review(request: Request, repo: Repo, draft: Annotated[int, Query(ge=1,
     products = {
         i: p.name
         for i, p in spray_items.items_by_id(
-            repo, [d.product_id for d in doses], scope="logs:read"
+            repo, [d.catalog_item_id for d in doses], scope="logs:read"
         ).items()
     }
     return render(
@@ -671,10 +682,10 @@ def draft_review(request: Request, repo: Repo, draft: Annotated[int, Query(ge=1,
         kind=item.kind,
         record=record,
         parcels=[parcels[i] for i in record.parcel_ids if i in parcels],
-        doses=[(products.get(d.product_id, f"Product {d.product_id}"), d) for d in doses],
+        doses=[(products.get(d.catalog_item_id, "Product"), d) for d in doses],
         fact=getattr(record, "fact", None),
         # An incomplete chat or assistant draft names what it still misses, never a guess.
-        missing=incomplete(item.payload),
+        missing=incomplete(payload),
         local_start=record.ts_start.astimezone(ZoneInfo(_farm_tz(request, repo)))
         if record.ts_start is not None
         else None,

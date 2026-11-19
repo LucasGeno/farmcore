@@ -20,7 +20,7 @@ from sqlalchemy import select
 from farmcore.apps.fields import tools as fields_tools
 from farmcore.apps.operations import spray_items
 from farmcore.apps.operations.spray_items import SprayDose, SprayItem
-from farmcore.core import drafts
+from farmcore.core import drafts, representations
 from farmcore.core.models.canonical import Log, LogParcel, LogSource
 from farmcore.core.tools import ToolContext, ToolResult, ToolSpec, object_schema
 
@@ -92,6 +92,7 @@ TOOLS = (
                 "parcel_ids": {"type": "array", "items": {"type": "integer"}},
                 "ts_start": {"type": "string"},
                 "ts_end": {"type": "string"},
+                # Each dose: catalog_item_id, value, unit (a legacy product_id is deprecated).
                 "doses": {"type": "array", "items": {"type": "object"}},
                 "fact": {"type": "object"},
             },
@@ -297,8 +298,19 @@ def propose_record(
         request_key=uuid4().hex,
     )
     text = f"Proposed a {type} record; the farmer reviews and confirms it."
+    facts: dict[str, Any] = {"draft_id": draft.id, "type": type}
+    from farmcore.apps.operations import drafts as record_drafts  # imports the record models
+
+    version = record_drafts.input_version(payload) if type == "spray" else None
+    if version is not None and version.deprecated is not None:  # the MCP form of `Deprecation`
+        facts["input_deprecated"] = {
+            "since": version.deprecated.isoformat(),
+            "note": version.note,
+            "link": representations.NOTES,
+        }
+        text += f" Note: {version.note} (deprecated since {version.deprecated:%Y-%m-%d})."
     return ToolResult(
-        facts={"draft_id": draft.id, "type": type},
+        facts=facts,
         text=text,
         links=(("Review record", f"/drafts/{draft.id}"),),
     )

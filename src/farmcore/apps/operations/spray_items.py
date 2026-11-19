@@ -1,9 +1,11 @@
 """The one read seam over spray products and their doses.
 
 Every reader of a spray's products and doses (register, label checks, stock, tools, map, NGSI,
-chat, planning, ISOXML matching) reads through here, never `product` or `quantity` directly, so
-moving the spray catalogue onto `catalog_item` and its crop-protection extension changes this
-module and the writers only (the contract step). Today it reads `product` and `quantity`.
+chat, planning, ISOXML matching) reads through here. A product is a `catalog_item` with
+operations' `crop_protection_item` extension; a dose is a `typed_quantity` on a spray log, kept
+as entered (`entered_measure`, `entered_value`, `entered_unit`). Since core_0018 they are the
+only copy: the legacy `product` and `quantity` tables are frozen for rollback, and
+`legacy_product_map`/`legacy_quantity_map` resolve the ids historic JSON still holds.
 
 - `SprayItem`: a product's legal record facts (Reg. (EU) 2023/564): name, authorisation number
   as printed (no country), active substance, and its props (placeholder flag, label limits,
@@ -24,14 +26,17 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core.access import ScopedRepository
-from farmcore.core.models.canonical import Farm, Product, Quantity
-from farmcore.core.models.catalog import legacy_typed_quantity
+from farmcore.core.models.canonical import Farm, Log
+from farmcore.core.models.catalog import CatalogItem, LegacyProductMap, TypedQuantity
 
-# Farm prop holding the shortlist; `[]` offers nothing, absent offers every item.
-SHORTLIST_KEY = "product_ids"
+# Farm prop holding the shortlist (catalog item ids); `[]` offers nothing, absent offers every
+# item. core_0018 renamed it from `product_ids`, so a reader of the old id space finds nothing.
+SHORTLIST_KEY = "catalog_item_ids"
+RESOURCE = "crop_protection_item"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,10 +46,19 @@ class SprayItem:
     authorisation_no: str
     active_substance: str
     props: Mapping[str, Any] = field(default_factory=dict, compare=False)
+    # The legacy product id core_0018 moved it from (its frozen map); None for a newer item.
+    legacy_id: int | None = field(default=None, compare=False)
 
     @property
     def placeholder(self) -> bool:
         return bool(self.props.get("placeholder"))
+
+    @property
+    def ref(self) -> int | str:
+        """The item's published ref, stable across the move: its legacy product id when it has
+        one, else `ci<catalog item id>` (a namespace no legacy id uses). Register check keys and
+        NGSI-LD v1 use it."""
+        return self.legacy_id if self.legacy_id is not None else f"ci{self.id}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,26 +76,46 @@ class SprayDose:
         return self.measure == "rate"
 
 
-def _item(product: Product) -> SprayItem:
+_ITEMS = (
+    select(
+        CatalogItem.id,
+        CatalogItem.name,
+        CropProtectionItem.authorisation_no,
+        CropProtectionItem.active_substance,
+        CropProtectionItem.props,
+        LegacyProductMap.product_id.label("legacy_id"),
+    )
+    .join(CropProtectionItem, CropProtectionItem.catalog_item_id == CatalogItem.id)
+    .outerjoin(LegacyProductMap, LegacyProductMap.catalog_item_id == CatalogItem.id)
+)
+
+
+def _item(row: Any) -> SprayItem:
     return SprayItem(
-        id=product.id,
-        name=product.name,
-        authorisation_no=product.authorisation_no,
-        active_substance=product.active_substance,
-        props=dict(product.props or {}),
+        id=row.id,
+        name=row.name,
+        authorisation_no=row.authorisation_no,
+        active_substance=row.active_substance,
+        props=dict(row.props or {}),
+        legacy_id=row.legacy_id,
     )
 
 
-def _dose(q: Quantity) -> SprayDose:
+def _dose(q: TypedQuantity) -> SprayDose:
     return SprayDose(
         id=q.id,
         log_id=q.log_id,
-        item_id=q.product_id,
-        measure=q.measure,
-        value=q.value,
-        unit=q.unit,
+        item_id=q.catalog_item_id,
+        measure=q.entered_measure,
+        value=q.entered_value,
+        unit=q.entered_unit,
         label=q.label,
     )
+
+
+def _items(repo: ScopedRepository, *where: Any, scope: str, order_by: Any) -> list[SprayItem]:
+    stmt = _ITEMS.where(*where).order_by(order_by)
+    return [_item(row) for row in repo.execute(stmt, scope=scope, resource=RESOURCE)]
 
 
 def offers_none(farm: Farm | None) -> bool:
@@ -96,14 +130,14 @@ def items_for_farm(repo: ScopedRepository, *, scope: str, by_id: bool = False) -
     ids = (farm.props or {}).get(SHORTLIST_KEY) if farm else None
     if ids == []:
         return []
-    filters = (Product.id.in_(ids),) if ids is not None else ()
-    order_by = Product.id if by_id else Product.name
-    return [_item(p) for p in repo.list(Product, *filters, scope=scope, order_by=order_by)]
+    filters = (CatalogItem.id.in_(ids),) if ids is not None else ()
+    order_by = CatalogItem.id if by_id else CatalogItem.name
+    return _items(repo, *filters, scope=scope, order_by=order_by)
 
 
 def all_items(repo: ScopedRepository, *, scope: str) -> list[SprayItem]:
     """Every item, on or off a shortlist (receipts name items a record once used)."""
-    return [_item(p) for p in repo.list(Product, scope=scope)]
+    return _items(repo, scope=scope, order_by=CatalogItem.id)
 
 
 def items_by_id(
@@ -113,42 +147,66 @@ def items_by_id(
     wanted = {i for i in ids if i is not None}
     if not wanted:
         return {}
-    return {p.id: _item(p) for p in repo.list(Product, Product.id.in_(wanted), scope=scope)}
+    found = _items(repo, CatalogItem.id.in_(wanted), scope=scope, order_by=CatalogItem.id)
+    return {i.id: i for i in found}
 
 
 def item(repo: ScopedRepository, item_id: int | None, *, scope: str) -> SprayItem | None:
     if item_id is None:
         return None
-    product = repo.get(Product, item_id, scope=scope)
-    return _item(product) if product is not None else None
+    return items_by_id(repo, [item_id], scope=scope).get(item_id)
 
 
 def known_item_ids(session: Session, ids: Collection[int]) -> set[int]:
     """Which of these ids name an item at all (a draft's validator runs on a bare session)."""
     if not ids:
         return set()
-    return set(session.scalars(select(Product.id).where(Product.id.in_(list(ids)))))
+    return set(
+        session.scalars(
+            select(CropProtectionItem.catalog_item_id).where(
+                CropProtectionItem.catalog_item_id.in_(list(ids))
+            )
+        )
+    )
+
+
+def legacy_item_ids(session: Session, product_ids: Collection[int]) -> dict[int, int]:
+    """Legacy product id -> the item it became (core_0018's frozen map); an id the map does not
+    hold is absent, never guessed. For ids kept in historic JSON and old inputs."""
+    if not product_ids:
+        return {}
+    rows = session.execute(
+        select(LegacyProductMap.product_id, LegacyProductMap.catalog_item_id).where(
+            LegacyProductMap.product_id.in_(list(product_ids))
+        )
+    )
+    return dict(rows.tuples().all())
 
 
 def doses_for_logs(
     repo: ScopedRepository, log_ids: Collection[int], *, scope: str, rates_only: bool = False
 ) -> dict[int, list[SprayDose]]:
-    """Each log's doses in entry order (an absent log has none)."""
+    """Each log's doses in entry order (an absent log has none). A dose is a row entered with a
+    measure: a spray's, or a legacy quantity core_0018 moved from an older record of another
+    type; another record's own entered amount (no measure) is never a dose."""
     out: dict[int, list[SprayDose]] = defaultdict(list)
     if not log_ids:
         return out
-    where = [Quantity.log_id.in_(list(log_ids))]
+    where = [
+        TypedQuantity.log_id.in_(list(log_ids)),
+        TypedQuantity.entered_measure.is_not(None),
+    ]
     if rates_only:
-        where.append(Quantity.measure == "rate")
-    for q in repo.list(Quantity, *where, scope=scope, order_by=Quantity.id):
+        where.append(TypedQuantity.entered_measure == "rate")
+    for q in repo.list(TypedQuantity, *where, scope=scope, order_by=TypedQuantity.id):
         out[q.log_id].append(_dose(q))
     return out
 
 
 @dataclass(frozen=True, slots=True)
 class StandardDose:
-    """A dose in its standard measure, value and unit (null when the entered unit has none or
-    the value is NaN), beside what was entered: what stock converts."""
+    """A dose in its standard measure, value and unit (null when the entered unit has none),
+    beside what was entered: what stock converts."""
 
     log_id: int
     item_id: int
@@ -162,36 +220,42 @@ class StandardDose:
 def standard_doses(
     repo: ScopedRepository, log_ids: Collection[int], item_ids: Collection[int]
 ) -> list[StandardDose]:
-    """The doses of these items on these (already scope-read) logs, in the standard shape from
-    the frozen unit table."""
+    """The doses of these items on these (already scope-read) logs, in the standard shape."""
     if not log_ids:
         return []
-    view = legacy_typed_quantity.c
     rows = repo.session.execute(
         select(
-            view.log_id,
-            view.product_id,
-            view.measure,
-            view.value,
-            view.unit,
-            view.entered_value,
-            view.entered_unit,
-        ).where(view.log_id.in_(list(log_ids)), view.product_id.in_(list(item_ids)))
+            TypedQuantity.log_id,
+            TypedQuantity.catalog_item_id,
+            TypedQuantity.measure,
+            TypedQuantity.value,
+            TypedQuantity.unit,
+            TypedQuantity.entered_value,
+            TypedQuantity.entered_unit,
+        ).where(
+            TypedQuantity.log_id.in_(list(log_ids)),
+            TypedQuantity.catalog_item_id.in_(list(item_ids)),
+            TypedQuantity.entered_measure.is_not(None),
+        )
     )
     return [StandardDose(*row) for row in rows]
 
 
-def doses_of_log(log: Any) -> list[SprayDose]:
-    """A loaded log's doses (its `quantities`), for readers that already hold the log."""
-    return [_dose(q) for q in log.quantities]
+def doses_of_log(log: Log) -> list[SprayDose]:
+    """A loaded spray log's doses, for readers that already hold the log."""
+    return [_dose(q) for q in log.typed_quantities if q.entered_measure is not None]
 
 
-def named_rates_of_log(log: Any) -> list[tuple[SprayDose, SprayItem | None]]:
+def named_rates_of_log(log: Log) -> list[tuple[SprayDose, SprayItem | None]]:
     """A loaded log's rate doses, each with the item it names (read through the log's session,
     for readers that hold a log read under their scope but no repository). Only rates resolve
     their item, as the readers only name rates."""
-    return [
-        (_dose(q), _item(q.product) if q.product else None)
-        for q in log.quantities
-        if q.measure == "rate"
-    ]
+    rates = [_dose(q) for q in log.typed_quantities if q.entered_measure == "rate"]
+    ids = {d.item_id for d in rates if d.item_id is not None}
+    session = object_session(log)
+    found = (
+        {r.id: _item(r) for r in session.execute(_ITEMS.where(CatalogItem.id.in_(ids)))}
+        if ids and session is not None
+        else {}
+    )
+    return [(d, found.get(d.item_id) if d.item_id is not None else None) for d in rates]

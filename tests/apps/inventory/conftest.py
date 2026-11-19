@@ -11,9 +11,10 @@ import pytest
 
 from farmcore.apps.inventory.models import InventoryStock
 from farmcore.apps.operations import seed as ops_seed
+from farmcore.apps.operations.spray_items import SprayItem
 from farmcore.core import clock, ext_ids, logs
 from farmcore.core import seed as core_seed
-from farmcore.core.models.canonical import Farm, Parcel, Product
+from farmcore.core.models.canonical import Farm, Parcel
 from farmcore.core.seed import ensure_default_farm
 
 SQUARE = "SRID=4326;MULTIPOLYGON(((-0.16 44.89,-0.15 44.89,-0.15 44.90,-0.16 44.90,-0.16 44.89)))"
@@ -24,7 +25,7 @@ TEST_SOURCE = "test-inventory-parcels"
 class InvFarm:
     farm: Farm
     parcels: list[Parcel]
-    products: dict[str, Product]
+    products: dict[str, SprayItem]
 
 
 def make_parcel(session, farm: Farm, n: int, area: str) -> Parcel:
@@ -60,7 +61,7 @@ def spray(
     session,
     farm: Farm,
     parcels: list[Parcel],
-    product: Product,
+    product: SprayItem,
     *,
     at: datetime,
     value: str,
@@ -82,7 +83,7 @@ def spray(
                 measure=measure,
                 value=Decimal(value),
                 unit=unit,
-                product_id=product.id,
+                catalog_item_id=product.id,
                 label=product.name,
             ),
             *extra,
@@ -95,10 +96,10 @@ def spray(
     return log
 
 
-def stock(session, farm: Farm, product: Product, **values) -> InventoryStock:
+def stock(session, farm: Farm, product: SprayItem, **values) -> InventoryStock:
     row = InventoryStock(
         farm_id=farm.id,
-        product_id=product.id,
+        catalog_item_id=product.id,
         season=values.pop("season", 2024),
         unit=values.pop("unit", "kg"),
         purchased=Decimal(values.pop("purchased", "20")),

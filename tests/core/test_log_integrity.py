@@ -189,7 +189,7 @@ def test_merge_refreshes_preloaded_sources_before_comparing_precision(committed_
         log_id = _spray(setup, farm, parcels[:1], VOICE, T0)[0].id
     with factory() as stale:
         old = stale.get(Log, log_id)
-        assert len(old.sources) == len(old.quantities) == len(old.parcels) == 1
+        assert len(old.sources) == len(old.typed_quantities) == len(old.parcels) == 1
         with factory.begin() as winner:
             _spray(winner, farm, parcels[:2], MACHINE, T0 + timedelta(hours=1), dose="9")
         lower = logs.SourceInput("file", "lower", {}, None, 20)
@@ -205,7 +205,7 @@ def test_merge_refreshes_preloaded_sources_before_comparing_precision(committed_
         )
         assert merged and result.id == log_id
         assert result.ts_start == T0 + timedelta(hours=1)
-        assert [q.value for q in result.quantities] == [9]
+        assert [q.entered_value for q in result.typed_quantities] == [9]
         assert len(result.sources) == 3
         assert {p.id for p in result.parcels} == {p.id for p in parcels[:2]}
         stale.commit()

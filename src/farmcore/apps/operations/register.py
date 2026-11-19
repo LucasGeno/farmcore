@@ -215,6 +215,7 @@ def _applications(
                         day=day,
                         parcel=parcel.alias,
                         product_id=product.id,
+                        product_ref=product.ref,
                         product_name=product.name,
                         substance=product.active_substance,
                         dose_kg_ha=dose,

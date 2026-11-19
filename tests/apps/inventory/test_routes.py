@@ -17,9 +17,9 @@ from farmcore.main import create_app
 from tests.apps.inventory.conftest import T_APR, at, spray, stock
 
 
-def _card(page: str, product_id: int) -> str:
+def _card(page: str, catalog_item_id: int) -> str:
     """The product's stock card as plain text (tags dropped, whitespace collapsed)."""
-    html = page.split(f'data-stock="{product_id}"', 1)[1].split("</article>", 1)[0]
+    html = page.split(f'data-stock="{catalog_item_id}"', 1)[1].split("</article>", 1)[0]
     return " ".join(re.sub(r"<[^>]+>", " ", html).split())
 
 
@@ -74,7 +74,7 @@ def test_low_stock_row_is_flagged(client, session, settings, inv):
 
 
 def test_farm_without_a_verified_catalogue_gets_an_honest_empty_state(client, session, inv):
-    es = Farm(name="Spanish demo", props={"country": "ES", "product_ids": []})
+    es = Farm(name="Spanish demo", props={"country": "ES", "catalog_item_ids": []})
     session.add(es)
     session.flush()
     ensure_owner_grant(session, es)
@@ -218,7 +218,7 @@ def test_a_member_asking_for_another_farms_stock_sees_none_of_it(
         for farm_id, lot in ((own_farm, "LOT-OWN"), (foreign_farm, "LOT-FOREIGN")):
             session.add(
                 InventoryStock(
-                    farm_id=farm_id, product_id=product.id, season=2024, unit="kg",
+                    farm_id=farm_id, catalog_item_id=product.id, season=2024, unit="kg",
                     purchased=Decimal("20"), lot=lot,
                 )
             )  # fmt: skip

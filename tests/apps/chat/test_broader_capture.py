@@ -23,7 +23,7 @@ from farmcore.apps.chat.extractor import (
 )
 from farmcore.apps.chat.handlers import on_callback, on_message
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import Farm, Log, Parcel, Quantity
+from farmcore.core.models.canonical import Farm, Log, Parcel
 from farmcore.core.models.catalog import TypedQuantity
 from tests.apps.chat.test_handlers import (
     CHAT,
@@ -121,7 +121,8 @@ def test_irrigation_preview_and_confirm_keep_the_entered_amount_unit_and_basis(
     out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[0][1]))
 
     [log] = logs_of(session)
-    assert (log.type, log.status, log.quantities) == ("irrigate", "done", [])
+    assert (log.type, log.status) == ("irrigate", "done")
+    assert [q.entered_measure for q in log.typed_quantities] == [None]  # an amount, not a dose
     assert log.props == {"irrigation": {"amount": "20", "unit": "mm", "basis": "gross"}}
     assert out.text.startswith("✅ Logged: P5 Les Granges · irrigation 20 mm gross · 10 Apr 06:00.")
     assert "No spray stock was used and no advice was calculated." in out.text
@@ -154,7 +155,7 @@ def test_a_confirmed_irrigation_keeps_its_amount_as_an_entered_quantity(
     assert (typed.entered_value, typed.entered_unit) == entered
     assert (typed.measure, typed.value, typed.unit) == standard
     # No plant-protection fields: no product rate, no catalog item.
-    assert (count(session, Quantity), typed.catalog_item_id) == (0, None)
+    assert (typed.entered_measure, typed.catalog_item_id) == (None, None)  # never a dose
 
 
 def test_irrigation_without_a_stated_basis_says_so_and_never_assumes_one(
@@ -195,7 +196,7 @@ def test_observation_preview_and_confirm_keep_what_was_seen(session_factory, ses
 
     [log] = logs_of(session)
     assert (log.status, log.props) == ("done", {"observation": {"text": transcript}})
-    assert log.quantities == [] and count(session, TypedQuantity) == 0
+    assert log.typed_quantities == [] and count(session, TypedQuantity) == 0
     assert out.text.startswith(f"✅ Logged: P5 Les Granges · observation: {transcript}")
     assert "Advice updated" not in out.text
 
@@ -247,7 +248,7 @@ def test_confirmed_irrigation_runs_no_advisor_job_and_uses_no_spray_stock(
         session.add(
             InventoryStock(
                 farm_id=farm_id,
-                product_id=ids[COPPER],
+                catalog_item_id=ids[COPPER],
                 season=2024,
                 unit="kg",
                 purchased=Decimal("20"),
@@ -293,7 +294,7 @@ def test_a_redelivered_irrigation_and_a_second_confirm_change_nothing(
 
 
 def test_cancelling_an_irrigation_leaves_no_record(session_factory, session, settings):
-    from farmcore.core.models.canonical import LogSource, Quantity
+    from farmcore.core.models.canonical import LogSource
 
     seed_farm(session, settings)
     d = deps(session_factory, settings, RegexExtractor())
@@ -302,7 +303,7 @@ def test_cancelling_an_irrigation_leaves_no_record(session_factory, session, set
     out = on_callback(d, Callback(chat_id=CHAT, data=echo.buttons[1][1]))
 
     assert out.text == "❌ Cancelled. Nothing was logged."
-    assert count(session, Log) == count(session, LogSource) == count(session, Quantity) == 0
+    assert count(session, Log) == count(session, LogSource) == count(session, TypedQuantity) == 0
     assert count(session, TypedQuantity) == 0
 
 

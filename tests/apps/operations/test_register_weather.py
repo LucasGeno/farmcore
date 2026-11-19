@@ -69,7 +69,7 @@ def _write(session, demo, products, source, *, parcels, ts):
         ts_end=None,
         quantities=[
             logs.QuantityInput(
-                "rate", Decimal("2"), "kg/ha", product_id=products["copper-contact"].id
+                "rate", Decimal("2"), "kg/ha", catalog_item_id=products["copper-contact"].id
             )
         ],
         source=source,

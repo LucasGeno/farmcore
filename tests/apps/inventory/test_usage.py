@@ -16,6 +16,8 @@ from farmcore.core import logs
 from farmcore.core import seed as core_seed
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.models.canonical import Farm
+from farmcore.core.models.catalog import CatalogItem
+from farmcore.core.units import UnitError
 from tests.apps.inventory.conftest import T_APR, make_parcel, spray, stock
 
 
@@ -138,7 +140,7 @@ def test_only_the_current_seasons_stock_rows_show(session, inv):
 def test_products_off_the_farm_shortlist_are_hidden(session, inv):
     copper = inv.products["copper-contact"]
     stock(session, inv.farm, copper, purchased="20")
-    inv.farm.props = {**(inv.farm.props or {}), "product_ids": []}
+    inv.farm.props = {**(inv.farm.props or {}), "catalog_item_ids": []}
     session.flush()
 
     rows = service.stock_rows(_repo(session, inv.farm), now=T_APR, tz="Europe/Paris")
@@ -236,6 +238,11 @@ def test_a_dose_without_a_known_factor_never_gives_a_balance(session, inv, value
     copper = inv.products["copper-contact"]
     stock(session, inv.farm, copper, purchased="20", low_stock=Decimal("5"))
     bad = logs.QuantityInput("rate", Decimal(value), unit, copper.id, copper.name)
+    if not Decimal(value).is_finite():  # a typed quantity never holds one (core_0018)
+        with pytest.raises(UnitError):
+            spray(session, inv.farm, inv.parcels, copper, at=T_APR, value="2", unit="kg/ha",
+                  key="mix", extra=(bad,))  # fmt: skip
+        return
     spray(session, inv.farm, inv.parcels, copper, at=T_APR, value="2", unit="kg/ha", key="mix",
           extra=(bad,))  # fmt: skip
 
@@ -302,3 +309,38 @@ def _waiting_on_advisory_lock(factory) -> bool:
                 )
             )
         )
+
+
+def test_a_dose_counts_against_one_stock_row_only(session, inv):
+    """One copy, one contribution (#92/#93): a plant-protection item's stock is counted by the
+    spray reader only, a fertiliser's by the item reader only, and a fertiliser record naming
+    the pesticide never consumes its stock."""
+    copper = inv.products["copper-contact"]
+    compost = CatalogItem(name="Compost")
+    session.add(compost)
+    session.flush()
+    stock(session, inv.farm, copper, purchased="20")
+    stock(session, inv.farm, compost, purchased="1000")
+    spray(session, inv.farm, inv.parcels, copper, at=T_APR, value="2", unit="kg/ha", key="s")
+    logs.record_operation(
+        session,
+        farm_id=inv.farm.id,
+        type="fertilise",
+        parcel_ids=[inv.parcels[0].id],
+        ts_start=T_APR,
+        ts_end=None,
+        quantities=[
+            logs.EnteredQuantity(Decimal("5"), "kg", catalog_item_id=copper.id),
+            logs.EnteredQuantity(Decimal("100"), "kg", catalog_item_id=compost.id),
+        ],
+        source=logs.SourceInput("file", "f", {}, None, logs.RANK_FILE),
+        actor="test",
+        occurred_at=T_APR,
+    )
+    repo, now = _repo(session, inv.farm), T_APR + timedelta(hours=1)
+
+    sprays = service.stock_rows(repo, now=now, tz="Europe/Paris")
+    items = service.item_stock_rows(repo, now=now, tz="Europe/Paris")
+
+    assert [(r.product.name, r.used, r.sprays) for r in sprays] == [(copper.name, Decimal(4), 1)]
+    assert [(r.name, r.used, r.records) for r in items] == [("Compost", Decimal(100), 1)]

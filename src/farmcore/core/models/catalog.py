@@ -1,20 +1,17 @@
-"""Neutral catalog items and typed quantities, beside the legacy spray data (migration core_0006).
+"""Neutral catalog items and typed quantities (core_0006), the single copy of spray data since
+core_0018.
 
-Expand step: `product` and `quantity` stay the only copy of legacy data and the source every
-current consumer reads. Their neutral shape is two database views, so it cannot drift from them
-whoever writes (ORM, Core, raw SQL, a restore):
-
-- `legacy_catalog_item`: each product as a catalog item with its crop-protection attributes.
-- `legacy_typed_quantity`: each quantity with its entered value and unit, and the standard
-  measure/value/unit from the frozen `unit_definition` table. A unit outside that table, or a
-  NaN value, has a null standard value: NaN is never a standard value.
-
-The tables hold only what is entered on the catalog itself (`provenance = 'entered'`): neutral
+The tables hold what is entered on the catalog itself (`provenance = 'entered'`): neutral
 `catalog_item`s, one `catalog_authorisation` number per country (FR AMM, ES and IT registration
-numbers…), the `crop_protection_item` extension (contact/penetrant, downy/powdery), and
-`typed_quantity`. A legacy product's `authorisation_no` names no country, so it never becomes an
-authorisation. The extension lives in core, not the advisor app, because app models register
-through manifests owned elsewhere this wave; contraction (ticket 14) moves it.
+numbers…), and `typed_quantity`: an amount as entered (value, unit and, for a spray's dose, the
+`rate` it was entered as) with the standard measure/value/unit from the runtime registry, null
+when the unit is unknown. Extensions belong to their apps: operations' `crop_protection_item`
+(a plant-protection product's legal label facts), crop protection's `advisor_product`.
+
+core_0018 moved every legacy `product` and `quantity` row here and froze both tables (kept only
+for its rollback). `legacy_product_map` and `legacy_quantity_map` record where each went: the only
+way an id kept in historic JSON or a published id resolves. A legacy `authorisation_no` names no
+country, so it never becomes a `catalog_authorisation`.
 """
 
 from __future__ import annotations
@@ -34,21 +31,15 @@ from sqlalchemy import (
     Numeric,
     Text,
     UniqueConstraint,
-    column,
-    table,
 )
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship
 
 from farmcore.core import units
 from farmcore.core.models.base import Base
-from farmcore.core.models.canonical import (
-    PRODUCT_TARGETS,
-    PRODUCT_TYPES,
-    _in,
-    _now,
-    _pk,
-    _props,
-)
+from farmcore.core.models.canonical import _in, _now, _pk, _props
+
+# How an amount was entered (farmOS quantity measures).
+ENTERED_MEASURES = ("rate", "volume", "area")
 
 _STANDARD = " OR ".join(
     f"(measure = '{measure}' AND unit = '{unit}')" for measure, unit in units.STANDARD_UNITS.items()
@@ -127,25 +118,6 @@ class CatalogImport(Base):
     reasons: Mapped[list[str]] = mapped_column(ARRAY(Text), default=list)
 
 
-class CropProtectionItem(Base):
-    """The crop-protection extension of a catalog item."""
-
-    __tablename__ = "crop_protection_item"
-    __table_args__ = (
-        CheckConstraint(_in("product_type", PRODUCT_TYPES), name="product_type"),
-        CheckConstraint(
-            "targets <@ ARRAY[" + ", ".join(repr(t) for t in PRODUCT_TARGETS) + "]::text[]",
-            name="targets",
-        ),
-    )
-
-    catalog_item_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("catalog_item.id", ondelete="CASCADE"), primary_key=True
-    )
-    product_type: Mapped[str] = mapped_column(Text)
-    targets: Mapped[list[str]] = mapped_column(ARRAY(Text))
-
-
 class TypedQuantity(Base):
     """An entered quantity: measure/value/unit in the standard unit (all null when the entered
     unit has none), plus the entered value and unit, a label and the provenance."""
@@ -160,6 +132,7 @@ class TypedQuantity(Base):
         CheckConstraint("entered_value <> 'NaN'::numeric", name="entered_value"),
         CheckConstraint("length(btrim(entered_unit)) > 0", name="entered_unit"),
         CheckConstraint("provenance = 'entered'", name="provenance"),
+        CheckConstraint(_in("entered_measure", ENTERED_MEASURES), name="entered_measure"),
         Index("ix_typed_quantity_log_id", "log_id"),
     )
 
@@ -175,30 +148,63 @@ class TypedQuantity(Base):
     entered_unit: Mapped[str] = mapped_column(Text)
     label: Mapped[str | None] = mapped_column(Text)
     provenance: Mapped[str] = mapped_column(Text, server_default="entered", default="entered")
+    # What the amount was entered as (farmOS quantity measure): `rate` for a spray's dose, null
+    # for every other entry. Kept apart from the standard `measure`, which an unknown unit nulls.
+    entered_measure: Mapped[str | None] = mapped_column(Text)
+
+    log: Mapped[Any] = relationship("Log", back_populates="typed_quantities")
+    catalog_item: Mapped[CatalogItem | None] = relationship()
 
 
-# Read-only handles on the legacy views (core_0006); not part of the ORM metadata.
-legacy_catalog_item = table(
-    "legacy_catalog_item",
-    column("product_id"),
-    column("name"),
-    column("product_type"),
-    column("targets"),
-    column("provenance"),
-)
-legacy_typed_quantity = table(
-    "legacy_typed_quantity",
-    column("legacy_quantity_id"),
-    column("log_id"),
-    column("product_id"),
-    column("measure"),
-    column("value"),
-    column("unit"),
-    column("entered_value"),
-    column("entered_unit"),
-    column("label"),
-    column("provenance"),
-)
+class LegacyProductMap(Base):
+    """Frozen by core_0018: each legacy `product` id and the catalog item it became. Written only
+    by that migration; the runtime reads it to resolve ids kept in historic JSON (events,
+    revisions, corrections, evidence) and published ids (NGSI-LD v1)."""
+
+    __tablename__ = "legacy_product_map"
+
+    product_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    catalog_item_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("catalog_item.id"), unique=True
+    )
+
+
+class LegacyQuantityMap(Base):
+    """Frozen by core_0018: each legacy `quantity` id and the typed quantity it became (gone with
+    it when a correction replaces the dose)."""
+
+    __tablename__ = "legacy_quantity_map"
+
+    quantity_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    typed_quantity_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("typed_quantity.id", ondelete="CASCADE"), unique=True
+    )
+
+
+def typed_quantity(
+    *,
+    value: Decimal,
+    unit: str,
+    catalog_item_id: int | None = None,
+    label: str | None = None,
+    entered_measure: str | None = None,
+) -> TypedQuantity:
+    """An entered quantity, not yet added. A unit outside the registry keeps a null standard
+    value; a float or non-finite value raises `units.UnitError`, never a silent null."""
+    units.decimal_value(value)
+    try:
+        typed = units.measure(value, unit)
+        standard = {"measure": typed.measure, "value": typed.value, "unit": typed.unit}
+    except units.UnknownUnit:
+        standard = {"measure": None, "value": None, "unit": None}
+    return TypedQuantity(
+        catalog_item_id=catalog_item_id,
+        entered_value=value,
+        entered_unit=unit,
+        label=label,
+        entered_measure=entered_measure,
+        **standard,
+    )
 
 
 def enter_quantity(
@@ -209,23 +215,17 @@ def enter_quantity(
     unit: str,
     catalog_item_id: int | None = None,
     label: str | None = None,
+    entered_measure: str | None = None,
 ) -> TypedQuantity:
-    """Store an entered quantity. A unit outside the registry keeps a null standard value; a
-    float or non-finite value raises `units.UnitError`, never a silent null."""
-    units.decimal_value(value)
-    try:
-        typed = units.measure(value, unit)
-        standard = {"measure": typed.measure, "value": typed.value, "unit": typed.unit}
-    except units.UnknownUnit:
-        standard = {"measure": None, "value": None, "unit": None}
-    row = TypedQuantity(
-        log_id=log_id,
+    """Store an entered quantity on a log (see `typed_quantity`)."""
+    row = typed_quantity(
+        value=value,
+        unit=unit,
         catalog_item_id=catalog_item_id,
-        entered_value=value,
-        entered_unit=unit,
         label=label,
-        **standard,
+        entered_measure=entered_measure,
     )
+    row.log_id = log_id
     session.add(row)
     session.flush()
     return row

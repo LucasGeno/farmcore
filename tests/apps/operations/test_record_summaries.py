@@ -72,7 +72,7 @@ def test_dose_and_unit_stay_on_one_line_on_a_phone(client, session, settings, de
         session,
         demo,
         parcels=demo.parcels[:1],
-        quantities=[_rate("2", "kg/ha", product_id=products["copper-contact"].id)],
+        quantities=[_rate("2", "kg/ha", catalog_item_id=products["copper-contact"].id)],
     )
     nowrap = re.compile(r'<span class="whitespace-nowrap">\s*2 kg/ha</span>')
 
@@ -91,7 +91,7 @@ def test_recent_spray_shows_product_dose_unit_and_every_parcel(
         session,
         demo,
         parcels=demo.parcels,
-        quantities=[_rate("2", "kg/ha", product_id=products["copper-contact"].id)],
+        quantities=[_rate("2", "kg/ha", catalog_item_id=products["copper-contact"].id)],
     )
 
     record = _record_html(_get(client, session, settings, "/operations/"), log.id)
@@ -119,8 +119,8 @@ def test_recent_record_lists_each_product_of_a_tank_mix(client, session, setting
         demo,
         parcels=demo.parcels,
         quantities=[
-            _rate("2", "kg/ha", product_id=products["copper-contact"].id),
-            _rate("0.45", "kg/ha", product_id=products["cymoxanil-penetrant"].id),
+            _rate("2", "kg/ha", catalog_item_id=products["copper-contact"].id),
+            _rate("0.45", "kg/ha", catalog_item_id=products["cymoxanil-penetrant"].id),
         ],
     )
 
@@ -168,7 +168,7 @@ def test_timeline_spray_entry_shows_product_dose_and_parcels(
         session,
         demo,
         parcels=demo.parcels,
-        quantities=[_rate("2", "kg/ha", product_id=products["copper-contact"].id)],
+        quantities=[_rate("2", "kg/ha", catalog_item_id=products["copper-contact"].id)],
     )
 
     html = _timeline(client, session, settings, demo.parcels[1])
@@ -193,13 +193,16 @@ def test_timeline_shows_a_merged_record_once_with_its_current_dose(
     current one, so it sits on the newest entry only, never on the older voice entry."""
     copper = products["copper-contact"].id
     _record(
-        session, demo, parcels=demo.parcels[:1], quantities=[_rate("2", "kg/ha", product_id=copper)]
+        session,
+        demo,
+        parcels=demo.parcels[:1],
+        quantities=[_rate("2", "kg/ha", catalog_item_id=copper)],
     )
     _record(
         session,
         demo,
         parcels=demo.parcels[:1],
-        quantities=[_rate("1.8", "kg/ha", product_id=copper)],
+        quantities=[_rate("1.8", "kg/ha", catalog_item_id=copper)],
         source=logs.SourceInput("isoxml", "tlg:1", {}, None, logs.RANK_MACHINE),
         at=T_SPRAY + timedelta(minutes=20),
     )
@@ -224,7 +227,7 @@ def test_timeline_unconfirmed_draft_gets_no_summary(client, session, settings, d
         parcel_ids=[demo.parcels[0].id],
         ts_start=T_SPRAY,
         ts_end=None,
-        quantities=[_rate("2", "kg/ha", product_id=products["copper-contact"].id)],
+        quantities=[_rate("2", "kg/ha", catalog_item_id=products["copper-contact"].id)],
         source=logs.SourceInput("voice", "tg:draft", {}, 0.9, logs.RANK_VOICE),
         actor="owner",
         occurred_at=T_SPRAY,

@@ -163,6 +163,8 @@ class Asset(Base):
 
 
 class Product(Base):
+    """Frozen by core_0018 (moved to `catalog_item` and its extensions); kept for its rollback."""
+
     __tablename__ = "product"
     __table_args__ = (
         CheckConstraint(_in("product_type", PRODUCT_TYPES), name="product_type"),
@@ -221,11 +223,13 @@ class Log(Base):
     )
 
     parcels: Mapped[list[Parcel]] = relationship(secondary="log_parcel", passive_deletes=True)
-    quantities: Mapped[list[Quantity]] = relationship(
+    # Its entered amounts (`core.models.catalog.TypedQuantity`), in entry order.
+    typed_quantities: Mapped[list[Any]] = relationship(
+        "TypedQuantity",
         back_populates="log",
         cascade="all, delete-orphan",
         passive_deletes=True,
-        order_by="Quantity.id",
+        order_by="TypedQuantity.id",
     )
     sources: Mapped[list[LogSource]] = relationship(
         back_populates="log", cascade="all, delete-orphan", passive_deletes=True
@@ -233,6 +237,8 @@ class Log(Base):
 
 
 class Quantity(Base):
+    """Frozen by core_0018 (moved to `typed_quantity`); kept for its rollback."""
+
     __tablename__ = "quantity"
     __table_args__ = (CheckConstraint(_in("measure", QUANTITY_MEASURES), name="measure"),)
 
@@ -243,9 +249,6 @@ class Quantity(Base):
     value: Mapped[Decimal] = mapped_column(Numeric)
     unit: Mapped[str] = mapped_column(Text)
     label: Mapped[str | None] = mapped_column(Text)
-
-    log: Mapped[Log] = relationship(back_populates="quantities")
-    product: Mapped[Product | None] = relationship()
 
 
 class Observation(Base):

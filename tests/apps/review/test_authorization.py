@@ -26,7 +26,7 @@ def test_assigned_members_review_with_csrf_but_operation_authority_stays_owner(
     with committed_session_factory.begin() as session:
         product = next(iter(ensure_products(session).values()))
         stock = InventoryStock(
-            farm_id=farm_id, product_id=product.id, season=2024, purchased=20, unit="kg"
+            farm_id=farm_id, catalog_item_id=product.id, season=2024, purchased=20, unit="kg"
         )
         session.add(stock)
         session.flush()

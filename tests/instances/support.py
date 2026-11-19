@@ -28,7 +28,7 @@ from farmcore.settings import get_settings
 
 AGE = shutil.which("age")
 AGE_KEYGEN = shutil.which("age-keygen")
-HEAD = "core_0017"  # the single supported Alembic head of this release
+HEAD = "core_0018"  # the single supported Alembic head of this release
 # Next to this interpreter in the project venv; on PATH when the interpreter is an overlay
 # (`uv run --with …` has no entry scripts of its own).
 FARMCORE = Path(sys.executable).with_name("farmcore")
@@ -354,10 +354,12 @@ def table_rows(dbs: Databases, name: str) -> dict[str, list[str]]:
 
 # Records, their sources and provenance, and module evidence (advice, events), by meaning.
 SEMANTIC = {
-    "records": "SELECT l.type, l.status, l.name, l.ts_start, p.alias, pr.name, q.measure, "
-    "q.value, q.unit FROM log l JOIN log_parcel lp ON lp.log_id = l.id JOIN parcel p "
-    "ON p.id = lp.parcel_id JOIN quantity q ON q.log_id = l.id LEFT JOIN product pr "
-    "ON pr.id = q.product_id ORDER BY 1, 2, 3, 4, 5, 6",
+    # A spray's doses as entered (core_0018 moved them from `quantity` to `typed_quantity`).
+    "records": "SELECT l.type, l.status, l.name, l.ts_start, p.alias, pr.name, "
+    "q.entered_measure, q.entered_value, q.entered_unit FROM log l JOIN log_parcel lp "
+    "ON lp.log_id = l.id JOIN parcel p ON p.id = lp.parcel_id JOIN typed_quantity q "
+    "ON q.log_id = l.id AND q.entered_measure IS NOT NULL LEFT JOIN catalog_item pr "
+    "ON pr.id = q.catalog_item_id ORDER BY 1, 2, 3, 4, 5, 6",
     "provenance": "SELECT l.name, ls.source_type, ls.external_key, ls.raw_payload::text, "
     "ls.precision_rank FROM log_source ls JOIN log l ON l.id = ls.log_id ORDER BY 1, 2, 3",
     "sources": "SELECT code, name, kind, licence FROM source ORDER BY code",

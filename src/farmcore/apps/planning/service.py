@@ -125,16 +125,16 @@ def _offered(repo: ScopedRepository) -> list[SprayItem]:
     return [offer.product for offer in offered]
 
 
-def _product(repo: ScopedRepository, product_id: int) -> SprayItem:
-    if not 0 < product_id < 2**63:
+def _product(repo: ScopedRepository, catalog_item_id: int) -> SprayItem:
+    if not 0 < catalog_item_id < 2**63:
         raise JobError("Choose a product from this farm's shortlist.")
     farm = repo.get(Farm, repo.farm_id, scope="logs:read")
     products = spray_items.items_for_farm(repo, scope="logs:read")
     offered, _ = production.offers(products, production.mode(farm))
     for offer in offered:
-        if offer.product.id == product_id:
+        if offer.product.id == catalog_item_id:
             return offer.product
-    if any(product.id == product_id for product in products):
+    if any(product.id == catalog_item_id for product in products):
         raise JobError(
             "Product is withheld in organic mode: no source in our product data shows its "
             "active substances are allowed in organic production."
@@ -158,7 +158,7 @@ def _snapshot(
         "revision": job.revision,
         "assessment_id": job.assessment_id,
         "config_version": {"id": job.config_version_id, "status": job.config_version_status},
-        "product_id": job.product_id,
+        "catalog_item_id": job.catalog_item_id,
         "scheduled_start": job.scheduled_start.isoformat(),
         "duration_minutes": job.duration_minutes,
         "parcels": parcel_ids,
@@ -198,7 +198,7 @@ def create(
     name: str,
     parcel_ids: list[int],
     assessment_id: int,
-    product_id: int,
+    catalog_item_id: int,
     scheduled_start: datetime,
     duration_minutes: int,
     notes: str = "",
@@ -212,7 +212,7 @@ def create(
     parcels = _parcels(repo, parcel_ids)
     if advice_row.parcel_id not in {parcel.id for parcel in parcels}:
         raise JobError("The assessment's parcel must be one of the job's parcels.")
-    _product(repo, product_id)
+    _product(repo, catalog_item_id)
     version_id, version_status = _version(repo, advice_row)
     job = PlanningJob(
         farm_id=repo.farm_id,
@@ -222,7 +222,7 @@ def create(
         assessment_id=advice_row.id,
         config_version_id=version_id,
         config_version_status=version_status,
-        product_id=product_id,
+        catalog_item_id=catalog_item_id,
         scheduled_start=scheduled_start,
         duration_minutes=duration_minutes,
         notes=notes,
@@ -341,9 +341,9 @@ def edit(
                 PlanningJobParcel(farm_id=repo.farm_id, job_id=job.id, parcel_id=parcel.id)
             )
         repo.session.flush()
-    if "product_id" in changes:
-        _product(repo, int(changes["product_id"]))  # type: ignore[arg-type]
-        job.product_id = int(changes["product_id"])  # type: ignore[arg-type]
+    if "catalog_item_id" in changes:
+        _product(repo, int(changes["catalog_item_id"]))  # type: ignore[arg-type]
+        job.catalog_item_id = int(changes["catalog_item_id"])  # type: ignore[arg-type]
     if "scheduled_start" in changes:
         start = changes["scheduled_start"]
         if not isinstance(start, datetime) or start.tzinfo is None:
@@ -667,23 +667,25 @@ def _raw_quantities(quantities: list[dict[str, object]]) -> list[dict[str, objec
     out: list[dict[str, object]] = []
     for item in quantities:
         try:
-            product_id = int(item["product_id"])  # type: ignore[arg-type]
+            catalog_item_id = int(item["catalog_item_id"])  # type: ignore[arg-type]
             value = Decimal(str(item["value"]))
             unit = str(item["unit"])
         except (KeyError, TypeError, ValueError, InvalidOperation):
             raise JobError(
                 "Each applied product needs a product, a positive dose and a rate unit."
             ) from None
-        if not 0 < product_id < 2**63:
+        if not 0 < catalog_item_id < 2**63:
             raise JobError("Choose products from this farm's shortlist.")
         if not value.is_finite() or value <= 0:
             raise JobError("A dose must be positive.")
         if unit not in RATE_UNITS:
             raise JobError("Use a spray rate unit: kg/ha, L/ha, l/ha, g/ha or ml/ha.")
-        out.append({"product_id": product_id, "value": _decimal_text(value), "unit": unit})
-    if len({int(q["product_id"]) for q in out}) != len(out):
+        out.append(
+            {"catalog_item_id": catalog_item_id, "value": _decimal_text(value), "unit": unit}
+        )
+    if len({int(q["catalog_item_id"]) for q in out}) != len(out):
         raise JobError("List each product once.")
-    return sorted(out, key=lambda q: (int(q["product_id"]), str(q["unit"])))
+    return sorted(out, key=lambda q: (int(q["catalog_item_id"]), str(q["unit"])))
 
 
 def _fingerprint(
@@ -700,7 +702,9 @@ def _fingerprint(
         "actual_start": actual_start.astimezone(UTC).isoformat(),
         "duration_minutes": int(duration_minutes),
         "parcel_ids": sorted(set(int(parcel_id) for parcel_id in parcel_ids)),
-        "quantities": [[int(q["product_id"]), str(q["value"]), str(q["unit"])] for q in quantities],
+        "quantities": [
+            [int(q["catalog_item_id"]), str(q["value"]), str(q["unit"])] for q in quantities
+        ],
         "notes": notes,
     }
     return hashlib.sha256(
@@ -730,10 +734,10 @@ def _completion_inputs(
     parcels = _parcels(repo, parcel_ids)
     doses = []
     for quantity in _raw_quantities(quantities):
-        product = _product(repo, int(quantity["product_id"]))
+        product = _product(repo, int(quantity["catalog_item_id"]))
         doses.append(
             {
-                "product_id": product.id,
+                "catalog_item_id": product.id,
                 "product": product.name,
                 "value": quantity["value"],
                 "unit": quantity["unit"],
@@ -822,7 +826,7 @@ def completion_preview(
         notes=notes,
     )
     planned_parcels = _job_parcels(repo, job.id)
-    planned_product = spray_items.item(repo, job.product_id, scope="logs:read")
+    planned_product = spray_items.item(repo, job.catalog_item_id, scope="logs:read")
     end = actual_start + timedelta(minutes=duration_minutes)
     state = _state(repo, actual_start, tz)
     advice_row = repo.get(Advice, job.assessment_id, scope="advice:read")
@@ -950,7 +954,7 @@ def complete(
                 measure="rate",
                 value=Decimal(str(dose["value"])),
                 unit=str(dose["unit"]),
-                product_id=int(dose["product_id"]),
+                catalog_item_id=int(dose["catalog_item_id"]),
                 label=str(dose["product"]),
             )
             for dose in doses
@@ -1083,7 +1087,7 @@ def job_json(
     forecast: offers.Forecast | None = None,
 ) -> dict[str, object]:
     advice_row = repo.get(Advice, job.assessment_id, scope="advice:read")
-    product = spray_items.item(repo, job.product_id, scope="logs:read")
+    product = spray_items.item(repo, job.catalog_item_id, scope="logs:read")
     parcels = _job_parcels(repo, job.id)
     assigned = _assigned_rows(repo, job.id)
     saved_assignments = []

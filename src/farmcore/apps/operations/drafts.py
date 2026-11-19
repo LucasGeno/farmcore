@@ -11,6 +11,10 @@ its own station weather there (`spray_weather`), whichever path confirmed it.
   (`parcel`, `date`, `product`, `dose`, `amount`, `unit`, `basis`, `text`): it is stored as an
   open draft without the absent fields, never with a guessed value, and confirm refuses it
   until a revision supplies them.
+- **Spray doses, v1 and v2 input.** A dose names its product by `catalog_item_id` (v2, what is
+  stored). A proposal still written for v1 names it by the legacy `product_id`: it is resolved
+  once, on input, through core_0018's frozen map (`input_v2`), and an id the map does not hold
+  is refused, never guessed. Nothing else reads the v1 key.
 - **Capture.** A conversational proposal (Telegram, the web assistant) keeps its working state
   in `capture`: the extracted operation, recent turns, the question asked and the messages it
   holds. Data, never instructions. Its transcript, input, adapter and notes are copied onto the
@@ -20,7 +24,7 @@ its own station weather there (`spray_weather`), whichever path confirmed it.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Annotated, Any, Literal
 
@@ -30,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from farmcore.apps.operations import facts, spray_items, spray_weather
 from farmcore.apps.operations.corrections import Dose
-from farmcore.core import logs
+from farmcore.core import logs, representations
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.drafts import wall_now
 from farmcore.core.logs import QuantityInput, SourceInput
@@ -147,7 +151,55 @@ MODELS: dict[str, type[_Record]] = {
 }
 
 
+# The spray proposal's input versions (`docs/api-compatibility.md`): v1 names a dose's product by
+# its legacy `product_id`, deprecated since core_0018; v2 by `catalog_item_id`.
+V1_KEY = "product_id"
+SPRAY_INPUT = representations.register(
+    representations.Representation(
+        "spray-draft-input",
+        (
+            representations.Version(
+                1, deprecated=date(2026, 11, 19), note="doses[].product_id; send catalog_item_id"
+            ),
+            representations.Version(2),
+        ),
+        default=2,
+    )
+)
+
+
+def input_version(payload: dict) -> representations.Version:
+    """Which spray input version a proposal is written in (v1: a dose names `product_id`)."""
+    doses = payload.get("doses")
+    v1 = isinstance(doses, list) and any(isinstance(d, dict) and V1_KEY in d for d in doses)
+    return SPRAY_INPUT.by_number[1 if v1 else 2]
+
+
+def input_v2(session: Session, payload: dict) -> dict:
+    """A spray proposal in the stored (v2) shape: v1 doses (`product_id`, a legacy product id)
+    become `catalog_item_id` through the frozen map; v2 doses pass unchanged. A dose naming both,
+    or a legacy id the map does not hold, raises."""
+    if input_version(payload).number == 2:
+        return payload
+    doses = payload["doses"]
+    if any(isinstance(d, dict) and "catalog_item_id" in d for d in doses):
+        raise ValueError("Name each product by catalog_item_id only (v2).")
+    legacy = {d["product_id"] for d in doses if isinstance(d.get("product_id"), int)}
+    mapped = spray_items.legacy_item_ids(session, legacy)
+    out = []
+    for dose in doses:
+        old = dose.get("product_id") if isinstance(dose, dict) else None
+        if old not in mapped:
+            raise ValueError("Some products are unknown.")
+        out.append(
+            {**{k: v for k, v in dose.items() if k != "product_id"}, "catalog_item_id": mapped[old]}
+        )
+    return {**payload, "doses": out}
+
+
 def _checked(session: Session, farm_id: int, kind: str, payload: dict) -> _Record:
+    if kind == "spray":
+        payload = input_v2(session, payload)
     record = MODELS[kind].model_validate(payload)
     ids = set(record.parcel_ids)
     found = set(
@@ -156,7 +208,7 @@ def _checked(session: Session, farm_id: int, kind: str, payload: dict) -> _Recor
     if found != ids:
         raise ValueError("Some parcels are not on this farm.")
     if isinstance(record, SprayDraft):
-        products = {d.product_id for d in record.doses}
+        products = {d.catalog_item_id for d in record.doses}
         if spray_items.known_item_ids(session, products) != products:
             raise ValueError("Some products are unknown.")
     return record
@@ -179,7 +231,7 @@ def _fields(record: _Record):
     """(quantities, props) the log takes for this record."""
     if isinstance(record, SprayDraft):
         quantities = [
-            QuantityInput("rate", Decimal(d.value), d.unit, d.product_id, d.label)
+            QuantityInput("rate", Decimal(d.value), d.unit, d.catalog_item_id, d.label)
             for d in record.doses
         ]
         return quantities, None

@@ -182,7 +182,7 @@ def test_planned_work_never_becomes_a_log_or_moves_stock(
 ):
     stock = InventoryStock(
         farm_id=farm.id,
-        product_id=products["copper-contact"].id,
+        catalog_item_id=products["copper-contact"].id,
         season=NOW.year,
         unit="kg",
         purchased=Decimal("10"),
@@ -322,7 +322,7 @@ def test_the_planning_form_creates_and_cancels_a_job(
             "name": "Form planned spray",
             "parcel_ids": [str(parcels[0].id)],
             "assessment_id": str(advice.id),
-            "product_id": str(products["copper-contact"].id),
+            "catalog_item_id": str(products["copper-contact"].id),
             "scheduled_start": "2024-04-09T08:00",
             "duration_minutes": "90",
             "notes": "From the planning form",

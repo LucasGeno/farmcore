@@ -21,9 +21,11 @@ from sqlalchemy import select
 from farmcore.apps.onboarding.importers import parsers
 from farmcore.core import mcp as farm_mcp
 from farmcore.core import registry
-from farmcore.core.models.canonical import AccessLog, CropSeason, Log, Parcel, Product
+from farmcore.core.models.canonical import AccessLog, CropSeason, Log, Parcel
+from farmcore.core.models.catalog import LegacyProductMap
 from farmcore.core.models.drafts import Draft
 from tests.core.test_mcp_stdio import _token
+from tests.spray_products import add_product
 
 GEOJSON = {
     "type": "FeatureCollection",
@@ -101,16 +103,11 @@ def test_propose_tools_write_open_drafts_and_nothing_else(
             "fact": {"text": "aphids on the leaves"},
         },
     )
-    product = Product(
-        name="Test copper",
-        authorisation_no="test",
-        active_substance="copper",
-        product_type="contact",
+    product = add_product(
+        session, "Test copper", authorisation_no="test", active_substance="copper"
     )
-    session.add(product)
-    session.flush()
     for kind, fields in (
-        ("spray", {"doses": [{"product_id": product.id, "value": "2", "unit": "kg/ha"}]}),
+        ("spray", {"doses": [{"catalog_item_id": product.id, "value": "2", "unit": "kg/ha"}]}),
         ("irrigation", {"fact": {"amount": "10", "unit": "mm"}}),
     ):
         tools.call(
@@ -464,3 +461,30 @@ def test_crop_confirm_records_only_uncovered_parcels(
             created = session.get(CropSeason, draft.result_id)
             assert created.parcel_id == parcel.id and created.crop_name == "Olive"
         assert session.get(CropSeason, covered.id).crop_name == "Vine"
+
+
+def test_a_v1_spray_proposal_is_flagged_deprecated_and_stored_as_v2(
+    session, session_factory, settings, manifests
+):
+    """drafts:propose v1 (`doses[].product_id`, a legacy product id) still works through the
+    frozen map, and the tool result says it is deprecated; v2 is not flagged."""
+    _, _, raw, parcel_id = _farm(session, ["drafts:propose", "logs:read"])
+    product = add_product(session, "Test copper", active_substance="copper")
+    session.add(LegacyProductMap(product_id=77, catalog_item_id=product.id))
+    session.flush()
+    tools = _tools(session_factory, settings, manifests)
+    base = {"type": "spray", "parcel_ids": [parcel_id], "ts_start": "2024-05-01T10:00:00+02:00"}
+
+    v1 = tools.call(
+        raw, "propose_record", base | {"doses": [{"product_id": 77, "value": "2", "unit": "kg/ha"}]}
+    )
+    v2 = tools.call(
+        raw,
+        "propose_record",
+        base | {"doses": [{"catalog_item_id": product.id, "value": "2", "unit": "kg/ha"}]},
+    )
+
+    assert v1.facts["input_deprecated"]["since"] == "2026-11-19"
+    assert "catalog_item_id" in v1.text and "input_deprecated" not in v2.facts
+    stored = session.get(Draft, v1.facts["draft_id"]).payload["doses"]
+    assert [d["catalog_item_id"] for d in stored] == [product.id]

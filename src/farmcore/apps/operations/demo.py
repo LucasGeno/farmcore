@@ -27,10 +27,11 @@ def apply_scene_b(session, farm, now) -> None:
 
     from farmcore.apps.operations import seed
     from farmcore.core import ext_ids
-    from farmcore.core.models.canonical import Log, LogSource, Product
+    from farmcore.core.models.canonical import Log, LogSource
+    from farmcore.core.models.catalog import CatalogItem
 
     copper = ext_ids.lookup(session, seed.PRODUCT_SOURCE, seed.SCENE_B_PRODUCT)
-    if not isinstance(copper, Product):
+    if not isinstance(copper, CatalogItem):
         raise ValueError("Seed the demo product catalogue before staging Scene B")
     seed._scene_b(session, farm.id, copper, "Europe/Paris")
     rows = session.scalars(

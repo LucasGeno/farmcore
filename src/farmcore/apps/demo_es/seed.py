@@ -55,7 +55,7 @@ def seed(session, *, scene: str | None, data_dir: Path) -> dict[str, int]:
                 "region": "ES418",
                 "demo_data": True,
                 "advisor_unavailable_reason": archive.NOTICE,
-                "product_ids": [],
+                "catalog_item_ids": [],  # operations.spray_items.SHORTLIST_KEY
                 "map_notice": "Demo grouping of ten SIGPAC 2024 · ITACyL vineyard recintos; "
                 "no claim of common ownership. " + archive.NOTICE,
             },

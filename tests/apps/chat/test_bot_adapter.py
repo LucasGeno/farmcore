@@ -26,11 +26,13 @@ from farmcore.apps.chat.extractor import DraftOperation, FakeExtractor
 from farmcore.apps.chat.handlers import ChatDeps
 from farmcore.apps.chat.telegram import FakeTelegramSender
 from farmcore.apps.chat.transcribe import FakeTranscriber, Transcript
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core.clock import set_replay
-from farmcore.core.models.canonical import Farm, Log, Parcel, Product
+from farmcore.core.models.canonical import Farm, Log, Parcel
 from farmcore.core.models.kernel import AppModule
 from farmcore.core.seed import ensure_default_farm
 from tests.apps.chat.test_handlers import drafts_of
+from tests.spray_products import add_product
 
 PARIS = ZoneInfo("Europe/Paris")
 NOW_LOCAL = datetime(2024, 4, 10, 6, 0, tzinfo=PARIS)
@@ -50,7 +52,8 @@ def seed_farm(session, settings, *, bound: bool = True) -> dict[str, int]:
         Parcel(farm_id=farm.id, alias=a, name=n, area_ha=Decimal("1"), geom=SQUARE)
         for a, n in (("P1", "Le Plateau"), ("P5", "Les Granges"))
     ]
-    copper = Product(
+    copper = add_product(
+        session,
         name=COPPER,
         authorisation_no="TEST-1",
         active_substance="copper",
@@ -557,7 +560,8 @@ def test_voice_confirm_merge_keeps_second_product_in_reply_register_and_checks(
     ids = seed_farm(session, settings)
     p6 = Parcel(farm_id=ids["farm"], alias="P6", name="Peyrot", area_ha=Decimal("1"), geom=SQUARE)
     session.add(p6)
-    sulphur = Product(
+    sulphur = add_product(
+        session,
         name="Sulfo Jet 80 WG",
         authorisation_no="TEST-2",
         active_substance="sulphur",
@@ -613,7 +617,10 @@ def test_voice_confirm_merge_keeps_second_product_in_reply_register_and_checks(
         assert "Peyrot" not in reply
         assert len(saved_logs) == 2
         saved = next(log for log in saved_logs if log.id != target_id)
-        assert [(q.product.active_substance, q.value) for q in saved.quantities] == [
+        assert [
+            (session.get(CropProtectionItem, q.catalog_item_id).active_substance, q.entered_value)
+            for q in saved.typed_quantities
+        ] == [
             ("sulphur", Decimal("5")),
         ]
     else:
@@ -621,7 +628,10 @@ def test_voice_confirm_merge_keeps_second_product_in_reply_register_and_checks(
         assert "copper + sulphur" in reply
         [saved] = saved_logs
         assert saved.id == target_id
-        assert sorted((q.product.active_substance, q.value) for q in saved.quantities) == [
+        assert sorted(
+            (session.get(CropProtectionItem, q.catalog_item_id).active_substance, q.entered_value)
+            for q in saved.typed_quantities
+        ) == [
             ("copper", Decimal("2")),
             ("sulphur", Decimal("5")),
         ]

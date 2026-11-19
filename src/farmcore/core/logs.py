@@ -1,10 +1,12 @@
 """Operation logs with provenance: write, merge, pending → confirm / cancel.
 
-Record types keep their own policy (`POLICIES`). A spray carries product rates (`quantity`,
-read by stock, the register and the label checks) and merges by the spray rule below. Every
-other record type never merges and takes only entered quantities (`EnteredQuantity`), stored as
-neutral `typed_quantity` rows with no product or catalog item: an irrigation can never carry
-plant-protection fields. A quantity of the other kind is refused before anything is written.
+Record types keep their own policy (`POLICIES`). A spray carries product rates
+(`QuantityInput`, read by stock, the register and the label checks) and merges by the spray rule
+below. Every other record type never merges and takes only entered quantities
+(`EnteredQuantity`): an irrigation can never carry a product rate. Both are stored as
+`typed_quantity` rows; a spray's keep the measure they were entered as (`entered_measure`, `rate`
+for a dose), another record's have none. A quantity of the other kind is refused before anything
+is written.
 
 Merge rule: an incoming *done spray* matches a done spray log on
 the same farm whose parcel set overlaps and whose `ts_start` is within `MERGE_WINDOW`. A match
@@ -31,8 +33,8 @@ from typing import Any
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from farmcore.core.models.canonical import Log, LogParcel, LogSource, Parcel, Quantity
-from farmcore.core.models.catalog import enter_quantity
+from farmcore.core.models.canonical import Log, LogParcel, LogSource, Parcel
+from farmcore.core.models.catalog import TypedQuantity, typed_quantity
 from farmcore.core.timeline import post_event
 
 # Source: the canonical data model merge rule.
@@ -61,7 +63,7 @@ class QuantityInput:
     measure: str  # rate, volume, area
     value: Decimal
     unit: str
-    product_id: int | None = None
+    catalog_item_id: int | None = None  # a plant-protection item (`crop_protection_item`)
     label: str | None = None
 
 
@@ -115,37 +117,33 @@ def _split(
 
 
 def _enter(session: Session, log: Log, entered: Sequence[EnteredQuantity]) -> None:
-    for q in entered:
-        enter_quantity(
-            session,
-            log_id=log.id,
-            value=q.value,
-            unit=q.unit,
-            label=q.label,
-            catalog_item_id=q.catalog_item_id,
-        )
+    log.typed_quantities.extend(
+        typed_quantity(value=q.value, unit=q.unit, label=q.label, catalog_item_id=q.catalog_item_id)
+        for q in entered
+    )
+    session.flush()
 
 
-def _quantities(items: Sequence[QuantityLike]) -> list[Quantity]:
+def _quantities(items: Sequence[QuantityLike]) -> list[TypedQuantity]:
     out = []
     for item in items:
         q = item if isinstance(item, QuantityInput) else QuantityInput(**item)
         out.append(
-            Quantity(
-                measure=q.measure,
+            typed_quantity(
                 value=Decimal(str(q.value)),
                 unit=q.unit,
-                product_id=q.product_id,
+                catalog_item_id=q.catalog_item_id,
                 label=q.label,
+                entered_measure=q.measure,
             )
         )
     return out
 
 
-def _quantity_key(quantity: Quantity) -> int | tuple[str, str | None, str]:
-    if quantity.product_id is not None:
-        return quantity.product_id
-    return quantity.measure, quantity.label, quantity.unit
+def _quantity_key(quantity: TypedQuantity) -> int | tuple[str | None, str | None, str]:
+    if quantity.catalog_item_id is not None:
+        return quantity.catalog_item_id
+    return quantity.entered_measure, quantity.label, quantity.entered_unit
 
 
 def _log_source(source: SourceInput) -> LogSource:
@@ -282,7 +280,7 @@ def _new_log(
         ts_end=ts_end,
     )
     log.parcels.extend(parcels)
-    log.quantities.extend(_quantities(rates))
+    log.typed_quantities.extend(_quantities(rates))
     log.sources.append(_log_source(source))
     session.add(log)
     session.flush()
@@ -378,7 +376,7 @@ def record_operation(
         target.ts_start = ts_start
         target.ts_end = ts_end
         if quantities:
-            target.quantities = _quantities(quantities)
+            target.typed_quantities = _quantities(quantities)
     session.flush()
     _post(
         session,
@@ -517,8 +515,8 @@ def confirm(
 
     replaced = _best_rank(pending) > _best_rank(target)
     if not replaced:
-        have = {_quantity_key(q) for q in target.quantities}
-        new = [q for q in pending.quantities if _quantity_key(q) not in have]
+        have = {_quantity_key(q) for q in target.typed_quantities}
+        new = [q for q in pending.typed_quantities if _quantity_key(q) not in have]
         pending_parcels = {p.id for p in pending.parcels}
         if new and any(p.id not in pending_parcels for p in target.parcels):
             # Quantities apply to every parcel of a log. Keep a new product on only
@@ -543,11 +541,13 @@ def confirm(
                         "from_confirmed_log_id": log_id,
                     },
                 )
-            dropped_products = []
-            for q in list(pending.quantities):
+            dropped_items = []
+            for q in list(pending.typed_quantities):
                 if _quantity_key(q) in have:
-                    dropped_products.append(q.product_id if q.product_id is not None else q.label)
-                    pending.quantities.remove(q)
+                    dropped_items.append(
+                        q.catalog_item_id if q.catalog_item_id is not None else q.label
+                    )
+                    pending.typed_quantities.remove(q)
             pending.status = "done"
             session.flush()
             _post(
@@ -559,27 +559,27 @@ def confirm(
                 occurred_at=occurred_at,
                 source_app=source_app,
                 source_types=[s.source_type for s in pending.sources],
-                extra={"duplicate_of": target.id, "dropped_products": dropped_products},
+                extra={"duplicate_of": target.id, "dropped_items": dropped_items},
             )
             return pending, False
-    added_products: list[int | str | None] = []
+    added_items: list[int | str | None] = []
     _add_parcels(target, pending.parcels)
     if replaced:
         target.ts_start = pending.ts_start
         target.ts_end = pending.ts_end
-        if pending.quantities:
-            target.quantities.clear()
+        if pending.typed_quantities:
+            target.typed_quantities.clear()
             session.flush()
-            for q in list(pending.quantities):
+            for q in list(pending.typed_quantities):
                 q.log = target
     else:
-        have = {_quantity_key(q) for q in target.quantities}
-        for q in list(pending.quantities):
+        have = {_quantity_key(q) for q in target.typed_quantities}
+        for q in list(pending.typed_quantities):
             key = _quantity_key(q)
             if key not in have:
                 q.log = target
                 have.add(key)
-                added_products.append(q.product_id if q.product_id is not None else q.label)
+                added_items.append(q.catalog_item_id if q.catalog_item_id is not None else q.label)
     source_types = [s.source_type for s in pending.sources]
     for src in list(pending.sources):
         if not _holds(target, src.source_type, src.external_key):
@@ -600,7 +600,7 @@ def confirm(
         extra={
             "replaced": replaced,
             "confirmed_log_id": log_id,
-            "added_products": added_products,
+            "added_items": added_items,
         },
     )
     return target, True

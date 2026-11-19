@@ -13,9 +13,11 @@ from sqlalchemy import select
 
 from farmcore.apps.operations import register
 from farmcore.apps.operations import seed as ops_seed
+from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.core import logs
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
-from farmcore.core.models.canonical import AccessLog, Quantity
+from farmcore.core.models.canonical import AccessLog
+from farmcore.core.models.catalog import TypedQuantity, enter_quantity
 
 # 2024-04-10 08:00 Europe/Paris (CEST) = 06:00 UTC. Synthetic values.
 T_SPRAY = datetime(2024, 4, 10, 6, 0, tzinfo=UTC)
@@ -29,7 +31,7 @@ def _repo(session, farm) -> ScopedRepository:
 
 def _spray(session, demo, products, *, parcels=None, status="done", ts=T_SPRAY, **kw):
     quantities = [
-        logs.QuantityInput("rate", Decimal(dose), "kg/ha", product_id=products[key].id)
+        logs.QuantityInput("rate", Decimal(dose), "kg/ha", catalog_item_id=products[key].id)
         for key, dose in kw.pop("doses", [("copper-contact", "2"), ("sulphur-wettable", "3")])
     ]
     write = logs.create_pending if status == "pending" else logs.record_operation
@@ -188,10 +190,10 @@ def test_rows_with_checks_carry_the_spray_checks_and_the_csv_says_them_in_words(
     copper, sulphur = products["copper-contact"].id, products["sulphur-wettable"].id
     assert got == {
         "copper": ("ok", "Copper 0.4 of 4 kg Cu/ha this year"),
-        f"applications:{copper}": ("ok", "1 of 5 copper applications this season"),
-        f"applications:{sulphur}": ("ok", "1 of 8 sulphur applications this season"),
-        f"dose:{copper}": ("ok", "Copper dose 2 kg/ha, label max 3.75"),
-        f"dose:{sulphur}": ("ok", "Sulphur dose 3 kg/ha, label max 12.5"),
+        f"applications:ci{copper}": ("ok", "1 of 5 copper applications this season"),
+        f"applications:ci{sulphur}": ("ok", "1 of 8 sulphur applications this season"),
+        f"dose:ci{copper}": ("ok", "Copper dose 2 kg/ha, label max 3.75"),
+        f"dose:ci{sulphur}": ("ok", "Sulphur dose 3 kg/ha, label max 12.5"),
         "phi": ("info", "Harvest not before 13 Apr"),
     }
     first = next(csv.DictReader(io.StringIO(register.to_csv(rows, tz="Europe/Paris"))))
@@ -264,12 +266,12 @@ def test_checks_count_earlier_confirmed_sprays_only(session, demo):
         "warn",
         "Copper 4.4 of 4 kg Cu/ha this year",
     )
-    assert got[f"applications:{products['copper-contact'].id}"]["label"] == (
+    assert got[f"applications:ci{products['copper-contact'].id}"]["label"] == (
         "3 of 5 copper applications this season"
     )
     over = next(r for r in rows if r["log_id"] != third.id and r["date"] == "2024-04-01")
     assert {c["key"]: c["status"] for c in over["checks"]}[
-        f"dose:{products['copper-contact'].id}"
+        f"dose:ci{products['copper-contact'].id}"
     ] == "warn"  # 10 kg/ha is above 3.75
 
 
@@ -298,8 +300,8 @@ def test_unconvertible_copper_rate_warns_and_keeps_later_known_sum(session, demo
         doses=[("copper-contact", "2")],
         ts=datetime(2024, 4, 1, 6, tzinfo=UTC),
     )
-    q = session.scalar(select(Quantity).where(Quantity.log_id == earlier.id))
-    q.unit = "l/ha"  # no density: cannot convert the actual recorded 2 L/ha to kg/ha
+    q = session.scalar(select(TypedQuantity).where(TypedQuantity.log_id == earlier.id))
+    q.entered_unit = "l/ha"  # no density: cannot convert the actual recorded 2 L/ha to kg/ha
     later = _spray(
         session,
         demo,
@@ -328,31 +330,30 @@ def test_register_checks_combine_same_product_rates_only(session, demo, second_u
         doses=[("copper-contact", "2"), ("copper-contact", "2")],
     )
     quantities = session.scalars(
-        select(Quantity).where(Quantity.log_id == log.id).order_by(Quantity.id)
+        select(TypedQuantity).where(TypedQuantity.log_id == log.id).order_by(TypedQuantity.id)
     ).all()
-    quantities[1].unit = second_unit
-    quantities[1].value = Decimal("2000") if second_unit == "g/ha" else Decimal("2")
-    session.add(
-        Quantity(
-            log_id=log.id,
-            measure="volume",
-            value=Decimal("1000"),
-            unit="kg/ha",
-            product_id=products["copper-contact"].id,
-            label="Tank volume",
-        )
+    quantities[1].entered_unit = second_unit
+    quantities[1].entered_value = Decimal("2000") if second_unit == "g/ha" else Decimal("2")
+    enter_quantity(
+        session,
+        log_id=log.id,
+        entered_measure="volume",
+        value=Decimal("1000"),
+        unit="kg/ha",
+        catalog_item_id=products["copper-contact"].id,
+        label="Tank volume",
     )
     session.flush()
     rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")
     found = {c["key"]: c for c in rows[0]["checks"]}
-    dose = found[f"dose:{products['copper-contact'].id}"]
+    dose = found[f"dose:ci{products['copper-contact'].id}"]
     assert dose["status"] == "warn"
     if second_unit == "l/ha":
         assert "incomplete" in dose["label"] and "at least 2" in dose["label"]
     else:
         assert dose["label"] == "Copper dose 4 kg/ha, above the label max 3.75"
         assert found["copper"]["label"] == "Copper 0.8 of 4 kg Cu/ha this year"
-    assert found[f"applications:{products['copper-contact'].id}"]["label"].startswith("1 of 5")
+    assert found[f"applications:ci{products['copper-contact'].id}"]["label"].startswith("1 of 5")
 
 
 def test_only_labelled_rates_are_products_without_catalogue_or_props(session, demo):
@@ -365,8 +366,13 @@ def test_only_labelled_rates_are_products_without_catalogue_or_props(session, de
         ("rate", ""),
         ("rate", "  "),
     ]:
-        session.add(
-            Quantity(log_id=log.id, measure=measure, label=label, value=Decimal("2"), unit="kg/ha")
+        enter_quantity(
+            session,
+            log_id=log.id,
+            entered_measure=measure,
+            label=label,
+            value=Decimal("2"),
+            unit="kg/ha",
         )
     session.flush()
     rows = register.register_rows(_repo(session, demo.farm), NOW, tz="Europe/Paris")
@@ -395,16 +401,18 @@ def test_register_interval_reaches_december_without_counting_it_in_january(sessi
     january = next(r for r in rows if r["date"] == "2024-01-02")
     found = {c["key"]: c for c in january["checks"]}
     assert (
-        found[f"interval:{pajo.id}"]["label"]
+        found[f"interval:ci{pajo.id}"]["label"]
         == "4 days since the last cymoxanil spray, label min 7"
     )
-    assert found[f"interval:{pajo.id}"]["status"] == "warn"
-    assert found[f"applications:{pajo.id}"]["label"] == "1 of 2 cymoxanil applications this season"
+    assert found[f"interval:ci{pajo.id}"]["status"] == "warn"
+    assert (
+        found[f"applications:ci{pajo.id}"]["label"] == "1 of 2 cymoxanil applications this season"
+    )
 
 
 def test_register_warns_for_known_copper_identity_without_composition(session, demo):
     products = ops_seed.ensure_products(session)
-    copper = products["copper-contact"]
+    copper = session.get(CropProtectionItem, products["copper-contact"].id)
     copper.props = {k: v for k, v in copper.props.items() if k != "cu_fraction"}
     _spray(session, demo, products, parcels=demo.parcels[:1], doses=[("copper-contact", "2")])
     rows = register.register_rows(_repo(session, demo.farm), NOW, checks=True, tz="Europe/Paris")

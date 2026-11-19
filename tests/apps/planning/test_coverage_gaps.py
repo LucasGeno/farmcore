@@ -67,7 +67,7 @@ def _job(session, farm, parcel, product):
         name="Coverage job",
         parcel_ids=[parcel.id],
         assessment_id=advice.id,
-        product_id=product.id,
+        catalog_item_id=product.id,
         scheduled_start=NOW + timedelta(hours=2),
         duration_minutes=90,
     )
@@ -80,7 +80,7 @@ def _completion(parcel, product, **overrides):
         "actual_start": NOW - timedelta(hours=2),
         "duration_minutes": 60,
         "parcel_ids": [parcel.id],
-        "quantities": [{"product_id": product.id, "value": "1.5", "unit": "kg/ha"}],
+        "quantities": [{"catalog_item_id": product.id, "value": "1.5", "unit": "kg/ha"}],
         "notes": "",
     }
     values.update(overrides)
@@ -94,7 +94,7 @@ def _form(job_id, expected_revision=1, **overrides):
         "actual_start": "2024-04-09T04:00",
         "duration_minutes": "60",
         "parcel_ids": [],
-        "product_id": [],
+        "catalog_item_id": [],
         "dose_value": [],
         "dose_unit": [],
         "notes": "",
@@ -142,7 +142,7 @@ def test_form_routes_report_clean_redirects(client, session, farm, parcels, prod
                 "expected_revision": "1",
                 "name": "Missing",
                 "parcel_ids": [str(parcels[0].id)],
-                "product_id": str(products["copper-contact"].id),
+                "catalog_item_id": str(products["copper-contact"].id),
                 "scheduled_start": "2024-04-09T08:00",
                 "duration_minutes": "90",
                 "notes": "",
@@ -157,7 +157,7 @@ def test_form_routes_report_clean_redirects(client, session, farm, parcels, prod
             "expected_revision": "99",
             "name": "Stale",
             "parcel_ids": [str(parcels[0].id)],
-            "product_id": str(products["copper-contact"].id),
+            "catalog_item_id": str(products["copper-contact"].id),
             "scheduled_start": "2024-04-09T08:00",
             "duration_minutes": "90",
             "notes": "",
@@ -179,7 +179,7 @@ def test_form_routes_report_clean_redirects(client, session, farm, parcels, prod
             "expected_revision": "1",
             "name": "Edited by form",
             "parcel_ids": [str(parcels[0].id)],
-            "product_id": str(products["copper-contact"].id),
+            "catalog_item_id": str(products["copper-contact"].id),
             "scheduled_start": "2024-04-09T08:00",
             "duration_minutes": "90",
             "notes": "",
@@ -249,7 +249,7 @@ def test_form_routes_report_clean_redirects(client, session, farm, parcels, prod
             data=_form(
                 999999,
                 parcel_ids=[str(parcels[0].id)],
-                product_id=[str(products["copper-contact"].id)],
+                catalog_item_id=[str(products["copper-contact"].id)],
                 dose_value=["1.5"],
                 dose_unit=["kg/ha"],
             ),
@@ -260,7 +260,7 @@ def test_form_routes_report_clean_redirects(client, session, farm, parcels, prod
     form = _form(
         fresh["id"],
         parcel_ids=[str(parcels[0].id)],
-        product_id=[str(products["copper-contact"].id)],
+        catalog_item_id=[str(products["copper-contact"].id)],
         dose_value=["1.5"],
         dose_unit=["kg/ha"],
     )
@@ -290,7 +290,7 @@ def test_form_routes_report_clean_redirects(client, session, farm, parcels, prod
         params={"farm": farm.id},
         data={
             **form,
-            "product_id": ["", str(products["copper-contact"].id)],
+            "catalog_item_id": ["", str(products["copper-contact"].id)],
             "dose_value": ["", "1.5"],
             "dose_unit": ["kg/ha", "kg/ha"],
         },
@@ -365,7 +365,7 @@ def test_service_create_validation_branches(session, farm, parcels, products, ad
             name="x" * 201,
             parcel_ids=[parcels[0].id],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW,
             duration_minutes=60,
         )
@@ -377,7 +377,7 @@ def test_service_create_validation_branches(session, farm, parcels, products, ad
             name="x",
             parcel_ids=[],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW,
             duration_minutes=60,
         )
@@ -390,7 +390,7 @@ def test_service_create_validation_branches(session, farm, parcels, products, ad
             name="x",
             parcel_ids=[parcels[0].id],
             assessment_id=none.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW,
             duration_minutes=60,
         )
@@ -403,7 +403,7 @@ def test_service_create_validation_branches(session, farm, parcels, products, ad
             name="x",
             parcel_ids=[parcels[0].id],
             assessment_id=future.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW,
             duration_minutes=60,
         )
@@ -415,7 +415,7 @@ def test_service_create_validation_branches(session, farm, parcels, products, ad
             name="x",
             parcel_ids=[parcels[0].id],
             assessment_id=advice.id,
-            product_id=0,
+            catalog_item_id=0,
             scheduled_start=NOW,
             duration_minutes=60,
         )
@@ -427,7 +427,7 @@ def test_service_create_validation_branches(session, farm, parcels, products, ad
             name="x",
             parcel_ids=[parcels[0].id],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=datetime(2024, 4, 9, 8),
             duration_minutes=60,
         )
@@ -439,7 +439,7 @@ def test_service_create_validation_branches(session, farm, parcels, products, ad
             name="x",
             parcel_ids=[parcels[0].id],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=NOW,
             duration_minutes=0,
         )
@@ -483,9 +483,9 @@ def test_service_edit_branches(session, farm, parcels, products):
         "Europe/Paris",
         job,
         expected_revision=2,
-        changes={"product_id": products["sulphur-wettable"].id},
+        changes={"catalog_item_id": products["sulphur-wettable"].id},
     )
-    assert edited.product_id == products["sulphur-wettable"].id
+    assert edited.catalog_item_id == products["sulphur-wettable"].id
     with pytest.raises(service.JobError, match="timezone"):
         service.edit(
             repo,
@@ -569,11 +569,15 @@ def test_service_completion_validation_branches(session, farm, parcels, products
     for override, message in (
         ({"quantities": []}, "at least one applied product"),
         ({"quantities": [{"value": "1", "unit": "kg/ha"}]}, "needs a product"),
-        ({"quantities": [{"product_id": 0, "value": "1", "unit": "kg/ha"}]}, "shortlist"),
+        ({"quantities": [{"catalog_item_id": 0, "value": "1", "unit": "kg/ha"}]}, "shortlist"),
         (
             {
                 "quantities": [
-                    {"product_id": products["copper-contact"].id, "value": "0", "unit": "kg/ha"}
+                    {
+                        "catalog_item_id": products["copper-contact"].id,
+                        "value": "0",
+                        "unit": "kg/ha",
+                    }
                 ]
             },
             "positive",
@@ -581,7 +585,7 @@ def test_service_completion_validation_branches(session, farm, parcels, products
         (
             {
                 "quantities": [
-                    {"product_id": products["copper-contact"].id, "value": "1", "unit": "cups"}
+                    {"catalog_item_id": products["copper-contact"].id, "value": "1", "unit": "cups"}
                 ]
             },
             "rate unit",
@@ -589,8 +593,16 @@ def test_service_completion_validation_branches(session, farm, parcels, products
         (
             {
                 "quantities": [
-                    {"product_id": products["copper-contact"].id, "value": "1", "unit": "kg/ha"},
-                    {"product_id": products["copper-contact"].id, "value": "2", "unit": "kg/ha"},
+                    {
+                        "catalog_item_id": products["copper-contact"].id,
+                        "value": "1",
+                        "unit": "kg/ha",
+                    },
+                    {
+                        "catalog_item_id": products["copper-contact"].id,
+                        "value": "2",
+                        "unit": "kg/ha",
+                    },
                 ]
             },
             "each product once",
@@ -633,7 +645,9 @@ def test_completion_preview_reports_removed_parcels_and_products(session, farm, 
         actual_start=NOW - timedelta(hours=2),
         duration_minutes=60,
         parcel_ids=[parcels[1].id],
-        quantities=[{"product_id": products["sulphur-wettable"].id, "value": "1", "unit": "kg/ha"}],
+        quantities=[
+            {"catalog_item_id": products["sulphur-wettable"].id, "value": "1", "unit": "kg/ha"}
+        ],
         notes="",
     )
     differences = " ".join(preview["differences"])
@@ -1009,7 +1023,7 @@ def test_job_offers_stop_after_three_feasible_jobs(session, farm, parcels, produ
             name=f"Other {index}",
             parcel_ids=[parcels[0].id],
             assessment_id=advice.id,
-            product_id=products["copper-contact"].id,
+            catalog_item_id=products["copper-contact"].id,
             scheduled_start=target.scheduled_start,
             duration_minutes=90,
         )

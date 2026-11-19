@@ -319,7 +319,7 @@ def _quantities(products: list[SprayItem], task: TaskRecord) -> list[logs.Quanti
                 measure="rate",
                 value=dose.value,
                 unit=dose.unit,
-                product_id=product.id if product else None,
+                catalog_item_id=product.id if product else None,
                 label=label,
             )
         )

@@ -180,7 +180,10 @@ def test_voice_log_then_taskdata_upload_is_one_record_with_two_sources(
     assert {p.alias for p in log.parcels} == set(SPRAYED)
     assert sorted(s.source_type for s in log.sources) == ["isoxml", "isoxml", "voice"]
     assert log.ts_start == local("2024-04-10 07:12:05")
-    assert sorted(q.value for q in log.quantities) == [Decimal("1.94"), Decimal("2.06")]
+    assert sorted(q.entered_value for q in log.typed_quantities) == [
+        Decimal("1.94"),
+        Decimal("2.06"),
+    ]
 
     index = client.get("/operations/").text
     [record] = re.findall(rf'<li[^>]*data-record="{log.id}"[^>]*>.*?</li>', index, re.S)

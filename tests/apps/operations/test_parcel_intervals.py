@@ -81,7 +81,7 @@ def test_merged_task_ngsi_uses_each_parcels_machine_interval(client, farm, merge
     # Merge storage/ranking and doses stay log-level; only the export interval changes.
     assert merged.ts_start == local("2024-04-10 07:12:05")
     assert merged.ts_end == local("2024-04-10 07:58:40")
-    assert sorted(str(q.value) for q in merged.quantities) == ["1.94", "2.06"]
+    assert sorted(str(q.entered_value) for q in merged.typed_quantities) == ["1.94", "2.06"]
 
 
 def test_legacy_receipts_keep_log_interval_even_with_saved_weather_ids(

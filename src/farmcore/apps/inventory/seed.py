@@ -48,7 +48,7 @@ def seed(session: Session, *, scene: str | None, data_dir: Path) -> dict[str, in
     products = ensure_products(session)
     held = set(
         session.scalars(
-            select(InventoryStock.product_id).where(
+            select(InventoryStock.catalog_item_id).where(
                 InventoryStock.farm_id == farm.id, InventoryStock.season == SEASON
             )
         )
@@ -60,7 +60,7 @@ def seed(session: Session, *, scene: str | None, data_dir: Path) -> dict[str, in
         session.add(
             InventoryStock(
                 farm_id=farm.id,
-                product_id=product.id,
+                catalog_item_id=product.id,
                 season=SEASON,
                 unit=d.unit,
                 purchased=Decimal(d.purchased),

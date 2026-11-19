@@ -98,10 +98,17 @@ class Application:
     substance: str
     dose_kg_ha: Decimal | None
     label: Label
+    # The product's published ref (`SprayItem.ref`), which check keys carry so they stay the same
+    # across the core_0018 move; the item id when none is given.
+    product_ref: int | str | None = None
 
     @property
     def order(self) -> tuple[datetime, int]:
         return self.ts, self.log_id
+
+    @property
+    def key_ref(self) -> int | str:
+        return self.product_ref if self.product_ref is not None else self.product_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,7 +183,7 @@ def _applications(a: Application, season: list[Application]) -> _ParcelCheck | N
         status, label = OK, f"{n} of {cap} {a.substance} applications this season"
     detail = f"{a.product_name}: at most {cap} applications a season on the label (E-Phy)."
     return _ParcelCheck(
-        Check(f"applications:{a.product_id}", status, label, detail), a.parcel, Decimal(n), str(n)
+        Check(f"applications:{a.key_ref}", status, label, detail), a.parcel, Decimal(n), str(n)
     )
 
 
@@ -191,7 +198,7 @@ def _interval(a: Application, season: list[Application]) -> _ParcelCheck | None:
     detail = f"{a.product_name}: at least {gap} days between applications on the label (E-Phy)."
     # Fewer days is tighter: rank by the negated gap.
     return _ParcelCheck(
-        Check(f"interval:{a.product_id}", status, label, detail),
+        Check(f"interval:{a.key_ref}", status, label, detail),
         a.parcel,
         Decimal(-days),
         f"{days} days",
@@ -218,7 +225,7 @@ def _dose(apps: list[Application]) -> _ParcelCheck | None:
         status = WARN
         label = f"{name} dose incomplete (at least {fmt(total)} kg/ha), label max {fmt(cap)}"
         detail = f"An unknown or unconvertible rate prevents checking the full dose. {detail}"
-    check = Check(f"dose:{a.product_id}", status, label, detail)
+    check = Check(f"dose:{a.key_ref}", status, label, detail)
     return _ParcelCheck(check, a.parcel, total, fmt(total))
 
 
@@ -259,10 +266,10 @@ def _merge(found: list[_ParcelCheck]) -> Check:
     return Check(worst.check.key, worst.check.status, worst.check.label, detail)
 
 
-def _order(key: str, product_order: dict[int, int]) -> tuple[int, int]:
-    kind, _, pid = key.partition(":")
+def _order(key: str, product_order: dict[str, int]) -> tuple[int, int]:
+    kind, _, ref = key.partition(":")
     kinds = ("copper", "applications", "interval", "dose", "phi")
-    return kinds.index(kind), product_order.get(int(pid), 0) if pid else 0
+    return kinds.index(kind), product_order.get(ref, 0)
 
 
 def _spray(apps: list[Application], history_of: Callable[[str], list[Application]]) -> list[Check]:
@@ -289,7 +296,8 @@ def _spray(apps: list[Application], history_of: Callable[[str], list[Application
     phi = _phi(apps)
     if phi is not None:
         out.append(phi)
-    product_order = {pid: i for i, pid in enumerate(dict.fromkeys(a.product_id for a in apps))}
+    refs = dict.fromkeys(str(a.key_ref) for a in apps)  # a key's product part, first seen first
+    product_order = {ref: i for i, ref in enumerate(refs)}
     return sorted(out, key=lambda c: _order(c.key, product_order))
 
 

@@ -42,7 +42,7 @@ class JobCreate(BaseModel):
     name: StrictStr = Field(min_length=1, max_length=200)
     parcel_ids: list[StrictInt] = Field(min_length=1, max_length=80)
     assessment_id: StrictInt = Field(gt=0, le=2**63 - 1)
-    product_id: StrictInt = Field(gt=0, le=2**63 - 1)
+    catalog_item_id: StrictInt = Field(gt=0, le=2**63 - 1)
     scheduled_start: AwareDatetime
     duration_minutes: StrictInt = Field(ge=1, le=1440)
     notes: StrictStr = Field(default="", max_length=10000)
@@ -61,7 +61,7 @@ class JobEdit(BaseModel):
     expected_revision: StrictInt = Field(ge=1)
     name: StrictStr | None = Field(default=None, max_length=200)
     parcel_ids: list[StrictInt] | None = None
-    product_id: StrictInt | None = Field(default=None, gt=0, le=2**63 - 1)
+    catalog_item_id: StrictInt | None = Field(default=None, gt=0, le=2**63 - 1)
     scheduled_start: AwareDatetime | None = None
     duration_minutes: StrictInt | None = Field(default=None, ge=1, le=1440)
     notes: StrictStr | None = Field(default=None, max_length=10000)
@@ -92,7 +92,7 @@ class AssignmentChange(BaseModel):
 class CompletionDose(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    product_id: StrictInt = Field(gt=0, le=2**63 - 1)
+    catalog_item_id: StrictInt = Field(gt=0, le=2**63 - 1)
     value: Decimal = Field(gt=0, allow_inf_nan=False)
     unit: Literal["kg/ha", "L/ha", "l/ha", "g/ha", "ml/ha"]
 
@@ -179,7 +179,7 @@ def create_job(request: Request, repo: Repo, body: JobCreate):
             name=body.name,
             parcel_ids=body.parcel_ids,
             assessment_id=body.assessment_id,
-            product_id=body.product_id,
+            catalog_item_id=body.catalog_item_id,
             scheduled_start=body.scheduled_start,
             duration_minutes=body.duration_minutes,
             notes=body.notes,
@@ -257,7 +257,7 @@ def _completion_kwargs(body: JobCompletion) -> dict[str, object]:
 
 
 def _completion_body(form, tz: str) -> JobCompletion:
-    products = form.getlist("product_id")
+    products = form.getlist("catalog_item_id")
     values = form.getlist("dose_value")
     units = form.getlist("dose_unit")
     if not (len(products) == len(values) == len(units)):
@@ -269,7 +269,9 @@ def _completion_body(form, tz: str) -> JobCompletion:
             continue
         if not product_text or not value_text:
             raise ValueError("each applied product needs a dose and a unit")
-        quantities.append({"product_id": int(product_text), "value": value_text, "unit": str(unit)})
+        quantities.append(
+            {"catalog_item_id": int(product_text), "value": value_text, "unit": str(unit)}
+        )
     return JobCompletion(
         expected_revision=int(str(form.get("expected_revision", "0"))),
         request_key=str(form.get("request_key", "")),
@@ -362,7 +364,7 @@ async def completion_preview_form(request: Request, repo: Repo, job_id: int):
             "parcel_ids": body.parcel_ids,
             "quantities": [
                 {
-                    "product_id": dose.product_id,
+                    "catalog_item_id": dose.catalog_item_id,
                     "value": str(dose.value),
                     "unit": dose.unit,
                 }
@@ -474,7 +476,7 @@ async def create_form(request: Request, repo: Repo):
             name=str(form.get("name", "")),
             parcel_ids=[int(value) for value in form.getlist("parcel_ids") if str(value).strip()],
             assessment_id=int(str(form.get("assessment_id", "0"))),
-            product_id=int(str(form.get("product_id", "0"))),
+            catalog_item_id=int(str(form.get("catalog_item_id", "0"))),
             scheduled_start=start,
             duration_minutes=int(str(form.get("duration_minutes", "0"))),
             notes=str(form.get("notes", "")),
@@ -499,7 +501,7 @@ async def edit_form(request: Request, repo: Repo, job_id: int):
             expected_revision=int(str(form.get("expected_revision", "0"))),
             name=str(form.get("name", "")),
             parcel_ids=[int(value) for value in form.getlist("parcel_ids") if str(value).strip()],
-            product_id=int(str(form.get("product_id", "0"))),
+            catalog_item_id=int(str(form.get("catalog_item_id", "0"))),
             scheduled_start=parse_local(str(form.get("scheduled_start", "")), tz),
             duration_minutes=int(str(form.get("duration_minutes", "0"))),
             notes=str(form.get("notes", "")),
