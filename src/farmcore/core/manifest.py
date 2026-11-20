@@ -240,10 +240,20 @@ def collect_assessment_kinds(manifests):
     """Assessment kind key -> (manifest, kind). A duplicate key across loaded apps is an error,
     and so is a read scope two kinds share: each kind is read with its own scope, so holding one
     kind's scope never reads another kind."""
+    from farmcore.core.access import SCOPES  # core's own scopes; access never imports manifests
+
     kinds = {}
     scopes: dict[str, str] = {}
     for m in manifests:
+        own = {scope for _, declared in m.resource_scopes for scope in declared}
         for kind in m.assessment_kinds:
+            # A core scope already reads core data (fields:read, logs:read...): a kind may reuse
+            # one only when its app reads its own tables with it too, so no holder gains a kind.
+            if kind.read_scope in SCOPES and kind.read_scope not in own:
+                raise ValueError(
+                    f"assessment kind {kind.key!r}: read scope {kind.read_scope!r} is a core "
+                    f"scope that app {m.name!r} does not declare on its own tables"
+                )
             if kind.key in kinds:
                 raise ValueError(f"duplicate assessment kind key {kind.key!r} across manifests")
             if kind.read_scope in scopes:

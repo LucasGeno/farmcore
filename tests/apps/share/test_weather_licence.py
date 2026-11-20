@@ -25,7 +25,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import Text, func, select, union
 
 from farmcore.apps.share import service
 from farmcore.core.access import ScopeDenied, authenticate_token
@@ -170,9 +170,26 @@ def test_grants_and_tokens_read_only_redistributable_weather(
             scope="stations:read",
             resource="weather_station",
         ),
+        lambda repo: repo.execute(
+            select(WeatherStation.id, select(WeatherObservation.value).limit(1).scalar_subquery()),
+            scope="stations:read",
+            resource="weather_station",
+        ),
+        lambda repo: repo.execute(
+            union(select(WeatherStation.name), select(func.cast(WeatherForecast.value, Text))),
+            scope="stations:read",
+            resource="weather_station",
+        ),
         lambda repo: repo.list(Observation, scope="stations:read"),
     ],
-    ids=["statement", "unaudited-statement", "mislabelled-statement", "legacy-rows"],
+    ids=[
+        "statement",
+        "unaudited-statement",
+        "mislabelled-statement",
+        "scalar-subquery",
+        "union",
+        "legacy-rows",
+    ],
 )
 def test_a_grant_cannot_read_weather_around_the_licence_gate(
     read, session, station_grant, weather
