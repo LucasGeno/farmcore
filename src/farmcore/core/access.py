@@ -44,6 +44,7 @@ from sqlalchemy.sql.util import find_tables
 
 from farmcore.core import ext_ids
 from farmcore.core.identity import token_hash
+from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
@@ -132,9 +133,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
     "catalog_item": _ANY,  # shared reference (a fertiliser's or a spray product's name)
-    # The assessment envelope (`core/assessments.py`). Crop protection is its only kind today;
-    # a per-kind read scope comes with the neutral core contract.
-    "assessment": frozenset({"advice:read"}),
+    # The assessment envelope (`core/assessments.py`): read by each loaded kind's own read
+    # scope (`register_assessment_kind`), which reads that kind's rows only. No kind, no reader.
+    "assessment": frozenset(),
     "clock_state": frozenset({"audit:read"}),
     "crop_season": frozenset({"fields:read"}),
     "data_grant": frozenset({"audit:read"}),
@@ -188,6 +189,30 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "weather_station": frozenset({"stations:read"}),
 }
 RESOURCE_OWNERS: dict[str, str] = dict.fromkeys(RESOURCE_SCOPES, "core")
+# Assessment kind key -> its read scope, as loaded apps declare them (`AssessmentKind.read_scope`).
+KIND_READ_SCOPES: dict[str, str] = {}
+
+
+def register_assessment_kind(key: str, read_scope: str) -> None:
+    """Let `read_scope` read the envelopes of kind `key`, and only those (registered at
+    discovery). A scope core does not know becomes known for the owner's reads only: it is never
+    in `GRANT_READ_SCOPES` or `TOKEN_SCOPES`, so no grant preset, agent token or OAuth connection
+    holds it by default. Idempotent; a kind or scope already registered differently is refused,
+    so one kind's scope never reads another kind."""
+    known = KIND_READ_SCOPES.get(key)
+    if known == read_scope:
+        return
+    if known is not None:
+        raise ValueError(f"assessment kind {key!r} is already read with {known!r}")
+    for other, scope in KIND_READ_SCOPES.items():
+        if scope == read_scope:
+            raise ValueError(f"assessment kinds {other!r} and {key!r} share {read_scope!r}")
+    KIND_READ_SCOPES[key] = read_scope
+    RESOURCE_SCOPES["assessment"] = RESOURCE_SCOPES["assessment"] | {read_scope}
+
+
+def _known(scope: str) -> bool:
+    return scope in SCOPES or scope in KIND_READ_SCOPES.values()
 
 
 def register_resource_scopes(
@@ -296,7 +321,7 @@ class ScopedRepository:
             )
         ):
             raise ScopeDenied("This resource is not available through ordinary grants.")
-        if scope not in SCOPES:
+        if not _known(scope):
             raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
         if resource is not None:
             allowed = RESOURCE_SCOPES.get(resource)
@@ -330,7 +355,7 @@ class ScopedRepository:
         order_by: Any = None,
         limit: int | None = None,
     ) -> list[M]:
-        stmt = self._scoped(model).where(*where)
+        stmt = self._scoped(model, scope).where(*where)
         if order_by is not None:
             stmt = stmt.order_by(
                 *(order_by if isinstance(order_by, (list, tuple)) else (order_by,))
@@ -344,13 +369,14 @@ class ScopedRepository:
         pk = model.__mapper__.primary_key
         if len(pk) != 1:
             raise TypeError(f"{model.__name__} has a composite key; use list()")
-        stmt = self._scoped(model).where(pk[0] == id)
+        stmt = self._scoped(model, scope).where(pk[0] == id)
         self._authorise(scope, model.__table__.name)
         return self.session.scalar(stmt)
 
     def execute(self, stmt: Any, *, scope: str, resource: str) -> Result[Any]:
         """Run `stmt` unchanged (the caller filters it) after the scope check; logs `resource`."""
         self._refuse_ungated(stmt, resource)
+        self._refuse_envelope(stmt, resource)
         self._authorise(scope, resource)
         return self.session.execute(stmt)
 
@@ -359,8 +385,18 @@ class ScopedRepository:
         decorative reads of data the same viewer already reads through an audited path (the
         parcel silhouettes: the map's layer already logs the geometry read)."""
         self._refuse_ungated(stmt, resource)
+        self._refuse_envelope(stmt, resource)
         self.check(scope, resource)
         return self.session.execute(stmt)
+
+    @staticmethod
+    def _refuse_envelope(stmt: Any, resource: str) -> None:
+        """Assessment envelopes are read only through `list`/`get`, which keep a scope to its
+        own kind; a caller-built statement on the table (or selecting FROM it) could not."""
+        froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
+        tables = {t.name for f in froms for t in find_tables(f)}
+        if resource == "assessment" or "assessment" in tables:
+            raise ScopeDenied("Assessments are read through list() or get(), one kind per scope.")
 
     def _refuse_ungated(self, stmt: Any, resource: str) -> None:
         """A caller-built statement cannot be held to the licence gate: refused for grant views
@@ -373,8 +409,13 @@ class ScopedRepository:
         if resource in _LICENCE_GATED or tables & _LICENCE_GATED:
             raise ScopeDenied("Weather values are shared only through the licence gate.")
 
-    def _scoped[M: Base](self, model: type[M]) -> Select[tuple[M]]:
+    def _scoped[M: Base](self, model: type[M], scope: str) -> Select[tuple[M]]:
         stmt = select(model)
+        if model is Assessment:
+            # A scope reads only the kinds that declared it (`register_assessment_kind`); the
+            # owner's `*` grant reads each kind through that kind's own scope too.
+            kinds = [key for key, read in KIND_READ_SCOPES.items() if read == scope]
+            stmt = stmt.where(Assessment.kind.in_(kinds))
         if model is Event and self.private_member:
             stmt = stmt.where(
                 or_(

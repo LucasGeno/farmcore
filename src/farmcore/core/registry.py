@@ -51,7 +51,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, configure_mappers, sessionmaker
 
-from farmcore.core.access import register_resource_scopes
+from farmcore.core.access import register_assessment_kind, register_resource_scopes
 from farmcore.core.app_manifest import MANIFEST as CORE
 from farmcore.core.manifest import (
     CORE_API,
@@ -112,9 +112,12 @@ def register_contributions(manifest: Manifest) -> None:
 
 
 def register_scopes(manifest: Manifest) -> None:
-    """Register `manifest.resource_scopes` with the scoped repository. Runs at discovery, so
-    every process that discovers apps (web, bot, replay, migrations) reads app tables the same
-    way. An app may declare only tables its own `models` define (imported here to check)."""
+    """Register `manifest.resource_scopes` and its assessment kinds' read scopes with the scoped
+    repository. Runs at discovery, so every process that discovers apps (web, bot, replay,
+    migrations) reads app tables the same way. An app may declare only tables its own `models`
+    define (imported here to check)."""
+    for kind in manifest.assessment_kinds:
+        register_assessment_kind(kind.key, kind.read_scope)
     if not manifest.resource_scopes:
         return
     for module in manifest.models:

@@ -24,6 +24,9 @@ KIND = AssessmentKind(
         f"farmcore.apps.advisor.specs:{name}"
         for name in ("DOWNY_3_10", "DOWNY_INCUBATION", "POWDERY_GUBLER_THOMAS", "SPRAY_DECISION")
     ),
+    # The scope that has always read stored advice: every grant and token that holds it keeps
+    # exactly its access, and nothing migrates.
+    read_scope="advice:read",
 )
 
 

@@ -4,6 +4,11 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- App authors: an `AssessmentKind` now declares its own `read_scope` (required, `<name>:read`),
+  and no two loaded kinds may share one. The scoped repository reads an `assessment` row only
+  with its kind's scope, and refuses `execute()` statements on the `assessment` table: read
+  envelopes with `list()` or `get()`. Crop protection's `advisor.spray` keeps `advice:read`, so
+  no grant or token gains or loses access. A new kind's scope is never granted by default.
 - Migration `core_0019` drops the legacy `product` and `quantity` tables that `core_0018`
   froze; the maps and the tables' id sequences stay. Downgrading below it rebuilds both from the
   maps and the catalog rows under their legacy ids, with their sequences as they were, and then

@@ -353,6 +353,15 @@ products and windows). Its `advice` row stays the public representation every re
 points at its envelope (`advice.assessment_id`, same farm, parcel and time); advice saved before
 `core_0012` keeps its evidence in `advice.props` and has no envelope.
 
+Each kind declares its own read scope (`AssessmentKind.read_scope`), and core never names one.
+The registry refuses two loaded kinds that share a scope. The scoped repository reads an
+`assessment` row only with its kind's scope (`list`/`get` filter by kind; a caller-built
+statement on the table is refused), so holding one kind's scope never reads another kind, and
+the owner's `*` grant also reads each kind through its own scope. Crop protection keeps
+`advice:read`, so every grant and token that holds it keeps exactly its access. A scope core does
+not know is owner-only: it is never in a grant preset, an agent token or an OAuth connection
+(`access.TOKEN_SCOPES`). Grant and token views read stored advice, never the envelope itself.
+
 Each kind names the models that compute it (`AssessmentKind.models`), each a `ModelSpec`
 (`core/model_spec.py`): method and citation, EPPO host and pest codes, BBCH window, inputs, every
 parameter with its source and status (`sourced`, `assumed`, or `unsourced`, never a guessed

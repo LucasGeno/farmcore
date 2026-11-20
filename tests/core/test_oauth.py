@@ -39,7 +39,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
 
-from farmcore.core import mcp_http, registry
+from farmcore.core import access, mcp_http, registry
 from farmcore.core.access import TokenRejected, authenticate_token, ensure_owner_grant
 from farmcore.core.identity import hash_password
 from farmcore.core.models.canonical import Farm
@@ -221,16 +221,24 @@ def _no_fetch(url: str):
     raise AssertionError(f"an operator-listed client is never fetched: {url}")
 
 
-def test_a_request_naming_no_scope_does_not_ask_for_advice_read(oauth_settings, session):
+def test_a_request_never_gets_an_assessment_scope_by_default(oauth_settings, session, monkeypatch):
     # An owner must choose to let an agent read stored advice; the default never includes it.
+    # Another assessment kind's own read scope is never offered to an agent at all (no widening).
+    monkeypatch.setattr(access, "KIND_READ_SCOPES", dict(access.KIND_READ_SCOPES))
+    monkeypatch.setattr(access, "RESOURCE_SCOPES", dict(access.RESOURCE_SCOPES))
+    access.register_assessment_kind("frost.hours", "assessment:frost.hours:read")
+    resolve = partial(clients.resolve, session, oauth_settings, _no_fetch)
     params = {k: v for k, v in _request().items() if k != "scope"}
 
-    asked = oauth.parse_request(
-        oauth_settings, params, partial(clients.resolve, session, oauth_settings, _no_fetch)
-    )
+    asked = oauth.parse_request(oauth_settings, params, resolve)
 
     assert "advice:read" not in asked.scopes
+    assert "assessment:frost.hours:read" not in asked.scopes
     assert "fields:read" in asked.scopes
+    with pytest.raises(oauth.Refused, match="read or propose"):
+        oauth.parse_request(
+            oauth_settings, _request(scope="fields:read assessment:frost.hours:read"), resolve
+        )
 
 
 def test_metadata_points_a_client_at_this_server_and_this_resource_only_when_on(
