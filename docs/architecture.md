@@ -393,9 +393,12 @@ points at its envelope (`advice.assessment_id`, same farm, parcel and time); adv
 `core_0012` keeps its evidence in `advice.props` and has no envelope.
 
 Each kind declares its own read scope (`AssessmentKind.read_scope`), and core never names one.
-The registry refuses two loaded kinds that share a scope. The scoped repository reads an
-`assessment` row only with its kind's scope (`list`/`get` filter by kind; a caller-built
-statement on the table is refused), so holding one kind's scope never reads another kind, and
+The registry refuses two loaded kinds that share a scope, and a kind whose scope is a core
+scope (`fields:read`, `logs:read`...) unless its own app reads its own tables with that scope.
+That load-time check (`collect_assessment_kinds`) is the authoritative one; the scoped
+repository's registration refuses the same sharing again only as a backstop. The scoped
+repository reads an `assessment` row only with its kind's scope (`list`/`get` filter by kind; a
+caller-built statement naming the table anywhere, or a textual one, is refused), so holding one kind's scope never reads another kind, and
 the owner's `*` grant also reads each kind through its own scope. Crop protection keeps
 `advice:read`, so every grant and token that holds it keeps exactly its access. A scope core does
 not know is owner-only: it is never in a grant preset, an agent token or an OAuth connection

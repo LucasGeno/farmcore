@@ -40,6 +40,8 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import Select, or_, select
 from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import TextClause
+from sqlalchemy.sql.expression import Exists, TableClause
 from sqlalchemy.sql.util import find_tables
 
 from farmcore.core import ext_ids
@@ -326,7 +328,8 @@ class ScopedRepository:
         ):
             raise ScopeDenied("This resource is not available through ordinary grants.")
         if not _known(scope):
-            raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
+            known = sorted(SCOPES | set(KIND_READ_SCOPES.values()))
+            raise ValueError(f"unknown scope {scope!r}; known: {known}")
         if resource is not None:
             allowed = RESOURCE_SCOPES.get(resource)
             if allowed is None:
@@ -379,6 +382,7 @@ class ScopedRepository:
 
     def execute(self, stmt: Any, *, scope: str, resource: str) -> Result[Any]:
         """Run `stmt` unchanged (the caller filters it) after the scope check; logs `resource`."""
+        _refuse_text(stmt)
         self._refuse_ungated(stmt, resource)
         self._refuse_envelope(stmt, resource)
         self._authorise(scope, resource)
@@ -388,6 +392,7 @@ class ScopedRepository:
         """`execute` without the access_log row: the scope and grant are still checked. Only for
         decorative reads of data the same viewer already reads through an audited path (the
         parcel silhouettes: the map's layer already logs the geometry read)."""
+        _refuse_text(stmt)
         self._refuse_ungated(stmt, resource)
         self._refuse_envelope(stmt, resource)
         self.check(scope, resource)
@@ -396,20 +401,19 @@ class ScopedRepository:
     @staticmethod
     def _refuse_envelope(stmt: Any, resource: str) -> None:
         """Assessment envelopes are read only through `list`/`get`, which keep a scope to its
-        own kind; a caller-built statement on the table (or selecting FROM it) could not."""
-        froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
-        tables = {t.name for f in froms for t in find_tables(f)}
-        if resource == "assessment" or "assessment" in tables:
+        own kind; a caller-built statement on the table, or naming it anywhere (a join, a
+        subquery, an EXISTS, a union), could not."""
+        if resource == "assessment" or "assessment" in referenced_tables(stmt):
             raise ScopeDenied("Assessments are read through list() or get(), one kind per scope.")
 
     def _refuse_ungated(self, stmt: Any, resource: str) -> None:
         """A caller-built statement cannot be held to the licence gate: refused for grant views
-        when labelled as a weather value table or selecting FROM one (a join or a subquery
-        included; an EXISTS in its WHERE is not a FROM)."""
+        when labelled as a weather value table or naming one where it can return values (a
+        join, a scalar or WHERE subquery, a union). An EXISTS selects no value: it is how
+        `core/weather/attribution.sources` says which receipts hold data."""
         if not self.grant_view:
             return
-        froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
-        tables = {t.name for f in froms for t in find_tables(f)}
+        tables = referenced_tables(stmt, through_exists=False)
         if resource in _LICENCE_GATED or tables & _LICENCE_GATED:
             raise ScopeDenied("Weather values are shared only through the licence gate.")
 
@@ -470,6 +474,28 @@ class ScopedRepository:
             )
         )
         self.session.flush()
+
+
+def referenced_tables(stmt: Any, *, through_exists: bool = True) -> set[str]:
+    """Every table `stmt` names: its FROMs (a joined eager load included) and any table in its
+    columns, WHERE, subqueries or union members; inside an EXISTS only if `through_exists`."""
+    froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
+    names = {t.name for f in froms for t in find_tables(f)}
+    stack = [stmt]
+    while stack:
+        element = stack.pop()
+        if isinstance(element, TableClause):
+            names.add(element.name)
+        if isinstance(element, Exists) and not through_exists:
+            continue
+        stack.extend(element.get_children())
+    return names
+
+
+def _refuse_text(stmt: Any) -> None:
+    """A textual statement names its tables in a string no check can read: refused."""
+    if isinstance(stmt, TextClause):
+        raise ScopeDenied("Read through a SQL expression, not text, so its tables are checked.")
 
 
 def ensure_owner_grant(session: Session, farm: Farm) -> DataGrant:

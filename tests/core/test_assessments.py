@@ -12,7 +12,7 @@ from decimal import Decimal
 import pytest
 from alembic import command
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import create_engine, select, text, update
+from sqlalchemy import create_engine, exists, select, text, union, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
@@ -119,6 +119,8 @@ def test_envelope_keeps_a_second_kind_typed_and_never_as_a_spray_result(session)
         (FROST, "duplicate assessment kind key 'frost.hours'"),
         # Another kind read with frost's scope: holding one would read the other.
         (replace(FROST, key="frost.days"), "share the read scope"),
+        # A core scope already reads core data: every fields:read holder would read the kind.
+        (replace(FROST, key="frost.days", read_scope="fields:read"), "is a core scope"),
     ],
 )
 def test_each_loaded_assessment_kind_has_its_own_key_and_read_scope(second, says):
@@ -176,10 +178,17 @@ def test_each_assessment_kind_is_read_only_with_its_own_scope(session, kind_scop
     # The owner holds every scope, and still reads each kind only through its own.
     assert reads(owner, "advice:read") == {spray.id}
     assert reads(owner, FROST.read_scope) == {frost.id}
-    # A caller-built statement could not be held to one kind: refused, labelled or joined.
+    # A caller-built statement could not be held to one kind: refused wherever it names the
+    # table (labelled, joined, a scalar or WHERE subquery, an EXISTS, a union) and as text.
+    frost_rows = select(Assessment.id).where(Assessment.kind == FROST.key)
     for stmt, resource in (
         (select(Assessment), "assessment"),
         (select(Advice.id).join(Assessment, Advice.assessment_id == Assessment.id), "advice"),
+        (select(Advice.id, frost_rows.limit(1).scalar_subquery()), "advice"),
+        (select(Advice.id).where(Advice.assessment_id.in_(frost_rows)), "advice"),
+        (select(Advice.id).where(exists().where(Assessment.kind == FROST.key)), "advice"),
+        (union(select(Advice.id), frost_rows), "advice"),
+        (text("SELECT result FROM assessment"), "advice"),
     ):
         with pytest.raises(ScopeDenied):
             owner.execute(stmt, scope="advice:read", resource=resource)
