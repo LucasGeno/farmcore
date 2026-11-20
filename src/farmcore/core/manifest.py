@@ -237,13 +237,32 @@ def collect_draft_kinds(manifests):
 
 
 def collect_assessment_kinds(manifests):
-    """Assessment kind key -> (manifest, kind); a duplicate key across loaded apps is an error."""
+    """Assessment kind key -> (manifest, kind). A duplicate key across loaded apps is an error,
+    and so is a read scope two kinds share: each kind is read with its own scope, so holding one
+    kind's scope never reads another kind."""
+    from farmcore.core.access import SCOPES  # core's own scopes; access never imports manifests
+
     kinds = {}
+    scopes: dict[str, str] = {}
     for m in manifests:
+        own = {scope for _, declared in m.resource_scopes for scope in declared}
         for kind in m.assessment_kinds:
+            # A core scope already reads core data (fields:read, logs:read...): a kind may reuse
+            # one only when its app reads its own tables with it too, so no holder gains a kind.
+            if kind.read_scope in SCOPES and kind.read_scope not in own:
+                raise ValueError(
+                    f"assessment kind {kind.key!r}: read scope {kind.read_scope!r} is a core "
+                    f"scope that app {m.name!r} does not declare on its own tables"
+                )
             if kind.key in kinds:
                 raise ValueError(f"duplicate assessment kind key {kind.key!r} across manifests")
+            if kind.read_scope in scopes:
+                raise ValueError(
+                    f"assessment kinds {scopes[kind.read_scope]!r} and {kind.key!r} share the "
+                    f"read scope {kind.read_scope!r}; each kind declares its own"
+                )
             kinds[kind.key] = (m, kind)
+            scopes[kind.read_scope] = kind.key
     return kinds
 
 
@@ -428,6 +447,8 @@ class DraftKind:
 
 
 _ASSESSMENT_KIND = re.compile(r"[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*")
+# A kind's read scope: read-only by its name, e.g. `assessment:frost.hours:read`.
+_KIND_READ_SCOPE = re.compile(r"[a-z][a-z0-9_.]*(:[a-z][a-z0-9_.]*)*:read")
 
 
 @dataclass(frozen=True)
@@ -441,12 +462,17 @@ class AssessmentKind:
     - models: ``module:SPEC`` paths to the `core.model_spec.ModelSpec` of every model that computes
       it, so its validation level travels with each result. Required for a loaded kind
       (checked at load by `model_spec.collect_model_specs`).
+    - read_scope: the scope that reads this kind's envelopes, and only them (`core.access`
+      filters `assessment` rows by it). Declared by the app that owns the kind, never by core;
+      unique across loaded kinds. A scope core does not know is never granted by default: no
+      grant preset, agent token or OAuth connection can hold it (`access.TOKEN_SCOPES`).
     """
 
     key: str
     version: int
     result: str
     models: tuple[str, ...] = ()
+    read_scope: str = ""
 
     def __post_init__(self) -> None:
         if not _ASSESSMENT_KIND.fullmatch(self.key):
@@ -458,6 +484,11 @@ class AssessmentKind:
         _check_provider(self.result, f"assessment kind {self.key!r}")
         for path in self.models:
             _check_provider(path, f"assessment kind {self.key!r} model")
+        if not _KIND_READ_SCOPE.fullmatch(self.read_scope):
+            raise ValueError(
+                f"assessment kind {self.key!r}: read_scope must be a read scope "
+                f"('<name>:read'), got {self.read_scope!r}"
+            )
 
 
 @dataclass(frozen=True)

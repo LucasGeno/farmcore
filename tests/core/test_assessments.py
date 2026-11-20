@@ -5,23 +5,25 @@ from __future__ import annotations
 
 import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 from alembic import command
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import create_engine, text, update
+from sqlalchemy import create_engine, exists, select, text, union, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.assessment import KIND as SPRAY
-from farmcore.core import assessments
+from farmcore.core import access, assessments
+from farmcore.core.access import ScopeDenied, ScopedRepository, ensure_owner_grant
 from farmcore.core.commands.migrate import alembic_config
 from farmcore.core.manifest import AssessmentKind, Manifest, collect_assessment_kinds
 from farmcore.core.models.assessment import Assessment
-from farmcore.core.models.canonical import Farm
+from farmcore.core.models.canonical import DataGrant, Farm
 from tests.apps.operations.conftest import make_parcel
 
 NOW = datetime(2024, 4, 10, 4, tzinfo=UTC)
@@ -57,7 +59,9 @@ class FrostHours(BaseModel):
     threshold_c: Decimal
 
 
-FROST = AssessmentKind("frost.hours", 1, f"{__name__}:FrostHours")
+FROST = AssessmentKind(
+    "frost.hours", 1, f"{__name__}:FrostHours", read_scope="assessment:frost.hours:read"
+)
 
 
 def _envelope(kind, *, farm_id, parcel_id=None, result, status="evaluable"):
@@ -106,16 +110,88 @@ def test_envelope_keeps_a_second_kind_typed_and_never_as_a_spray_result(session)
         assessments.result_of(session.get(Assessment, frost.id), SPRAY)
     # A saved v1 result is never read as a later shape, even when it would happen to validate.
     with pytest.raises(assessments.AssessmentInvalid):
-        assessments.result_of(
-            session.get(Assessment, spray.id), AssessmentKind(SPRAY.key, 2, SPRAY.result)
-        )
+        assessments.result_of(session.get(Assessment, spray.id), replace(SPRAY, version=2))
 
 
-def test_two_apps_cannot_declare_the_same_assessment_kind():
+@pytest.mark.parametrize(
+    ("second", "says"),
+    [
+        (FROST, "duplicate assessment kind key 'frost.hours'"),
+        # Another kind read with frost's scope: holding one would read the other.
+        (replace(FROST, key="frost.days"), "share the read scope"),
+        # A core scope already reads core data: every fields:read holder would read the kind.
+        (replace(FROST, key="frost.days", read_scope="fields:read"), "is a core scope"),
+    ],
+)
+def test_each_loaded_assessment_kind_has_its_own_key_and_read_scope(second, says):
     one = Manifest(name="one", version="1", summary="", assessment_kinds=(FROST,))
-    two = Manifest(name="two", version="1", summary="", assessment_kinds=(FROST,))
-    with pytest.raises(ValueError, match="frost.hours"):
+    two = Manifest(name="two", version="1", summary="", assessment_kinds=(second,))
+    with pytest.raises(ValueError, match=says):
         collect_assessment_kinds([one, two])
+
+
+@pytest.fixture
+def kind_scopes(monkeypatch):
+    """Crop protection's and frost's read scopes, registered as discovery would; dropped after."""
+    monkeypatch.setattr(access, "KIND_READ_SCOPES", {})
+    monkeypatch.setattr(access, "RESOURCE_SCOPES", dict(access.RESOURCE_SCOPES))
+    access.RESOURCE_SCOPES["assessment"] = frozenset()
+    for kind in (SPRAY, FROST):
+        access.register_assessment_kind(kind.key, kind.read_scope)
+
+
+def test_each_assessment_kind_is_read_only_with_its_own_scope(session, kind_scopes):
+    """Failure mode: a kind-blind envelope read hands one kind's scope another kind's rows."""
+    farm, stranger = _farm(session, "Two kinds"), _farm(session, "Stranger")
+    parcel = make_parcel(session, farm, 1, area="1", props={})
+    frost = _envelope(FROST, farm_id=farm.id, result={"hours_below": 3, "threshold_c": "-1.5"})
+    spray = _envelope(SPRAY, farm_id=farm.id, parcel_id=parcel.id, result=SPRAY_RESULT)
+    elsewhere = _envelope(
+        SPRAY,
+        farm_id=stranger.id,
+        parcel_id=make_parcel(session, stranger, 2, area="1", props={}).id,
+        result=SPRAY_RESULT,
+    )
+    session.add_all([frost, spray, elsewhere])
+    session.flush()
+
+    def repo(scopes):
+        grant = DataGrant(farm_id=farm.id, grantee="adviser", scopes=scopes, purpose="test")
+        session.add(grant)
+        session.flush()
+        return ScopedRepository(session, farm.id, grant, "adviser", "test")
+
+    def reads(r, scope):
+        try:
+            return {row.id for row in r.list(Assessment, scope=scope)}
+        except ScopeDenied:
+            return "denied"
+
+    advice, frost_only = repo(["advice:read"]), repo([FROST.read_scope])
+    owner = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "owner", "t")
+    # `advice:read` keeps exactly crop protection's envelopes; frost's scope reads only frost.
+    assert reads(advice, "advice:read") == {spray.id}
+    assert reads(advice, FROST.read_scope) == "denied"
+    assert reads(frost_only, FROST.read_scope) == {frost.id}
+    assert reads(frost_only, "advice:read") == "denied"
+    assert frost_only.get(Assessment, spray.id, scope=FROST.read_scope) is None
+    # The owner holds every scope, and still reads each kind only through its own.
+    assert reads(owner, "advice:read") == {spray.id}
+    assert reads(owner, FROST.read_scope) == {frost.id}
+    # A caller-built statement could not be held to one kind: refused wherever it names the
+    # table (labelled, joined, a scalar or WHERE subquery, an EXISTS, a union) and as text.
+    frost_rows = select(Assessment.id).where(Assessment.kind == FROST.key)
+    for stmt, resource in (
+        (select(Assessment), "assessment"),
+        (select(Advice.id).join(Assessment, Advice.assessment_id == Assessment.id), "advice"),
+        (select(Advice.id, frost_rows.limit(1).scalar_subquery()), "advice"),
+        (select(Advice.id).where(Advice.assessment_id.in_(frost_rows)), "advice"),
+        (select(Advice.id).where(exists().where(Assessment.kind == FROST.key)), "advice"),
+        (union(select(Advice.id), frost_rows), "advice"),
+        (text("SELECT result FROM assessment"), "advice"),
+    ):
+        with pytest.raises(ScopeDenied):
+            owner.execute(stmt, scope="advice:read", resource=resource)
 
 
 def test_saved_assessment_evidence_cannot_be_rewritten(session):

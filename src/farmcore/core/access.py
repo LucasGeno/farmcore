@@ -40,10 +40,13 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import Select, or_, select
 from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import TextClause
+from sqlalchemy.sql.expression import Exists, TableClause
 from sqlalchemy.sql.util import find_tables
 
 from farmcore.core import ext_ids
 from farmcore.core.identity import token_hash
+from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
@@ -132,9 +135,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
     "catalog_item": _ANY,  # shared reference (a fertiliser's or a spray product's name)
-    # The assessment envelope (`core/assessments.py`). Crop protection is its only kind today;
-    # a per-kind read scope comes with the neutral core contract.
-    "assessment": frozenset({"advice:read"}),
+    # The assessment envelope (`core/assessments.py`): read by each loaded kind's own read
+    # scope (`register_assessment_kind`), which reads that kind's rows only. No kind, no reader.
+    "assessment": frozenset(),
     "clock_state": frozenset({"audit:read"}),
     "crop_season": frozenset({"fields:read"}),
     "data_grant": frozenset({"audit:read"}),
@@ -188,6 +191,30 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "weather_station": frozenset({"stations:read"}),
 }
 RESOURCE_OWNERS: dict[str, str] = dict.fromkeys(RESOURCE_SCOPES, "core")
+# Assessment kind key -> its read scope, as loaded apps declare them (`AssessmentKind.read_scope`).
+KIND_READ_SCOPES: dict[str, str] = {}
+
+
+def register_assessment_kind(key: str, read_scope: str) -> None:
+    """Let `read_scope` read the envelopes of kind `key`, and only those (registered at
+    discovery). A scope core does not know becomes known for the owner's reads only: it is never
+    in `GRANT_READ_SCOPES` or `TOKEN_SCOPES`, so no grant preset, agent token or OAuth connection
+    holds it by default. Idempotent; a kind or scope already registered differently is refused,
+    so one kind's scope never reads another kind."""
+    known = KIND_READ_SCOPES.get(key)
+    if known == read_scope:
+        return
+    if known is not None:
+        raise ValueError(f"assessment kind {key!r} is already read with {known!r}")
+    for other, scope in KIND_READ_SCOPES.items():
+        if scope == read_scope:
+            raise ValueError(f"assessment kinds {other!r} and {key!r} share {read_scope!r}")
+    KIND_READ_SCOPES[key] = read_scope
+    RESOURCE_SCOPES["assessment"] = RESOURCE_SCOPES["assessment"] | {read_scope}
+
+
+def _known(scope: str) -> bool:
+    return scope in SCOPES or scope in KIND_READ_SCOPES.values()
 
 
 def register_resource_scopes(
@@ -296,8 +323,9 @@ class ScopedRepository:
             )
         ):
             raise ScopeDenied("This resource is not available through ordinary grants.")
-        if scope not in SCOPES:
-            raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
+        if not _known(scope):
+            known = sorted(SCOPES | set(KIND_READ_SCOPES.values()))
+            raise ValueError(f"unknown scope {scope!r}; known: {known}")
         if resource is not None:
             allowed = RESOURCE_SCOPES.get(resource)
             if allowed is None:
@@ -330,7 +358,7 @@ class ScopedRepository:
         order_by: Any = None,
         limit: int | None = None,
     ) -> list[M]:
-        stmt = self._scoped(model).where(*where)
+        stmt = self._scoped(model, scope).where(*where)
         if order_by is not None:
             stmt = stmt.order_by(
                 *(order_by if isinstance(order_by, (list, tuple)) else (order_by,))
@@ -344,13 +372,15 @@ class ScopedRepository:
         pk = model.__mapper__.primary_key
         if len(pk) != 1:
             raise TypeError(f"{model.__name__} has a composite key; use list()")
-        stmt = self._scoped(model).where(pk[0] == id)
+        stmt = self._scoped(model, scope).where(pk[0] == id)
         self._authorise(scope, model.__table__.name)
         return self.session.scalar(stmt)
 
     def execute(self, stmt: Any, *, scope: str, resource: str) -> Result[Any]:
         """Run `stmt` unchanged (the caller filters it) after the scope check; logs `resource`."""
+        _refuse_text(stmt)
         self._refuse_ungated(stmt, resource)
+        self._refuse_envelope(stmt, resource)
         self._authorise(scope, resource)
         return self.session.execute(stmt)
 
@@ -358,23 +388,38 @@ class ScopedRepository:
         """`execute` without the access_log row: the scope and grant are still checked. Only for
         decorative reads of data the same viewer already reads through an audited path (the
         parcel silhouettes: the map's layer already logs the geometry read)."""
+        _refuse_text(stmt)
         self._refuse_ungated(stmt, resource)
+        self._refuse_envelope(stmt, resource)
         self.check(scope, resource)
         return self.session.execute(stmt)
 
+    @staticmethod
+    def _refuse_envelope(stmt: Any, resource: str) -> None:
+        """Assessment envelopes are read only through `list`/`get`, which keep a scope to its
+        own kind; a caller-built statement on the table, or naming it anywhere (a join, a
+        subquery, an EXISTS, a union), could not."""
+        if resource == "assessment" or "assessment" in referenced_tables(stmt):
+            raise ScopeDenied("Assessments are read through list() or get(), one kind per scope.")
+
     def _refuse_ungated(self, stmt: Any, resource: str) -> None:
         """A caller-built statement cannot be held to the licence gate: refused for grant views
-        when labelled as a weather value table or selecting FROM one (a join or a subquery
-        included; an EXISTS in its WHERE is not a FROM)."""
+        when labelled as a weather value table or naming one where it can return values (a
+        join, a scalar or WHERE subquery, a union). An EXISTS selects no value: it is how
+        `core/weather/attribution.sources` says which receipts hold data."""
         if not self.grant_view:
             return
-        froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
-        tables = {t.name for f in froms for t in find_tables(f)}
+        tables = referenced_tables(stmt, through_exists=False)
         if resource in _LICENCE_GATED or tables & _LICENCE_GATED:
             raise ScopeDenied("Weather values are shared only through the licence gate.")
 
-    def _scoped[M: Base](self, model: type[M]) -> Select[tuple[M]]:
+    def _scoped[M: Base](self, model: type[M], scope: str) -> Select[tuple[M]]:
         stmt = select(model)
+        if model is Assessment:
+            # A scope reads only the kinds that declared it (`register_assessment_kind`); the
+            # owner's `*` grant reads each kind through that kind's own scope too.
+            kinds = [key for key, read in KIND_READ_SCOPES.items() if read == scope]
+            stmt = stmt.where(Assessment.kind.in_(kinds))
         if model is Event and self.private_member:
             stmt = stmt.where(
                 or_(
@@ -425,6 +470,28 @@ class ScopedRepository:
             )
         )
         self.session.flush()
+
+
+def referenced_tables(stmt: Any, *, through_exists: bool = True) -> set[str]:
+    """Every table `stmt` names: its FROMs (a joined eager load included) and any table in its
+    columns, WHERE, subqueries or union members; inside an EXISTS only if `through_exists`."""
+    froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
+    names = {t.name for f in froms for t in find_tables(f)}
+    stack = [stmt]
+    while stack:
+        element = stack.pop()
+        if isinstance(element, TableClause):
+            names.add(element.name)
+        if isinstance(element, Exists) and not through_exists:
+            continue
+        stack.extend(element.get_children())
+    return names
+
+
+def _refuse_text(stmt: Any) -> None:
+    """A textual statement names its tables in a string no check can read: refused."""
+    if isinstance(stmt, TextClause):
+        raise ScopeDenied("Read through a SQL expression, not text, so its tables are checked.")
 
 
 def ensure_owner_grant(session: Session, farm: Farm) -> DataGrant:

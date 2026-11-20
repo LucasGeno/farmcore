@@ -85,7 +85,11 @@ class FrostHours(BaseModel):
 
 
 FROST_KIND = AssessmentKind(
-    "frost.hours", 1, f"{__name__}:FrostHours", models=(f"{__name__}:FROST",)
+    "frost.hours",
+    1,
+    f"{__name__}:FrostHours",
+    models=(f"{__name__}:FROST",),
+    read_scope="assessment:frost.hours:read",
 )
 
 
@@ -122,7 +126,11 @@ def test_a_model_missing_a_declaration_fails_with_a_clear_error(change, says):
             (
                 FROST_KIND,
                 AssessmentKind(
-                    "frost.days", 1, "pydantic:BaseModel", models=(f"{__name__}:OTHER_FROST",)
+                    "frost.days",
+                    1,
+                    "pydantic:BaseModel",
+                    models=(f"{__name__}:OTHER_FROST",),
+                    read_scope="assessment:frost.days:read",
                 ),
             ),
             "'frost.hours' is declared twice",
