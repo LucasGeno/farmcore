@@ -39,7 +39,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
 
-from farmcore.core import mcp_http, registry
+from farmcore.core import access, mcp_http, registry
 from farmcore.core.access import TokenRejected, authenticate_token, ensure_owner_grant
 from farmcore.core.identity import hash_password
 from farmcore.core.models.canonical import Farm
@@ -222,28 +222,35 @@ def _no_fetch(url: str):
 
 
 def test_the_401_and_a_request_naming_no_scope_ask_for_the_same_read_scopes(
-    oauth_settings, session_factory, session
+    oauth_settings, session_factory, session, monkeypatch
 ) -> None:
     """MCP authorization spec, scope selection: the 401 names the scopes a client should ask for
     (RFC 6750 §3 `scope`), so it asks for least privilege instead of every supported scope, and
     an authorization request naming none gets the same set. An owner must choose to let an agent
-    read stored advice or propose drafts, so neither is in it."""
+    read stored advice or propose drafts, so neither is in it. Another assessment kind's own read
+    scope is never offered to an agent at all (no widening)."""
+    monkeypatch.setattr(access, "KIND_READ_SCOPES", dict(access.KIND_READ_SCOPES))
+    monkeypatch.setattr(access, "RESOURCE_SCOPES", dict(access.RESOURCE_SCOPES))
+    access.register_assessment_kind("frost.hours", "assessment:frost.hours:read")
+    resolve = partial(clients.resolve, session, oauth_settings, _no_fetch)
     with TestClient(
         mcp_http.create_app(session_factory, oauth_settings, registry.discover())
     ) as mcp:
         unauthorized = mcp.post("/mcp", json={})
     params = {k: v for k, v in _request().items() if k != "scope"}
 
-    asked = oauth.parse_request(
-        oauth_settings, params, partial(clients.resolve, session, oauth_settings, _no_fetch)
-    )
+    asked = oauth.parse_request(oauth_settings, params, resolve)
 
     assert unauthorized.status_code == 401
     named = re.search(r'(?:^|[ ,])scope="([^"]*)"', unauthorized.headers["www-authenticate"])
     assert named is not None
     assert set(named.group(1).split()) == set(asked.scopes)
     assert "fields:read" in asked.scopes
-    assert not {"advice:read", "drafts:propose"} & set(asked.scopes)
+    assert not {"advice:read", "drafts:propose", "assessment:frost.hours:read"} & set(asked.scopes)
+    with pytest.raises(oauth.Refused, match="read or propose"):
+        oauth.parse_request(
+            oauth_settings, _request(scope="fields:read assessment:frost.hours:read"), resolve
+        )
 
 
 def test_metadata_points_a_client_at_this_server_and_this_resource_only_when_on(
