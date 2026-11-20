@@ -110,8 +110,9 @@ database, a small core and installable apps, in the style of Odoo.
 | Assistant | Web panel and Telegram: voice/text → draft spray → ✅; answers questions from read-only app tools |
 | Spanish archive (`demo_es`) | Optional: SIGPAC parcels and an InfoRiego station archive from local files; no advice |
 
-The advisor is a pure calculation over observations and logs. Every threshold lives in
-`apps/advisor/engine/config.py` with its source, or an "assumed" label shown in the UI.
+The advisor is a pure calculation over observations and logs. Every threshold is read from
+`apps/advisor/engine/config.py` with its source, or an "assumed" label shown in the UI; the
+mildew models' thresholds are declared in their ModelSpec modules (`engine/mildew/`).
 
 ## AI boundary
 
@@ -365,8 +366,10 @@ stamp to the advice row. A later, stronger spec never upgrades an older result, 
 stored before stamps reads as `unvalidated`. Every result surface shows the level: a badge
 (`core/_validation.html`) linking to "About this model" (`GET /models/{key}`,
 `GET /models?kind=`, open to any signed-in principal), `model_validation` in each JSON, and a
-"Trust:" line in assistant text. Crop protection's specs are in `apps/advisor/specs.py`; their
-parameters are the engine rules' own `THRESHOLDS`.
+"Trust:" line in assistant text. Crop protection's specs are listed in `apps/advisor/specs.py`. The
+mildew models (3-10, Goidanich, Gubler–Thomas) are ModelSpec modules in
+`apps/advisor/engine/mildew/` that own their parameters, and the engine config reads its defaults
+from them; the spray decision's parameters are the engine rules' own `THRESHOLDS`.
 
 ### Module lifecycle
 

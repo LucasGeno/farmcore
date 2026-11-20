@@ -1,10 +1,14 @@
 """Every agronomic threshold of the Spray Advisor, with its value, source and `assumed` flag.
 
-No other engine module holds a threshold literal: rules read `config.<name>.value` and echo it
-in `RuleResult.threshold`. "assumed" marks defaults that still await agronomist review.
+No rule module holds a threshold literal: rules read `config.<name>.value` and echo it in
+`RuleResult.threshold`. "assumed" marks defaults that still await agronomist review. The mildew
+models' parameters (3-10, Goidanich, Gubler–Thomas, with their sources) are declared in their
+ModelSpec modules (`engine/mildew/`); the defaults here are read from those parameters (`_p`), so
+a rule and its spec cannot disagree.
 
 Upgrade path: the Orlandini continuous incubation form would add its parameters next to
-`incub_table` (the Goidanich table, data rather than a `Threshold`). The incubation
+`incub_table` (the Goidanich table, data rather than a `Threshold`, in
+`mildew/downy_incubation.py`). The incubation
 (`incub_*`), Gubler–Thomas (`gt_*`, `powdery_start/end` per year) and tank-mix keys are
 top-level thresholds.
 
@@ -29,17 +33,20 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from farmcore.apps.advisor.engine.mildew import PENDING as _PENDING
+from farmcore.apps.advisor.engine.mildew import downy_3_10, downy_incubation, powdery_gubler_thomas
+from farmcore.apps.advisor.engine.mildew.downy_3_10 import GATE_SOURCE as _SRC_GATE
+from farmcore.apps.advisor.engine.mildew.downy_3_10 import SOURCE as _SRC_3_10
+from farmcore.apps.advisor.engine.mildew.downy_incubation import GOIDANICH_TABLE, GoidanichTable
+from farmcore.apps.advisor.engine.mildew.downy_incubation import SOURCE as _SRC_GOIDANICH
+from farmcore.apps.advisor.engine.mildew.powdery_gubler_thomas import BLOOM_SOURCE as _SRC_BLOOM
+from farmcore.apps.advisor.engine.mildew.powdery_gubler_thomas import END_SOURCE as _SRC_POWDERY_END
+from farmcore.apps.advisor.engine.mildew.powdery_gubler_thomas import POWDERY_RESISTANCE_DAYS
 from farmcore.apps.advisor.engine.types import ProductRef, RuleResult
+from farmcore.core.model_spec import Parameter
 
 DEFAULT_REGION = "FRI12"  # NUTS-3 Gironde (St-Émilion station 33394002)
 
-_PENDING = "assumed: awaiting agronomist"
-
-_SRC_GATE = (
-    "assumption: shoots ≥ 10 cm (BBCH 13–15) dated per region and year; Bordeaux usually "
-    "mid–late April (BSV Sud Aquitaine); default, " + _PENDING
-)
-_SRC_3_10 = "3-10 rule (Baldacci 1947) via Velasquez-Camacho et al. 2023, Microorganisms 11(1):73"
 _SRC_PROTECTION = (
     "République et canton de Genève, annexe 22 (ge.ch/document/2937/annexe/22; that address "
     "now serves another document, a dated copy is still to be pinned): "
@@ -55,26 +62,9 @@ _SRC_RAINFAST = (
 )
 
 
-_SRC_GOIDANICH = (
-    "Goidanich et al. 1957 table via VineSens (Pérez-Expósito et al. 2017, Sensors 17:465, "
-    "Table 1, daily rates; FarmCore accumulates them hourly)"
-)
-_SRC_GT = (
-    "UC Davis powdery mildew risk index (Gubler–Thomas), UC IPM "
-    "ipm.ucanr.edu/agriculture/grape/powdery-mildew/; Thomas, Gubler & Leavitt 1994, "
-    "Phytopathology 84:1070, abstract"
-)
-_SRC_BLOOM = "assumption: bloom (BBCH 61) dated per region and year; " + _PENDING
 _SRC_BUNCH_CLOSURE = (
     "assumption: bunch closure (BBCH 77) dated per region and year, the calendar programme's "
     "end; " + _PENDING
-)
-# Berries resist powdery mildew ~3–4 weeks after bloom, so the Gubler–Thomas period (and the
-# sulphur passes it drives) ends at bloom + 28 d, not at bunch closure.
-POWDERY_RESISTANCE_DAYS = 28
-_SRC_POWDERY_END = (
-    f"bloom + {POWDERY_RESISTANCE_DAYS} d (powdery_resistance_days): berries resistant to "
-    "powdery mildew 3–4 weeks after bloom (Gadoury 2003); bloom date " + _PENDING
 )
 _SRC_TANKMIX = (
     "assumption: tank-mix when the powdery cover ends within 2 days of a due downy pass "
@@ -122,58 +112,11 @@ def _t(value: Any, source: str, unit: str = "", *, assumed: bool = False) -> Any
     return Threshold(value=value, source=source, unit=unit, assumed=assumed)
 
 
-class GoidanichTable(BaseModel):
-    """Daily incubation development (%/day) by temperature: rows of (T °C, dry, humid).
-
-    Dry = RH < 75 % daily mean, humid = RH ≥ 75 % (the table's own split; the hourly engine picks
-    the column with `incub_humid_rh_hourly`). Rows are ascending; T above the last row reads the
-    last row. Data, not a `Threshold`: rules echo the cells they used in `inputs`.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    rows: tuple[tuple[float, float, float], ...]
-    source: str
-    note: str = ""
-
-
-GOIDANICH_TABLE = GoidanichTable(
-    rows=(
-        (12.0, 0.0, 5.25),
-        (12.5, 4.7, 6.2),
-        (13.0, 5.3, 7.1),
-        (13.5, 6.0, 8.0),
-        (14.0, 6.6, 9.0),
-        (14.5, 7.1, 9.7),
-        (15.0, 7.6, 10.6),
-        (15.5, 8.1, 11.1),
-        (16.0, 8.5, 11.7),
-        (16.5, 9.3, 12.5),
-        (17.0, 10.0, 13.25),
-        (17.5, 10.5, 14.3),
-        (18.0, 11.1, 15.3),
-        (18.5, 11.7, 16.0),
-        (19.0, 12.5, 16.6),
-        (19.5, 13.4, 18.3),
-        (20.0, 14.2, 20.0),
-        (20.5, 14.8, 21.0),
-        (21.0, 15.3, 22.2),
-        (21.5, 16.0, 22.2),
-        (22.0, 16.6, 22.2),
-        (22.5, 17.3, 23.5),
-        (23.0, 18.1, 25.0),
-        (23.5, 18.1, 25.0),
-        (24.0, 18.1, 25.0),
-        (24.5, 17.3, 23.5),
-        (25.0, 16.6, 22.2),
-    ),
-    source=_SRC_GOIDANICH,
-    note=(
-        "assumed: dry 12.0 °C cell set to 0 (source cell ambiguous); dry 16.5 °C = 9.3 (source "
-        "prints 6.3, a typo given its neighbours); 25 °C and above constant. Table form, not the "
-        "Orlandini continuous equation (upgrade path: add its parameters here)"
-    ),
-)
+def _p(parameter: Parameter) -> Any:
+    """The threshold a mildew ModelSpec parameter sets (`engine/mildew/`)."""
+    return _t(
+        parameter.value, parameter.source, parameter.unit, assumed=parameter.status == "assumed"
+    )
 
 
 class SeasonDates(BaseModel):
@@ -389,87 +332,41 @@ class AdvisorConfig(BaseModel):
     powdery_start: Threshold[date]  # bloom (BBCH 61)
     powdery_end: Threshold[date]  # bloom + POWDERY_RESISTANCE_DAYS (berry resistance)
 
-    # Downy primary infection, 3-10 rule on rolling hourly windows.
-    downy_window_h: Threshold[int] = _t(48, _SRC_3_10 + " (≥ 10 mm in 24–48 h)", "h")
-    downy_rain_min_mm: Threshold[float] = _t(10.0, _SRC_3_10, "mm")
-    downy_temp_min_c: Threshold[float] = _t(10.0, _SRC_3_10 + " (mean T ≥ 10 °C)", "°C")
-    downy_event_max_days: Threshold[float] = _t(
-        3.0,
-        "assumption: an uncovered event stays active risk 3 days; " + _PENDING,
-        "d",
-        assumed=True,
-    )
+    # Downy primary infection, 3-10 rule on rolling hourly windows (`mildew/downy_3_10.py`).
+    downy_window_h: Threshold[int] = _p(downy_3_10.P["downy_window_h"])
+    downy_rain_min_mm: Threshold[float] = _p(downy_3_10.P["downy_rain_min_mm"])
+    downy_temp_min_c: Threshold[float] = _p(downy_3_10.P["downy_temp_min_c"])
+    downy_event_max_days: Threshold[float] = _p(downy_3_10.P["downy_event_max_days"])
 
-    # Downy incubation after each 3-10 event: Goidanich table, accumulated hourly.
+    # Downy incubation after each 3-10 event: Goidanich table, accumulated hourly
+    # (`mildew/downy_incubation.py`).
     incub_table: GoidanichTable = GOIDANICH_TABLE
-    incub_tmin: Threshold[float] = _t(
-        11.0,
-        "assumption: no incubation progress at or below 11 °C, linear ramp to the 12.0 °C row "
-        "(Charentes table starts at 12 °C; nothing below ~10–11 °C); " + _PENDING,
-        "°C",
-        assumed=True,
-    )
-    incub_humid_rh_hourly: Threshold[float] = _t(
-        90.0,
-        "assumption: hourly RH ≥ 90 % as a leaf-wetness proxy selects the humid column; "
-        + _PENDING,
-        "%",
-        assumed=True,
-    )
-    incub_alert_pct: Threshold[float] = _t(
-        50.0,
-        "Montenegro DSS alert at GI ≥ 50 % (Racković et al. 2026, Sensors 26:2843, PMC13165835)",
-        "%",
-    )
-    incub_symptoms_pct: Threshold[float] = _t(
-        100.0, _SRC_GOIDANICH + "; GI ≥ 100 % = incubation complete, symptoms expected", "%"
-    )
+    incub_tmin: Threshold[float] = _p(downy_incubation.P["incub_tmin"])
+    incub_humid_rh_hourly: Threshold[float] = _p(downy_incubation.P["incub_humid_rh_hourly"])
+    incub_alert_pct: Threshold[float] = _p(downy_incubation.P["incub_alert_pct"])
+    incub_symptoms_pct: Threshold[float] = _p(downy_incubation.P["incub_symptoms_pct"])
 
-    # Powdery: Gubler–Thomas index on local days from bloom to `powdery_end` (bloom + 28 d).
-    gt_band_min_c: Threshold[float] = _t(21.0, _SRC_GT + " (70 °F)", "°C")
-    gt_band_max_c: Threshold[float] = _t(29.5, _SRC_GT + " (85 °F)", "°C")
-    gt_min_hours: Threshold[int] = _t(6, _SRC_GT + "; ≥ 6 continuous hours in the band", "h")
-    gt_hot_c: Threshold[float] = _t(
-        35.0,
-        _SRC_GT + "; ≥ 35 °C (95 °F) for > 15 min; hourly proxy: any hour ≥ 35 °C",
-        "°C",
+    # Powdery: Gubler–Thomas index on local days from bloom to `powdery_end` (bloom + 28 d)
+    # (`mildew/powdery_gubler_thomas.py`).
+    gt_band_min_c: Threshold[float] = _p(powdery_gubler_thomas.P["gt_band_min_c"])
+    gt_band_max_c: Threshold[float] = _p(powdery_gubler_thomas.P["gt_band_max_c"])
+    gt_min_hours: Threshold[int] = _p(powdery_gubler_thomas.P["gt_min_hours"])
+    gt_hot_c: Threshold[float] = _p(powdery_gubler_thomas.P["gt_hot_c"])
+    gt_onset: Threshold[int] = _p(powdery_gubler_thomas.P["gt_onset"])
+    gt_step_pre_onset: Threshold[int] = _p(powdery_gubler_thomas.P["gt_step_pre_onset"])
+    gt_delta_qualify: Threshold[int] = _p(powdery_gubler_thomas.P["gt_delta_qualify"])
+    gt_delta_qualify_hot: Threshold[int] = _p(powdery_gubler_thomas.P["gt_delta_qualify_hot"])
+    gt_delta_fail: Threshold[int] = _p(powdery_gubler_thomas.P["gt_delta_fail"])
+    gt_delta_fail_hot: Threshold[int] = _p(powdery_gubler_thomas.P["gt_delta_fail_hot"])
+    gt_index_min: Threshold[int] = _p(powdery_gubler_thomas.P["gt_index_min"])
+    gt_index_max: Threshold[int] = _p(powdery_gubler_thomas.P["gt_index_max"])
+    gt_low_max: Threshold[int] = _p(powdery_gubler_thomas.P["gt_low_max"])
+    gt_moderate_max: Threshold[int] = _p(powdery_gubler_thomas.P["gt_moderate_max"])
+    gt_interval_low_days: Threshold[float] = _p(powdery_gubler_thomas.P["gt_interval_low_days"])
+    gt_interval_moderate_days: Threshold[float] = _p(
+        powdery_gubler_thomas.P["gt_interval_moderate_days"]
     )
-    gt_onset: Threshold[int] = _t(60, _SRC_GT + "; epidemic onset at 60; before it, resets")
-    gt_step_pre_onset: Threshold[int] = _t(20, _SRC_GT + "; +20 per qualifying day")
-    gt_delta_qualify: Threshold[int] = _t(20, _SRC_GT + "; after onset, ≥ 6 h in band → +20")
-    gt_delta_qualify_hot: Threshold[int] = _t(
-        10, _SRC_GT + "; after onset, both conditions the same day → +10"
-    )
-    gt_delta_fail: Threshold[int] = _t(-10, _SRC_GT + "; after onset, < 6 h in band → −10")
-    gt_delta_fail_hot: Threshold[int] = _t(
-        -20,
-        "assumption: after onset, < 6 h in band and a ≥ 35 °C hour → −20 (UC IPM reading, "
-        "both penalties); " + _PENDING,
-        assumed=True,
-    )
-    gt_index_min: Threshold[int] = _t(0, _SRC_GT + "; index bounded 0–100")
-    gt_index_max: Threshold[int] = _t(100, _SRC_GT + "; index bounded 0–100")
-    gt_low_max: Threshold[int] = _t(
-        30, _SRC_GT + "; 0–30 low; values above (e.g. 35) map up to moderate"
-    )
-    gt_moderate_max: Threshold[int] = _t(
-        50, _SRC_GT + "; 40–50 moderate; values above (e.g. 55) map up to high"
-    )
-    gt_interval_low_days: Threshold[float] = _t(
-        18.0,
-        "assumption: midpoint of UC IPM sulphur interval 14–21 d at low risk; " + _PENDING,
-        "d",
-        assumed=True,
-    )
-    gt_interval_moderate_days: Threshold[float] = _t(
-        14.0,
-        "assumption: within UC IPM sulphur interval 10–17 d at moderate risk ; " + _PENDING,
-        "d",
-        assumed=True,
-    )
-    gt_interval_high_days: Threshold[float] = _t(
-        7.0, _SRC_GT + "; sulphur interval 7 d at high risk (≥ 60)", "d"
-    )
+    gt_interval_high_days: Threshold[float] = _p(powdery_gubler_thomas.P["gt_interval_high_days"])
 
     # Tank-mix: sulphur rides a due downy pass when the powdery cover is about to end.
     tankmix_cover_ending_days: Threshold[float] = _t(2.0, _SRC_TANKMIX, "d", assumed=True)
