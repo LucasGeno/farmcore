@@ -1,6 +1,7 @@
 # Self-hosting
 
-`docker-compose.yml` is one installation: six services, one image, one Compose project.
+`docker-compose.yml` is one installation: six services (seven with the optional Open-Meteo
+server), one FarmCore image, one Compose project.
 
 | Service | What |
 |---|---|
@@ -10,6 +11,11 @@
 | `worker` | All live background work (forecast fetch, station ingest, advice, push, draft expiry); also waits for `migrate`; idle in replay |
 | `bot` | Telegram long-polling bot; only with `--profile telegram`; also waits for `migrate` |
 | `backup` | Daily `farmcore backup`: one encrypted bundle into the `backups` volume, kept 7 days |
+| `openmeteo` | Upstream Open-Meteo server (its own image); only with `--profile openmeteo`; see section 6 |
+
+The FarmCore image is built from `src` and the open demo data in `sample-data` only.
+`tools/oracles/` (copyleft reference implementations that contributors run out of process to
+generate test fixtures) is never packaged into the image or run by an installation.
 
 Each installation runs its own PostgreSQL server, and FarmCore expects that: servers shared
 with other software or other installations are not supported for now. The server has two
@@ -199,9 +205,49 @@ farm.example.org {
 }
 ```
 
-To let a farmer's own agent connect (Sharing, "Connect your agent"), route `/mcp` to the MCP
-process (`farmcore mcp --http`, `MCP_HTTP_ENABLED=true`, port 8001) before the catch-all, and
-list the public host name in `MCP_HTTP_ALLOWED_HOSTS`:
+To let a farmer's own agent connect (Sharing, "Connect your agent"), run the MCP process
+(`farmcore mcp --http`) and route `/mcp` to it. The stock `docker-compose.yml` does not run it
+and passes the web app only `MCP_HTTP_ENABLED`, `MCP_HTTP_HOST` and `MCP_HTTP_PORT`, so add a
+service in an override next to it (one `docker-compose.override.yml`, shared with the
+weather credentials below if you use them):
+
+```yaml
+# docker-compose.override.yml
+services:
+  app:
+    environment: &mcp-settings
+      MCP_HTTP_ENABLED: "true"
+      MCP_HTTP_ALLOWED_HOSTS: '["farm.example.org"]'
+      MCP_HTTP_PUBLIC_URL: https://farm.example.org/mcp
+      MCP_HTTP_FORWARDED_ALLOW_IPS: ${MCP_HTTP_FORWARDED_ALLOW_IPS:-}
+  mcp:
+    extends:                     # same image, runtime-role DATABASE_URL and settings
+      file: docker-compose.yml
+      service: worker
+    command: ["farmcore", "mcp", "--http"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *mcp-settings
+      MCP_HTTP_HOST: 0.0.0.0       # inside the container; published on loopback only
+      MCP_HTTP_PORT: "8001"        # matches the container port below
+    ports:
+      - "127.0.0.1:${MCP_PUBLISH_PORT:-8001}:8001"
+```
+
+Then `docker compose up -d`. `farmcore mcp --http` refuses to start unless `MCP_HTTP_ENABLED`
+is true, and listens on loopback unless `MCP_HTTP_HOST` says otherwise; on `0.0.0.0` it logs a
+warning, since it must sit behind the TLS proxy. `MCP_HTTP_ALLOWED_HOSTS` is the public host
+name agents use (empty: loopback names only), and `MCP_HTTP_PUBLIC_URL` the public `/mcp` URL.
+With several installations on one host, give each its own `MCP_PUBLISH_PORT`, not one another
+installation's `FARMCORE_PORT`, and point that installation's `/mcp` proxy upstream at the same
+port (the Caddy example below assumes the default 8001). The per-address limit counts by the connection's address unless
+`MCP_HTTP_FORWARDED_ALLOW_IPS` names the proxy's address as the container sees it (another
+container's, or the Docker network gateway for a proxy on the host). Route `/mcp` before the
+catch-all:
 
 ```caddyfile
 farm.example.org {
@@ -259,16 +305,26 @@ Commercial use, or more calls, needs one of two lawful routes:
    hostname for `OPEN_METEO_SINGLE_RUNS_BASE_URL` from your Open-Meteo customer dashboard. The
    key is sent as the `apikey` query parameter only to a `customer-` host and is never logged,
    stored in a receipt or shown in the UI. A key requires `https` base URLs; startup refuses a
-   key combined with `http`. Rotate it in `.env` and restart; no FarmCore data changes.
+   key combined with `http`. Set the key and both URLs in `.env` together, then run
+`docker compose up -d` so Compose recreates `app` and `worker` with them (`restart` keeps the
+old environment, and so the old endpoint). Rotate the key the same way; no FarmCore data
+changes.
 2. **Self-hosted server.** The optional compose profile runs the upstream Open-Meteo image as a
-   separate container, with a data volume:
+   separate container, with a data volume. Set both URLs in `.env` first, then start the
+   profile; the same `up -d` recreates `app` and `worker` with the new URLs (until then they
+   still call the public API):
 
    ```sh
-   docker compose --profile openmeteo up -d
    # .env
    OPEN_METEO_BASE_URL=http://openmeteo:8080
    OPEN_METEO_SINGLE_RUNS_BASE_URL=http://openmeteo:8080
    ```
+
+   ```sh
+   docker compose --profile openmeteo up -d
+   ```
+
+   Pass `--profile openmeteo` on every later `up` too, or the `openmeteo` service is left out.
 
    The upstream server is licensed **AGPL-3.0**. FarmCore only names its published container
    image (pinned default `ghcr.io/open-meteo/open-meteo:1.8.0`, override with
@@ -369,6 +425,35 @@ in live clock mode only. It avoids Open-Meteo's non-commercial historical API.
   Service (2025): ERA5 hourly time-series data on single levels from 1940 to present. Copernicus
   Climate Change Service (C3S) Climate Data Store (CDS). DOI: 10.24381/1cf1ad76 (Accessed on
   <date>)".
+
+### Passing the Météo-France and ERA5 credentials to Compose
+
+The stock `docker-compose.yml` passes only the variables it names to its containers, and it
+does not name `METEOFRANCE_*` or `CDSAPI_*` yet: set in `.env` alone, they never reach the
+app or the worker, and both jobs do nothing. Until the compose file names them, add an override
+next to it (it holds no secret values, only references to the env file). If you also run the
+MCP service (section 3), it is one file: add the three lines to the existing `app`
+`environment` (below the MCP settings) and add the `worker` entry, rather than repeating `app:`.
+
+```yaml
+# docker-compose.override.yml
+services:
+  app:
+    environment:
+      METEOFRANCE_CLIENT_ID: ${METEOFRANCE_CLIENT_ID:-}
+      METEOFRANCE_CLIENT_SECRET: ${METEOFRANCE_CLIENT_SECRET:-}
+      CDSAPI_KEY: ${CDSAPI_KEY:-}
+  worker:
+    environment:
+      METEOFRANCE_CLIENT_ID: ${METEOFRANCE_CLIENT_ID:-}
+      METEOFRANCE_CLIENT_SECRET: ${METEOFRANCE_CLIENT_SECRET:-}
+      CDSAPI_KEY: ${CDSAPI_KEY:-}
+```
+
+Compose reads `docker-compose.override.yml` by itself only when no `-f` is given; with the
+Vertex file, list it too (`-f docker-compose.yml -f docker-compose.vertex.yml -f
+docker-compose.override.yml`). Add `METEOFRANCE_API_BASE_URL`, `METEOFRANCE_TOKEN_URL` or
+`CDSAPI_URL` the same way only if you change them from their defaults.
 
 ## Backups and restore
 
@@ -626,6 +711,20 @@ this release. A failed migration (or one stopped with `SIGTERM`, `SIGHUP` or Ctr
 cancelled on the server and rolled back as a whole; the installation stays `failed` until a
 migrate or upgrade succeeds. A stopped `migrate` or `upgrade` says what the stop left before
 it exits; a second stop signal does not cut it short.
+
+**Data-changing migrations.** Some revisions move rows, not only the schema. `core_0018`
+moves spray products and doses onto the catalog tables (`catalog_item` with its
+crop-protection extensions, `typed_quantity`) and freezes the legacy `product` and
+`quantity` tables; `core_0019` then drops those two tables and keeps the id maps that
+published ids are read through ([API compatibility](api-compatibility.md)). Before it writes
+anything, `core_0018` checks every legacy row it would move. If any would not pass the new
+checks (among them a blank or over-long product name, an unknown product type, target or measure, a NaN or
+infinite dose, a blank unit, a malformed farm product shortlist, a record other than a spray
+holding more than one amount), it refuses with all of them at once, by id and count, never a
+row value: `core_0018 refused, nothing was changed: …`. `farmcore upgrade` and
+`farmcore migrate` print that message in full; the schema stays where it was, so this is the
+"nothing was applied" case below. Fix the named rows, back up, and run the upgrade again.
+`upgrade --check` compares schema revisions only; it does not run this check.
 
 Without `farmcore upgrade` (say, a scripted deploy), take a bundle first
 (`docker compose -p farm-a --env-file farm-a.env run --rm --no-deps -e BACKUP_ONCE=1 backup`)
