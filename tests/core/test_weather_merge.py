@@ -6,9 +6,15 @@ Failure model (one test each):
 - Invented hours: an hour or a value appears that no source holds (interpolated, zero-filled).
 - Determinism: the merged series depends on the order sources arrive in.
 - Ranking input: the tier is read from a receipt's `endpoint_kind` instead of the provider's
-  declaration, two providers serving one station count as two sources, or the farm's stored
-  automatic pick (`props["weather_sources"]`) decides instead of a recomputed ranking.
-- Consumer: the advisor reads a gap-filled hour without flagging it in its inputs and card.
+  declaration (or, before providers declared one, the provider name), two providers serving one
+  WIGOS station count as two sources or fail to store, a value is labelled with another tier
+  the station also served, or the farm's stored automatic pick (`props["weather_sources"]`)
+  decides instead of a recomputed ranking.
+- Flag ranges: two filled hours around a missing one are reported as one range.
+- As of: a replay of an earlier time reads a value whose receipt came later.
+- Consumer: the advisor reads a gap-filled or forecast hour without its source per hour and
+  variable in its inputs, card and JSON; reads the latest forecast fetched after now; ranks
+  every parcel from one farm point; or skips a farm whose weather has no station asset.
 """
 
 from __future__ import annotations
@@ -28,6 +34,7 @@ from farmcore.core.weather.contract import (
     BBox,
     Capabilities,
     Fetched,
+    ForecastValue,
     Licence,
     ObservationValue,
     Point,
@@ -36,7 +43,7 @@ from farmcore.core.weather.contract import (
     Tier,
     TimeRange,
 )
-from farmcore.core.weather.store import receive, record_receipt, store_observations, upsert_station
+from farmcore.core.weather.store import receive
 from farmcore.core.weather.variables import BY_LEGACY
 
 T0 = datetime(2026, 6, 1, tzinfo=UTC)
@@ -142,7 +149,9 @@ class Fake:
         return ()
 
 
-def _fetched(rain: dict[int, str], endpoint_kind: str, payload: bytes) -> Fetched:
+def _fetched(
+    rain: dict[int, str], endpoint_kind: str, payload: bytes, fetched_at: datetime = T0
+) -> Fetched:
     variable = BY_LEGACY["rr1_mm"]
     values = [
         ObservationValue(
@@ -154,77 +163,106 @@ def _fetched(rain: dict[int, str], endpoint_kind: str, payload: bytes) -> Fetche
         )
         for h, v in rain.items()
     ]
-    return Fetched(Request("hourly", None, {}, endpoint_kind), T0, payload, values)
+    return Fetched(Request("hourly", None, {}, endpoint_kind), fetched_at, payload, values)
 
 
-def test_tier_comes_from_the_provider_and_one_station_is_one_source(session, settings):
+WIGOS = "0-20000-0-07510"
+
+
+def test_tier_comes_with_each_value_and_one_wigos_station_is_one_source(session, settings):
     farm = ensure_default_farm(session, settings)
-    national = Fake("national-service", Tier.NATIONAL)
-    model = Fake("some-model", Tier.MODEL)
-    far = Station("NAT1", "National station 30 km away", 45.17, -0.2)
-    near = Station("GRID1", "Model grid point next to the pin", 44.9, -0.2)
-    # The national station misses hour 2 and calls its endpoint "model-reanalysis";
+    nat = Station("NAT1", "National station 30 km away", 45.17, -0.2, wigos_id=WIGOS)
+    # The national station misses hours 2, 5 to 8 and calls its endpoint "model-reanalysis";
     receive(
         session,
-        national,
+        Fake("national-service", Tier.NATIONAL),
         _fetched({1: "1.0", 3: "3.0"}, "model-reanalysis", b"n"),
-        station=far,
+        station=nat,
         farm_id=farm.id,
     )
-    # a second provider serving the same station (live beside replay) writes that station's
-    # row with hour 4, declaring no tier: still one source, at the best tier either declared;
-    second = Fake("national-service-live", None)
-    live = _fetched({4: "4.0"}, "public", b"live")
-    receipt = record_receipt(
-        session,
-        provider=second.name,
-        licence=OPEN,
-        fetched=live,
-        farm_id=farm.id,
-        tier=second.capabilities().tier,
-    )
-    store_observations(session, receipt, upsert_station(session, national.name, far), live.values)
-    # the model is nearer, calls itself "public", and the stored automatic pick names it.
+    # the live portal serves the same WIGOS station under its own ID (hour 4), declaring no
+    # tier: its provider name reads national, so it is the same source;
+    portal = Station("PORTAL-7510", "Same station, live", 45.17, -0.2, wigos_id=WIGOS)
     receive(
         session,
-        model,
-        _fetched({1: "9.0", 2: "2.0", 3: "9.0", 4: "9.0"}, "public", b"m"),
-        station=near,
+        Fake("meteofrance-portal", None),
+        _fetched({4: "4.0"}, "public", b"p"),
+        station=portal,
+        farm_id=farm.id,
+    )
+    # a model served at that station's WIGOS (hour 5) stays model tier;
+    receive(
+        session,
+        Fake("station-model", Tier.MODEL),
+        _fetched({5: "5.0"}, "public", b"sm"),
+        station=Station("SM-7510", "Model at the station", 45.17, -0.2, wigos_id=WIGOS),
+        farm_id=farm.id,
+    )
+    # the nearer model grid point lacks hours 5 and 7, calls itself "public", and the stored
+    # automatic pick names it;
+    receive(
+        session,
+        Fake("some-model", Tier.MODEL),
+        _fetched({1: "9.0", 2: "2.0", 3: "9.0", 4: "9.0", 6: "6.0", 8: "8.0"}, "public", b"m"),
+        station=Station("GRID1", "Model grid point next to the pin", 44.9, -0.2),
+        farm_id=farm.id,
+    )
+    # the national station's hour 2 arrives late (a backfill fetched at hour 12).
+    receive(
+        session,
+        Fake("national-service", Tier.NATIONAL),
+        _fetched({2: "2.5"}, "public", b"late", fetched_at=T0 + timedelta(hours=12)),
+        station=nat,
         farm_id=farm.id,
     )
     farm.props = {
         **(farm.props or {}),
-        "weather_sources": {"stations": [{"provider": model.name, "id": "GRID1"}]},
+        "weather_sources": {"stations": [{"provider": "some-model", "id": "GRID1"}]},
     }
     session.flush()
     repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "test", "merge")
+    end = T0 + timedelta(hours=8)
 
-    merged = merge.farm_hourly(repo, T0, T0 + timedelta(hours=4), PIN)
+    merged = merge.farm_hourly(repo, T0, end, PIN, as_of=end)
 
-    assert [(h.ts.hour, h.values["rr1_mm"], h.filled_by["rr1_mm"]) for h in merged.hours] == [
-        (1, 1.0, "national-service:NAT1"),
-        (2, 2.0, "some-model:GRID1"),
-        (3, 3.0, "national-service:NAT1"),
-        (4, 4.0, "national-service:NAT1"),
+    assert [
+        (h.ts.hour, h.values["rr1_mm"], h.filled_by["rr1_mm"], h.tiers["rr1_mm"])
+        for h in merged.hours
+    ] == [
+        (1, 1.0, WIGOS, Tier.NATIONAL),
+        (2, 2.0, "some-model:GRID1", Tier.MODEL),
+        (3, 3.0, WIGOS, Tier.NATIONAL),
+        (4, 4.0, WIGOS, Tier.NATIONAL),
+        (5, 5.0, WIGOS, Tier.MODEL),
+        (6, 6.0, "some-model:GRID1", Tier.MODEL),
+        (8, 8.0, "some-model:GRID1", Tier.MODEL),
     ]
     assert merge.sources_of(merged) == [
-        {"source": "national-service:NAT1", "tier": "national"},
+        {"source": WIGOS, "tier": "national"},
         {"source": "some-model:GRID1", "tier": "model"},
+        {"source": WIGOS, "tier": "model"},
     ]
+    at = [(T0 + timedelta(hours=h)).isoformat() for h in range(9)]
     assert merged.gap_filled() == [
         {
             "source": "some-model:GRID1",
             "tier": "model",
             "variable": "rr1_mm",
-            "hours": [[(T0 + timedelta(hours=2)).isoformat()] * 2],
-        }
+            "hours": [[at[2], at[2]], [at[6], at[6]], [at[8], at[8]]],
+        },
+        {"source": WIGOS, "tier": "model", "variable": "rr1_mm", "hours": [[at[5], at[5]]]},
     ]
+    # Read after the late receipt, hour 2 is the national station's.
+    later = merge.farm_hourly(repo, T0, end, PIN, as_of=T0 + timedelta(hours=12))
+    assert (later.hours[1].values["rr1_mm"], later.hours[1].filled_by["rr1_mm"]) == (2.5, WIGOS)
 
 
 # --- consumer: the advisor -------------------------------------------------------------------
 
 
-def test_the_advisor_flags_a_gap_filled_hour_in_its_inputs_and_card(client, session, settings):
+def test_the_advisor_reads_and_flags_gap_filled_and_forecast_hours_per_hour(
+    client, session, settings
+):
     from farmcore.apps.advisor.advice import Advice
     from farmcore.apps.advisor.job import evaluate
     from farmcore.core.manifest import JobContext
@@ -233,7 +271,7 @@ def test_the_advisor_flags_a_gap_filled_hour_in_its_inputs_and_card(client, sess
     from tests.apps.chat.test_handlers import seed_farm
 
     now = datetime(2024, 4, 10, 4, tzinfo=UTC)
-    gap = now - timedelta(hours=5)
+    gap, later = now - timedelta(hours=5), now + timedelta(hours=2)
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
     complete_station(session, parcel.farm_id, now)
@@ -253,12 +291,38 @@ def test_the_advisor_flags_a_gap_filled_hour_in_its_inputs_and_card(client, sess
             [
                 ObservationValue(
                     BY_LEGACY["rr1_mm"].name, "mm", Decimal("0.4"), gap - timedelta(hours=1), gap
-                )
+                ),
+                # an observed future hour (replay surrogate): the forecast never replaces it
+                ObservationValue(
+                    BY_LEGACY["rr1_mm"].name,
+                    "mm",
+                    Decimal("0.1"),
+                    later - timedelta(hours=1),
+                    later,
+                ),
             ],
         ),
         station=Station("CELL", "Grid cell", 44.9, -0.2),
         farm_id=parcel.farm_id,
     )
+    rain = BY_LEGACY["rr1_mm"].name
+    ahead = now + timedelta(hours=1)  # no observation: the forecast fills it
+
+    def forecast(fetched_at, payload, values):
+        receive(
+            session,
+            Fake("forecaster", Tier.MODEL),
+            Fetched(
+                Request("forecast"),
+                fetched_at,
+                payload,
+                [ForecastValue("m", None, ts, rain, "mm", Decimal(v)) for ts, v in values],
+            ),
+            farm_id=parcel.farm_id,
+        )
+
+    forecast(now - timedelta(hours=1), b"f", [(gap, "9.9"), (ahead, "0.6"), (later, "7.0")])
+    forecast(now + timedelta(hours=1), b"later", [(ahead, "5.0")])  # not out yet at now
 
     evaluate(JobContext(session, now, settings, (parcel.farm_id,)))
 
@@ -268,15 +332,97 @@ def test_the_advisor_flags_a_gap_filled_hour_in_its_inputs_and_card(client, sess
     assert "weather_gap_filled" in row.props["flags"]
     saved = client.get(f"/advisor/parcels/{parcel.id}/assessments/{row.id}.json").json()
     snapshot = saved["input_snapshot"]
-    assert snapshot["weather_gap_filled"] == [
+    filled = [
         {
             "source": "reanalysis:CELL",
             "tier": "model",
             "variable": "rr1_mm",
-            "hours": [[gap.isoformat(), gap.isoformat()]],
-        }
+            "hours": [[gap.isoformat(), gap.isoformat()], [later.isoformat(), later.isoformat()]],
+        },
+        {
+            "source": "forecaster:forecast",
+            "tier": "model",
+            "variable": "rr1_mm",
+            "hours": [[ahead.isoformat(), ahead.isoformat()]],
+        },
     ]
-    assert [s["tier"] for s in snapshot["weather_sources"]] == ["on-farm", "model"]
+    assert snapshot["weather_gap_filled"] == filled
+    assert [(s["source"], s["tier"]) for s in snapshot["weather_sources"][1:]] == [
+        ("reanalysis:CELL", "model"),
+        ("forecaster:forecast", "model"),
+    ]
+    assert snapshot["weather_sources"][0]["tier"] == "on-farm"
+    # Every hour names its source per variable (an index into weather_sources).
+    own = {"rr1_mm": 0, "t_c": 0, "rh_pct": 0, "ff_kmh": 0}
+    rows = snapshot["hourly_inputs"]
+    assert rows[0]["filled_by"] == own
+    assert [(r["ts"], r["rr1_mm"], r["filled_by"]) for r in rows if r["filled_by"] != own] == [
+        (gap.isoformat(), 0.4, {**own, "rr1_mm": 1}),
+        (ahead.isoformat(), 0.6, {"rr1_mm": 2}),
+        (later.isoformat(), 0.1, {"rr1_mm": 1}),
+    ]
+    parcel_json = client.get(f"/advisor/parcels/{parcel.id}.json").json()
+    assert parcel_json["weather_filled"][-2:] == filled  # after the on-farm station's runs
     page = client.get(f"/advisor/parcels/{parcel.id}").text
     assert 'data-flag="weather_gap_filled"' in page
     assert "reanalysis:CELL" in page
+
+
+def test_each_parcel_reads_its_nearest_station_without_a_station_asset(session, settings):
+    from farmcore.apps.advisor.advice import Advice
+    from farmcore.apps.advisor.job import evaluate
+    from farmcore.core.farm_location import LOCATION_KEY
+    from farmcore.core.manifest import JobContext
+    from farmcore.core.models.canonical import Farm, Parcel
+    from tests.apps.chat.test_handlers import seed_farm
+
+    now = datetime(2024, 4, 10, 4, tzinfo=UTC)
+    ids = seed_farm(session, settings)
+
+    def square(lon):
+        return (
+            f"SRID=4326;MULTIPOLYGON((({lon} 44.9,{lon + 0.001} 44.9,{lon + 0.001} 44.901,"
+            f"{lon} 44.901,{lon} 44.9)))"
+        )
+
+    session.get(Parcel, ids["P1"]).geom = square(-0.2)
+    session.get(Parcel, ids["P6"]).geom = square(-0.6)
+    session.get(Parcel, ids["P5"]).geom = "SRID=4326;MULTIPOLYGON EMPTY"  # no centroid: the pin
+    farm = session.get(Farm, session.get(Parcel, ids["P1"]).farm_id)
+    farm.props = {**(farm.props or {}), LOCATION_KEY: {"latitude": 44.9, "longitude": -0.6}}
+    network = Fake("network", Tier.NETWORK)
+    for station, rain in (("EAST", "1.0"), ("WEST", "2.0")):
+        lon = -0.2 if station == "EAST" else -0.6
+        receive(
+            session,
+            network,
+            _fetched_at(now, rain, station.encode()),
+            station=Station(station, station, 44.9, lon),
+            farm_id=farm.id,
+        )
+
+    evaluate(JobContext(session, now, settings, (farm.id,)))
+
+    rain = {}
+    for alias in ("P1", "P5", "P6"):
+        row = session.scalars(
+            select(Advice).where(Advice.parcel_id == ids[alias]).order_by(Advice.id.desc())
+        ).first()
+        rows = saved_evidence(session, farm, row)["input_snapshot"]["hourly_inputs"]
+        rain[alias] = rows[-1]["rr1_mm"]
+    assert rain == {"P1": 1.0, "P5": 2.0, "P6": 2.0}
+
+
+def _fetched_at(now: datetime, rain: str, payload: bytes) -> Fetched:
+    variable = BY_LEGACY["rr1_mm"]
+    value = ObservationValue(
+        variable.name, variable.unit, Decimal(rain), now - timedelta(hours=1), now
+    )
+    return Fetched(Request("hourly"), now, payload, [value])
+
+
+def saved_evidence(session, farm, row):
+    from farmcore.apps.advisor import service
+
+    repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "test", "merge")
+    return service.saved_evidence(repo, row)

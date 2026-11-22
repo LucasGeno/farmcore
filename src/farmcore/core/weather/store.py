@@ -8,7 +8,8 @@
   declared merge `tier` is kept in the receipt's request metadata (`request["tier"]`), so the
   merge layer reads which tier filled an hour from the evidence itself.
 - `upsert_station`: one `weather_station` per provider station ID; its owner is never cleared
-  implicitly.
+  implicitly. A station whose WIGOS ID another provider's row already holds is that row (one
+  physical station, one row: `wigos_id` is unique), left as that provider stored it.
 - `store_observations` / `store_forecast`: decimal values in their CF variable's stored unit only
   (a float, a non-finite value, an unknown variable or another unit raises `WeatherValueError`
   before anything is written). An observation already held for the same station, variable and
@@ -132,6 +133,14 @@ def upsert_station(
             WeatherStation.provider_station_id == station.provider_station_id,
         )
     )
+    if row is None and station.wigos_id:
+        shared = session.scalar(
+            select(WeatherStation).where(WeatherStation.wigos_id == station.wigos_id)
+        )
+        if shared is not None:
+            _own(shared, station, owner_farm_id)
+            session.flush()
+            return shared
     if row is None:
         row = WeatherStation(provider=provider, provider_station_id=station.provider_station_id)
         session.add(row)
@@ -139,12 +148,16 @@ def upsert_station(
     row.name = station.name
     row.geom = f"SRID=4326;POINT({station.longitude} {station.latitude})"
     row.elevation_m = station.elevation_m
+    _own(row, station, owner_farm_id)
+    session.flush()
+    return row
+
+
+def _own(row: WeatherStation, station: Station, owner_farm_id: int | None) -> None:
     if owner_farm_id is not None:
         if row.owner_farm_id not in (None, owner_farm_id):
             raise WeatherValueError(f"station {station.provider_station_id} has another owner")
         row.owner_farm_id = owner_farm_id
-    session.flush()
-    return row
 
 
 def _checked(value: ObservationValue | ForecastValue) -> dict:

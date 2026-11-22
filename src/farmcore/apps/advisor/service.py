@@ -3,12 +3,17 @@
 Every read goes through a `ScopedRepository` (the job passes `repo_for_job`, routes `get_repo`)
 and is bounded by the clock `now`:
 
-- weather: the farm's merged hourly series (`core.weather.merge.farm_hourly`, every source the
-  farm holds, best tier first) from 1 Mar local of now's year to now + forecast_span(config)
+- weather: the farm's merged hourly weather (`core.weather.merge`: every source the farm
+  holds through receipts fetched by now, best tier first, the latest forecast filling hours
+  after now that nothing observed) from 1 Mar local of now's year to now + forecast_span(config)
   (73 h with the defaults: the window's last horizon hour reads the rain of the hours after it),
-  loaded once per farm; the hours after now feed only the engine's window search. Hours filled
-  from a source other than the best one are flagged `weather_gap_filled` and listed in the
-  input snapshot (`weather_gap_filled`, `weather_sources`); a single source adds neither;
+  loaded once per farm (`load_held`) and ranked per parcel from its centroid
+  (`parcel_points`; the farm pin when a parcel has none); the hours after now feed only the
+  engine's window search. With more than one source, hours filled from a source other than the
+  best one are flagged `weather_gap_filled`, and the input snapshot lists the ranked sources
+  (`weather_sources`), each `hourly_inputs` row's source per variable (`filled_by`, an index
+  into `weather_sources`) and the lower sources' runs (`weather_gap_filled`); a single source
+  adds none of these;
 - sprays: done spray logs on the parcel with `ts_start <= now`; each quantity's product gives the
   engine its type and targets;
 - previous advice: the latest advice for the parcel evaluated before now. A re-evaluation at the
@@ -48,7 +53,7 @@ from farmcore.core.access import ScopeDenied, ScopedRepository
 from farmcore.core.farm_location import farm_location
 from farmcore.core.model_spec import validation_json
 from farmcore.core.models.assessment import Assessment
-from farmcore.core.models.canonical import Asset, Farm, Log, LogParcel, LogSource
+from farmcore.core.models.canonical import Asset, Farm, Log, LogParcel, LogSource, Parcel
 from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from farmcore.core.models.weather import WeatherReceipt
 from farmcore.core.weather import merge
@@ -92,7 +97,9 @@ def _farm_reason(repo: ScopedRepository) -> str | None:
     reason = (farm.props or {}).get("advisor_unavailable_reason") if farm else None
     if reason:
         return reason
-    if stations.station_for_farm(repo) is None:
+    if stations.station_for_farm(repo) is None and not merge.has_weather(
+        repo.session, repo.farm_id
+    ):
         return NO_STATION
     return None
 
@@ -114,7 +121,7 @@ def _grant_reason(repo: ScopedRepository) -> str | None:
     has_station = repo.session.scalar(
         select(Asset.id).where(Asset.farm_id == repo.farm_id, Asset.kind == "station").limit(1)
     )
-    if has_station is None:
+    if has_station is None and not merge.has_weather(repo.session, repo.farm_id):
         return NO_STATION
     barred = repo.session.scalar(
         select(WeatherReceipt.id)
@@ -143,15 +150,37 @@ def series_start(now: datetime, tz: str) -> datetime:
     return datetime(now.astimezone(zone).year, month, day, tzinfo=zone)
 
 
+def farm_point(repo: ScopedRepository) -> Point | None:
+    farm = repo.get(Farm, repo.farm_id, scope=SCOPE)
+    pin = farm_location(farm)
+    return Point(pin["latitude"], pin["longitude"]) if pin else None
+
+
+def load_held(repo: ScopedRepository, now: datetime, tz: str, config: AdvisorConfig) -> merge.Held:
+    """The farm's weather as of `now`, not yet ranked from a point (`Held.at`)."""
+    return merge.load(repo, series_start(now, tz), now + forecast_span(config), now)
+
+
 def load_weather(
     repo: ScopedRepository, now: datetime, tz: str, config: AdvisorConfig
 ) -> merge.Merged:
-    """The farm's merged hourly weather the engine reads (`Merged.series()`), ranked from the
-    farm's pin."""
-    farm = repo.get(Farm, repo.farm_id, scope=SCOPE)
-    pin = farm_location(farm)
-    point = Point(pin["latitude"], pin["longitude"]) if pin else None
-    return merge.farm_hourly(repo, series_start(now, tz), now + forecast_span(config), point)
+    """The farm's merged hourly weather ranked from the farm pin (farm-level checks)."""
+    return load_held(repo, now, tz, config).at(farm_point(repo))
+
+
+def parcel_points(repo: ScopedRepository) -> dict[int, Point | None]:
+    """Each parcel's centroid, the point its weather is ranked from; the farm pin for a parcel
+    whose geometry has no centroid (empty)."""
+    centroid = func.ST_Centroid(Parcel.geom)
+    rows = repo.execute(
+        select(Parcel.id, func.ST_Y(centroid), func.ST_X(centroid)).where(
+            Parcel.farm_id == repo.farm_id
+        ),
+        scope="fields:read",
+        resource="parcel",
+    ).all()
+    pin = None if all(lat is not None for _, lat, _ in rows) else farm_point(repo)
+    return {pid: Point(lat, lon) if lat is not None else pin for pid, lat, lon in rows}
 
 
 def load_sprays(repo: ScopedRepository, parcel_id: int, now: datetime) -> tuple[list[Spray], int]:
@@ -482,6 +511,7 @@ def advice_row(
     effective=None,
     input_snapshot: dict | None = None,
     weather_gap_filled: Sequence[dict[str, Any]] = (),
+    weather_filled: Sequence[dict[str, Any]] = (),
 ) -> Advice:
     """The advice row (crop protection's public representation) linked to its new envelope
     (`advisor.assessment.KIND`), which keeps the evidence: status, parameter version (or the
@@ -547,8 +577,10 @@ def advice_row(
             "passes": advice.passes,
             "treatments": advice.treatments,
             "model_validation": envelope.config_version.get("model_validation"),
-            # Which source filled the hours the best source lacked (absent: one source).
+            # Which source filled the hours the best source lacked, and every source's hours
+            # (absent: one source).
             **({"weather_gap_filled": list(weather_gap_filled)} if weather_gap_filled else {}),
+            **({"weather_filled": list(weather_filled)} if weather_filled else {}),
         },
         assessment=envelope,
     )
@@ -615,6 +647,8 @@ def advice_json(row: Advice) -> dict[str, Any]:
         "incubation_pct": props.get("incubation_pct"),
         "flags": props.get("flags", []),
         "weather_gap_filled": props.get("weather_gap_filled", []),
+        # Per source and variable, the runs of hours it filled (empty: a single source).
+        "weather_filled": props.get("weather_filled", []),
         "products": row.products,
         "passes": props.get("passes", 0),
         "treatments": props.get("treatments", 0),
@@ -671,8 +705,10 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored, w
     """The exact hourly series the engine read, plus the spray evidence and crop season, with
     unknown receipt semantics stated explicitly. Station rows are not copied: `hourly_inputs` is
     what was evaluated, and rows written before this shape also carry `observations`. When
-    `weather` (the merged series) came from more than one source, its ranked sources and the
-    hours each lower one filled are added; a single source adds nothing."""
+    `weather` (the merged series) came from more than one source, its ranked sources, each
+    hourly row's source per variable (`filled_by`: index into `weather_sources`) and the hours
+    each lower one filled are added; a single source adds nothing. `station` None: the farm has
+    no station asset (its weather came from providers only)."""
     logs = repo.list(
         Log,
         Log.type == "spray",
@@ -729,18 +765,26 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored, w
             if col.name != "geom"
         }
 
+    multi = weather is not None and len(weather.sources) > 1
     return {
         "evaluation_at": now.isoformat(),
         "display_tz": tz,
         "config_tz": config.local_tz,
         "algorithm": "FarmCore typed hourly advisor / reviewed-parameters-v1",
-        "station": columns(station),
+        "station": columns(station) if station is not None else None,
         "observation_receipt": "unknown",
         "observation_issue_time": "unknown",
         "future_observations": "Replay surrogate, not as-issued forecast",
         "loaded_from": series_start(now, tz).isoformat(),
         "loaded_until": (now + forecast_span(config)).isoformat(),
-        "hourly_inputs": evidence(series),
+        "hourly_inputs": (
+            [
+                {**evidence(row), "filled_by": by}
+                for row, by in zip(series, weather.provenance(), strict=True)
+            ]
+            if multi
+            else evidence(series)
+        ),
         "spray_logs": [columns(log) for log in logs],
         "log_sources": [columns(source) for source in sources],
         "hourly_units": {"rr1_mm": "mm", "t_c": "°C", "rh_pct": "%", "ff_kmh": "km/h"},
@@ -764,7 +808,7 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored, w
                 "weather_sources": list(merge.sources_of(weather)),
                 "weather_gap_filled": weather.gap_filled(),
             }
-            if weather is not None and len(weather.sources) > 1
+            if multi
             else {}
         ),
     }
