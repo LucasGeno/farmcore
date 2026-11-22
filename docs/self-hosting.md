@@ -463,9 +463,13 @@ Global FieldID*) and keep the id as one more portable alias:
 
 - **Credentials.** Sign up at [account.varda.ag](https://account.varda.ag) for read access and
   set `VARDA_CLIENT_ID` and `VARDA_CLIENT_SECRET` (the stock `docker-compose.yml` passes both to
-  the app). FarmCore exchanges them at `VARDA_TOKEN_URL` (OAuth2 client credentials) for a bearer
-  token it reuses until it expires. They are never logged, stored or shown; startup refuses a
-  secret with an `http` URL. Without them there is no lookup action and nothing calls Varda.
+  the app). FarmCore exchanges them at the token URL (OAuth2 client credentials) for a bearer
+  token it reuses until it expires. They are never logged, stored or shown. Without them there
+  is no lookup action and nothing calls Varda.
+- **Permitted hosts.** `VARDA_TOKEN_URL` defaults to `https://auth.varda.ag/oauth/token` and
+  `VARDA_API_BASE_URL` to `https://api.varda.ag/fid/v1`. They are the only values accepted (a
+  trailing slash aside): startup refuses any other scheme, host, port, IP address or path, so the
+  secret and the parcel outlines can only reach Varda. Leave both unset.
 - **What is sent.** Only the parcel's outline, to `POST /field-searches`, and only when the owner
   asks and the clock is live: a replay never calls out.
 - **What is kept.** A match with an IoU of 0.8 or more, Varda's own threshold for the same field

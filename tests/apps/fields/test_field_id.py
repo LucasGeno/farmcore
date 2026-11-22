@@ -5,22 +5,27 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr, ValidationError
 from sqlalchemy import select
 
 from farmcore.apps.fields import field_id
 from farmcore.apps.fields.manifest import MANIFEST as FIELDS
+from farmcore.apps.share import service as share_service
 from farmcore.core import clock
 from farmcore.core.access import FARM_COOKIE, ScopedRepository, ensure_owner_grant
+from farmcore.core.identity import DUMMY_HASH, token_hash
 from farmcore.core.models.canonical import ExtId, Farm
+from farmcore.core.models.identity import FarmMembership, LocalIdentity, LocalSession
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
-from farmcore.settings import DEFAULT_VARDA_API_BASE_URL, DEFAULT_VARDA_TOKEN_URL
+from farmcore.settings import DEFAULT_VARDA_API_BASE_URL, DEFAULT_VARDA_TOKEN_URL, Settings
 from tests.apps.operations.conftest import make_parcel
 
 FIXTURES = Path(__file__).parent / "fixtures" / "varda"
@@ -44,6 +49,8 @@ class FakeVarda:
             return httpx.Response(
                 200, json={**_fixture("token"), "access_token": f"token-{self.tokens}"}
             )
+        if self.search == "not-json":  # a proxy's error page, say
+            return httpx.Response(200, text="<html>secret-under-test</html>")
         if self.refuse_next:
             self.refuse_next = False
             body = {"error": {"title": "Unauthorized", "status": 401, "detail": "expired"}}
@@ -119,6 +126,39 @@ def test_the_token_is_reused_until_it_expires_and_renewed_once_when_refused():
     assert search.headers["Content-Type"] == "application/geo+json"
     assert json.loads(search.content) == square
     assert all(b"secret-under-test" not in c.content for c in fake.searches())
+
+    fake.search = "not-json"  # a bounded error that never carries the body
+    with pytest.raises(field_id.VardaError) as refused:
+        client.search(square)
+    assert str(refused.value) == "field-searches: the response is not JSON"
+
+
+@pytest.mark.parametrize(
+    ("setting", "url"),
+    [
+        ("varda_token_url", "https://127.0.0.1:8443/oauth/token"),  # loopback
+        ("varda_token_url", "https://169.254.169.254/latest/meta-data/"),  # link-local
+        ("varda_token_url", "https://10.0.0.5/oauth/token"),  # private
+        ("varda_token_url", "https://attacker.example/oauth/token"),  # another host
+        ("varda_token_url", "https://auth.varda.ag.attacker.example/oauth/token"),
+        ("varda_token_url", "http://auth.varda.ag/oauth/token"),  # not https
+        ("varda_token_url", "https://auth.varda.ag:8443/oauth/token"),  # another port
+        ("varda_token_url", "https://auth.varda.ag/elsewhere"),  # another path
+        ("varda_api_base_url", "https://localhost/fid/v1"),
+        ("varda_api_base_url", "https://api.varda.ag/fid/v2"),
+    ],
+)
+def test_varda_urls_are_pinned_to_its_documented_hosts(setting, url):
+    secrets = {
+        "varda_client_id": SecretStr("client-under-test"),
+        "varda_client_secret": SecretStr("secret-under-test"),
+    }
+    assert Settings(_env_file=None, **secrets).varda_token_url == DEFAULT_VARDA_TOKEN_URL
+
+    with pytest.raises(ValidationError) as refused:
+        Settings(_env_file=None, **secrets, **{setting: url})
+
+    assert "secret-under-test" not in str(refused.value)
 
 
 @pytest.mark.parametrize(
@@ -215,3 +255,74 @@ def test_an_owner_chooses_among_candidates_and_the_parcel_shows_its_field_id(
     kept = web.post(url, data={"field_id": "15RJ.CZM7"}, follow_redirects=False)
     assert kept.status_code == 303
     assert "Global FieldID 15RJ.CZM7" in web.get(f"/fields/parcels/{parcel.id}").text
+
+
+def test_an_advisor_or_an_agent_token_cannot_trigger_a_lookup(
+    session, session_factory, settings, farms
+):
+    farm, parcel = farms[0], farms[2]
+    clock.set_live(session, settings)
+    owner = LocalIdentity(login="gfid-owner", password_hash=DUMMY_HASH)
+    advisor = LocalIdentity(login="gfid-advisor", password_hash=DUMMY_HASH)
+    session.add_all([owner, advisor])
+    session.flush()
+    session.add_all(
+        [
+            FarmMembership(identity_id=owner.id, farm_id=farm.id, role="owner"),
+            FarmMembership(identity_id=advisor.id, farm_id=farm.id, role="advisor"),
+        ]
+    )
+    cookie, nonce = "synthetic-gfid-advisor-session", "synthetic-gfid-advisor-csrf"
+    session.add(
+        LocalSession(
+            token_hash=token_hash(cookie),
+            identity_id=advisor.id,
+            csrf_hash=token_hash(nonce),
+            expires_at=datetime.now(UTC) + timedelta(hours=12),
+        )
+    )
+    _, agent_token = share_service.create_token(
+        _repo(session, farm),
+        creator_id=owner.id,
+        name="Synthetic agent",
+        scopes=["register:read"],
+        purpose="gfid denial test",
+        valid_to=datetime.now(UTC) + timedelta(days=7),
+        tz="Europe/Paris",
+    )
+    session.commit()
+    fake = FakeVarda()
+    app = create_app(settings, manifests=[FIELDS], session_factory=session_factory)
+    app.dependency_overrides[field_id.get_client] = lambda: client_for(fake)
+    routes = (
+        f"/fields/parcels/{parcel.id}/field-id/lookup",
+        f"/fields/parcels/{parcel.id}/field-id",
+    )
+
+    with TestClient(app, base_url="https://testserver") as web:
+        web.cookies.set("farmcore_session", cookie)
+        web.cookies.set("farmcore_csrf", nonce)
+        advisor_headers = {"Origin": "https://testserver", "X-CSRF-Token": nonce}
+        page = web.get(f"/fields/parcels/{parcel.id}", params={"farm": farm.id})
+        assert page.status_code == 200 and "Look up Global FieldID" not in page.text
+        for route in routes:
+            refused = web.post(
+                route,
+                params={"farm": farm.id},
+                data={"field_id": "15RJ.CZM7"},
+                headers=advisor_headers,
+            )
+            assert refused.status_code == 403, route
+        web.cookies.clear()
+        for route in routes:
+            refused = web.post(
+                route,
+                params={"farm": farm.id},
+                data={"field_id": "15RJ.CZM7"},
+                headers={"Authorization": f"Bearer {agent_token}"},
+            )
+            assert refused.status_code == 403, route
+            assert "secret-under-test" not in refused.text
+
+    assert fake.calls == []
+    assert _kept(session, parcel) == set()

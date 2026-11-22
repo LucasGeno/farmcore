@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -218,8 +225,6 @@ class Settings(BaseSettings):
         "meteofrance_api_base_url",
         "meteofrance_token_url",
         "cdsapi_url",
-        "varda_api_base_url",
-        "varda_token_url",
     )
     @classmethod
     def _http_url_without_credentials(cls, v: str) -> str:
@@ -256,13 +261,25 @@ class Settings(BaseSettings):
                     raise ValueError("METEOFRANCE_CLIENT_SECRET requires https Météo-France URLs")
         return self
 
-    @model_validator(mode="after")
-    def _varda_credentials_require_https(self) -> Settings:
-        if self.varda_client_secret is not None:
-            for url in (self.varda_api_base_url, self.varda_token_url):
-                if urlsplit(url).scheme != "https":
-                    raise ValueError("VARDA_CLIENT_SECRET requires https Varda URLs")
-        return self
+    @field_validator("varda_api_base_url", "varda_token_url")
+    @classmethod
+    def _varda_documented_hosts(cls, v: str, info: ValidationInfo) -> str:
+        # The client secret goes to the token URL and parcel outlines to the API: only Varda's
+        # documented https hosts and paths, never another host, port, IP or path (no SSRF).
+        default = (
+            DEFAULT_VARDA_API_BASE_URL
+            if info.field_name == "varda_api_base_url"
+            else DEFAULT_VARDA_TOKEN_URL
+        )
+        _check_http_url(v)
+        url, want = urlsplit(v), urlsplit(default)
+        if (url.scheme, url.netloc.lower(), url.path.rstrip("/")) != (
+            want.scheme,
+            want.netloc,
+            want.path,
+        ):
+            raise ValueError(f"must be {default}")
+        return v
 
     @model_validator(mode="after")
     def _cdsapi_key_requires_https(self) -> Settings:

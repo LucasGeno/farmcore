@@ -122,13 +122,14 @@ class VardaClient:
             response = self._send("token", "POST", self.token_url, data=self._form)
             if response.status_code != 200:
                 raise VardaError(f"token: HTTP {response.status_code}")
-            body = response.json()
+            body = _object(response, "token")
             token, lifetime = body.get("access_token"), body.get("expires_in")
             if not isinstance(token, str) or not token:
                 raise VardaError("token: no access token in the response")
             self._token = token
-            # No lifetime: keep it until the API refuses it.
-            ttl = float(lifetime) if isinstance(lifetime, int | float) else float("inf")
+            # No (or a nonsensical) lifetime: keep it until the API refuses it.
+            valid = isinstance(lifetime, int | float) and not isinstance(lifetime, bool)
+            ttl = float(lifetime) if valid and lifetime > 0 else float("inf")
             self._expires_at = self._clock() + ttl - TOKEN_MARGIN_S
         return self._token
 
@@ -151,14 +152,32 @@ class VardaClient:
                 break
         if response.status_code != 200:
             raise VardaError(f"field-searches: HTTP {response.status_code}")
-        return [_candidate(entry) for entry in response.json().get("entries") or []]
+        entries = _object(response, "field-searches").get("entries", [])
+        if not isinstance(entries, list):
+            raise VardaError("field-searches: unexpected response shape")
+        return [_candidate(entry) for entry in entries]
+
+
+def _object(response: httpx.Response, step: str) -> dict:
+    """The response's JSON object; a bounded error (never the body) for anything else."""
+    try:
+        body = response.json()
+    except ValueError:
+        raise VardaError(f"{step}: the response is not JSON") from None
+    if not isinstance(body, dict):
+        raise VardaError(f"{step}: unexpected response shape")
+    return body
 
 
 def _figure(value: Any) -> float | None:
-    return float(value) if isinstance(value, int | float) else None
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
 
 
-def _candidate(entry: dict) -> Candidate:
+def _candidate(entry: Any) -> Candidate:
+    if not isinstance(entry, dict):
+        raise VardaError("field-searches: unexpected response shape")
     field, boundary = entry.get("field_id"), entry.get("boundary_id")
     if not isinstance(field, str) or not isinstance(boundary, str):
         raise VardaError("field-searches: an entry without field_id or boundary_id")
