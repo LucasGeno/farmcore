@@ -4,6 +4,11 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- The 3-10, Goidanich and Gubler–Thomas rules are ModelSpec modules in
+  `apps/advisor/engine/mildew/` that own their parameters and sources; `AdvisorConfig` reads its
+  defaults from them. No threshold, output or config digest changes. `GOIDANICH_TABLE` and
+  `GoidanichTable` are still importable from `engine.config`; `specs.DOIS` moved to
+  `engine.mildew.DOIS`.
 - Migration `core_0019` drops the legacy `product` and `quantity` tables that `core_0018`
   froze; the maps and the tables' id sequences stay. Downgrading below it rebuilds both from the
   maps and the catalog rows under their legacy ids, with their sequences as they were, and then
