@@ -202,7 +202,9 @@ def _post(
         "source_types": list(dict.fromkeys(source_types)),
         **(extra or {}),
     }
-    for parcel in log.parcels:
+    # `log.parcels` loads without ORDER BY (heap order); emit per parcel in id order so the
+    # timeline and activity list a log's parcels the same way every time.
+    for parcel in sorted(log.parcels, key=lambda p: p.id):
         post_event(
             session,
             farm_id=log.farm_id,
