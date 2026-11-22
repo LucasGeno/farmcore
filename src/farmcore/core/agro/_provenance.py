@@ -10,13 +10,15 @@ ASSUMPTION = "assumption:"
 # alone identify nothing.
 _URL = re.compile(r"https?://[^\s/]+\.[^\s/]+/\S+", re.IGNORECASE)
 _DOI = re.compile(r"\b10\.\d+/\S+")
+# A DOI claim: "doi:" first, a bare "10." prefix or a doi.org link ("Doig 2024" is an author).
+_DOI_CLAIM = re.compile(r"^\s*doi\s*:|^\s*10\.|doi\.org/", re.IGNORECASE)
 _WORD = re.compile(r"\b[^\W\d_]{2,}\b")
 _YEAR = re.compile(r"(?<!\d)\d{4}(?!\d)")
 
 
 def _cites(text: str) -> bool:
     # What claims to be a DOI or a link must be one; it never passes as author-year instead.
-    if text.lower().startswith("doi"):
+    if _DOI_CLAIM.search(text):
         return bool(_DOI.search(text))
     if "://" in text:
         return bool(_URL.search(text))
