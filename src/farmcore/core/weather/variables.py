@@ -6,7 +6,9 @@ https://cfconventions.org/Data/cf-standard-names/95/build/cf-standard-name-table
 stored unit is a UDUNITS string that converts to the name's canonical unit (`mm` -> `m`,
 `degC` -> `K`, `%` -> `1`, `km h-1` -> `m s-1`). Rain is the liquid-water-equivalent depth, so
 millimetres stay millimetres. The database's frozen `weather_variable` table (core_0008) holds
-exactly these rows; a parity test keeps them equal.
+exactly these rows; a parity test keeps them equal. Soil moisture (core_0021) is the volume of
+water in a volume of soil, in percent; the depth it is read at belongs to the station
+(`weather_push.devices`), not the variable.
 """
 
 from __future__ import annotations
@@ -14,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CF_TABLE_VERSION = 95
+SOIL_MOISTURE = "volume_fraction_of_condensed_water_in_soil"
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,7 @@ VARIABLES: dict[str, Variable] = {
         # instantaneous value is a mean over an empty period.
         Variable("wind_speed", "km h-1", "ff_kmh", "time: mean"),
         Variable("wind_speed_of_gust", "km h-1", "fx_kmh", "time: maximum"),
+        Variable(SOIL_MOISTURE, "%", None, "time: point"),
     )
 }
 BY_LEGACY: dict[str, Variable] = {v.legacy_name: v for v in VARIABLES.values() if v.legacy_name}

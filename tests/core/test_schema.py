@@ -147,7 +147,7 @@ def test_the_installed_task_library_has_the_schema_core_0009_applied() -> None:
 
 
 def test_single_migration_head_creates_every_core_table(session) -> None:
-    head = "core_0020"  # core_0019 -> core_0020
+    head = "core_0021"  # core_0020 -> core_0021
     assert ScriptDirectory.from_config(alembic_config()).get_heads() == [head]
     assert session.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     assert _tables(session) >= CANONICAL_TABLES | IDENTITY_TABLES

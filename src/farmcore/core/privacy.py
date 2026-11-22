@@ -13,8 +13,12 @@ from farmcore.core.tour import EXIT as TOUR_EXIT
 from farmcore.web import operator_authenticated
 
 # Leaving the tour only drops a cookie, so a browser in any state may do it.
+# On-farm devices push with a bearer token of their own: the route (app weather_push) takes that
+# token only, never a session cookie.
+WEATHER_PUSH = "/weather_push/observations"
 PUBLIC_PATHS = (
-    frozenset({"/health", "/admin/sign-in", "/admin/sign-out", "/login", TOUR_EXIT}) | OAUTH_PATHS
+    frozenset({"/health", "/admin/sign-in", "/admin/sign-out", "/login", TOUR_EXIT, WEATHER_PUSH})
+    | OAUTH_PATHS
 )
 
 
