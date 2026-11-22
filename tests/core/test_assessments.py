@@ -12,9 +12,21 @@ from decimal import Decimal
 import pytest
 from alembic import command
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import create_engine, exists, select, text, union, update
+from sqlalchemy import (
+    Integer,
+    column,
+    create_engine,
+    exists,
+    literal_column,
+    select,
+    text,
+    union,
+    update,
+    values,
+)
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.orm import aliased
 
 from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.assessment import KIND as SPRAY
@@ -119,13 +131,22 @@ def test_envelope_keeps_a_second_kind_typed_and_never_as_a_spray_result(session)
         (FROST, "duplicate assessment kind key 'frost.hours'"),
         # Another kind read with frost's scope: holding one would read the other.
         (replace(FROST, key="frost.days"), "share the read scope"),
-        # A core scope already reads core data: every fields:read holder would read the kind.
-        (replace(FROST, key="frost.days", read_scope="fields:read"), "is a core scope"),
+        # A scope that already reads something would hand the kind to every holder: a core
+        # scope, crop protection's advice:read (its kind alone keeps it) or an app's own.
+        (replace(FROST, key="frost.days", read_scope="fields:read"), "already reads"),
+        (replace(FROST, key="frost.days", read_scope="advice:read"), "already reads"),
+        (replace(FROST, key="frost.days", read_scope="frost_log:read"), "already reads"),
     ],
 )
 def test_each_loaded_assessment_kind_has_its_own_key_and_read_scope(second, says):
     one = Manifest(name="one", version="1", summary="", assessment_kinds=(FROST,))
-    two = Manifest(name="two", version="1", summary="", assessment_kinds=(second,))
+    two = Manifest(
+        name="two",
+        version="1",
+        summary="",
+        assessment_kinds=(second,),
+        resource_scopes=(("frost_log", ("frost_log:read",)),),
+    )
     with pytest.raises(ValueError, match=says):
         collect_assessment_kinds([one, two])
 
@@ -179,8 +200,10 @@ def test_each_assessment_kind_is_read_only_with_its_own_scope(session, kind_scop
     assert reads(owner, "advice:read") == {spray.id}
     assert reads(owner, FROST.read_scope) == {frost.id}
     # A caller-built statement could not be held to one kind: refused wherever it names the
-    # table (labelled, joined, a scalar or WHERE subquery, an EXISTS, a union) and as text.
+    # table (labelled, joined, a scalar or WHERE subquery, an EXISTS, a union, a VALUES payload)
+    # and as text, top-level or embedded.
     frost_rows = select(Assessment.id).where(Assessment.kind == FROST.key)
+    embedded = "(SELECT result FROM assessment LIMIT 1)"
     for stmt, resource in (
         (select(Assessment), "assessment"),
         (select(Advice.id).join(Assessment, Advice.assessment_id == Assessment.id), "advice"),
@@ -189,9 +212,30 @@ def test_each_assessment_kind_is_read_only_with_its_own_scope(session, kind_scop
         (select(Advice.id).where(exists().where(Assessment.kind == FROST.key)), "advice"),
         (union(select(Advice.id), frost_rows), "advice"),
         (text("SELECT result FROM assessment"), "advice"),
+        (
+            select(
+                values(column("x", Integer))
+                .data([(frost_rows.limit(1).scalar_subquery(),)])
+                .alias("v")
+                .c.x
+            ),
+            "advice",
+        ),
+        (select(Advice.id, text(embedded)), "advice"),
+        (select(Advice.id, literal_column(embedded)), "advice"),
     ):
         with pytest.raises(ScopeDenied):
             owner.execute(stmt, scope="advice:read", resource=resource)
+    # Nor can list()'s own predicates ask about another kind's envelopes.
+    other = aliased(Assessment)
+    for where, order_by in (
+        (exists().where(other.kind == FROST.key), None),
+        (Assessment.id.in_(select(other.id).where(other.kind == FROST.key)), None),
+        (True, select(other.id).where(other.kind == FROST.key).limit(1).scalar_subquery()),
+        (text("kind = 'frost.hours'"), None),
+    ):
+        with pytest.raises(ScopeDenied):
+            owner.list(Assessment, where, scope="advice:read", order_by=order_by)
 
 
 def test_saved_assessment_evidence_cannot_be_rewritten(session):

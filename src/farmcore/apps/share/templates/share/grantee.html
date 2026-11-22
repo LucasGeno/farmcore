@@ -70,9 +70,9 @@
   {% else %}
   <p class="mt-1 text-muted">No weather source shared.</p>
   {% endfor %}
-  {% for w in weather.withheld %}
-  <p data-withheld class="mt-2 rounded-lg border border-stone-300 bg-stone-100 px-4 py-3 text-stone-700">Not shared: data from {{ w.provider }} ({{ w.dataset }}, licence {{ w.licence }}), because {{ w.reason }}.</p>
-  {% endfor %}
+  {% if weather.withheld %}
+  <p data-withheld class="mt-2 rounded-lg border border-stone-300 bg-stone-100 px-4 py-3 text-stone-700">{{ weather.withheld }}</p>
+  {% endif %}
 </section>
 {% endif %}
 {% endblock %}

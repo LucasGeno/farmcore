@@ -236,23 +236,33 @@ def collect_draft_kinds(manifests):
     return kinds
 
 
+# The one kind that keeps an existing scope: crop protection's envelopes are read with the scope
+# that has always read stored advice, so no grant or token changes access and nothing migrates.
+_COMPATIBLE_KIND_SCOPES = frozenset({("advisor.spray", "advice:read")})
+
+
 def collect_assessment_kinds(manifests):
     """Assessment kind key -> (manifest, kind). A duplicate key across loaded apps is an error,
-    and so is a read scope two kinds share: each kind is read with its own scope, so holding one
-    kind's scope never reads another kind."""
+    and so is a read scope two kinds share, or one that already reads something else (a core
+    scope, or any app's table scope): each kind is read with its own new scope, so no existing
+    holder gains a kind. `_COMPATIBLE_KIND_SCOPES` is the sole exception."""
     from farmcore.core.access import SCOPES  # core's own scopes; access never imports manifests
 
+    manifests = list(manifests)
+    taken = set(SCOPES) | {
+        scope for m in manifests for _, declared in m.resource_scopes for scope in declared
+    }
     kinds = {}
     scopes: dict[str, str] = {}
     for m in manifests:
-        own = {scope for _, declared in m.resource_scopes for scope in declared}
         for kind in m.assessment_kinds:
-            # A core scope already reads core data (fields:read, logs:read...): a kind may reuse
-            # one only when its app reads its own tables with it too, so no holder gains a kind.
-            if kind.read_scope in SCOPES and kind.read_scope not in own:
+            if (
+                kind.read_scope in taken
+                and (kind.key, kind.read_scope) not in _COMPATIBLE_KIND_SCOPES
+            ):
                 raise ValueError(
-                    f"assessment kind {kind.key!r}: read scope {kind.read_scope!r} is a core "
-                    f"scope that app {m.name!r} does not declare on its own tables"
+                    f"assessment kind {kind.key!r}: read scope {kind.read_scope!r} already "
+                    "reads other data; declare a new scope for the kind"
                 )
             if kind.key in kinds:
                 raise ValueError(f"duplicate assessment kind key {kind.key!r} across manifests")

@@ -25,8 +25,8 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, literal_column, select
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import cast, func, literal, select
+from sqlalchemy.dialects.postgresql import JSONB, JSONPATH
 
 from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.operations import spray_items
@@ -39,7 +39,8 @@ DECISION_WORDS = {"spray": "Spray", "wait": "Wait", "protected": "Protected", "n
 
 
 def _rule(name: str):
-    path = literal_column(f"""'$[*] ? (@.rule == "{name}")'::jsonpath""")
+    # A bound, typed path: the scoped repository refuses literal SQL it cannot check.
+    path = cast(literal(f'$[*] ? (@.rule == "{name}")'), JSONPATH)
     return func.jsonb_path_query_first(Advice.reasons, path, type_=JSONB)
 
 

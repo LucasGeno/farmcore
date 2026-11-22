@@ -9,6 +9,8 @@ Failure model (one owning test each):
   under another resource label), the receipts of blocked sources, or the legacy `observation`
   rows, which carry no licence at all;
 - the grantee export drops blocked data silently, or its notice leaks the blocked values;
+- a grant view tells a farm with withheld weather from a farm with none (owner ruling
+  2026-11-22: existence is information; the notice is generic, from the grant's scope);
 - a weather view shows no attribution, or not which endpoint served the data.
 
 Latent leaks, owned by the follow-up 'Gate weather in derived exports' (it blocks the first
@@ -25,7 +27,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import Text, func, select, union
+from sqlalchemy import Integer, Text, column, exists, func, literal_column, select, union, values
 
 from farmcore.apps.share import service
 from farmcore.core.access import ScopeDenied, authenticate_token
@@ -37,7 +39,7 @@ from farmcore.core.models.weather import (
     WeatherReceipt,
     WeatherStation,
 )
-from farmcore.core.weather import store
+from farmcore.core.weather import attribution, store
 from farmcore.core.weather.contract import (
     Fetched,
     ForecastValue,
@@ -59,11 +61,9 @@ SOURCES = (
 )
 
 
-@pytest.fixture
-def weather(session, demo):
-    """One observation and one forecast value per source on the demo farm, and one legacy
-    `observation` row (no receipt, no licence)."""
-    for n, (provider, licence, kind, value) in enumerate(SOURCES):
+def _record(session, farm_id, sources):
+    """One observation and one forecast value per source on the farm."""
+    for n, (provider, licence, kind, value) in enumerate(sources):
         for forecast in (False, True):
             fetched = Fetched(
                 request=Request(dataset="forecast" if forecast else "hourly", endpoint_kind=kind),
@@ -72,7 +72,7 @@ def weather(session, demo):
                 values=[],
             )
             receipt = store.record_receipt(
-                session, provider=provider, licence=licence, fetched=fetched, farm_id=demo.farm.id
+                session, provider=provider, licence=licence, fetched=fetched, farm_id=farm_id
             )
             if forecast:
                 store.store_forecast(
@@ -90,6 +90,13 @@ def weather(session, demo):
                     station,
                     [ObservationValue("air_temperature", "degC", value, HOUR, HOUR)],
                 )
+
+
+@pytest.fixture
+def weather(session, demo):
+    """`_record` for every source on the demo farm, and one legacy `observation` row (no
+    receipt, no licence)."""
+    _record(session, demo.farm.id, SOURCES)
     asset = Asset(farm_id=demo.farm.id, kind="station", name="Legacy station")
     session.add(asset)
     session.flush()
@@ -180,6 +187,29 @@ def test_grants_and_tokens_read_only_redistributable_weather(
             scope="stations:read",
             resource="weather_station",
         ),
+        lambda repo: repo.execute(
+            select(WeatherStation.id).where(exists().where(WeatherObservation.value > 30)),
+            scope="stations:read",
+            resource="weather_station",
+        ),
+        lambda repo: repo.execute(
+            select(
+                values(column("v", Integer))
+                .data([(select(WeatherObservation.value).limit(1).scalar_subquery(),)])
+                .alias("v")
+                .c.v
+            ),
+            scope="stations:read",
+            resource="weather_station",
+        ),
+        lambda repo: repo.execute(
+            select(WeatherStation.id, literal_column("(SELECT value FROM weather_observation)")),
+            scope="stations:read",
+            resource="weather_station",
+        ),
+        lambda repo: repo.list(
+            WeatherStation, exists().where(WeatherObservation.value > 30), scope="stations:read"
+        ),
         lambda repo: repo.list(Observation, scope="stations:read"),
     ],
     ids=[
@@ -188,6 +218,10 @@ def test_grants_and_tokens_read_only_redistributable_weather(
         "mislabelled-statement",
         "scalar-subquery",
         "union",
+        "exists-oracle",
+        "values-payload",
+        "embedded-text",
+        "list-predicate",
         "legacy-rows",
     ],
 )
@@ -210,14 +244,32 @@ def test_the_grantee_export_omits_blocked_weather_and_says_so(
     assert {(s["provider"], s["attribution"]) for s in body["sources"]} == {
         ("open-station", "Synthetic open network")
     }
-    assert {(w["provider"], w["licence"]) for w in body["withheld"]} == {
-        ("nc-station", "CC-BY-NC-4.0"),
-        ("quiet-station", "unknown"),
-    }
+    assert body["withheld"] == attribution.WITHHELD_NOTE
     for text in (response.text, page):
         assert not any(str(v) in text for v in (NON_COMMERCIAL, UNSTATED, LEGACY))
+        assert "nc-station" not in text and "quiet-station" not in text
     assert "Synthetic open network" in page
-    assert "nc-station" in page and "quiet-station" in page
+    assert attribution.WITHHELD_NOTE in page
+
+
+def test_a_grant_view_cannot_tell_withheld_weather_from_none(
+    session, grantee_client, demo, station_grant
+) -> None:
+    def seen():
+        export = grantee_client.get(f"/share/as/{station_grant.id}/observations.json")
+        page = grantee_client.get(f"/share/as/{station_grant.id}/")
+        assert export.status_code == page.status_code == 200
+        return export.json(), page.text
+
+    nothing = seen()
+    _record(
+        session,
+        demo.farm.id,
+        [s for s in SOURCES if not s[1].redistribution or s[1].identifier is None],
+    )
+    session.commit()
+
+    assert seen() == nothing
 
 
 def test_weather_page_shows_each_source_attribution_endpoint_and_sharing(admin, weather) -> None:

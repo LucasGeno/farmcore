@@ -16,9 +16,9 @@ A repository is bound to one farm, one grant, an actor and a purpose. Each read:
    a grant or agent-token view (`grant_view`) reads only weather values and receipts whose
    receipt allows redistribution (the licence gate); a caller-built statement labelled as, or
    selecting FROM, a weather value table is refused, and so are the legacy `observation` rows,
-   which carry no licence. Receipt metadata of every source (never a value) is read through
-   `execute(..., resource="weather_receipt")` by `core/weather/attribution.sources` only, so a
-   grant can say what it withheld;
+   which carry no licence. A grant view never learns whether withheld weather exists: no
+   statement or predicate of its may name a weather value table at all, not even in an EXISTS,
+   and `core/weather/attribution` words what it withheld from the grant's scope alone;
 4. writes exactly one `access_log` row (actor, farm, grant, resource, scope, purpose).
 
 `execute(stmt, scope, resource)` runs a caller-built statement as-is (the caller scopes it); it is
@@ -31,6 +31,7 @@ access_log rows commit before the response is sent; a plain `Depends(get_repo)` 
 from __future__ import annotations
 
 import hmac
+import re
 import secrets
 from collections.abc import Collection, Iterator
 from datetime import UTC, datetime, timedelta
@@ -40,8 +41,9 @@ from fastapi import Depends, HTTPException, Request
 from sqlalchemy import Select, or_, select
 from sqlalchemy.engine import Result
 from sqlalchemy.orm import Session
-from sqlalchemy.sql.elements import TextClause
-from sqlalchemy.sql.expression import Exists, TableClause
+from sqlalchemy.sql.elements import ColumnClause, TextClause
+from sqlalchemy.sql.expression import TableClause
+from sqlalchemy.sql.selectable import TextualSelect, Values
 from sqlalchemy.sql.util import find_tables
 
 from farmcore.core import ext_ids
@@ -369,6 +371,7 @@ class ScopedRepository:
             )
         if limit is not None:
             stmt = stmt.limit(limit)
+        self._refuse_predicates(stmt)
         self._authorise(scope, model.__table__.name)
         return list(self.session.scalars(stmt))
 
@@ -377,12 +380,13 @@ class ScopedRepository:
         if len(pk) != 1:
             raise TypeError(f"{model.__name__} has a composite key; use list()")
         stmt = self._scoped(model, scope).where(pk[0] == id)
+        self._refuse_predicates(stmt)
         self._authorise(scope, model.__table__.name)
         return self.session.scalar(stmt)
 
     def execute(self, stmt: Any, *, scope: str, resource: str) -> Result[Any]:
         """Run `stmt` unchanged (the caller filters it) after the scope check; logs `resource`."""
-        _refuse_text(stmt)
+        _refuse_opaque(stmt)
         self._refuse_ungated(stmt, resource)
         self._refuse_envelope(stmt, resource)
         self._authorise(scope, resource)
@@ -392,7 +396,7 @@ class ScopedRepository:
         """`execute` without the access_log row: the scope and grant are still checked. Only for
         decorative reads of data the same viewer already reads through an audited path (the
         parcel silhouettes: the map's layer already logs the geometry read)."""
-        _refuse_text(stmt)
+        _refuse_opaque(stmt)
         self._refuse_ungated(stmt, resource)
         self._refuse_envelope(stmt, resource)
         self.check(scope, resource)
@@ -408,14 +412,28 @@ class ScopedRepository:
 
     def _refuse_ungated(self, stmt: Any, resource: str) -> None:
         """A caller-built statement cannot be held to the licence gate: refused for grant views
-        when labelled as a weather value table or naming one where it can return values (a
-        join, a scalar or WHERE subquery, a union). An EXISTS selects no value: it is how
-        `core/weather/attribution.sources` says which receipts hold data."""
+        when labelled as a weather value table or naming one anywhere (a join, a subquery, an
+        EXISTS, a union). Withheld weather is indistinguishable from none: not even a yes/no."""
         if not self.grant_view:
             return
-        tables = referenced_tables(stmt, through_exists=False)
-        if resource in _LICENCE_GATED or tables & _LICENCE_GATED:
+        if resource in _LICENCE_GATED or referenced_tables(stmt) & _LICENCE_GATED:
             raise ScopeDenied("Weather values are shared only through the licence gate.")
+
+    def _refuse_predicates(self, stmt: Select[Any]) -> None:
+        """`list`/`get` hold the caller's WHERE and ORDER BY to `execute`'s rules: no opaque
+        SQL, no assessment table (another kind's envelopes, read in a subquery or an EXISTS),
+        and for grant views no weather value table outside the licence gate. The repository's
+        own filters name neither."""
+        parts = [p for p in (stmt.whereclause, stmt._order_by_clause) if p is not None]
+        for part in parts:
+            _refuse_opaque(part)
+            tables = referenced_tables(part)
+            if "assessment" in tables:
+                raise ScopeDenied(
+                    "Assessments are read through list() or get(), one kind per scope."
+                )
+            if self.grant_view and tables & _LICENCE_GATED:
+                raise ScopeDenied("Weather values are shared only through the licence gate.")
 
     def _scoped[M: Base](self, model: type[M], scope: str) -> Select[tuple[M]]:
         stmt = select(model)
@@ -476,9 +494,9 @@ class ScopedRepository:
         self.session.flush()
 
 
-def referenced_tables(stmt: Any, *, through_exists: bool = True) -> set[str]:
+def referenced_tables(stmt: Any) -> set[str]:
     """Every table `stmt` names: its FROMs (a joined eager load included) and any table in its
-    columns, WHERE, subqueries or union members; inside an EXISTS only if `through_exists`."""
+    columns, WHERE, subqueries, EXISTS or union members."""
     froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
     names = {t.name for f in froms for t in find_tables(f)}
     stack = [stmt]
@@ -486,16 +504,28 @@ def referenced_tables(stmt: Any, *, through_exists: bool = True) -> set[str]:
         element = stack.pop()
         if isinstance(element, TableClause):
             names.add(element.name)
-        if isinstance(element, Exists) and not through_exists:
-            continue
         stack.extend(element.get_children())
     return names
 
 
-def _refuse_text(stmt: Any) -> None:
-    """A textual statement names its tables in a string no check can read: refused."""
-    if isinstance(stmt, TextClause):
-        raise ScopeDenied("Read through a SQL expression, not text, so its tables are checked.")
+_HARMLESS_LITERAL = re.compile(r"\*|\d+")  # count(*), EXISTS(SELECT *), select(1)
+
+
+def _refuse_opaque(stmt: Any) -> None:
+    """Text, a literal column or a VALUES payload (anywhere in `stmt`) can name tables where no
+    check reads them: refused. `*` and a bare integer are the literal columns allowed."""
+    stack = [stmt]
+    while stack:
+        element = stack.pop()
+        if isinstance(element, (TextClause, TextualSelect, Values)) or (
+            isinstance(element, ColumnClause)
+            and element.is_literal
+            and not _HARMLESS_LITERAL.fullmatch(element.name)
+        ):
+            raise ScopeDenied(
+                "Read through SQL expressions, not text or VALUES, so their tables are checked."
+            )
+        stack.extend(element.get_children())
 
 
 def ensure_owner_grant(session: Session, farm: Farm) -> DataGrant:
