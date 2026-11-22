@@ -1,25 +1,32 @@
 #!/usr/bin/env bash
-# Build the optional oracle container and regenerate the stored fixtures.
+# Build the optional oracle containers and regenerate the stored fixtures.
 #
-# Usage: tools/oracles/run.sh [oracle...]   (default: every oracle; known: degday)
-# Writes tests/fixtures/oracles/<oracle>/*.json. Never runs in CI; the image is never pushed.
+# Usage: tools/oracles/run.sh [oracle...]   (default: degday viticolr plasmopy)
+# Writes tests/fixtures/oracles/<oracle>/*.json; the downy mildew oracles read the synthetic
+# season in tests/fixtures/oracles/inputs/, rewritten first by inputs/make_season.py.
+# Builds one image at a time. Never runs in CI; the images are never pushed.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-image=farmcore-oracles:local
+fixtures=tests/fixtures/oracles
 oracles=("$@")
-((${#oracles[@]})) || oracles=(degday)
+((${#oracles[@]})) || oracles=(degday viticolr plasmopy)
 
-docker build -t "$image" tools/oracles
+mkdir -p "$fixtures/inputs"
+python3 tools/oracles/inputs/make_season.py "$fixtures/inputs/season-2025.csv"
 
 for oracle in "${oracles[@]}"; do
   case "$oracle" in
     degday) cmd=(Rscript degday/generate.R /out) ;;
+    viticolr) cmd=(Rscript viticolr/generate.R /in/season-2025.csv /out) ;;
+    plasmopy) cmd=(python3 plasmopy/generate.py /in/season-2025.csv /out) ;;
     *) echo "unknown oracle: $oracle" >&2; exit 2 ;;
   esac
-  out="tests/fixtures/oracles/$oracle"
+  image="farmcore-oracles-$oracle:local"
+  docker build --target "$oracle" -t "$image" tools/oracles
+  out="$fixtures/$oracle"
   rm -rf "$out"
   mkdir -p "$out"
-  docker run --rm --network none --user "$(id -u):$(id -g)" \
-    -v "$PWD/$out:/out" "$image" "${cmd[@]}"
+  docker run --rm --network none --user "$(id -u):$(id -g)" -e HOME=/tmp \
+    -v "$PWD/$fixtures/inputs:/in:ro" -v "$PWD/$out:/out" "$image" "${cmd[@]}"
 done

@@ -1,0 +1,2832 @@
+{
+  "format": "farmcore-oracle-fixture/1",
+  "generator": {
+    "name": "viticolR",
+    "version": "0.0.4 (commit f32eb0abe02d49882eefe2c957e90776fac74b59)",
+    "licence": "GPL (>= 3)",
+    "source": "https://github.com/PaulMelloy/viticolR",
+    "source_sha256": "03a06d5073bdac85a6510dc1c5812dfdf19bc4983e5102cb6c391aa557f9693b",
+    "authors": "Paul Melloy",
+    "dependencies": [
+      {
+        "name": "epiphytoolR",
+        "version": "0.0.4 (commit 3cab18e878f819f882e25a2c5c51112910864967)",
+        "licence": "MIT + file LICENSE",
+        "source_sha256": "c05a07a111fd659879d379c656b793b44ae704c1f453e7edb2211fafe0c6c309"
+      }
+    ],
+    "runtime": "R version 4.4.2 (2024-10-31)",
+    "run": "out of process, in the tools/oracles container"
+  },
+  "method_reference": "Rossi, V., Caffi, T., Giosue, S. & Bugiani, R. (2008). A mechanistic model simulating primary infections of downy mildew in grapevine. Ecological Modelling 212, 480-491. viticolR describes itself as translated and adapted from this paper.",
+  "call": "viticolR::estimate_DM_PI then viticolR::get_PI_dates",
+  "parameters": {
+    "Start": "2025-01-01 00:00:00",
+    "End": "2025-07-31 23:00:00",
+    "SOD": 1,
+    "station": {
+      "lat": 46,
+      "lon": 7,
+      "ws": 0,
+      "wd": 0,
+      "wd_sd": 0
+    }
+  },
+  "inputs": {
+    "file": "inputs/season-2025.csv",
+    "sha256": "78c9ff0ae98e5a75eb092b539ea7971fa40bd57a2dd9cafda53ff49ac78ca15c",
+    "units": {
+      "temp_c": "degC",
+      "rh_pct": "%",
+      "rain_mm": "mm",
+      "leaf_wet_min": "min (unused)"
+    }
+  },
+  "outputs": {
+    "cohorts": 43,
+    "primary_infection_stages": [
+      {
+        "cohort": 1,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-02-15T13:00:00Z"
+      },
+      {
+        "cohort": 1,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-02-20T09:00:00Z"
+      },
+      {
+        "cohort": 1,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-02-16T19:00:00Z"
+      },
+      {
+        "cohort": 1,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 1,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 1,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-02-17T13:00:00Z"
+      },
+      {
+        "cohort": 1,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 1,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-02-19T21:00:00Z"
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-02-24T16:00:00Z"
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-02-21T19:00:00Z"
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-02-22T12:00:00Z"
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 2,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-02-24T12:00:00Z"
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-01T06:00:00Z"
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-02-25T15:00:00Z"
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-02-25T15:00:00Z"
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 3,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-01T04:00:00Z"
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-05T20:00:00Z"
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-01T22:00:00Z"
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-02T12:00:00Z"
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 4,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-05T12:00:00Z"
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-10T03:00:00Z"
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-06T11:00:00Z"
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-06T12:00:00Z"
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 5,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-09T21:00:00Z"
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-14T13:00:00Z"
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-10T19:00:00Z"
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-11T11:00:00Z"
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 6,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-14T21:00:00Z"
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-19T11:00:00Z"
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-15T16:00:00Z"
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-15T16:00:00Z"
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 7,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-19T05:00:00Z"
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-23T16:00:00Z"
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-19T18:00:00Z"
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-20T11:00:00Z"
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 8,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-23T02:00:00Z"
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-27T12:00:00Z"
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-23T16:00:00Z"
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-23T16:00:00Z"
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 9,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-27T05:00:00Z"
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-03-31T14:00:00Z"
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-27T15:00:00Z"
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-27T15:00:00Z"
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 10,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-03-31T05:00:00Z"
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-04-04T13:00:00Z"
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-03-31T16:00:00Z"
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-03-31T16:00:00Z"
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 11,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-04-04T09:00:00Z"
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-04-08T14:00:00Z"
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-04-04T22:00:00Z"
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-04-05T10:00:00Z"
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 12,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-04-08T20:00:00Z"
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-04-13T02:00:00Z"
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-04-09T07:00:00Z"
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-04-09T10:00:00Z"
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 13,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-04-12T21:00:00Z"
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-04-17T02:00:00Z"
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-04-13T08:00:00Z"
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-04-13T10:00:00Z"
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 14,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-04-16T18:00:00Z"
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-04-20T20:00:00Z"
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-04-16T22:00:00Z"
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": "2025-04-16T22:00:00Z"
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": "2025-04-17T05:00:00Z"
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-04-17T10:00:00Z"
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": "2025-04-29T13:00:00Z"
+      },
+      {
+        "cohort": 15,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": "2025-05-03T04:00:00Z"
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-04-20T03:00:00Z"
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-04-24T05:00:00Z"
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-04-20T10:00:00Z"
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-04-20T10:00:00Z"
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 16,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-04-23T09:00:00Z"
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-04-27T09:00:00Z"
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-04-23T21:00:00Z"
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-04-24T09:00:00Z"
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 17,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-04-27T08:00:00Z"
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-01T05:00:00Z"
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-04-27T22:00:00Z"
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-04-28T09:00:00Z"
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 18,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-01T19:00:00Z"
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-05T16:00:00Z"
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-01T22:00:00Z"
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": "2025-05-01T22:00:00Z"
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": "2025-05-02T04:00:00Z"
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-02T09:00:00Z"
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": "2025-05-12T05:00:00Z"
+      },
+      {
+        "cohort": 19,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": "2025-05-15T04:00:00Z"
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-05T07:00:00Z"
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-09T03:00:00Z"
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-05T21:00:00Z"
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-06T09:00:00Z"
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 20,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-08T21:00:00Z"
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-12T17:00:00Z"
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-09T01:00:00Z"
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-09T09:00:00Z"
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 21,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-12T04:00:00Z"
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-15T19:00:00Z"
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-12T09:00:00Z"
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-12T09:00:00Z"
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 22,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-16T07:00:00Z"
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-19T22:00:00Z"
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-16T15:00:00Z"
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-16T15:00:00Z"
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 23,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-19T09:00:00Z"
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-22T23:00:00Z"
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-19T22:00:00Z"
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-20T09:00:00Z"
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 24,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-22T07:00:00Z"
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-25T18:00:00Z"
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-22T14:00:00Z"
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-22T14:00:00Z"
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 25,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-26T18:00:00Z"
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-05-30T11:00:00Z"
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-26T20:00:00Z"
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": "2025-05-26T20:00:00Z"
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": "2025-05-26T23:00:00Z"
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-27T08:00:00Z"
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": "2025-06-03T12:00:00Z"
+      },
+      {
+        "cohort": 26,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": "2025-06-05T15:00:00Z"
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-05-30T22:00:00Z"
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-03T13:00:00Z"
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-05-31T01:00:00Z"
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-05-31T08:00:00Z"
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 27,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-06-03T23:00:00Z"
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-07T13:00:00Z"
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-06-04T03:00:00Z"
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-06-04T08:00:00Z"
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 28,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-06-08T02:00:00Z"
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-11T14:00:00Z"
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-06-08T06:00:00Z"
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-06-08T08:00:00Z"
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 29,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-06-11T22:00:00Z"
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-15T09:00:00Z"
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-06-12T01:00:00Z"
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-06-12T08:00:00Z"
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 30,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-06-15T19:00:00Z"
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-19T07:00:00Z"
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-06-15T21:00:00Z"
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": "2025-06-15T21:00:00Z"
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": "2025-06-16T00:00:00Z"
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-06-16T08:00:00Z"
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": "2025-06-22T10:00:00Z"
+      },
+      {
+        "cohort": 31,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": "2025-06-24T06:00:00Z"
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-06-20T00:00:00Z"
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-23T11:00:00Z"
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-06-20T03:00:00Z"
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-06-20T08:00:00Z"
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 32,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-06-23T22:00:00Z"
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-27T09:00:00Z"
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-06-24T01:00:00Z"
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-06-24T08:00:00Z"
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 33,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-06-27T08:00:00Z"
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-06-30T13:00:00Z"
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-06-27T23:00:00Z"
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-06-28T08:00:00Z"
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 34,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-07-01T22:00:00Z"
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-07-05T05:00:00Z"
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-07-02T01:00:00Z"
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-07-02T08:00:00Z"
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 35,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-07-06T00:00:00Z"
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-07-09T07:00:00Z"
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-07-06T03:00:00Z"
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-07-06T08:00:00Z"
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 36,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-07-10T20:00:00Z"
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-07-14T02:00:00Z"
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-07-10T22:00:00Z"
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-07-11T08:00:00Z"
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 37,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-07-15T18:00:00Z"
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-07-19T00:00:00Z"
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-07-15T20:00:00Z"
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": "2025-07-15T20:00:00Z"
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": "2025-07-15T23:00:00Z"
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-07-16T08:00:00Z"
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": "2025-07-21T16:00:00Z"
+      },
+      {
+        "cohort": 38,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": "2025-07-23T09:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-07-20T18:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-07-24T00:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-07-20T20:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": "2025-07-20T20:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": "2025-07-20T23:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-07-21T07:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": "2025-07-26T15:00:00Z"
+      },
+      {
+        "cohort": 39,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": "2025-07-28T08:00:00Z"
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-07-25T23:00:00Z"
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-07-29T04:00:00Z"
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": "2025-07-26T02:00:00Z"
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": "2025-07-26T07:00:00Z"
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 40,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "GEO_h",
+        "hour": "2025-07-31T23:00:00Z"
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": "2025-07-31T23:00:00Z"
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": null
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": null
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 41,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "GEO_h",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 42,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "GEO_h",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "SUS_death_h",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "ZRE_ind",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "ZDI_ind",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "ZIN_ind",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "SUZ_death_ind",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "INC_h_lower",
+        "hour": null
+      },
+      {
+        "cohort": 43,
+        "primary_infection_stage": "INC_h_upper",
+        "hour": null
+      }
+    ],
+    "end_of_day": [
+      {
+        "date": "2025-01-01",
+        "Hyd_t": 0.0215435533556253,
+        "PMO": 0.000287169415285168
+      },
+      {
+        "date": "2025-01-02",
+        "Hyd_t": 0.0430895277580613,
+        "PMO": 0.00032182632361104
+      },
+      {
+        "date": "2025-01-03",
+        "Hyd_t": 0.0646355021604973,
+        "PMO": 0.000360092114950801
+      },
+      {
+        "date": "2025-01-04",
+        "Hyd_t": 0.0861986101770455,
+        "PMO": 0.00040231106205797
+      },
+      {
+        "date": "2025-01-05",
+        "Hyd_t": 0.107773374138118,
+        "PMO": 0.000448810084675275
+      },
+      {
+        "date": "2025-01-06",
+        "Hyd_t": 0.129368849257815,
+        "PMO": 0.000499969339741725
+      },
+      {
+        "date": "2025-01-07",
+        "Hyd_t": 0.150989138141194,
+        "PMO": 0.000556186458664135
+      },
+      {
+        "date": "2025-01-08",
+        "Hyd_t": 0.172651536829817,
+        "PMO": 0.000617926672251855
+      },
+      {
+        "date": "2025-01-09",
+        "Hyd_t": 0.194344077793318,
+        "PMO": 0.000685604429928355
+      },
+      {
+        "date": "2025-01-10",
+        "Hyd_t": 0.216081391045244,
+        "PMO": 0.000759742853253198
+      },
+      {
+        "date": "2025-01-11",
+        "Hyd_t": 0.237851456184524,
+        "PMO": 0.000840808127905061
+      },
+      {
+        "date": "2025-01-12",
+        "Hyd_t": 0.259671789493879,
+        "PMO": 0.000929405417900519
+      },
+      {
+        "date": "2025-01-13",
+        "Hyd_t": 0.28154256363892,
+        "PMO": 0.00102611587082433
+      },
+      {
+        "date": "2025-01-14",
+        "Hyd_t": 0.303481541535907,
+        "PMO": 0.00113164240123198
+      },
+      {
+        "date": "2025-01-15",
+        "Hyd_t": 0.325479178313994,
+        "PMO": 0.00124660413543066
+      },
+      {
+        "date": "2025-01-16",
+        "Hyd_t": 0.347547311989539,
+        "PMO": 0.00137176725275607
+      },
+      {
+        "date": "2025-01-17",
+        "Hyd_t": 0.369690746872448,
+        "PMO": 0.0015079139435225
+      },
+      {
+        "date": "2025-01-18",
+        "Hyd_t": 0.391911583403961,
+        "PMO": 0.00165585874438736
+      },
+      {
+        "date": "2025-01-19",
+        "Hyd_t": 0.414215648891271,
+        "PMO": 0.00181649179787405
+      },
+      {
+        "date": "2025-01-20",
+        "Hyd_t": 0.436600501844377,
+        "PMO": 0.0019906948383263
+      },
+      {
+        "date": "2025-01-21",
+        "Hyd_t": 0.45908775531792,
+        "PMO": 0.0021796000103415
+      },
+      {
+        "date": "2025-01-22",
+        "Hyd_t": 0.481675167174415,
+        "PMO": 0.00238422109078868
+      },
+      {
+        "date": "2025-01-23",
+        "Hyd_t": 0.5043689647895,
+        "PMO": 0.00260570473592926
+      },
+      {
+        "date": "2025-01-24",
+        "Hyd_t": 0.52716989385554,
+        "PMO": 0.0028452111591572
+      },
+      {
+        "date": "2025-01-25",
+        "Hyd_t": 0.550086978633862,
+        "PMO": 0.00310405679699578
+      },
+      {
+        "date": "2025-01-26",
+        "Hyd_t": 0.574640629631897,
+        "PMO": 0.00340268876035505
+      },
+      {
+        "date": "2025-01-27",
+        "Hyd_t": 0.599318903224336,
+        "PMO": 0.00372630096806699
+      },
+      {
+        "date": "2025-01-28",
+        "Hyd_t": 0.624142008498064,
+        "PMO": 0.0040768892763791
+      },
+      {
+        "date": "2025-01-29",
+        "Hyd_t": 0.647175368092258,
+        "PMO": 0.00442590910990479
+      },
+      {
+        "date": "2025-01-30",
+        "Hyd_t": 0.670342857594217,
+        "PMO": 0.00480116480979869
+      },
+      {
+        "date": "2025-01-31",
+        "Hyd_t": 0.693662782290534,
+        "PMO": 0.00520460033414226
+      },
+      {
+        "date": "2025-02-01",
+        "Hyd_t": 0.71712948596735,
+        "PMO": 0.00563785833988879
+      },
+      {
+        "date": "2025-02-02",
+        "Hyd_t": 0.740751584164291,
+        "PMO": 0.00610291841033175
+      },
+      {
+        "date": "2025-02-03",
+        "Hyd_t": 0.764540969266254,
+        "PMO": 0.00660195017433708
+      },
+      {
+        "date": "2025-02-04",
+        "Hyd_t": 0.784536486074614,
+        "PMO": 0.00704621494570939
+      },
+      {
+        "date": "2025-02-05",
+        "Hyd_t": 0.804669911397594,
+        "PMO": 0.00751733508290737
+      },
+      {
+        "date": "2025-02-06",
+        "Hyd_t": 0.824953329230209,
+        "PMO": 0.00801696729763589
+      },
+      {
+        "date": "2025-02-07",
+        "Hyd_t": 0.84539046044976,
+        "PMO": 0.00854665576187303
+      },
+      {
+        "date": "2025-02-08",
+        "Hyd_t": 0.865980966570185,
+        "PMO": 0.0091079018048187
+      },
+      {
+        "date": "2025-02-09",
+        "Hyd_t": 0.888245442335163,
+        "PMO": 0.00974700364068743
+      },
+      {
+        "date": "2025-02-10",
+        "Hyd_t": 0.91068945146584,
+        "PMO": 0.0104263228300891
+      },
+      {
+        "date": "2025-02-11",
+        "Hyd_t": 0.933319763893234,
+        "PMO": 0.0111481572316442
+      },
+      {
+        "date": "2025-02-12",
+        "Hyd_t": 0.95613404094856,
+        "PMO": 0.0119146058744977
+      },
+      {
+        "date": "2025-02-13",
+        "Hyd_t": 0.979149730461622,
+        "PMO": 0.0127285387711491
+      },
+      {
+        "date": "2025-02-14",
+        "Hyd_t": 1.00236581933828,
+        "PMO": 0.0135923208017223
+      },
+      {
+        "date": "2025-02-15",
+        "Hyd_t": 1.02580054488578,
+        "PMO": 0.0145091553875457
+      },
+      {
+        "date": "2025-02-16",
+        "Hyd_t": 1.05096499476125,
+        "PMO": 0.0155454712437679
+      },
+      {
+        "date": "2025-02-17",
+        "Hyd_t": 1.07636491423617,
+        "PMO": 0.0166475696508845
+      },
+      {
+        "date": "2025-02-18",
+        "Hyd_t": 1.10276441249723,
+        "PMO": 0.0178545936354466
+      },
+      {
+        "date": "2025-02-19",
+        "Hyd_t": 1.12511267235501,
+        "PMO": 0.0189268198323355
+      },
+      {
+        "date": "2025-02-20",
+        "Hyd_t": 1.14767506470011,
+        "PMO": 0.0200574537425702
+      },
+      {
+        "date": "2025-02-21",
+        "Hyd_t": 1.17045482312862,
+        "PMO": 0.0212492132736389
+      },
+      {
+        "date": "2025-02-22",
+        "Hyd_t": 1.19346809466637,
+        "PMO": 0.0225056241993585
+      },
+      {
+        "date": "2025-02-23",
+        "Hyd_t": 1.21671310443021,
+        "PMO": 0.0238293810324566
+      },
+      {
+        "date": "2025-02-24",
+        "Hyd_t": 1.24019311919713,
+        "PMO": 0.0252235269163857
+      },
+      {
+        "date": "2025-02-25",
+        "Hyd_t": 1.26392331354911,
+        "PMO": 0.026691946437078
+      },
+      {
+        "date": "2025-02-26",
+        "Hyd_t": 1.28790743617263,
+        "PMO": 0.0282379853057369
+      },
+      {
+        "date": "2025-02-27",
+        "Hyd_t": 1.31215783612826,
+        "PMO": 0.029865674819318
+      },
+      {
+        "date": "2025-02-28",
+        "Hyd_t": 1.33667927355231,
+        "PMO": 0.0315786957743979
+      },
+      {
+        "date": "2025-03-01",
+        "Hyd_t": 1.36147596958673,
+        "PMO": 0.0333807967993712
+      },
+      {
+        "date": "2025-03-02",
+        "Hyd_t": 1.38655294263137,
+        "PMO": 0.0352758871061475
+      },
+      {
+        "date": "2025-03-03",
+        "Hyd_t": 1.41192989860296,
+        "PMO": 0.0372691571958078
+      },
+      {
+        "date": "2025-03-04",
+        "Hyd_t": 1.43761223781429,
+        "PMO": 0.0393648919071308
+      },
+      {
+        "date": "2025-03-05",
+        "Hyd_t": 1.46360548954579,
+        "PMO": 0.0415674970241443
+      },
+      {
+        "date": "2025-03-06",
+        "Hyd_t": 1.48991696951328,
+        "PMO": 0.0438816452346997
+      },
+      {
+        "date": "2025-03-07",
+        "Hyd_t": 1.516565154762,
+        "PMO": 0.0463131715859013
+      },
+      {
+        "date": "2025-03-08",
+        "Hyd_t": 1.54355883048819,
+        "PMO": 0.0488672502127008
+      },
+      {
+        "date": "2025-03-09",
+        "Hyd_t": 1.57090410191234,
+        "PMO": 0.0515489278680755
+      },
+      {
+        "date": "2025-03-10",
+        "Hyd_t": 1.5936032413464,
+        "PMO": 0.0538476852893161
+      },
+      {
+        "date": "2025-03-11",
+        "Hyd_t": 1.61659365907358,
+        "PMO": 0.0562436411589279
+      },
+      {
+        "date": "2025-03-12",
+        "Hyd_t": 1.64246986608267,
+        "PMO": 0.0590223105575053
+      },
+      {
+        "date": "2025-03-13",
+        "Hyd_t": 1.66607130851496,
+        "PMO": 0.061632783156898
+      },
+      {
+        "date": "2025-03-14",
+        "Hyd_t": 1.68998900976035,
+        "PMO": 0.0643525821128656
+      },
+      {
+        "date": "2025-03-15",
+        "Hyd_t": 1.71422932373362,
+        "PMO": 0.0671856652678235
+      },
+      {
+        "date": "2025-03-16",
+        "Hyd_t": 1.73879877320454,
+        "PMO": 0.0701360804776351
+      },
+      {
+        "date": "2025-03-17",
+        "Hyd_t": 1.76653936800536,
+        "PMO": 0.0735628594278943
+      },
+      {
+        "date": "2025-03-18",
+        "Hyd_t": 1.79179903578586,
+        "PMO": 0.0767713615710907
+      },
+      {
+        "date": "2025-03-19",
+        "Hyd_t": 1.81742895513548,
+        "PMO": 0.0801127539657473
+      },
+      {
+        "date": "2025-03-20",
+        "Hyd_t": 1.84342875921211,
+        "PMO": 0.0835905844429467
+      },
+      {
+        "date": "2025-03-21",
+        "Hyd_t": 1.86981512117044,
+        "PMO": 0.0872107107715181
+      },
+      {
+        "date": "2025-03-22",
+        "Hyd_t": 1.89971033941415,
+        "PMO": 0.0914220617629474
+      },
+      {
+        "date": "2025-03-23",
+        "Hyd_t": 1.92689982585203,
+        "PMO": 0.0953530272562046
+      },
+      {
+        "date": "2025-03-24",
+        "Hyd_t": 1.95450652353266,
+        "PMO": 0.0994418842010624
+      },
+      {
+        "date": "2025-03-25",
+        "Hyd_t": 1.98254547975034,
+        "PMO": 0.103694633886407
+      },
+      {
+        "date": "2025-03-26",
+        "Hyd_t": 2.01103098821382,
+        "PMO": 0.108117255744926
+      },
+      {
+        "date": "2025-03-27",
+        "Hyd_t": 2.04340389746545,
+        "PMO": 0.11326706489416
+      },
+      {
+        "date": "2025-03-28",
+        "Hyd_t": 2.07281472372958,
+        "PMO": 0.118058295647633
+      },
+      {
+        "date": "2025-03-29",
+        "Hyd_t": 2.10270499233971,
+        "PMO": 0.123035955025801
+      },
+      {
+        "date": "2025-03-30",
+        "Hyd_t": 2.13309092309436,
+        "PMO": 0.128206395339392
+      },
+      {
+        "date": "2025-03-31",
+        "Hyd_t": 2.15774750874041,
+        "PMO": 0.132482343280875
+      },
+      {
+        "date": "2025-04-01",
+        "Hyd_t": 2.18980294484109,
+        "PMO": 0.138147230790013
+      },
+      {
+        "date": "2025-04-02",
+        "Hyd_t": 2.21526215526317,
+        "PMO": 0.142730154286976
+      },
+      {
+        "date": "2025-04-03",
+        "Hyd_t": 2.24113350642979,
+        "PMO": 0.147461742993879
+      },
+      {
+        "date": "2025-04-04",
+        "Hyd_t": 2.26743405658582,
+        "PMO": 0.152347305265715
+      },
+      {
+        "date": "2025-04-05",
+        "Hyd_t": 2.29418003626435,
+        "PMO": 0.15739203895825
+      },
+      {
+        "date": "2025-04-06",
+        "Hyd_t": 2.32921392041134,
+        "PMO": 0.164113741583008
+      },
+      {
+        "date": "2025-04-07",
+        "Hyd_t": 2.35688120048943,
+        "PMO": 0.169510806908884
+      },
+      {
+        "date": "2025-04-08",
+        "Hyd_t": 2.3850178307408,
+        "PMO": 0.175077448192776
+      },
+      {
+        "date": "2025-04-09",
+        "Hyd_t": 2.41364355913844,
+        "PMO": 0.180819311289541
+      },
+      {
+        "date": "2025-04-10",
+        "Hyd_t": 2.44277685929493,
+        "PMO": 0.186741765463415
+      },
+      {
+        "date": "2025-04-11",
+        "Hyd_t": 2.48126540746532,
+        "PMO": 0.194683485904452
+      },
+      {
+        "date": "2025-04-12",
+        "Hyd_t": 2.51145218138501,
+        "PMO": 0.201002132700595
+      },
+      {
+        "date": "2025-04-13",
+        "Hyd_t": 2.54219620216415,
+        "PMO": 0.207515249765864
+      },
+      {
+        "date": "2025-04-14",
+        "Hyd_t": 2.57350093497841,
+        "PMO": 0.214224505001953
+      },
+      {
+        "date": "2025-04-15",
+        "Hyd_t": 2.60538131333279,
+        "PMO": 0.221133756742924
+      },
+      {
+        "date": "2025-04-16",
+        "Hyd_t": 2.64783719596378,
+        "PMO": 0.230448606643371
+      },
+      {
+        "date": "2025-04-17",
+        "Hyd_t": 2.68092363898118,
+        "PMO": 0.237792553506429
+      },
+      {
+        "date": "2025-04-18",
+        "Hyd_t": 2.71465251920332,
+        "PMO": 0.245350676805344
+      },
+      {
+        "date": "2025-04-19",
+        "Hyd_t": 2.7490240268853,
+        "PMO": 0.253122459079333
+      },
+      {
+        "date": "2025-04-20",
+        "Hyd_t": 2.78405555038651,
+        "PMO": 0.261110843674729
+      },
+      {
+        "date": "2025-04-21",
+        "Hyd_t": 2.83113931115583,
+        "PMO": 0.271945701295567
+      },
+      {
+        "date": "2025-04-22",
+        "Hyd_t": 2.86755626776583,
+        "PMO": 0.280395942729976
+      },
+      {
+        "date": "2025-04-23",
+        "Hyd_t": 2.90468788139701,
+        "PMO": 0.289068351480225
+      },
+      {
+        "date": "2025-04-24",
+        "Hyd_t": 2.93395766062894,
+        "PMO": 0.29594070506952
+      },
+      {
+        "date": "2025-04-25",
+        "Hyd_t": 2.96379265144467,
+        "PMO": 0.302975227385009
+      },
+      {
+        "date": "2025-04-26",
+        "Hyd_t": 3.01172603578021,
+        "PMO": 0.314331516756845
+      },
+      {
+        "date": "2025-04-27",
+        "Hyd_t": 3.04268423406727,
+        "PMO": 0.321696674119224
+      },
+      {
+        "date": "2025-04-28",
+        "Hyd_t": 3.07425489251205,
+        "PMO": 0.329228119923683
+      },
+      {
+        "date": "2025-04-29",
+        "Hyd_t": 3.10642283405577,
+        "PMO": 0.336919783123945
+      },
+      {
+        "date": "2025-04-30",
+        "Hyd_t": 3.13923291968855,
+        "PMO": 0.344779615367335
+      },
+      {
+        "date": "2025-05-01",
+        "Hyd_t": 3.19276978125574,
+        "PMO": 0.357626416882358
+      },
+      {
+        "date": "2025-05-02",
+        "Hyd_t": 3.22686508443032,
+        "PMO": 0.365815644264513
+      },
+      {
+        "date": "2025-05-03",
+        "Hyd_t": 3.26165905393125,
+        "PMO": 0.374173718499699
+      },
+      {
+        "date": "2025-05-04",
+        "Hyd_t": 3.29713360465725,
+        "PMO": 0.382691943349817
+      },
+      {
+        "date": "2025-05-05",
+        "Hyd_t": 3.33332006547819,
+        "PMO": 0.391373070900828
+      },
+      {
+        "date": "2025-05-06",
+        "Hyd_t": 3.39330099779423,
+        "PMO": 0.405732402000377
+      },
+      {
+        "date": "2025-05-07",
+        "Hyd_t": 3.43095621552846,
+        "PMO": 0.414720175484401
+      },
+      {
+        "date": "2025-05-08",
+        "Hyd_t": 3.46937407041063,
+        "PMO": 0.423862702292292
+      },
+      {
+        "date": "2025-05-09",
+        "Hyd_t": 3.50857682036057,
+        "PMO": 0.43315856144484
+      },
+      {
+        "date": "2025-05-10",
+        "Hyd_t": 3.54858753340572,
+        "PMO": 0.442605987309109
+      },
+      {
+        "date": "2025-05-11",
+        "Hyd_t": 3.61592937453094,
+        "PMO": 0.458401581543566
+      },
+      {
+        "date": "2025-05-12",
+        "Hyd_t": 3.65760511841378,
+        "PMO": 0.468102252633464
+      },
+      {
+        "date": "2025-05-13",
+        "Hyd_t": 3.70011219225659,
+        "PMO": 0.477931103769191
+      },
+      {
+        "date": "2025-05-14",
+        "Hyd_t": 3.74352601540397,
+        "PMO": 0.487896167342174
+      },
+      {
+        "date": "2025-05-15",
+        "Hyd_t": 3.78784848915521,
+        "PMO": 0.497987824414098
+      },
+      {
+        "date": "2025-05-16",
+        "Hyd_t": 3.86350273061892,
+        "PMO": 0.515007223830824
+      },
+      {
+        "date": "2025-05-17",
+        "Hyd_t": 3.90969516240402,
+        "PMO": 0.525262372206604
+      },
+      {
+        "date": "2025-05-18",
+        "Hyd_t": 3.95682119192546,
+        "PMO": 0.535611854790782
+      },
+      {
+        "date": "2025-05-19",
+        "Hyd_t": 4.00493617644984,
+        "PMO": 0.54605579032033
+      },
+      {
+        "date": "2025-05-20",
+        "Hyd_t": 4.05403967988863,
+        "PMO": 0.556581487816023
+      },
+      {
+        "date": "2025-05-21",
+        "Hyd_t": 4.13890326053018,
+        "PMO": 0.57444294851497
+      },
+      {
+        "date": "2025-05-22",
+        "Hyd_t": 4.19007015913831,
+        "PMO": 0.585002931161235
+      },
+      {
+        "date": "2025-05-23",
+        "Hyd_t": 4.24231390228088,
+        "PMO": 0.595617590838329
+      },
+      {
+        "date": "2025-05-24",
+        "Hyd_t": 4.28190633021496,
+        "PMO": 0.603546740198105
+      },
+      {
+        "date": "2025-05-25",
+        "Hyd_t": 4.32227365460923,
+        "PMO": 0.611527255795779
+      },
+      {
+        "date": "2025-05-26",
+        "Hyd_t": 4.41001740824848,
+        "PMO": 0.62850609449601
+      },
+      {
+        "date": "2025-05-27",
+        "Hyd_t": 4.45196824306803,
+        "PMO": 0.63644311308373
+      },
+      {
+        "date": "2025-05-28",
+        "Hyd_t": 4.49474085136694,
+        "PMO": 0.64441382568765
+      },
+      {
+        "date": "2025-05-29",
+        "Hyd_t": 4.53836310853135,
+        "PMO": 0.652415333004265
+      },
+      {
+        "date": "2025-05-30",
+        "Hyd_t": 4.58281387185292,
+        "PMO": 0.660435579348541
+      },
+      {
+        "date": "2025-05-31",
+        "Hyd_t": 4.68039050862859,
+        "PMO": 0.677567131770201
+      },
+      {
+        "date": "2025-06-01",
+        "Hyd_t": 4.72656476194465,
+        "PMO": 0.685446152956817
+      },
+      {
+        "date": "2025-06-02",
+        "Hyd_t": 4.77363539609175,
+        "PMO": 0.693327386203648
+      },
+      {
+        "date": "2025-06-03",
+        "Hyd_t": 4.8215771250433,
+        "PMO": 0.701198200133657
+      },
+      {
+        "date": "2025-06-04",
+        "Hyd_t": 4.8704177836271,
+        "PMO": 0.709054812701697
+      },
+      {
+        "date": "2025-06-05",
+        "Hyd_t": 4.97807165465668,
+        "PMO": 0.725798818168745
+      },
+      {
+        "date": "2025-06-06",
+        "Hyd_t": 5.02877443537238,
+        "PMO": 0.733413716349165
+      },
+      {
+        "date": "2025-06-07",
+        "Hyd_t": 5.08042468338747,
+        "PMO": 0.740994102051978
+      },
+      {
+        "date": "2025-06-08",
+        "Hyd_t": 5.13303145321414,
+        "PMO": 0.748533017245287
+      },
+      {
+        "date": "2025-06-09",
+        "Hyd_t": 5.18658308941416,
+        "PMO": 0.75602069570396
+      },
+      {
+        "date": "2025-06-10",
+        "Hyd_t": 5.30428627795253,
+        "PMO": 0.771826783375065
+      },
+      {
+        "date": "2025-06-11",
+        "Hyd_t": 5.35979937263802,
+        "PMO": 0.778976288380329
+      },
+      {
+        "date": "2025-06-12",
+        "Hyd_t": 5.41628600983185,
+        "PMO": 0.786054314367807
+      },
+      {
+        "date": "2025-06-13",
+        "Hyd_t": 5.47377518454106,
+        "PMO": 0.793057280806663
+      },
+      {
+        "date": "2025-06-14",
+        "Hyd_t": 5.5322265757199,
+        "PMO": 0.799973409739193
+      },
+      {
+        "date": "2025-06-15",
+        "Hyd_t": 5.65962341602411,
+        "PMO": 0.814352496881036
+      },
+      {
+        "date": "2025-06-16",
+        "Hyd_t": 5.7201032405099,
+        "PMO": 0.820854339893513
+      },
+      {
+        "date": "2025-06-17",
+        "Hyd_t": 5.78157138745894,
+        "PMO": 0.827254612362998
+      },
+      {
+        "date": "2025-06-18",
+        "Hyd_t": 5.84409018921191,
+        "PMO": 0.833554210158334
+      },
+      {
+        "date": "2025-06-19",
+        "Hyd_t": 5.90761187604672,
+        "PMO": 0.839743011493449
+      },
+      {
+        "date": "2025-06-20",
+        "Hyd_t": 6.04408945967739,
+        "PMO": 0.85234218877076
+      },
+      {
+        "date": "2025-06-21",
+        "Hyd_t": 6.10961982195006,
+        "PMO": 0.858065568201718
+      },
+      {
+        "date": "2025-06-22",
+        "Hyd_t": 6.17619202271584,
+        "PMO": 0.863671391576922
+      },
+      {
+        "date": "2025-06-23",
+        "Hyd_t": 6.24378161568287,
+        "PMO": 0.869154056706366
+      },
+      {
+        "date": "2025-06-24",
+        "Hyd_t": 6.31236193952225,
+        "PMO": 0.874508467118769
+      },
+      {
+        "date": "2025-06-25",
+        "Hyd_t": 6.45695665278177,
+        "PMO": 0.885138168472588
+      },
+      {
+        "date": "2025-06-26",
+        "Hyd_t": 6.52751521029299,
+        "PMO": 0.890014596088609
+      },
+      {
+        "date": "2025-06-27",
+        "Hyd_t": 6.59908573291453,
+        "PMO": 0.894762283912619
+      },
+      {
+        "date": "2025-06-28",
+        "Hyd_t": 6.67161008193902,
+        "PMO": 0.899376232271646
+      },
+      {
+        "date": "2025-06-29",
+        "Hyd_t": 6.74510401393105,
+        "PMO": 0.903856793708119
+      },
+      {
+        "date": "2025-06-30",
+        "Hyd_t": 6.89698824318203,
+        "PMO": 0.912524911979527
+      },
+      {
+        "date": "2025-07-01",
+        "Hyd_t": 6.97238969371445,
+        "PMO": 0.91654703670643
+      },
+      {
+        "date": "2025-07-02",
+        "Hyd_t": 7.04871831689848,
+        "PMO": 0.920438603403251
+      },
+      {
+        "date": "2025-07-03",
+        "Hyd_t": 7.12599685101808,
+        "PMO": 0.924201496889805
+      },
+      {
+        "date": "2025-07-04",
+        "Hyd_t": 7.2041472134498,
+        "PMO": 0.927833056714507
+      },
+      {
+        "date": "2025-07-05",
+        "Hyd_t": 7.362244024663,
+        "PMO": 0.934675001087822
+      },
+      {
+        "date": "2025-07-06",
+        "Hyd_t": 7.4421735807316,
+        "PMO": 0.937891693101774
+      },
+      {
+        "date": "2025-07-07",
+        "Hyd_t": 7.52291450650011,
+        "PMO": 0.940985372460058
+      },
+      {
+        "date": "2025-07-08",
+        "Hyd_t": 7.60448650958431,
+        "PMO": 0.943959149964115
+      },
+      {
+        "date": "2025-07-09",
+        "Hyd_t": 7.68688941880832,
+        "PMO": 0.946815431275721
+      },
+      {
+        "date": "2025-07-10",
+        "Hyd_t": 7.8501864661703,
+        "PMO": 0.952063594389653
+      },
+      {
+        "date": "2025-07-11",
+        "Hyd_t": 7.93410026765169,
+        "PMO": 0.954560636445321
+      },
+      {
+        "date": "2025-07-12",
+        "Hyd_t": 8.01874927664953,
+        "PMO": 0.956950787678427
+      },
+      {
+        "date": "2025-07-13",
+        "Hyd_t": 8.10411428266382,
+        "PMO": 0.959236586011024
+      },
+      {
+        "date": "2025-07-14",
+        "Hyd_t": 8.19012511125537,
+        "PMO": 0.961419431790166
+      },
+      {
+        "date": "2025-07-15",
+        "Hyd_t": 8.35756960271966,
+        "PMO": 0.965345333975203
+      },
+      {
+        "date": "2025-07-16",
+        "Hyd_t": 8.44480102642413,
+        "PMO": 0.967232370805162
+      },
+      {
+        "date": "2025-07-17",
+        "Hyd_t": 8.53263323897468,
+        "PMO": 0.969030272081681
+      },
+      {
+        "date": "2025-07-18",
+        "Hyd_t": 8.62097582225611,
+        "PMO": 0.970740633570685
+      },
+      {
+        "date": "2025-07-19",
+        "Hyd_t": 8.68426091951542,
+        "PMO": 0.97190833962076
+      },
+      {
+        "date": "2025-07-20",
+        "Hyd_t": 8.84198161324157,
+        "PMO": 0.97462234362099
+      },
+      {
+        "date": "2025-07-21",
+        "Hyd_t": 8.90594841012116,
+        "PMO": 0.975647795198635
+      },
+      {
+        "date": "2025-07-22",
+        "Hyd_t": 8.9702043850281,
+        "PMO": 0.976636669438004
+      },
+      {
+        "date": "2025-07-23",
+        "Hyd_t": 9.03464057498248,
+        "PMO": 0.977588458904474
+      },
+      {
+        "date": "2025-07-24",
+        "Hyd_t": 9.09933334901146,
+        "PMO": 0.9785054646675
+      },
+      {
+        "date": "2025-07-25",
+        "Hyd_t": 9.25869160808443,
+        "PMO": 0.980609023623465
+      },
+      {
+        "date": "2025-07-26",
+        "Hyd_t": 9.32382484402811,
+        "PMO": 0.98140891426085
+      },
+      {
+        "date": "2025-07-27",
+        "Hyd_t": 9.38910571928107,
+        "PMO": 0.982177812457303
+      },
+      {
+        "date": "2025-07-28",
+        "Hyd_t": 9.45450621823092,
+        "PMO": 0.98291651080015
+      },
+      {
+        "date": "2025-07-29",
+        "Hyd_t": 9.51997087055316,
+        "PMO": 0.983625527596515
+      },
+      {
+        "date": "2025-07-30",
+        "Hyd_t": 9.68025272038273,
+        "PMO": 0.985240636529987
+      },
+      {
+        "date": "2025-07-31",
+        "Hyd_t": 9.74583010831531,
+        "PMO": 0.985854924385877
+      }
+    ]
+  }
+}

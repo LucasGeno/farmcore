@@ -1,0 +1,466 @@
+{
+  "format": "farmcore-oracle-fixture/1",
+  "generator": {
+    "name": "plasmopy",
+    "version": "1.0 (commit 2fea0cb3dfc9e5892f231328a03447ea381dd3f8)",
+    "licence": "AGPL-3.0 (LICENSE in the upstream repository)",
+    "source": "https://github.com/agroscope-ch/plasmopy",
+    "source_sha256": "924133672435ac5209bbf9cb0f89d1c520cb5f7e5031020bdbb0d21cd26d1a36",
+    "authors": "Livio Ruzzante; Agroscope",
+    "runtime": "Python 3.12.8",
+    "run": "out of process, in the tools/oracles container (python3 src/main.py)"
+  },
+  "method_reference": "Agroscope VitiMeteo Plasmopara model (plasmopy README). Not Rossi et al. 2008: use for event-timing cross-checks only.",
+  "call": "plasmopy src/main.py (Hydra) with the overrides in parameters.overrides",
+  "parameters": {
+    "overrides": {
+      "input_data.spore_counts": null,
+      "spore_driven_model.enabled": false,
+      "site.latitude": 46.0,
+      "site.longitude": 7.0,
+      "site.elevation": 400,
+      "site.timezone": "UTC",
+      "oospore_maturation.date": null
+    },
+    "model": {
+      "spore_driven_model": {
+        "enabled": false,
+        "spore_count_threshold": 50,
+        "spore_count_lookback_days": 5,
+        "spore_count_percent_increase": 50
+      },
+      "site": {
+        "latitude": 46.0,
+        "longitude": 7.0,
+        "elevation": 400,
+        "timezone": "UTC"
+      },
+      "run_settings": {
+        "algorithmic_time_steps": 1,
+        "computational_time_steps": 6,
+        "measurement_time_interval": 10,
+        "fast_mode": true
+      },
+      "data_columns": {
+        "use_columns": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "rename_columns": {
+          "0": "datetime",
+          "1": "temperature",
+          "2": "humidity",
+          "3": "rainfall",
+          "4": "leaf_wetness"
+        },
+        "format_columns": {
+          "0": "%d.%m.%Y %H:%M",
+          "1": [
+            -20,
+            50
+          ],
+          "2": [
+            0,
+            100
+          ],
+          "3": [
+            0,
+            200
+          ],
+          "4": [
+            0,
+            10
+          ]
+        }
+      },
+      "oospore_maturation": {
+        "date": null,
+        "base_temperature": 8.0,
+        "sum_degree_days_threshold": 140.0
+      },
+      "oospore_germination": {
+        "algorithm": 2,
+        "base_temperature": 8,
+        "base_duration": 8,
+        "leaf_wetness_threshold": 1.0,
+        "relative_humidity_threshold": 80,
+        "moisturization_temperature_threshold": 8.0,
+        "moisturization_rainfall_threshold": 5.0,
+        "moisturization_rainfall_period": 48
+      },
+      "oospore_dispersion": {
+        "rainfall_threshold": 3.0,
+        "latency": 6.0
+      },
+      "primary_infection": {
+        "base_temperature": 8.0,
+        "leaf_wetness_latency": 6.0,
+        "sum_degree_hours_threshold": 50.0
+      },
+      "sporulation": {
+        "leaf_wetness_threshold": 0.0,
+        "min_humidity": 92.0,
+        "min_temperature": 12.0,
+        "min_darkness_hours": 4.0
+      },
+      "sporangia": {
+        "latency": 4.0,
+        "max_density": 300000.0,
+        "max_temperature": 17.5,
+        "min_temperature": 11.0
+      },
+      "spore_lifespan": {
+        "constant": 11.35,
+        "saturation_vapor_pressure": null
+      },
+      "secondary_infection": {
+        "min_temperature": 3.0,
+        "max_temperature": 29.0,
+        "leaf_wetness_latency": 60.0,
+        "sum_degree_hours_threshold": 50.0
+      }
+    },
+    "input_step_minutes": 10
+  },
+  "inputs": {
+    "file": "inputs/season-2025.csv",
+    "sha256": "78c9ff0ae98e5a75eb092b539ea7971fa40bd57a2dd9cafda53ff49ac78ca15c",
+    "units": {
+      "temp_c": "degC",
+      "rh_pct": "%",
+      "rain_mm": "mm/h",
+      "leaf_wet_min": "min"
+    },
+    "transform": "each hour repeated as six 10-minute rows; rain kept as mm/h (plasmopy reads intensity); leaf wetness scaled to minutes per 10 minutes; times in UTC"
+  },
+  "outputs": {
+    "description": "plasmopy's <run>.infection_datetimes.csv, one object per row",
+    "infections": [
+      {
+        "id": "19278",
+        "start": "2025-05-14 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-05-16 20:30:00+00:00",
+        "oospore_dispersion": "2025-05-16 20:30:00+00:00",
+        "oospore_infection": "2025-05-17 00:00:00+00:00",
+        "completed_incubation": "2025-05-26 00:00:00+00:00",
+        "sporulation": "2025-05-26 23:20:00+00:00",
+        "sporangia_density": "54664.61538461539",
+        "secondary_infection": "2025-05-31 20:50:00+00:00",
+        "oospore_infection_strength": "42.93999999999999",
+        "secondary_infection_strength": "115.14"
+      },
+      {
+        "id": "19554",
+        "start": "2025-05-16 19:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-05-16 21:30:00+00:00",
+        "oospore_dispersion": "2025-05-16 21:30:00+00:00",
+        "oospore_infection": "2025-05-17 01:20:00+00:00",
+        "completed_incubation": "2025-05-26 01:20:00+00:00",
+        "sporulation": "2025-05-26 23:20:00+00:00",
+        "sporangia_density": "54664.61538461539",
+        "secondary_infection": "2025-05-31 20:50:00+00:00",
+        "oospore_infection_strength": "42.93999999999999",
+        "secondary_infection_strength": "115.14"
+      },
+      {
+        "id": "19560",
+        "start": "2025-05-16 20:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-05-16 22:30:00+00:00",
+        "oospore_dispersion": "2025-05-16 22:30:00+00:00",
+        "oospore_infection": "2025-05-17 02:40:00+00:00",
+        "completed_incubation": "2025-05-26 02:40:00+00:00",
+        "sporulation": "2025-05-26 23:20:00+00:00",
+        "sporangia_density": "54664.61538461539",
+        "secondary_infection": "2025-05-31 20:50:00+00:00",
+        "oospore_infection_strength": "42.93999999999999",
+        "secondary_infection_strength": "115.14"
+      },
+      {
+        "id": "21438",
+        "start": "2025-05-29 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-05-31 20:30:00+00:00",
+        "oospore_dispersion": "2025-05-31 20:30:00+00:00",
+        "oospore_infection": "2025-05-31 23:30:00+00:00",
+        "completed_incubation": "2025-06-07 23:30:00+00:00",
+        "sporulation": "2025-06-10 23:30:00+00:00",
+        "sporangia_density": "116824.61538461539",
+        "secondary_infection": "2025-06-15 20:50:00+00:00",
+        "oospore_infection_strength": "115.14",
+        "secondary_infection_strength": "124.67999999999999"
+      },
+      {
+        "id": "21714",
+        "start": "2025-05-31 19:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-05-31 21:30:00+00:00",
+        "oospore_dispersion": "2025-05-31 21:30:00+00:00",
+        "oospore_infection": "2025-06-01 00:50:00+00:00",
+        "completed_incubation": "2025-06-08 00:50:00+00:00",
+        "sporulation": "2025-06-10 23:30:00+00:00",
+        "sporangia_density": "116824.61538461539",
+        "secondary_infection": "2025-06-15 20:50:00+00:00",
+        "oospore_infection_strength": "49.339999999999996",
+        "secondary_infection_strength": "124.67999999999999"
+      },
+      {
+        "id": "21720",
+        "start": "2025-05-31 20:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-05-31 22:30:00+00:00",
+        "oospore_dispersion": "2025-05-31 22:30:00+00:00",
+        "oospore_infection": "2025-06-01 02:10:00+00:00",
+        "completed_incubation": "2025-06-08 02:10:00+00:00",
+        "sporulation": "2025-06-10 23:30:00+00:00",
+        "sporangia_density": "116824.61538461539",
+        "secondary_infection": "2025-06-15 20:50:00+00:00",
+        "oospore_infection_strength": "49.339999999999996",
+        "secondary_infection_strength": "124.67999999999999"
+      },
+      {
+        "id": "21726",
+        "start": "2025-05-31 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-05-31 23:30:00+00:00",
+        "oospore_dispersion": "2025-05-31 23:30:00+00:00",
+        "oospore_infection": "2025-06-01 03:20:00+00:00",
+        "completed_incubation": "2025-06-08 03:20:00+00:00",
+        "sporulation": "2025-06-10 23:30:00+00:00",
+        "sporangia_density": "116824.61538461539",
+        "secondary_infection": "2025-06-15 20:50:00+00:00",
+        "oospore_infection_strength": "49.339999999999996",
+        "secondary_infection_strength": "124.67999999999999"
+      },
+      {
+        "id": "23598",
+        "start": "2025-06-13 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-15 20:30:00+00:00",
+        "oospore_dispersion": "2025-06-15 20:30:00+00:00",
+        "oospore_infection": "2025-06-15 23:20:00+00:00",
+        "completed_incubation": "2025-06-22 23:20:00+00:00",
+        "sporulation": "2025-06-25 23:40:00+00:00",
+        "sporangia_density": "164603.07692307694",
+        "secondary_infection": "2025-06-30 20:50:00+00:00",
+        "oospore_infection_strength": "124.67999999999999",
+        "secondary_infection_strength": "131.96999999999997"
+      },
+      {
+        "id": "23874",
+        "start": "2025-06-15 19:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-15 21:30:00+00:00",
+        "oospore_dispersion": "2025-06-15 21:30:00+00:00",
+        "oospore_infection": "2025-06-16 00:30:00+00:00",
+        "completed_incubation": "2025-06-23 00:30:00+00:00",
+        "sporulation": "2025-06-25 23:40:00+00:00",
+        "sporangia_density": "164603.07692307694",
+        "secondary_infection": "2025-06-30 20:50:00+00:00",
+        "oospore_infection_strength": "54.7",
+        "secondary_infection_strength": "131.96999999999997"
+      },
+      {
+        "id": "23880",
+        "start": "2025-06-15 20:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-15 22:30:00+00:00",
+        "oospore_dispersion": "2025-06-15 22:30:00+00:00",
+        "oospore_infection": "2025-06-16 01:50:00+00:00",
+        "completed_incubation": "2025-06-23 01:50:00+00:00",
+        "sporulation": "2025-06-25 23:40:00+00:00",
+        "sporangia_density": "164603.07692307694",
+        "secondary_infection": "2025-06-30 20:50:00+00:00",
+        "oospore_infection_strength": "54.7",
+        "secondary_infection_strength": "131.96999999999997"
+      },
+      {
+        "id": "23886",
+        "start": "2025-06-15 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-15 23:30:00+00:00",
+        "oospore_dispersion": "2025-06-15 23:30:00+00:00",
+        "oospore_infection": "2025-06-16 03:00:00+00:00",
+        "completed_incubation": "2025-06-23 03:00:00+00:00",
+        "sporulation": "2025-06-25 23:40:00+00:00",
+        "sporangia_density": "164603.07692307694",
+        "secondary_infection": "2025-06-30 20:50:00+00:00",
+        "oospore_infection_strength": "54.7",
+        "secondary_infection_strength": "131.96999999999997"
+      },
+      {
+        "id": "25758",
+        "start": "2025-06-28 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-30 20:30:00+00:00",
+        "oospore_dispersion": "2025-06-30 20:30:00+00:00",
+        "oospore_infection": "2025-06-30 23:10:00+00:00",
+        "completed_incubation": "2025-07-06 23:10:00+00:00",
+        "sporulation": "2025-07-10 23:30:00+00:00",
+        "sporangia_density": "204904.61538461543",
+        "secondary_infection": "2025-07-15 20:50:00+00:00",
+        "oospore_infection_strength": "131.96999999999997",
+        "secondary_infection_strength": "136.66"
+      },
+      {
+        "id": "26034",
+        "start": "2025-06-30 19:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-30 21:30:00+00:00",
+        "oospore_dispersion": "2025-06-30 21:30:00+00:00",
+        "oospore_infection": "2025-07-01 00:20:00+00:00",
+        "completed_incubation": "2025-07-07 00:20:00+00:00",
+        "sporulation": "2025-07-10 23:30:00+00:00",
+        "sporangia_density": "204904.61538461543",
+        "secondary_infection": "2025-07-15 20:50:00+00:00",
+        "oospore_infection_strength": "58.77999999999999",
+        "secondary_infection_strength": "136.66"
+      },
+      {
+        "id": "26040",
+        "start": "2025-06-30 20:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-30 22:30:00+00:00",
+        "oospore_dispersion": "2025-06-30 22:30:00+00:00",
+        "oospore_infection": "2025-07-01 01:30:00+00:00",
+        "completed_incubation": "2025-07-07 01:30:00+00:00",
+        "sporulation": "2025-07-10 23:30:00+00:00",
+        "sporangia_density": "204904.61538461543",
+        "secondary_infection": "2025-07-15 20:50:00+00:00",
+        "oospore_infection_strength": "58.77999999999999",
+        "secondary_infection_strength": "136.66"
+      },
+      {
+        "id": "26046",
+        "start": "2025-06-30 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-06-30 23:30:00+00:00",
+        "oospore_dispersion": "2025-06-30 23:30:00+00:00",
+        "oospore_infection": "2025-07-01 02:40:00+00:00",
+        "completed_incubation": "2025-07-07 02:40:00+00:00",
+        "sporulation": "2025-07-10 23:30:00+00:00",
+        "sporangia_density": "204904.61538461543",
+        "secondary_infection": "2025-07-15 20:50:00+00:00",
+        "oospore_infection_strength": "58.77999999999999",
+        "secondary_infection_strength": "136.66"
+      },
+      {
+        "id": "27918",
+        "start": "2025-07-13 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-15 20:30:00+00:00",
+        "oospore_dispersion": "2025-07-15 20:30:00+00:00",
+        "oospore_infection": "2025-07-15 23:00:00+00:00",
+        "completed_incubation": "2025-07-21 23:00:00+00:00",
+        "sporulation": "2025-07-25 23:20:00+00:00",
+        "sporangia_density": "227021.5384615385",
+        "secondary_infection": "2025-07-30 20:50:00+00:00",
+        "oospore_infection_strength": "136.66",
+        "secondary_infection_strength": "138.52"
+      },
+      {
+        "id": "28194",
+        "start": "2025-07-15 19:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-15 21:30:00+00:00",
+        "oospore_dispersion": "2025-07-15 21:30:00+00:00",
+        "oospore_infection": "2025-07-16 00:10:00+00:00",
+        "completed_incubation": "2025-07-22 00:10:00+00:00",
+        "sporulation": "2025-07-25 23:20:00+00:00",
+        "sporangia_density": "227021.5384615385",
+        "secondary_infection": "2025-07-30 20:50:00+00:00",
+        "oospore_infection_strength": "61.35",
+        "secondary_infection_strength": "138.52"
+      },
+      {
+        "id": "28200",
+        "start": "2025-07-15 20:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-15 22:30:00+00:00",
+        "oospore_dispersion": "2025-07-15 22:30:00+00:00",
+        "oospore_infection": "2025-07-16 01:20:00+00:00",
+        "completed_incubation": "2025-07-22 01:20:00+00:00",
+        "sporulation": "2025-07-25 23:20:00+00:00",
+        "sporangia_density": "227021.5384615385",
+        "secondary_infection": "2025-07-30 20:50:00+00:00",
+        "oospore_infection_strength": "61.35",
+        "secondary_infection_strength": "138.52"
+      },
+      {
+        "id": "28206",
+        "start": "2025-07-15 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-15 23:30:00+00:00",
+        "oospore_dispersion": "2025-07-15 23:30:00+00:00",
+        "oospore_infection": "2025-07-16 02:30:00+00:00",
+        "completed_incubation": "2025-07-22 02:30:00+00:00",
+        "sporulation": "2025-07-25 23:20:00+00:00",
+        "sporangia_density": "227021.5384615385",
+        "secondary_infection": "2025-07-30 20:50:00+00:00",
+        "oospore_infection_strength": "61.35",
+        "secondary_infection_strength": "138.52"
+      },
+      {
+        "id": "30078",
+        "start": "2025-07-28 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-30 20:30:00+00:00",
+        "oospore_dispersion": "2025-07-30 20:30:00+00:00",
+        "oospore_infection": "2025-07-30 23:00:00+00:00",
+        "completed_incubation": "None",
+        "sporulation": "NA",
+        "sporangia_density": "NA",
+        "secondary_infection": "NA",
+        "oospore_infection_strength": "NA",
+        "secondary_infection_strength": "NA"
+      },
+      {
+        "id": "30354",
+        "start": "2025-07-30 19:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-30 21:30:00+00:00",
+        "oospore_dispersion": "2025-07-30 21:30:00+00:00",
+        "oospore_infection": "2025-07-31 00:10:00+00:00",
+        "completed_incubation": "None",
+        "sporulation": "NA",
+        "sporangia_density": "NA",
+        "secondary_infection": "NA",
+        "oospore_infection_strength": "NA",
+        "secondary_infection_strength": "NA"
+      },
+      {
+        "id": "30360",
+        "start": "2025-07-30 20:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-30 22:30:00+00:00",
+        "oospore_dispersion": "2025-07-30 22:30:00+00:00",
+        "oospore_infection": "2025-07-31 01:20:00+00:00",
+        "completed_incubation": "None",
+        "sporulation": "NA",
+        "sporangia_density": "NA",
+        "secondary_infection": "NA",
+        "oospore_infection_strength": "NA",
+        "secondary_infection_strength": "NA"
+      },
+      {
+        "id": "30366",
+        "start": "2025-07-30 21:00:00+00:00",
+        "oospore_maturation": "2025-05-06 00:00:00+00:00",
+        "oospore_germination": "2025-07-30 23:30:00+00:00",
+        "oospore_dispersion": "2025-07-30 23:30:00+00:00",
+        "oospore_infection": "2025-07-31 02:30:00+00:00",
+        "completed_incubation": "None",
+        "sporulation": "NA",
+        "sporangia_density": "NA",
+        "secondary_infection": "NA",
+        "oospore_infection_strength": "NA",
+        "secondary_infection_strength": "NA"
+      }
+    ]
+  }
+}
