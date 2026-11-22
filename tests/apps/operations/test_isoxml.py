@@ -80,6 +80,15 @@ def test_parse_accepts_the_same_file_zipped():
     assert isoxml.parse(_zipped(xml)) == isoxml.parse(xml)
 
 
+def test_parse_refuses_document_type_declarations():
+    xml = isoxml_demo.demo_taskdata().replace(
+        b"<ISO11783_TaskData", b"<!DOCTYPE ISO11783_TaskData>\n<ISO11783_TaskData", 1
+    )
+
+    with pytest.raises(isoxml.IsoxmlError, match="document type declarations"):
+        isoxml.parse(xml)
+
+
 MINIMAL = """<?xml version="1.0" encoding="UTF-8"?>
 <ISO11783_TaskData VersionMajor="4" VersionMinor="3" DataTransferOrigin="1">
   <PFD A="PFD1" C="Les Granges" D="40700"/>
