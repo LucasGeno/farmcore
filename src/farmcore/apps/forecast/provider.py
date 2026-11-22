@@ -39,6 +39,7 @@ from farmcore.core.weather.contract import (
     Point,
     Request,
     Station,
+    Tier,
     TimeRange,
 )
 from farmcore.core.weather.variables import BY_LEGACY
@@ -226,6 +227,7 @@ class OpenMeteo:
             observations=False,
             forecast=True,
             variables=frozenset(BY_LEGACY[v].name for v in sources.VARIABLES.values()),
+            tier=Tier.MODEL,
         )
 
     def licence(self) -> Licence:

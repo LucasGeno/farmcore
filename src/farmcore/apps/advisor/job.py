@@ -1,12 +1,14 @@
 """`advisor.evaluate`: evaluate every parcel of every farm at the clock `now`.
 
-Per farm: the weather series once (`service.load_series`), then per parcel its done sprays, one
-`engine.evaluate`, one `advice` row (evaluated_at = now) and an `advice.evaluated` event on the
+Per farm: its weather once (`service.load_held`), then per parcel the merged series ranked from the
+parcel's centroid (`service.parcel_points`), its done sprays, one `engine.evaluate`, one `advice`
+row (evaluated_at = now) and an `advice.evaluated` event on the
 parcel. When the decision differs from the parcel's previous advice (`service.previous_decisions`;
 missing = `none`) it also posts `advice.changed` (payload: parcel alias and name, old, new,
 headline, card path). So a first evaluation that yields `none` posts no change. A done spray log
 with no known product gives no cover and flags the row `spray_without_product`. Chat (16) pushes
-the changes; advisor never imports chat. A farm without a weather station is skipped.
+the changes; advisor never imports chat. A farm with no weather (no station asset and no value
+from any provider, `service.unavailable_reason`) or nothing to merge by now is skipped.
 
 In live mode the job only plans (one durable task per due farm, `core/tasks.py`) and the worker
 runs `evaluate_live`, which writes nothing unless its attempt is still current.
@@ -85,21 +87,26 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
     """Evaluate parcels. Caller holds advisory→farm row locks before creating this repo."""
     if service.unavailable_reason(repo):
         return 0
-    station = stations.station_for_farm(repo)
-    if station is None:
-        logger.info("%s: farm %s has no weather station, skipped", JOB_NAME, repo.farm_id)
-        return 0
+    station = stations.station_for_farm(repo)  # None: weather from providers only
     from farmcore.apps.review.service import resolve
 
     effective = resolve(repo, now, tz, seed=True)
     config = effective.config
-    series = service.load_series(repo, station.id, now, tz, config)
+    held = service.load_held(repo, now, tz, config)
+    if station is None and not held:
+        logger.info("%s: farm %s has no weather by now, skipped", JOB_NAME, repo.farm_id)
+        return 0
+    points = service.parcel_points(repo)
+    own = service.station_identities(repo, station)
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
     previous = service.previous_decisions(repo, now)
     session = repo.session
     for parcel in parcels:
+        weather = held.at(points.get(parcel.id))
+        series = weather.series()
+        record = service.records_sources(weather, own)
         sprays, ignored = service.load_sprays(repo, parcel.id, now)
         advice = engine_evaluate(series, sprays, config, now)
         if effective.status in ("rejected", "unsure"):
@@ -129,8 +136,18 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
             ignored_sprays=ignored,
             effective=effective,
             input_snapshot=service.input_snapshot(
-                repo, station, parcel.id, series, config, now, tz, ignored
+                repo,
+                station,
+                parcel.id,
+                series,
+                config,
+                now,
+                tz,
+                ignored,
+                weather if record else None,
             ),
+            weather_gap_filled=weather.gap_filled(),
+            weather_filled=weather.filled() if record else (),
         )
         session.add(row)
         session.flush()

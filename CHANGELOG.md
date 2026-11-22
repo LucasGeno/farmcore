@@ -4,6 +4,18 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- The advisor reads one merged hourly weather series per parcel (`core/weather/merge.py`),
+  ranked from the parcel's centroid: on-farm sensors first, then agricultural networks, national
+  services and models, each provider declaring its tier on `Capabilities.tier` (stored on its
+  receipts). The latest forecast fetched by now fills future hours nothing observed. Only
+  receipts fetched by the clock time are read, so a replay never sees a later backfill. A farm
+  with provider weather but no station asset is evaluated. An hour filled from a source other
+  than the best one flags the advice `weather_gap_filled`; the input snapshot records each
+  hour's source per variable (`hourly_inputs[].filled_by`) and the parcel JSON every source's
+  hours (`weather_filled`). With a single source nothing changes. A provider serving a WIGOS
+  station already held writes to that station's row. App authors: declare `tier` on your
+  provider's `Capabilities`; an undeclared provider ranks after every tier.
+
 - The 3-10, Goidanich and Gubler–Thomas rules are ModelSpec modules in
   `apps/advisor/engine/mildew/` that own their parameters and sources; `AdvisorConfig` reads its
   defaults from them. No threshold, output or config digest changes. `GOIDANICH_TABLE` and

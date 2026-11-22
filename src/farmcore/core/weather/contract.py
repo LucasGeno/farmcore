@@ -7,7 +7,8 @@ object with a unique `name` and six methods:
 - `fetch_observations(station, range)`: one response's observations for a station and period;
 - `fetch_forecast(point, models, run)`: one response's forecast for a point, the named models and
   a model run (None: the latest the provider serves);
-- `capabilities()`: what it serves (observations, forecasts, which CF variables);
+- `capabilities()`: what it serves (observations, forecasts, which CF variables) and its merge
+  `tier` (`Tier`: on-farm sensor, agricultural network, national service or model);
 - `licence()`: the licence, attribution and whether the data may be redistributed;
 - `auth_schema()`: the per-installation credentials it needs. A credential is passed to the
   provider when it is built, never put in a request it reports: the store refuses a request that
@@ -24,6 +25,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 
@@ -70,6 +72,18 @@ class AuthField:
     description: str = ""
 
 
+class Tier(StrEnum):
+    """Where a provider's data ranks when sources are merged (spec W4), best first: a farm's
+    own sensor, then an agricultural network (SiAR, InfoRiego, ARPA), a national weather
+    service, then a model (reanalysis or forecast). A provider declares its own; it is never
+    inferred from a receipt's `endpoint_kind`."""
+
+    ON_FARM = "on-farm"
+    NETWORK = "network"
+    NATIONAL = "national"
+    MODEL = "model"
+
+
 @dataclass(frozen=True)
 class Capabilities:
     observations: bool
@@ -78,6 +92,7 @@ class Capabilities:
     countries: frozenset[str] | None = None  # ISO 3166-1 alpha-2; None: anywhere
     backfill: bool = False  # gridded history for any point (ERA5): joined as the farm's backfill
     live_only: bool = False  # asked over the network in live clock mode only, never in replay
+    tier: Tier | None = None  # None: undeclared, merged after every declared tier
 
 
 @dataclass(frozen=True)

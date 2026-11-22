@@ -313,7 +313,10 @@ def test_scene_b_spray_then_protected_and_backward_replay(
     assert "Last spray Wed 10 Apr 2024" in ops and "0.4 kg Cu/ha" in ops
 
     at(session, settings, local("2024-04-08 06:00"))
-    assert "0 of 10 parcels evaluated" in text(client.get("/advisor/map/farm"))
+    # The only ingest ran at 10 Apr: a replay of 8 Apr reads none of its weather (receipt as-of)
+    # and none of the later advice.
+    body = text(client.get("/advisor/map/farm"))
+    assert "missing hourly observations" in body and "Spray 8 parcels" not in body
     assert "No confirmed spray yet" in text(client.get(f"/operations/map/parcels/{p5.id}"))
 
 

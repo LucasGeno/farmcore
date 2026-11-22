@@ -7,6 +7,9 @@ from pathlib import Path
 
 HEADER = "num_poste,nom_usuel,lat,lon,alti_m,timestamp_utc,rr1_mm,t_c,rh_pct,ff_ms,ff_kmh,fxi_ms"
 FILE = "meteofrance/demo_station_33394002_2024_2025.csv"
+# When `observe` says its rows were read: before any clock time a test reads, so the merge's
+# receipt as-of cutoff never hides them (tests of that cutoff store their own receipts).
+READ_AT = datetime(2000, 1, 1, tzinfo=UTC)
 
 Row = tuple[datetime, str, str, str, str]
 
@@ -43,6 +46,12 @@ class _Synthetic:
     def auth_schema(self):
         return ()
 
+    def capabilities(self):
+        from farmcore.core.weather.contract import Capabilities, Tier
+
+        # The farm's own station asset: merged at the on-farm tier.
+        return Capabilities(True, False, frozenset(), tier=Tier.ON_FARM)
+
 
 def observe(session, station, rows) -> None:
     """Store `rows` ((ts, station variable, value), the variables of `connector.VARIABLES`) for
@@ -68,7 +77,7 @@ def observe(session, station, rows) -> None:
         select(ExtId.source).where(ExtId.model == "asset", ExtId.res_id == station.id)
     ).all()
     if connector.EXT_SOURCE in sources:
-        provider.store_hours(session, station, hours, max(by_ts))
+        provider.store_hours(session, station, hours, READ_AT)
         return
     key = f"station-{station.id}"
     if _Synthetic.name not in sources:
@@ -77,7 +86,7 @@ def observe(session, station, rows) -> None:
     receive(
         session,
         _Synthetic(),
-        provider.fetched(hours, "synthetic", key, max(by_ts)),
+        provider.fetched(hours, "synthetic", key, READ_AT),
         station=Station(key, station.name, 44.917667, -0.188),
         farm_id=station.farm_id,
     )

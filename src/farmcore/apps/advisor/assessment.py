@@ -53,7 +53,8 @@ class SprayResult(_Strict):
     products: tuple[Product, ...]
     next_window: tuple[datetime, datetime] | None
     protected_until: datetime | None
-    flags: tuple[Flag | Literal["spray_without_product"], ...]
+    # The service's flags beside the engine's (additive: every saved v1 result still reads).
+    flags: tuple[Flag | Literal["spray_without_product", "weather_gap_filled"], ...]
     mm_since_spray: float | None
     incubation_pct: float | None
     passes: int = Field(ge=0)
