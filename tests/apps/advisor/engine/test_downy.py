@@ -73,7 +73,7 @@ def test_event_is_active_risk_at_most_three_days():
 
     assert _downy(still).verdict == "risk"
     assert still.decision in {"spray", "wait"}
-    assert _downy(over).verdict == "no risk"
+    assert _downy(over).verdict == "no infection event detected"
     assert over.decision == "none"
 
 

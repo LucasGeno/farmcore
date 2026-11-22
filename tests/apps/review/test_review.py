@@ -131,7 +131,7 @@ def test_activation_only_changes_future_assessments_and_later_opinion_is_explici
         assert view.status_code == 200
         assert "Assessment limited" in view.text
         assert "Nothing to spray today" not in view.text
-        assert "no infection risk right now" not in view.text
+        assert "no infection event detected" not in view.text
         assert "No spray needed" not in view.text
 
 

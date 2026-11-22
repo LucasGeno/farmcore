@@ -80,7 +80,10 @@ def project(model: ModelSpec, row: Advice | None) -> ModelView:
             action = f"{row.decision.capitalize()} {' + '.join(products)}"
         elif model.key == "powdery":
             action = by_rule.get("powdery_pass", {}).get("verdict", "Not evaluated")
-        elif row.decision in ("none", "protected") or status in ("covered", "no risk"):
+        elif row.decision in ("none", "protected") or status in (
+            "covered",
+            "no infection event detected",
+        ):
             action = "No downy pass due"
         else:
             action = "See combined advice"

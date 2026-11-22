@@ -251,7 +251,7 @@ def test_sulphur_only_pass_when_never_applied_and_window_open():
     assert advice.decision == "spray"
     assert [p.name for p in advice.products_recommended] == ["sulphur"]
     assert (advice.passes, advice.treatments) == (1, 1)
-    assert advice.reason("downy_3_10").verdict == "no risk"
+    assert advice.reason("downy_3_10").verdict == "no infection event detected"
     assert advice.reason("powdery_pass").verdict == "sulphur due"
     assert advice.reason("spray_window").inputs["sulphur"] is True
     assert advice.next_window[0] == now.replace(minute=0)

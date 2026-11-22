@@ -233,7 +233,7 @@ INCOMPLETE = [
             "conflicting duplicate",
         )
     ),
-    ("downy", "nothing"),  # control: complete dry observations still establish no risk
+    ("downy", "nothing"),  # control: complete dry observations still detect no infection event
 ]
 
 
@@ -244,7 +244,7 @@ def test_incomplete_inputs_never_establish_no_risk_low_pressure_or_protection(mo
     advice = evaluate(rows, sprays, CONFIG, now)
     if gap == "nothing":
         assert advice.assessment_status == "evaluable"
-        assert advice.reason(rule).verdict == "no risk"
+        assert advice.reason(rule).verdict == "no infection event detected"
         return
     assert advice.assessment_status == "limited"
     assert advice.decision != "protected"
@@ -280,7 +280,7 @@ def test_old_incubation_gap_limits_that_reason_without_invalidating_current_look
     ]
     advice = evaluate(rows, [], CONFIG, now)
     assert advice.assessment_status == "evaluable"
-    assert advice.reason("downy_3_10").verdict == "no risk"
+    assert advice.reason("downy_3_10").verdict == "no infection event detected"
     incubation = advice.reason("downy_incubation")
     assert incubation.verdict == "not evaluable"
     assert incubation.inputs["coverage"] == "limited"

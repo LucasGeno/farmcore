@@ -81,7 +81,7 @@ def test_no_event_in_the_lookback_gives_none():
 
     downy = evaluate(s, [], CONFIG, now).reason("downy_3_10")
 
-    assert downy.verdict == "no risk"
+    assert downy.verdict == "no infection event detected"
     assert {k: downy.inputs[k] for k in EVENT_KEYS} == dict.fromkeys(EVENT_KEYS)
 
 

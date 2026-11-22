@@ -176,7 +176,7 @@ def evaluate(
     recent = [e for e in scan.events if e > lookback_start]
     downy_sprays = [s.ts for s in done if any("downy" in p.targets for p in s.products)]
     active = [e for e in recent if not any(ts >= e for ts in downy_sprays)]
-    verdict = "risk" if active else ("covered" if recent else "no risk")
+    verdict = "risk" if active else ("covered" if recent else "no infection event detected")
     if scan.data_gap_hours and not active:
         verdict = "not evaluable"
     event_at = max(active) if active else (max(recent) if recent else None)
@@ -266,7 +266,7 @@ def evaluate(
                 {},
                 "limited",
                 "Actual evaluation inputs",
-                "Incomplete observations cannot establish no risk or protection",
+                "Incomplete observations cannot rule out infection or establish protection",
             )
         )
     if advice.assessment_status == "limited":
