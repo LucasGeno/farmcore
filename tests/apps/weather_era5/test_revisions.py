@@ -15,6 +15,8 @@ Failure model (one test each):
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -162,19 +164,67 @@ def _season() -> tuple[datetime, datetime]:
     return now - timedelta(days=12), now
 
 
-def test_a_conflicting_write_to_a_shared_station_from_another_farm_is_refused(session) -> None:
-    a, b = Farm(name="A"), Farm(name="B")
-    session.add_all([a, b])
-    session.flush()
-    public = Station("PUB-1", "Shared public station", 45.0, -0.2)
+def test_a_conflicting_write_to_a_shared_station_from_another_farm_is_refused(
+    committed_session_factory,
+) -> None:
+    """Two farms write one hour of a shared station at once: B's write starts while A's is
+    uncommitted. B waits for A, then is refused, never passing its check and losing the
+    insert's conflict silently; A's value stands."""
     provider = era5.Era5(key=KEY, base_url="https://cds.climate.copernicus.eu/api")
     first = _fetched("288.15", datetime(2026, 8, 20, tzinfo=UTC))
-    store.receive(session, provider, first, station=public, farm_id=a.id)
+    with committed_session_factory() as s:
+        a, b = Farm(name="A"), Farm(name="B")
+        s.add_all([a, b])
+        s.flush()
+        station = store.upsert_station(s, provider.name, Station("PUB-2", "Shared", 45.0, -0.2))
+        receipts = {
+            f.id: store.record_receipt(
+                s,
+                provider=provider.name,
+                licence=provider.licence(),
+                fetched=replace(first, payload=f"farm {f.id}".encode()),
+                farm_id=f.id,
+            )
+            for f in (a, b)
+        }
+        s.commit()
+    writer_a, writer_b = committed_session_factory(), committed_session_factory()
+    store.store_observations(writer_a, receipts[a.id], station, first.values)
+    writer_a.flush()  # A holds its write, uncommitted
+    outcome: list[object] = []
 
-    with pytest.raises(store.WeatherValueError, match="another farm"):
-        store.receive(
-            session, provider, replace(first, payload=b"b's copy"), station=public, farm_id=b.id
-        )
+    def b_writes() -> None:
+        try:
+            store.store_observations(writer_b, receipts[b.id], station, first.values)
+            writer_b.commit()
+            outcome.append("stored")
+        except store.WeatherValueError as exc:
+            writer_b.rollback()
+            outcome.append(exc)
+
+    thread = threading.Thread(target=b_writes)
+    thread.start()
+    with committed_session_factory() as watcher:  # B is waiting on A's lock
+        for _ in range(200):
+            waiting = watcher.scalar(
+                text("SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'")
+            )
+            if waiting:
+                break
+            time.sleep(0.05)
+    assert waiting, "B never waited for A"
+    writer_a.commit()
+    thread.join(timeout=10)
+    writer_a.close()
+    writer_b.close()
+
+    assert len(outcome) == 1 and isinstance(outcome[0], store.WeatherValueError)
+    assert "another farm" in str(outcome[0])
+    with committed_session_factory() as s:  # A's value stands, held through A's receipt
+        held_by = s.scalars(
+            select(WeatherObservation.receipt_id).where(WeatherObservation.station_id == station.id)
+        ).all()
+    assert held_by == [receipts[a.id].id]
 
 
 def test_provisional_hours_are_ordered_again_once_old_enough_to_be_final(

@@ -955,6 +955,50 @@ def test_weather_revisions_backfill_era5t_and_per_farm_grid_stations_then_round_
             command.downgrade(cfg, "core_0019")
         with engine.begin() as db:
             db.execute(text("DELETE FROM weather_observation WHERE id = :f"), {"f": final})
+            b = farm(db, "B")
+            # The same hour of the cell also held by the public grid point (a value no farm's
+            # receipt holds), then by farm B's own grid point: each one is refused.
+            public = one(
+                db,
+                "INSERT INTO weather_station (provider, provider_station_id, name, geom) "
+                "VALUES ('copernicus-era5', '45.00,-0.25', 'g', 'SRID=4326;POINT(-0.25 45)') "
+                "RETURNING id",
+            )
+            private_b = one(
+                db,
+                "INSERT INTO weather_station (provider, provider_station_id, name, geom, "
+                "owner_farm_id) VALUES ('copernicus-era5', :sid, 'g', "
+                "'SRID=4326;POINT(-0.25 45)', :b) RETURNING id",
+                sid=f"farm{b}:45.00,-0.25",
+                b=b,
+            )
+            nobody = one(
+                db,
+                "INSERT INTO weather_receipt (provider, dataset, fetched_at) "
+                "VALUES ('copernicus-era5', 'era5', '2026-11-22T10:00Z') RETURNING id",
+            )
+        for station in (public, private_b):
+            with engine.begin() as db:
+                db.execute(
+                    text(
+                        "INSERT INTO weather_observation (station_id, receipt_id, period_start, "
+                        "period_end, variable, unit, value) SELECT :s, :r, period_start, "
+                        "period_end, variable, unit, 15 FROM weather_observation "
+                        "WHERE period_end = '2026-07-31T23:00Z'"
+                    ),
+                    {"s": station, "r": nobody},
+                )
+            with pytest.raises(MigrationRefused, match="1 hour.* more than one of its stations"):
+                command.downgrade(cfg, "core_0019")
+            with engine.begin() as db:
+                db.execute(
+                    text("DELETE FROM weather_observation WHERE station_id = :s"), {"s": station}
+                )
+        with engine.begin() as db:
+            db.execute(
+                text("DELETE FROM weather_station WHERE id IN (:p, :q)"),
+                {"p": public, "q": private_b},
+            )
         command.downgrade(cfg, "core_0019")
         with engine.begin() as db:
             stations = db.execute(

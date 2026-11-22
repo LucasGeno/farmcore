@@ -15,8 +15,9 @@ Backfill (no value is rewritten):
   grid station left with no values is deleted. Values held through no farm's receipt stay.
 
 Downgrade returns every value to the old shape or refuses, naming counts, while the old key
-cannot hold it: a final value stored beside a provisional one, or two farms holding the same
-hour of one grid cell. Nothing is deleted to get past a refusal.
+cannot hold it: a final value stored beside a provisional one, or one hour of a grid cell held
+by two of its stations (two farms, or a farm and the public grid point). Nothing is deleted to
+get past a refusal.
 
 Revision ID: core_0020
 Revises: core_0019
@@ -112,17 +113,22 @@ def downgrade() -> None:
             f"core_0020 downgrade: {revised} provisional observation(s) have a final value "
             "stored beside them; the old key holds one value per station, variable and period"
         )
+    # Every ERA5 grid station of a cell, the public one (kept for values no farm's receipt
+    # holds, or written since) and each farm's, collapses into the public one on downgrade.
     shared = _count(
         bind,
-        "SELECT count(*) FROM (SELECT o.variable, o.period_start, o.period_end, "
-        "split_part(f.provider_station_id, ':', 2) AS cell FROM weather_observation o "
-        f"JOIN (SELECT f.id, f.provider_station_id {PER_FARM}) f ON f.id = o.station_id "
-        "GROUP BY 1, 2, 3, 4 HAVING count(*) > 1) d",
+        "SELECT count(*) FROM (SELECT o.variable, o.period_start, o.period_end, g.cell "
+        "FROM weather_observation o JOIN ("
+        f"SELECT f.id, split_part(f.provider_station_id, ':', 2) AS cell {PER_FARM} "
+        "UNION ALL SELECT s.id, s.provider_station_id FROM weather_station s "
+        "WHERE s.provider = :era5 AND s.owner_farm_id IS NULL"
+        ") g ON g.id = o.station_id GROUP BY 1, 2, 3, 4 HAVING count(*) > 1) d",
     )
     if shared:
         raise MigrationRefused(
             f"core_0020 downgrade: {shared} hour(s) of an ERA5 grid cell are held by more than "
-            "one farm; the old shared grid station holds one value per hour"
+            "one of its stations (two farms, or a farm and the public grid point); the old "
+            "shared grid station holds one value per hour"
         )
     op.execute(
         sa.text(

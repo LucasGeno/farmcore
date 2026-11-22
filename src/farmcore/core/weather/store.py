@@ -210,6 +210,12 @@ def store_observations(
         for v in values
     ]
     if rows:
+        # One writer per station at a time: two farms' writes to a shared station cannot both
+        # pass the check and then lose the insert's conflict silently. The lock is held to the
+        # end of the transaction, so the next writer's check sees what this one stored.
+        session.execute(
+            select(WeatherStation.id).where(WeatherStation.id == station.id).with_for_update()
+        )
         _check_held(session, receipt, station, rows)
     _insert(session, WeatherObservation, rows)
 
