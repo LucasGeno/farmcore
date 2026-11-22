@@ -10,8 +10,9 @@
 </p>
 
 <p align="center">
-  <a href="https://farmcore.lucasreed.me"><b>Website</b></a> ·
+  <a href="https://farmcore.farm/"><b>Website</b></a> ·
   <a href="https://agri.lucasreed.me/">Live demo</a> ·
+  <a href="https://farmcore.farm/vineyard-treatment-records/">Vineyard treatment record guide</a> ·
   <a href="docs/self-hosting.md">Self-hosting</a> ·
   <a href="docs/architecture.md">Architecture</a>
 </p>
