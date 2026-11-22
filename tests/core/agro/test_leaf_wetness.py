@@ -54,6 +54,7 @@ def test_threshold_is_a_labelled_parameter_and_bad_inputs_are_refused() -> None:
         Parameter("x", 110.0, "%", source="assumption: test", status="assumed"),
         Parameter("x", 90.0, "%", source="", status="sourced"),  # sourced with no citation
         Parameter("x", 90.0, "%", source="from a paper", status="assumed"),  # no label
+        *(Parameter("x", 90.0, "%", source=s) for s in ["2024", "DOI:", "https://"]),  # opaque
     ]:
         with pytest.raises(ValueError, match="threshold"):
             leaf_wetness(_hours(100), threshold=bad)

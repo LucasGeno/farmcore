@@ -63,6 +63,6 @@ def test_invalid_stages_and_windows_are_refused() -> None:
     # A source is a citation (year, DOI or link) or a labelled assumption, never an opaque word.
     sourced = StageWindows(((date(2025, 4, 1), 9),), source="IFV Bordeaux phase calendar, 2024")
     assert stage_on(date(2025, 4, 2), windows=sourced).source == sourced.source
-    for opaque in ["", "x", "assumption:", "regional calendar"]:
+    for opaque in ["", "x", "assumption:", "regional calendar", "2024", "DOI:", "https://"]:
         with pytest.raises(ValueError, match="source"):
             StageWindows(((date(2025, 4, 1), 9),), source=opaque)

@@ -5,15 +5,26 @@ from __future__ import annotations
 import re
 
 ASSUMPTION = "assumption:"
-# A citation names its year, a DOI or a link; a bare word ("x", "table") says nothing.
-_CITATION = re.compile(r"\b(1[89]|20)\d{2}\b|\bdoi\b|10\.\d{4,}/|https?://", re.IGNORECASE)
+# An identifiable citation: a URL with a host and a path, a DOI (10.<digits>/<suffix>), or an
+# author-year reference (a word of 2+ letters and a 4-digit year). "2024", "DOI:" or "https://"
+# alone identify nothing.
+_URL = re.compile(r"https?://[^\s/]+\.[^\s/]+/\S+", re.IGNORECASE)
+_DOI = re.compile(r"\b10\.\d+/\S+")
+_WORD = re.compile(r"\b[^\W\d_]{2,}\b")
+_YEAR = re.compile(r"(?<!\d)\d{4}(?!\d)")
+
+
+def _cites(text: str) -> bool:
+    return bool(
+        _URL.search(text) or _DOI.search(text) or (_WORD.search(text) and _YEAR.search(text))
+    )
 
 
 def provenance_problem(source: str, status: str) -> str | None:
     """Why `source` does not back a value of `status` ("sourced" or "assumed"); None if it does.
 
-    An assumed value carries an `assumption: <what is assumed>` label; a sourced one a citation
-    with a year, DOI or link, and no assumption label."""
+    An assumed value carries an `assumption: <what is assumed>` label; a sourced one an identifiable
+    citation (URL with host and path, DOI, or author and year) and no assumption label."""
     text = (source or "").strip()
     label = text.lower().startswith(ASSUMPTION)
     if status == "assumed":
@@ -21,7 +32,7 @@ def provenance_problem(source: str, status: str) -> str | None:
             return "an assumed value needs an 'assumption: ...' label saying what is assumed"
         return None
     if status == "sourced":
-        if label or not _CITATION.search(text):
-            return "a sourced value needs a citation with a year, DOI or link"
+        if label or not _cites(text):
+            return "a sourced value needs a citation: a URL, a DOI or an author and year"
         return None
     return f"status must be sourced or assumed, got {status!r}"
