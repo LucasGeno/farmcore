@@ -87,8 +87,12 @@ SCOPES = frozenset(
         "register:read",
         "audit:read",
         "drafts:propose",
+        "weather:push",
     }
 )
+# An on-farm device's only scope (app weather_push): it stores readings and reads nothing, so it
+# is in neither GRANT_READ_SCOPES nor TOKEN_SCOPES, and no resource lists it.
+WEATHER_PUSH = "weather:push"
 GRANT_READ_SCOPES = frozenset(
     {"fields:read", "stations:read", "logs:read", "register:read", "advice:read", "planning:read"}
 )
@@ -122,7 +126,7 @@ _OWNED_OR_PUBLIC: dict[type[Base], Any] = {WeatherStation: WeatherStation.owner_
 # CatalogItem from here and from RESOURCE_SCOPES' `_ANY`, and scope it to its farm.
 _SHARED: frozenset[type[Base]] = frozenset({Source, CatalogItem})
 
-_ANY = SCOPES
+_ANY = SCOPES - {WEATHER_PUSH}
 _LOG_READS = frozenset({"logs:read", "logs:write", "register:read"})
 # Which scopes may read which resource (table name). Every farm table must be declared here or
 # by its app manifest (`Manifest.resource_scopes`); an undeclared resource is denied.

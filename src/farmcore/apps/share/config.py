@@ -40,6 +40,7 @@ SCOPE_WORDS: MappingProxyType[str, str] = MappingProxyType(
         "audit:read": "access and model-call audit",
         "planning:read": "planned jobs",
         "drafts:propose": "propose drafts you confirm",
+        "weather:push": "send its sensor readings to the farm",
     }
 )
 
