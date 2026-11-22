@@ -1,7 +1,7 @@
 # FarmCore web app and Telegram bot: one image, two commands (see docker-compose.yml).
 # Secrets never enter the image: they come from the environment at run time.
 # Pinned (tag + digest) so rebuilds get the same Python and Debian.
-FROM python:3.12.15-slim-trixie@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+FROM python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.16 /uv /bin/uv
 
