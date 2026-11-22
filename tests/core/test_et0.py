@@ -19,35 +19,35 @@ import gzip
 import math
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from importlib.metadata import version
 
 import pytest
 import refet
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 from sqlalchemy import func, select
+from typer.testing import CliRunner
 
 from farmcore.apps.forecast import provider as open_meteo
 from farmcore.apps.forecast import sources
 from farmcore.apps.weather_meteofrance import etp
+from farmcore.apps.weather_meteofrance import provider as meteofrance
+from farmcore.cli import cli
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.farm_location import LOCATION_KEY
+from farmcore.core.models.canonical import Parcel
 from farmcore.core.models.weather import WeatherObservation, WeatherReceipt
 from farmcore.core.seed import ensure_default_farm
 from farmcore.core.weather import et0, merge
 from farmcore.core.weather.contract import (
-    BBox,
-    Capabilities,
     Fetched,
-    Licence,
-    ObservationValue,
     Point,
     Request,
     Station,
-    Tier,
     TimeRange,
 )
 from farmcore.core.weather.store import receive
-from farmcore.core.weather.variables import BY_LEGACY, ET0, SHORTWAVE, VARIABLES
+from farmcore.core.weather.variables import ET0, SHORTWAVE, VARIABLES
 
 H = timedelta(hours=1)
 
@@ -132,6 +132,7 @@ def _hours(rows: list[dict]) -> dict[datetime, merge.MergedHour]:
     return hours
 
 
+@settings(deadline=None)  # the first example imports pandas and pyet
 @given(
     rows=st.lists(_hour, min_size=24, max_size=24),
     gap=st.tuples(
@@ -158,81 +159,72 @@ def test_a_day_lacking_any_input_hour_is_unknown_never_zero(rows, gap):
 
 # --- official first, then computed, labelled ---------------------------------------------------
 
-OPEN = Licence("CC-BY-4.0", "Test national service", True)
 UCCLE = Point(50.80, 4.35)
+COMPUTED = f"FAO-56 Penman-Monteith (pyet {version('pyet')}) from the merged hourly weather"
 
 
-class National:
-    name = "national-service"
-
-    def discover_stations(self, bbox: BBox) -> list[Station]:
-        return []
-
-    def fetch_observations(self, station: Station, range: TimeRange) -> Fetched:
-        raise NotImplementedError
-
-    def fetch_forecast(self, point, models, run) -> Fetched:
-        raise NotImplementedError
-
-    def capabilities(self) -> Capabilities:
-        return Capabilities(True, False, frozenset(), tier=Tier.NATIONAL)
-
-    def licence(self) -> Licence:
-        return OPEN
-
-    def auth_schema(self):
-        return ()
-
-
-def _ex18_day(day: date, skip_radiation_hour: int | None = None) -> list[ObservationValue]:
-    """FAO-56 Ex. 18's day as 24 station hours: Tmin/Tmax 12.3/21.5 °C, RHmin/RHmax 63/84 %,
-    10 km/h at 10 m, radiation averaging 22.07 MJ m-2 day-1."""
-    start = datetime(day.year, day.month, day.day, tzinfo=UTC)
-    out = []
-    for h in range(1, 25):
-        end = start + h * H
-        warm = 6 < h <= 18
-        for name, value, period in (
-            ("t_c", "21.5" if warm else "12.3", timedelta(0)),
-            ("rh_pct", "63" if warm else "84", timedelta(0)),
-            ("ff_kmh", "10", timedelta(minutes=10)),
-        ):
-            v = BY_LEGACY[name]
-            out.append(ObservationValue(v.name, v.unit, Decimal(value), end - period, end))
-        if h != skip_radiation_hour:
-            rad = Decimal("22.07") / Decimal("0.0864") / 12 * 24 if warm else Decimal(0)
-            out.append(
-                ObservationValue(SHORTWAVE, "W m-2", rad.quantize(Decimal("0.0001")), end - H, end)
-            )
-    return out
+def _dpclim(days: list[date], skip_glo: tuple[date, int] | None = None) -> str:
+    """FAO-56 Ex. 18's day as a DPClim hourly file (Météo-France's columns and units): Tmin/Tmax
+    12.3/21.5 °C, RH 84/63 %, wind 2.78 m/s at 10 m, and the day's 22.07 MJ m-2 (2207 J/cm²) of
+    global radiation as integer hourly GLO in J/cm² over its 12 daylight hours."""
+    lines = ["POSTE;DATE;RR1;QRR1;T;QT;U;QU;FF;QFF;GLO;QGLO"]
+    for day in days:
+        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        for h in range(1, 25):
+            warm = 6 < h <= 18
+            glo = ("183" if h == 7 else "184") if warm else "0"
+            if skip_glo == (day, h):
+                glo = ""
+            t, u = ("21,5", "63") if warm else ("12,3", "84")
+            lines.append(f"06447001;{start + h * H:%Y%m%d%H};0;1;{t};1;{u};1;2,78;1;{glo};1")
+    return "\n".join(lines) + "\n"
 
 
 def _grid(tmp_path, rows: list[str]):
     path = tmp_path / "QUOT_ETPgrille_2026.csv.gz"
-    path.write_bytes(
-        gzip.compress(("longitude;latitude;date;ETP_grille\n" + "".join(rows)).encode())
-    )
+    text = "longitude;latitude;date;ETP_grille\n" + "".join(rows)
+    path.write_bytes(gzip.compress(text.encode()))
     return path
 
 
-def test_official_et0_is_preferred_labelled_and_read_as_of_else_computed_or_unknown(
+def test_official_et0_is_preferred_in_its_own_cell_labelled_and_read_as_of_else_computed(
     session, settings, tmp_path
 ):
     farm = ensure_default_farm(session, settings)
     farm.props = {**(farm.props or {}), LOCATION_KEY: {"latitude": 50.80, "longitude": 4.35}}
+    # A parcel just east of the pin's cell edge (4.4375): 7.7 km from that cell's centre, in
+    # the next cell.
+    session.add(
+        Parcel(
+            farm_id=farm.id,
+            name="East",
+            alias="east",
+            area_ha=Decimal("1"),
+            geom="SRID=4326;MULTIPOLYGON(((4.449 50.799,4.451 50.799,4.451 50.801,"
+            "4.449 50.801,4.449 50.799)))",
+        )
+    )
     session.flush()
-    uccle = Station("UCC", "Uccle", 50.80, 4.35)
-    observed = [
-        *_ex18_day(date(2026, 7, 6)),
-        *_ex18_day(date(2026, 7, 7)),
-        *_ex18_day(date(2026, 7, 8), skip_radiation_hour=13),
-    ]
+    east = Point(50.80, 4.45)
+    # Observed hours from Météo-France's DPClim archive, through its provider: 8 July lacks
+    # the 13:00 radiation hour.
+    july = [date(2026, 7, d) for d in (6, 7, 8)]
+    span = TimeRange(datetime(2026, 7, 6, tzinfo=UTC), datetime(2026, 7, 9, tzinfo=UTC))
+    text = _dpclim(july, skip_glo=(date(2026, 7, 8), 13))
+    mf = meteofrance.MeteoFranceLive(
+        client_id=None, client_secret=None, base_url="https://x.invalid", token_url="https://x"
+    )
     at = datetime(2026, 7, 9, tzinfo=UTC)
     receive(
         session,
-        National(),
-        Fetched(Request("hourly"), at - H, b"obs", observed),
-        station=uccle,
+        mf,
+        Fetched(
+            Request(f"{meteofrance.CLIM}/commande-station/horaire"),
+            at - H,
+            text.encode(),
+            meteofrance.archive_values(text, span),
+        ),
+        station=Station("06447001", "Uccle", 50.80, 4.35),
         farm_id=farm.id,
     )
     # Open-Meteo's live forecast for 9 July, its radiation included (the 10th has none).
@@ -262,8 +254,8 @@ def test_official_et0_is_preferred_labelled_and_read_as_of_else_computed_or_unkn
         ),
         farm_id=farm.id,
     )
-    # The grid: the cell holding Uccle (4.375, 50.750) has 7 July and an empty 8 July; its
-    # neighbour (4.500, 50.750) other values.
+    # The grid: the pin's cell (4.375, 50.750) has 7 July and an empty 8 July; the parcel's
+    # cell (4.500, 50.750) 9.9 mm both days; a cell holding neither is not imported.
     path = _grid(
         tmp_path,
         [
@@ -271,21 +263,28 @@ def test_official_et0_is_preferred_labelled_and_read_as_of_else_computed_or_unkn
             "4.375;50.750;20260707;4.1\n",
             "4.375;50.750;20260708;\n",
             "4.500;50.750;20260708;9.9\n",
+            "4.250;50.750;20260707;7.7\n",
         ],
     )
     imported_at = at + timedelta(hours=6)
-    etp.import_file(session, farm.id, path, last_update=date(2026, 7, 21), fetched_at=imported_at)
+    done = etp.import_file(
+        session, farm.id, path, last_update=date(2026, 7, 21), fetched_at=imported_at
+    )
+    assert (done.stations, done.values) == (
+        (f"farm{farm.id}:50.750,4.375", f"farm{farm.id}:50.750,4.500"),
+        3,
+    )
     repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "test", "et0")
 
     days = et0.daily(repo, date(2026, 7, 6), date(2026, 7, 10), UCCLE, imported_at, 100.0)
 
-    method = et0._method()
     grid = (
         "Météo-France, Données ETP spatialisées quotidiennes (data.gouv.fr), Licence Ouverte / "
         "Etalab 2.0, last updated 2026-07-21"
     )
     assert [(d.day.day, d.mm, d.method, d.source, d.forecast, d.missing) for d in days] == [
-        (6, pytest.approx(3.88, abs=0.01), "fao56-pm", method, False, ()),
+        # computed from Météo-France's observed hours, its GLO radiation included
+        (6, pytest.approx(3.88, abs=0.01), "fao56-pm", COMPUTED, False, ()),
         (7, 4.1, "official", "meteofrance-etp/ETP_QUOT/QUOT_ETPgrille", False, ()),
         (8, None, None, None, False, ("radiation",)),
         # 9 July read at 06:00: its first hours are past and nothing observed them (a
@@ -294,11 +293,15 @@ def test_official_et0_is_preferred_labelled_and_read_as_of_else_computed_or_unkn
         (10, None, None, None, True, ("radiation",)),
     ]
     assert (days[1].licence, days[1].attribution) == ("etalab-2.0", grid)
-    # A point 50 km north is not in that cell: 7 July is computed there, never the cell's.
-    north = et0.daily(
-        repo, date(2026, 7, 7), date(2026, 7, 7), Point(51.25, 4.35), imported_at, 100.0
-    )
-    assert north[0].method == "fao56-pm"
+    # The parcel reads its own cell, never the pin's 7.7 km away; a point in a cell not
+    # imported reads none, and neither does an unknown point.
+    assert [
+        (d.mm, d.method)
+        for d in et0.daily(repo, date(2026, 7, 7), date(2026, 7, 8), east, imported_at, 100.0)
+    ] == [(9.9, "official"), (9.9, "official")]
+    for point in (Point(50.80, 4.25), None):
+        [day] = et0.daily(repo, date(2026, 7, 7), date(2026, 7, 7), point, imported_at, 100.0)
+        assert day.method != "official"
     # Read before the grid arrived (9 July 00:00, the forecast already in hand): 7 July is
     # computed; 9 July is the forecast's.
     before = et0.daily(repo, date(2026, 7, 7), date(2026, 7, 9), UCCLE, at, 100.0)
@@ -307,9 +310,13 @@ def test_official_et0_is_preferred_labelled_and_read_as_of_else_computed_or_unkn
         (None, None, False),
         (pytest.approx(3.88, abs=0.01), "fao56-pm", True),
     ]
-    assert et0.daily(repo, date(2026, 7, 6), date(2026, 7, 6), None, at, 100.0)[0].missing == (
-        "latitude",
-    )
+    # The CLI never credits a date of its own: the publisher's last update is required.
+    runner = CliRunner()
+    base = ["weather-meteofrance", "import-etp", str(path), "--farm", str(farm.id)]
+    missing = runner.invoke(cli, base)
+    assert missing.exit_code == 2 and "--last-update" in missing.output
+    wrong = runner.invoke(cli, [*base, "--last-update", "21/07/2026"])
+    assert wrong.exit_code == 1 and "is not YYYY-MM-DD" in wrong.output
 
 
 # --- the grid import's failure model ----------------------------------------------------------
@@ -350,7 +357,7 @@ def test_a_bad_grid_file_stores_nothing_and_a_reimport_is_the_same_evidence(
     ok = _grid(tmp_path, good)
     first = etp.import_file(session, farm.id, ok, last_update=date(2026, 7, 21))
     again = etp.import_file(session, farm.id, ok, last_update=date(2026, 7, 21))
-    assert (first.receipt_id, first.days, count()) == (again.receipt_id, 1, 1)
+    assert (first.receipt_id, first.values, count()) == (again.receipt_id, 1, 1)
     receipt = session.get(WeatherReceipt, first.receipt_id)
     assert (receipt.redistribution, receipt.request["tier"]) == (True, "national")
     assert VARIABLES[ET0].unit == "kg m-2"

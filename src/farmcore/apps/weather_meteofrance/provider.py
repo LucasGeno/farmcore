@@ -9,13 +9,17 @@ Sources (Météo-France's portal, read 2026-11-19):
 - DPObs v2 (`/public/DPObs/v2`, 100 requests/min): `GET /station/horaire?id_station=<8
   digits>&date=<hour>&format=json` returns one hour, nearest the date asked, kept 24 hours.
   `validity_time` is the hour; `t` is kelvin, `ff` the 10-minute mean wind at 10 m in m/s,
-  `rr1` the hour's rain in mm, `u` relative humidity in %. A row for another hour is dropped.
+  `rr1` the hour's rain in mm, `u` relative humidity in %, `ray_glo01` the global radiation
+  received over the hour in J/m² (stored as its mean flux: / 3600 s, W m-2). A row for another
+  hour is dropped.
   `GET /liste-stations` is the station catalogue (CSV, `;`).
 - DPClim v1 (`/public/DPClim/v1`, 50 requests/min): `GET /commande-station/horaire?id-station=
   &date-deb-periode=&date-fin-periode=` orders a period (202, order id); `GET /commande/fichier?
   id-cmde=` returns the CSV (201) or 204 while it is produced. Columns `POSTE;DATE(AAAAMMJJHH);
-  RR1;T;U;FF;…` in mm, °C, %, m/s, each with its quality code `Q<name>`: 0 protected and 1
-  validated (`passed`), 2 doubtful (`suspect`), 9 filtered only (`unchecked`).
+  RR1;T;U;FF;GLO;…` in mm, °C, %, m/s and J/cm² (`GLO`: the hour's global radiation, an integer,
+  stored as its mean flux: x 10^4 / 3600 s = x 25/9, W m-2), each with its quality code
+  `Q<name>`: 0 protected and 1 validated (`passed`), 2 doubtful (`suspect`), 9 filtered only
+  (`unchecked`). A station without a pyranometer leaves `GLO` empty: missing, never zero.
 - https://portail-api.meteofrance.fr (API pages and their OpenAPI documents);
   https://confluence-meteofrance.atlassian.net/wiki/spaces/OpenDataMeteoFrance/pages/853639294
   (DPObs guide), .../pages/854261785 (DPClim guide); field lists:
@@ -54,7 +58,7 @@ from farmcore.core.weather.contract import (
     Tier,
     TimeRange,
 )
-from farmcore.core.weather.variables import BY_LEGACY
+from farmcore.core.weather.variables import BY_LEGACY, SHORTWAVE, VARIABLES
 from farmcore.settings import Settings
 
 PROVIDER = "meteofrance-portal"
@@ -73,7 +77,12 @@ POLL_SECONDS = 5.0
 KELVIN = Decimal("273.15")
 MS_TO_KMH = Decimal("3.6")
 QC = {"0": "passed", "1": "passed", "2": "suspect"}
-PERIODS = {"rr1_mm": timedelta(hours=1), "ff_kmh": timedelta(minutes=10)}
+PERIODS = {
+    "rr1_mm": timedelta(hours=1),
+    "ff_kmh": timedelta(minutes=10),
+    SHORTWAVE: timedelta(hours=1),
+}
+RADIATION_PLACES = Decimal("0.0001")  # W m-2: the J/cm² -> W m-2 factor 25/9 does not terminate
 
 
 class PortalError(RuntimeError):
@@ -113,7 +122,7 @@ def _decimal(text: object) -> Decimal | None:
 
 
 def _value(name: str, value: Decimal, end: datetime, qc: str = "unchecked") -> ObservationValue:
-    variable = BY_LEGACY[name]
+    variable = BY_LEGACY.get(name) or VARIABLES[name]
     return ObservationValue(
         variable=variable.name,
         unit=variable.unit,
@@ -135,6 +144,7 @@ def recent_values(rows: Sequence[dict], hour: datetime) -> list[ObservationValue
             ("rh_pct", "u", lambda v: v),
             ("ff_kmh", "ff", lambda v: v * MS_TO_KMH),
             ("rr1_mm", "rr1", lambda v: v),
+            (SHORTWAVE, "ray_glo01", lambda v: (v / 3600).quantize(RADIATION_PLACES)),
         ):
             number = _decimal(row.get(key))
             if number is not None:
@@ -155,6 +165,7 @@ def archive_values(text: str, range: TimeRange) -> list[ObservationValue]:
             ("rh_pct", "U", lambda v: v),
             ("ff_kmh", "FF", lambda v: v * MS_TO_KMH),
             ("rr1_mm", "RR1", lambda v: v),
+            (SHORTWAVE, "GLO", lambda v: (v * 25 / 9).quantize(RADIATION_PLACES)),
         ):
             number = _decimal(row.get(key))
             if number is not None:
@@ -360,7 +371,8 @@ class MeteoFranceLive:
             forecast=False,
             variables=frozenset(
                 BY_LEGACY[name].name for name in ("rr1_mm", "t_c", "rh_pct", "ff_kmh")
-            ),
+            )
+            | {SHORTWAVE},
             countries=frozenset({"FR"}),
             live_only=True,
             tier=Tier.NATIONAL,

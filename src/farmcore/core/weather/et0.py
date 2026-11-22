@@ -5,9 +5,10 @@
 
 - **Official first.** A value of `variables.ET0` stored for exactly that day through one of the
   farm's receipts fetched by `as_of` (`store.held`), as a source publishes it (Météo-France's
-  daily ETP grid: `weather_meteofrance.etp`), within `OFFICIAL_RADIUS_M` of the point (a grid
-  cell's value is not the weather 50 km away; any distance when the point is unknown). Several
-  sources rank as in the merge layer (tier, then distance from the point, then identity).
+  daily ETP grid: `weather_meteofrance.etp`), only from the grid cell containing the point
+  (`OFFICIAL_HALF_CELL`: the official source is a 0.125 degree grid; a neighbouring cell's value
+  is another place's, and an unknown point reads none). Several sources containing the point
+  rank as in the merge layer (tier, then distance from the point, then identity).
   Labelled `official` with its provider, dataset, licence and the receipt's attribution.
 - **Else computed.** FAO-56 Penman-Monteith (Allen, Pereira, Raes & Smith 1998, FAO Irrigation
   and Drainage Paper 56, eq. 6, G = 0 for a day, eq. 42) by `pyet.pm_fao56` from the merged
@@ -49,8 +50,9 @@ INPUTS = ("t_c", "rh_pct", "ff_kmh", SHORTWAVE)  # merged fields, in `missing` o
 NAMES = {"t_c": "temperature", "rh_pct": "humidity", "ff_kmh": "wind", SHORTWAVE: "radiation"}
 WIND_HEIGHT_M = 10.0
 W_M2_TO_MJ_DAY = 0.0864  # 86 400 s / 10^6
-# `assumed`: about half the diagonal of a 0.125 degree cell at 45 degrees N (8.7 km), rounded up
-OFFICIAL_RADIUS_M = 10_000.0
+# Half the step of the official grid (Météo-France ETP, 0.125 degree): a cell holds a point
+# within this many degrees of its centre in latitude and in longitude.
+OFFICIAL_HALF_CELL = 0.0625
 OFFICIAL = "official"
 COMPUTED = "fao56-pm"
 
@@ -260,8 +262,11 @@ def _official(
             if point is not None
             else None
         )
-        if distance is not None and distance > OFFICIAL_RADIUS_M:
-            continue  # another place's value
+        if point is None or not (
+            abs(station.latitude - point.latitude) <= OFFICIAL_HALF_CELL
+            and abs(station.longitude - point.longitude) <= OFFICIAL_HALF_CELL
+        ):
+            continue  # another cell's value, or no point to place it
         ident = merge.identity(station.wigos_id, station.provider, station.provider_station_id)
         candidate = _Official(
             float(o.value),
