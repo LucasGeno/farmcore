@@ -1,0 +1,35 @@
+{
+  "format": "farmcore-oracle-fixture/1",
+  "generator": {
+    "name": "degday",
+    "version": "0.4.0",
+    "licence": "GPL (>= 3)",
+    "source": "https://cran.r-project.org/package=degday",
+    "source_sha256": "1e0ca4504d92c78641defe36d4df067e17d9e49ea969aa48a2bb40680afd451d",
+    "authors": "Andy Lyons; Regents of the University of California",
+    "runtime": "R version 4.4.2 (2024-10-31)",
+    "run": "out of process, in the tools/oracles container"
+  },
+  "method_reference": "Zalom, F.G., Goodell, P.B., Wilson, L.T., Barnett, W.W. & Bentley, W.J. (1983). Degree-days: the calculation and use of heat units in pest management. UC DANR Leaflet 21373.",
+  "call": "degday::dd_calc",
+  "parameters": {
+    "method": "sng_sine",
+    "cutoff": "horizontal",
+    "thresh_low": 10,
+    "thresh_up": 30,
+    "digits": 6,
+    "cumulative": false,
+    "no_neg": true
+  },
+  "inputs": {
+    "units": "degC",
+    "case": ["entirely below lower threshold", "crosses lower threshold only", "between thresholds", "crosses upper threshold only", "crosses both thresholds", "entirely above upper threshold", "min and max exactly on the thresholds", "flat day (min equals max)", "last day (next-day min is its own min)"],
+    "daily_min": [2, 5, 12, 15, 8, 31, 10, 20, 14],
+    "daily_max": [8, 18, 24, 34, 36, 38, 30, 20, 28],
+    "nextday_min": [5, 12, 15, 8, 31, 10, 20, 14, 14]
+  },
+  "outputs": {
+    "units": "degC day",
+    "daily_degree_days": [0, 2.874355, 8, 13.703432, 11.02253, 20, 10, 10, 11]
+  }
+}
