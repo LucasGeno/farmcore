@@ -233,6 +233,7 @@ services:
     environment:
       <<: *mcp-settings
       MCP_HTTP_HOST: 0.0.0.0       # inside the container; published on loopback only
+      MCP_HTTP_PORT: "8001"        # matches the container port below
     ports:
       - "127.0.0.1:${MCP_PUBLISH_PORT:-8001}:8001"
 ```
@@ -242,7 +243,8 @@ is true, and listens on loopback unless `MCP_HTTP_HOST` says otherwise; on `0.0.
 warning, since it must sit behind the TLS proxy. `MCP_HTTP_ALLOWED_HOSTS` is the public host
 name agents use (empty: loopback names only), and `MCP_HTTP_PUBLIC_URL` the public `/mcp` URL.
 With several installations on one host, give each its own `MCP_PUBLISH_PORT`, not one another
-installation's `FARMCORE_PORT`. The per-address limit counts by the connection's address unless
+installation's `FARMCORE_PORT`, and point that installation's `/mcp` proxy upstream at the same
+port (the Caddy example below assumes the default 8001). The per-address limit counts by the connection's address unless
 `MCP_HTTP_FORWARDED_ALLOW_IPS` names the proxy's address as the container sees it (another
 container's, or the Docker network gateway for a proxy on the host). Route `/mcp` before the
 catch-all:
@@ -430,19 +432,22 @@ The stock `docker-compose.yml` passes only the variables it names to its contain
 does not name `METEOFRANCE_*` or `CDSAPI_*` yet: set in `.env` alone, they never reach the
 app or the worker, and both jobs do nothing. Until the compose file names them, add an override
 next to it (it holds no secret values, only references to the env file). If you also run the
-MCP service (section 3), it is one file: put these three lines under the existing `app`
-`environment` and add the `worker` entry, rather than repeating `app:`.
+MCP service (section 3), it is one file: add the three lines to the existing `app`
+`environment` (below the MCP settings) and add the `worker` entry, rather than repeating `app:`.
 
 ```yaml
 # docker-compose.override.yml
 services:
   app:
-    environment: &weather-credentials
+    environment:
       METEOFRANCE_CLIENT_ID: ${METEOFRANCE_CLIENT_ID:-}
       METEOFRANCE_CLIENT_SECRET: ${METEOFRANCE_CLIENT_SECRET:-}
       CDSAPI_KEY: ${CDSAPI_KEY:-}
   worker:
-    environment: *weather-credentials
+    environment:
+      METEOFRANCE_CLIENT_ID: ${METEOFRANCE_CLIENT_ID:-}
+      METEOFRANCE_CLIENT_SECRET: ${METEOFRANCE_CLIENT_SECRET:-}
+      CDSAPI_KEY: ${CDSAPI_KEY:-}
 ```
 
 Compose reads `docker-compose.override.yml` by itself only when no `-f` is given; with the
