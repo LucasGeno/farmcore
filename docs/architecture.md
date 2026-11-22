@@ -378,7 +378,10 @@ stored before stamps reads as `unvalidated`. Every result surface shows the leve
 "Trust:" line in assistant text. Crop protection's specs are listed in `apps/advisor/specs.py`. The
 mildew models (3-10, Goidanich, Gubler–Thomas) are ModelSpec modules in
 `apps/advisor/engine/mildew/` that own their parameters, and the engine config reads its defaults
-from them; the spray decision's parameters are the engine rules' own `THRESHOLDS`.
+from them; the spray decision's parameters are the engine rules' own `THRESHOLDS`. The Rossi 2008
+downy mildew primary infection model (`engine/rossi.py`, spec `engine/mildew/downy_rossi.py`) runs on
+the parcel card from the merged series since 1 January, beside the 3-10 rule; it is in no assessment
+kind and never feeds the decision.
 
 ### Module lifecycle
 

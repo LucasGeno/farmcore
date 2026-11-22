@@ -63,6 +63,28 @@
 </details>
 {% endif %}
 
+{% if rossi %}
+{% call card("mt-4", {"id": "rossi", "data-model": rossi.spec.key, "aria-labelledby": "rossi-title"}) %}
+  <div class="flex flex-wrap items-center justify-between gap-2">
+    {{ h2("rossi-title", "Downy primary infections (Rossi 2008 model)") }}
+    <span data-validation="{{ rossi.spec.validation.level }}" title="Model validation: {{ rossi.spec.validation.label }}" class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-line px-2 py-0.5 text-xs font-semibold text-muted">{{ icon("info", "h-3.5 w-3.5") }}{{ rossi.spec.validation.label }}</span>
+  </div>
+  <p class="mt-2 text-[13px] text-muted">Shown for comparison. The spray decision above still uses the 3-10 rule.</p>
+  <p class="mt-2 text-[15px]" data-rossi-season>{{ rossi.season }} · hydro-thermal time {{ rossi.ht }}</p>
+  {% if rossi.limited %}<p class="mt-2 text-sm text-wait" data-rossi-limited>{{ rossi.limited }}</p>{% endif %}
+  {% if rossi.infections %}
+  <ul id="rossi-infections" class="mt-2 divide-y divide-line text-[15px]">
+    {% for i in rossi.infections %}
+    <li class="py-2" data-infection="{{ i.raw }}"><span class="font-semibold">Infection {{ i.at }}</span>{% if i.cohorts > 1 %} <span class="text-[13px] text-muted">· {{ i.cohorts }} oospore cohorts</span>{% endif %}<br><span class="text-[13px] text-muted">Symptoms expected {{ i.symptoms }}</span></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="mt-2 text-[15px]" id="rossi-infections">No primary infection this season so far ({{ rossi.cohorts }} oospore cohort{{ "" if rossi.cohorts == 1 else "s" }}).</p>
+  {% endif %}
+  <p class="mt-2 text-[13px] text-muted">{% if rossi.wetness == "estimated" %}Leaf wetness estimated from relative humidity {{ assumed() }} · {% endif %}{{ rossi.spec.method.citation }}{% if rossi.spec.method.doi %} · <a class="underline underline-offset-2" href="https://doi.org/{{ rossi.spec.method.doi }}">doi:{{ rossi.spec.method.doi }}</a>{% endif %}</p>
+{% endcall %}
+{% endif %}
+
 {% if advice.protection %}
 {% call card("mt-4", {"id": "protection", "data-protection": advice.protection.verdict, "aria-labelledby": "protection-title"}) %}
   {{ h2("protection-title", "Downy protection") }}

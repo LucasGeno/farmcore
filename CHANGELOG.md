@@ -4,6 +4,12 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- The parcel card shows the Rossi et al. 2008 downy mildew primary infection model beside the
+  3-10 rule: infection hours and the expected symptoms window, the primary inoculum season and
+  its validation level (unvalidated). It runs on the merged observed series since 1 January;
+  missing hours make it "Limited". The spray decision still uses the 3-10 rule. Implemented from
+  the paper and checked against the viticolR oracle fixtures; no migration.
+
 - The advisor reads one merged hourly weather series per parcel (`core/weather/merge.py`),
   ranked from the parcel's centroid: on-farm sensors first, then agricultural networks, national
   services and models, each provider declaring its tier on `Capabilities.tier` (stored on its

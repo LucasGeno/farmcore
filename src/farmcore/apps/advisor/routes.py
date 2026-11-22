@@ -28,10 +28,11 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from farmcore.apps.advisor import service
 from farmcore.apps.advisor.checklist import assumed_keys, checklist, day_text
+from farmcore.apps.advisor.engine.mildew.downy_rossi import SPEC as ROSSI_SPEC
 from farmcore.apps.advisor.engine.window import REPLAY_NOTE
 from farmcore.apps.advisor.navigation import parcel_link
 from farmcore.apps.fields.seed import alias_number
-from farmcore.core.access import Repo
+from farmcore.core.access import Repo, ScopeDenied
 from farmcore.core.clock import get_clock
 from farmcore.core.debug import debug_enabled
 from farmcore.core.models.canonical import Parcel
@@ -695,7 +696,59 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
         ),
         "evaluated_at": advice["evaluated_at"] and _fmt(advice["evaluated_at"], tz),
     }
-    return {"parcel": advice["parcel"], "advice": view, "now": now, "debug": debug}
+    rossi = _rossi_view(repo, parcel, now, tz) if advice["id"] is not None else None
+    return {"parcel": advice["parcel"], "advice": view, "rossi": rossi, "now": now, "debug": debug}
+
+
+ROSSI_SEASON = {
+    "not started": "Primary inoculum season not started yet",
+    "open": "Primary inoculum season open",
+    "ended": "Primary inoculum season over",
+}
+
+
+def _rossi_view(repo: Repo, parcel: Parcel, now: datetime, tz: str) -> dict[str, Any] | None:
+    """The Rossi 2008 model's primary infections, shown beside the 3-10 rule for comparison
+    (crop-models R4: the decision stays on the 3-10 rule until a season's comparison). None when
+    the grant cannot read the weather."""
+    try:
+        run = service.rossi_run(repo, parcel.id, now, tz)
+    except ScopeDenied:
+        return None
+    zone = ZoneInfo(tz)
+
+    def local(ts: datetime | None) -> str:
+        return ts.astimezone(zone).strftime(LOCAL_FORMAT) if ts else "—"
+
+    # Cohorts that infect in the same hour (their zoospores waited for the same rain) are one
+    # line; they share the symptoms window too (incubation depends only on the hours after it).
+    by_hour: dict[datetime, list] = {}
+    for c in run.infections:
+        by_hour.setdefault(c.infection, []).append(c)
+    infections = [
+        {
+            "at": local(hour),
+            "raw": hour.isoformat(),
+            "cohorts": len(cs),
+            "symptoms": f"{local(cs[0].symptoms_from)} to {local(cs[0].symptoms_to)}",
+        }
+        for hour, cs in sorted(by_hour.items(), reverse=True)
+    ]
+    limited = ""
+    if not run.complete:
+        limited = (
+            f"Limited: {run.missing_hours} of {run.hours} hours since 1 January lack temperature, "
+            "humidity or rain, so dates may be late or missing."
+        )
+    return {
+        "spec": ROSSI_SPEC,
+        "season": ROSSI_SEASON[run.season],
+        "ht": f"{run.ht:.2f}",
+        "infections": infections,
+        "cohorts": len(run.cohorts),
+        "limited": limited,
+        "wetness": run.wetness,
+    }
 
 
 @router.get("/parcels/{parcel_id}/workspace", response_class=HTMLResponse)
