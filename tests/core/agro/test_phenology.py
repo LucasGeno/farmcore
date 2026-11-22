@@ -60,9 +60,10 @@ def test_invalid_stages_and_windows_are_refused() -> None:
         StageWindows(((date(2025, 5, 1), 61), (date(2025, 4, 1), 9)), source=WINDOWS.source)
     with pytest.raises(ValueError, match="ascending"):  # stages never go backwards
         StageWindows(((date(2025, 4, 1), 61), (date(2025, 5, 1), 9)), source=WINDOWS.source)
-    # A source is a citation (year, DOI or link) or a labelled assumption, never an opaque word.
+    # A source is a URL, DOI or author-year citation, or a labelled assumption; never opaque.
     sourced = StageWindows(((date(2025, 4, 1), 9),), source="IFV Bordeaux phase calendar, 2024")
     assert stage_on(date(2025, 4, 2), windows=sourced).source == sourced.source
-    for opaque in ["", "x", "assumption:", "regional calendar", "2024", "DOI:", "https://"]:
+    opaque = ["", "x", "assumption:", "regional calendar", "2024", "DOI:", "https://"]
+    for source in [*opaque, "DOI: 2024", "https://2024"]:
         with pytest.raises(ValueError, match="source"):
-            StageWindows(((date(2025, 4, 1), 9),), source=opaque)
+            StageWindows(((date(2025, 4, 1), 9),), source=source)

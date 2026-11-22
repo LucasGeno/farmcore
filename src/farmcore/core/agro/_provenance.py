@@ -15,9 +15,12 @@ _YEAR = re.compile(r"(?<!\d)\d{4}(?!\d)")
 
 
 def _cites(text: str) -> bool:
-    return bool(
-        _URL.search(text) or _DOI.search(text) or (_WORD.search(text) and _YEAR.search(text))
-    )
+    # What claims to be a DOI or a link must be one; it never passes as author-year instead.
+    if text.lower().startswith("doi"):
+        return bool(_DOI.search(text))
+    if "://" in text:
+        return bool(_URL.search(text))
+    return bool(_DOI.search(text) or (_WORD.search(text) and _YEAR.search(text)))
 
 
 def provenance_problem(source: str, status: str) -> str | None:
