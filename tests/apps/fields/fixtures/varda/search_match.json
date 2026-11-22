@@ -1,0 +1,18 @@
+{
+  "entries": [
+    {
+      "field_id": "15RJ.CZM7",
+      "boundary_id": "0193a3c1-6f2e-7c4a-9d1b-2f5e8a7c4b10",
+      "iou_score": 0.93,
+      "input_based_intersection": 0.97,
+      "output_based_intersection": 0.95
+    },
+    {
+      "field_id": "7KQW.R3TN",
+      "boundary_id": "0193a3c1-6f2e-7c4a-9d1b-2f5e8a7c4b11",
+      "iou_score": 0.02,
+      "input_based_intersection": 0.03,
+      "output_based_intersection": 0.05
+    }
+  ]
+}

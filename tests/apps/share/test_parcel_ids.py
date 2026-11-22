@@ -1,8 +1,8 @@
 """Portable parcel ids: the NGSI-LD export carries one `AgriParcel` per exported parcel, its
 genuine IACS/LPIS id and portable `ext_id` aliases in the Smart Data Models `relatedSource` property
 (AgriFood-Commons: "List of IDs the current entity may have in external applications"); the
-register JSON carries the aliases as `source:key`. A Varda Global FieldID would be one more
-alias, source `varda`: nothing is called or generated."""
+register JSON carries the aliases as `source:key`. A Varda Global FieldID an owner kept is one
+more alias, source `varda-gfid`: the exports call nothing and generate nothing."""
 
 from __future__ import annotations
 
@@ -56,7 +56,12 @@ def test_the_export_carries_each_parcel_with_its_iacs_id_and_aliases(admin, demo
 def test_a_varda_alias_is_one_more_related_source(admin, session, demo, spray):
     spray(parcels=demo.parcels[:1])
     session.add(
-        ExtId(source="varda", key="key-under-test", model="parcel", res_id=demo.parcels[0].id)
+        ExtId(
+            source=register.VARDA_SOURCE,
+            key="key-under-test",
+            model="parcel",
+            res_id=demo.parcels[0].id,
+        )
     )
     session.commit()
 
@@ -65,10 +70,10 @@ def test_a_varda_alias_is_one_more_related_source(admin, session, demo, spray):
 
     related = _parcels(body)[f"{PARCEL_PREFIX}{demo.parcels[0].id}"]["relatedSource"]
     assert {
-        "application": "urn:ngsi-ld:AgriApp:varda",
+        "application": "urn:ngsi-ld:AgriApp:varda-gfid",
         "applicationEntityId": "key-under-test",
     } in related
-    assert "varda:key-under-test" in rows[0]["parcel_aliases"]
+    assert "varda-gfid:key-under-test" in rows[0]["parcel_aliases"]
 
 
 def test_a_synthetic_parcel_id_is_not_exported_as_iacs(admin, session, demo, spray):

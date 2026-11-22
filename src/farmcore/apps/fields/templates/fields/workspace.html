@@ -11,12 +11,21 @@
   <div class="min-w-0">
 <h1 id="parcel-heading" data-return-heading tabindex="-1" class="mt-3 scroll-mt-20 focus-visible:underline focus:outline focus:outline-2 focus:outline-brand-700 break-words text-2xl font-semibold">{{ parcel.alias }} · {{ parcel.name }}</h1>
 <p class="break-words text-muted">{{ '%.2f'|format(parcel.area_ha) }} ha · {{ (parcel.props or {}).get('variety') or 'Not recorded' }}</p>
+{% if field_id %}<p data-field-id class="break-words text-muted">Global FieldID {{ field_id }} · <a href="{{ field_id_url.format(field_id) }}" rel="noopener noreferrer" class="font-semibold text-brand-700">Open in Global FieldID</a></p>{% endif %}
   </div>
 </div>
 <nav aria-label="Parcel views" class="mt-6 flex flex-wrap gap-2">
 {% for item in views %}<a href="{{ item.url }}" class="inline-flex min-h-[44px] items-center rounded-lg border border-line px-4 font-semibold {{ 'bg-brand-50 text-brand-900' if item.key == selected_view else 'bg-surface text-muted hover:bg-ground' }}"{% if item.key == selected_view %} aria-current="page"{% endif %}>{{ item.label }}</a>{% endfor %}
 </nav>
 {% if notice %}<p role="note" class="mt-4 text-wait">{{ notice }}</p>{% endif %}
+{#- Only with Varda credentials and a live clock (`field_id.can_call`): a replay never calls out. -#}
+{% if field_id_lookup and is_farm_owner and not is_tour %}
+<form method="post" action="{{ resolved_farm_url('/fields/parcels/' ~ parcel.id ~ '/field-id/lookup') }}" class="mt-4 flex flex-wrap items-center gap-3">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit" class="min-h-[44px] rounded-lg border border-line px-3 py-2 font-semibold">{{ 'Look up Global FieldID again' if field_id else 'Look up Global FieldID' }}</button>
+  <span class="text-sm text-muted">Sends this parcel's outline to Varda; only the id is kept.</span>
+</form>
+{% endif %}
 {% if selected_view == 'overview' %}
 <h2 class="mt-6 text-lg font-semibold">Overview</h2>
 

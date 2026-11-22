@@ -13,6 +13,7 @@ MANIFEST = Manifest(
         "farmcore.apps.fields.routes:router",
         "farmcore.apps.fields.outlines:router",
         "farmcore.apps.fields.aerial:router",
+        "farmcore.apps.fields.field_id:router",
     ),
     title="Map & parcels",
     category="Essentials",

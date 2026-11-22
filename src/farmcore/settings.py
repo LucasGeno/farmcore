@@ -24,6 +24,8 @@ DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL = "https://single-runs-api.open-meteo.co
 DEFAULT_METEOFRANCE_API_BASE_URL = "https://public-api.meteofrance.fr/public"
 DEFAULT_METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token"
 DEFAULT_CDSAPI_URL = "https://cds.climate.copernicus.eu/api"
+DEFAULT_VARDA_API_BASE_URL = "https://api.varda.ag/fid/v1"
+DEFAULT_VARDA_TOKEN_URL = "https://auth.varda.ag/oauth/token"
 
 
 def _check_http_url(v: str) -> str:
@@ -113,6 +115,13 @@ class Settings(BaseSettings):
     # No key: the backfill stays off.
     cdsapi_url: str = DEFAULT_CDSAPI_URL
     cdsapi_key: SecretStr | None = None
+    # Varda Global FieldID (`fields`: an owner looks up a parcel's GFID): the OAuth client
+    # credentials from account.varda.ag, exchanged for a bearer token; never logged, stored or
+    # rendered. No client: no lookup action and no call. Lookups are read-only and keep ids only.
+    varda_api_base_url: str = DEFAULT_VARDA_API_BASE_URL
+    varda_token_url: str = DEFAULT_VARDA_TOKEN_URL
+    varda_client_id: SecretStr | None = None
+    varda_client_secret: SecretStr | None = None
     # Optional address search on the location step: a Nominatim or Photon base URL. Empty (the
     # default) keeps the geocoder off; map, browser location and coordinates still work.
     geocoder_base_url: str = ""
@@ -209,6 +218,8 @@ class Settings(BaseSettings):
         "meteofrance_api_base_url",
         "meteofrance_token_url",
         "cdsapi_url",
+        "varda_api_base_url",
+        "varda_token_url",
     )
     @classmethod
     def _http_url_without_credentials(cls, v: str) -> str:
@@ -243,6 +254,14 @@ class Settings(BaseSettings):
             for url in (self.meteofrance_api_base_url, self.meteofrance_token_url):
                 if urlsplit(url).scheme != "https":
                     raise ValueError("METEOFRANCE_CLIENT_SECRET requires https Météo-France URLs")
+        return self
+
+    @model_validator(mode="after")
+    def _varda_credentials_require_https(self) -> Settings:
+        if self.varda_client_secret is not None:
+            for url in (self.varda_api_base_url, self.varda_token_url):
+                if urlsplit(url).scheme != "https":
+                    raise ValueError("VARDA_CLIENT_SECRET requires https Varda URLs")
         return self
 
     @model_validator(mode="after")

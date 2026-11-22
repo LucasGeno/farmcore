@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 from sqlalchemy import select
 
-from farmcore.apps.fields import seasons
+from farmcore.apps.fields import field_id, seasons
 from farmcore.apps.fields.service import (
     NOT_ADVISED_LABEL,
     parcels_feature_collection,
@@ -286,7 +286,7 @@ def provider_query(request: Request, keys: tuple[str, ...]) -> dict[str, str]:
 
 
 @router.get("/parcels/{parcel_id}", response_class=HTMLResponse)
-def workspace(request: Request, repo: Repo, parcel_id: int) -> HTMLResponse:
+def workspace(request: Request, repo: Repo, parcel_id: int, varda: field_id.Client) -> HTMLResponse:
     parcel = _scoped_parcel(repo, parcel_id)
     if parcel is None:
         raise HTTPException(status_code=404, detail="No such parcel on this farm.")
@@ -348,6 +348,9 @@ def workspace(request: Request, repo: Repo, parcel_id: int) -> HTMLResponse:
         notice=notice,
         section=section,
         sections=sections,
+        field_id=field_id.alias_of(repo, parcel),
+        field_id_url=field_id.RESOLVER,
+        field_id_lookup=field_id.can_call(request, repo, varda),
     )
 
 

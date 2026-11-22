@@ -39,8 +39,8 @@ at the same commit (`$schemaVersion` 1.0.2) and `agrifood-schema.json` (AgriFood
   no custom @context term): the IACS/LPIS id first (application `urn:ngsi-ld:AgriApp:iacs-lpis`;
   left out for a synthetic id, `props.id_label`, or an id matching an `ign-rpg-*` alias),
   then portable `ext_id` aliases, application `urn:ngsi-ld:AgriApp:<source>`, key as is
-  (`register.parcel_aliases`). A Varda Global FieldID
-  goes here as source `varda` when one is recorded; nothing calls Varda or makes one up.
+  (`register.parcel_aliases`). A Varda Global FieldID an owner kept goes here as source
+  `varda-gfid` (its BoundaryID as `varda-gfid-boundary`); the export never calls Varda.
   Distinct application/key pairs are retained, even when unrelated sources share a key.
   The demo's `iacs_parcel_id` register column carries the open RPG polygon id as a stand-in
   for the IACS reference; it is exported only under its IGN RPG application here.

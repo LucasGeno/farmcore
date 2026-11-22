@@ -455,6 +455,31 @@ Vertex file, list it too (`-f docker-compose.yml -f docker-compose.vertex.yml -f
 docker-compose.override.yml`). Add `METEOFRANCE_API_BASE_URL`, `METEOFRANCE_TOKEN_URL` or
 `CDSAPI_URL` the same way only if you change them from their defaults.
 
+## Global FieldID lookups (optional)
+
+[Varda's Global FieldID](https://www.varda.ag/global-field-id) gives a field a stable public id
+such as `15RJ.CZM7`. With credentials, a farm owner can look a parcel up from its page (*Look up
+Global FieldID*) and keep the id as one more portable alias:
+
+- **Credentials.** Sign up at [account.varda.ag](https://account.varda.ag) for read access and
+  set `VARDA_CLIENT_ID` and `VARDA_CLIENT_SECRET` (the stock `docker-compose.yml` passes both to
+  the app). FarmCore exchanges them at `VARDA_TOKEN_URL` (OAuth2 client credentials) for a bearer
+  token it reuses until it expires. They are never logged, stored or shown; startup refuses a
+  secret with an `http` URL. Without them there is no lookup action and nothing calls Varda.
+- **What is sent.** Only the parcel's outline, to `POST /field-searches`, and only when the owner
+  asks and the clock is live: a replay never calls out.
+- **What is kept.** A match with an IoU of 0.8 or more, Varda's own threshold for the same field
+  ([guide](https://developer.varda.ag/docs/field-id-lookups.md)), is kept at once; otherwise the
+  candidates are listed with their overlap figures and the owner keeps one or none. FarmCore stores
+  the Global FieldID (`ext_id` source `varda-gfid`) and its BoundaryID (`varda-gfid-boundary`),
+  never Varda's outlines, whose licence is not settled. The id shows on the parcel page and as an
+  alias in the register JSON and the NGSI-LD export.
+- **Known limits.** One installation holds a Global FieldID for one parcel: a second farm in the
+  same installation that tries to keep it is refused ("already claimed in this installation").
+  Lookups are read-only: registering a new field in Global FieldID is not offered. Coverage is
+  national (France and Italy among others, Greece not yet), and the terms for storing ids in an
+  open-source product are still to be confirmed with Varda.
+
 ## Backups and restore
 
 A backup is one file, a **bundle**: a `pg_dump` of the installation database (custom format,
