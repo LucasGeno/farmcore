@@ -17,10 +17,10 @@ The observed property is a CF standard name (`name`, or the last path segment of
 Each reading must be one the schema can hold honestly, or the whole payload is refused
 (`Refused`, nothing stored): a variable FarmCore stores (`variables.VARIABLES`), a unit this
 module converts from (`UNITS`), an exact decimal within the variable's physical range, a time
-with its zone and not in the future, a period that fits the variable (`time: point`: an
-instant; `time: sum`: exactly one hour; `time: mean`/`maximum`: at most one hour) ending on
-the hour (the merge layer is hourly), a depth for soil moisture and for nothing else, and no
-reading given twice.
+with its zone that has ended when it is received (no allowance for a fast clock), a period that
+fits the variable (`time: point`: an instant; `time: sum`: exactly one hour; `time: mean`/
+`maximum`: at most one hour) ending on the hour (the merge layer is hourly), a depth for soil
+moisture and for nothing else, and no reading given twice.
 """
 
 from __future__ import annotations
@@ -37,7 +37,6 @@ from farmcore.core.weather.contract import ObservationValue
 from farmcore.core.weather.variables import SOIL_MOISTURE, VARIABLES
 
 MAX_READINGS = 5000  # assumed: a day of 10-minute readings from a dozen datastreams, with room
-FUTURE_SKEW = timedelta(minutes=5)  # assumed: a device clock running slightly fast
 HOUR = timedelta(hours=1)
 MAX_DEPTH_M = Decimal("10")  # assumed: deeper than any soil moisture probe
 CSV_COLUMNS = ("observed_property", "unit", "phenomenon_time", "result", "depth_m")
@@ -218,7 +217,7 @@ def _reading(where, name, symbol, time, result, depth, now: datetime) -> Reading
         raise Refused(f"{where}: {variable.name} is over a period of at most one hour")
     if end != end.replace(minute=0, second=0, microsecond=0):
         raise Refused(f"{where}: the reading must end on the hour (hourly readings)")
-    if end > now + FUTURE_SKEW:
+    if end > now:
         raise Refused(f"{where}: the reading is in the future")
     if (variable.name == SOIL_MOISTURE) != (depth is not None):
         raise Refused(f"{where}: soil moisture needs depth_m, and only soil moisture has one")

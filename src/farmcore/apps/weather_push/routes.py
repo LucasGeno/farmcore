@@ -2,20 +2,23 @@
 
 Each request passes, in order, before anything is stored:
 
-1. A device token in `Authorization: Bearer` (`devices.authenticate_device`): 401 otherwise,
+1. The client address's rate (429): `RATE_PER_ADDRESS`, before any token is looked up.
+2. A device token in `Authorization: Bearer` (`devices.authenticate_device`): 401 otherwise,
    one answer for every cause. The path is open to requests without a session
    (`core.privacy.PUBLIC_PATHS`); the token is the only credential, never a cookie or a URL.
-2. That device's rate (429 with `Retry-After`): `RATE_PER_MINUTE`, a token bucket per device
+3. That device's rate (429 with `Retry-After`): `RATE_PER_MINUTE`, a token bucket per device
    in this process.
-3. The format: `application/json` (SensorThings deep insert) or `text/csv` (415 otherwise).
-4. The body size: `MAX_BYTES` (413), read no further than that.
-5. Every reading (`parse`): one the schema cannot hold refuses the whole payload (422).
+4. The format: `application/json` (SensorThings deep insert) or `text/csv` (415 otherwise).
+5. The body size: `MAX_BYTES` (413), read no further than that.
+6. Every reading (`parse`): one the schema cannot hold refuses the whole payload (422).
 
-Then one receipt (`store.record_receipt`, the on-farm tier, the farm's own data) and the
-readings under the device's stations (`store.store_observations`), in one transaction; the token
-is checked again inside it, so a device revoked meanwhile stores nothing. The same payload again
-returns the receipt already held and stores nothing new; a reading already held keeps its first
-value (append-only evidence). Responses carry no farm data, only counts and the receipt id.
+Then one receipt (`store.record_receipt`, the on-farm tier, the farm's own data), the readings
+under the device's stations (`store.store_observations`) and one `access_log` row (actor
+`token:<id>`, its grant, scope `weather:push`; never the token or the body), in one
+transaction. The token is checked again inside it, so a device revoked meanwhile stores nothing.
+The same payload again returns the receipt already held and stores nothing new; a reading
+already held keeps its first value (append-only evidence). Responses carry no farm data, only
+counts and the receipt id.
 """
 
 from __future__ import annotations
@@ -29,10 +32,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
 from farmcore.apps.weather_push import parse
-from farmcore.apps.weather_push.devices import authenticate_device, station_for
+from farmcore.apps.weather_push.devices import SCOPE, authenticate_device, station_for
 from farmcore.apps.weather_push.provider import LICENCE, NAME
 from farmcore.core.access import TokenRejected
 from farmcore.core.mcp_http import RateLimit, bearer
+from farmcore.core.models.canonical import AccessLog
 from farmcore.core.weather import store
 from farmcore.core.weather.contract import Fetched, Tier
 from farmcore.core.weather.contract import Request as WeatherRequest
@@ -44,7 +48,15 @@ router = APIRouter()
 PATH = "/observations"
 MAX_BYTES = 256 * 1024  # assumed: MAX_READINGS JSON readings fit with room
 RATE_PER_MINUTE = 60  # assumed: one push a minute on average, bursts of a minute's worth
+# assumed: before any token is looked up, so forged tokens cannot tie up the thread and database
+# pools; room for a few dozen devices behind one address (a farm gateway or NAT).
+RATE_PER_ADDRESS = 120
 FORMATS = {"application/json": "json", "text/csv": "csv"}
+
+
+def _now() -> datetime:
+    """Wall time: a device's readings are real-world, whatever the installation clock replays."""
+    return datetime.now(UTC)
 
 
 def _refusal(status: int, message: str, **headers: str) -> Response:
@@ -59,12 +71,16 @@ def _unauthorized() -> Response:
     )
 
 
-def _limiter(request: Request) -> RateLimit:
+def _limiter(request: Request, kind: str) -> RateLimit:
+    """This app instance's bucket set: `address` (before authentication) or `device`."""
     state = request.app.state
-    limiter = getattr(state, "weather_push_rate", None)
-    if limiter is None:
-        limiter = state.weather_push_rate = RateLimit(RATE_PER_MINUTE)
-    return limiter
+    limiters = getattr(state, "weather_push_rate", None)
+    if limiters is None:
+        limiters = state.weather_push_rate = {
+            "address": RateLimit(RATE_PER_ADDRESS),
+            "device": RateLimit(RATE_PER_MINUTE),
+        }
+    return limiters[kind]
 
 
 async def _body(request: Request) -> bytes | None:
@@ -84,6 +100,9 @@ async def _body(request: Request) -> bytes | None:
 async def push(request: Request) -> Response:
     factory = request.app.state.session_factory
     raw = bearer(request.headers)
+    client = request.client.host if request.client else ""
+    if wait := _limiter(request, "address").wait(client):
+        return _refusal(429, "Too many requests.", **{"Retry-After": str(wait)})
 
     def device() -> int | None:
         with session_scope(factory) as session:
@@ -96,7 +115,7 @@ async def push(request: Request) -> Response:
     if device_id is None:
         logger.info("weather push refused: 401")
         return _unauthorized()
-    if wait := _limiter(request).wait(str(device_id)):
+    if wait := _limiter(request, "device").wait(str(device_id)):
         return _refusal(429, "Too many requests.", **{"Retry-After": str(wait)})
     kind = FORMATS.get(request.headers.get("content-type", "").split(";", 1)[0].strip().lower())
     if kind is None:
@@ -111,7 +130,7 @@ async def push(request: Request) -> Response:
                 token, grant = authenticate_device(session, raw)
             except TokenRejected:
                 return _unauthorized()
-            now = datetime.now(UTC)
+            now = _now()
             try:
                 readings = (parse.parse_json if kind == "json" else parse.parse_csv)(body, now)
             except parse.Refused as exc:
@@ -145,6 +164,17 @@ async def push(request: Request) -> Response:
             except store.WeatherValueError as exc:
                 session.rollback()
                 return _refusal(422, str(exc))
+            # One audit row per accepted push, beside the values (Sharing's history reads it).
+            session.add(
+                AccessLog(
+                    actor=f"token:{token.id}",
+                    farm_id=grant.farm_id,
+                    grant_id=grant.id,
+                    resource="weather_observation",
+                    scope=SCOPE,
+                    purpose=grant.purpose,
+                )
+            )
             return JSONResponse(
                 {"readings": len(readings), "receipt_id": receipt.id}, status_code=201
             )

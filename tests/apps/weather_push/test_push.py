@@ -35,8 +35,8 @@ from farmcore.core.access import (
     repo_for_job,
 )
 from farmcore.core.identity import hash_password
-from farmcore.core.models.canonical import DataGrant
-from farmcore.core.models.identity import FarmMembership, LocalIdentity
+from farmcore.core.models.canonical import AccessLog, DataGrant
+from farmcore.core.models.identity import AccessToken, FarmMembership, LocalIdentity
 from farmcore.core.models.weather import WeatherObservation, WeatherReceipt, WeatherStation
 from farmcore.core.seed import ensure_default_farm
 from farmcore.core.weather import merge, store
@@ -186,6 +186,17 @@ def test_json_readings_convert_units_and_lead_the_merge_as_on_farm(
     assert probe.provider_station_id.endswith("@0.3m") and probe.owner_farm_id == farm.id
     pushed_receipt = session.get(WeatherReceipt, soil.receipt_id)
     assert pushed_receipt.request["tier"] == "on-farm" and pushed_receipt.redistribution
+    grant, raw = device
+    token = session.scalars(select(AccessToken).where(AccessToken.grant_id == grant.id)).one()
+    [audit] = session.scalars(select(AccessLog).where(AccessLog.actor.like("token:%"))).all()
+    assert (audit.actor, audit.farm_id, audit.grant_id, audit.resource, audit.scope) == (
+        f"token:{token.id}",
+        farm.id,
+        grant.id,
+        "weather_observation",
+        "weather:push",
+    )
+    assert audit.purpose == grant.purpose and raw not in repr(audit.__dict__)
 
 
 def test_the_same_reading_as_csv_or_json_or_twice_is_stored_once(http, session, device) -> None:
@@ -208,6 +219,7 @@ def test_the_same_reading_as_csv_or_json_or_twice_is_stored_once(http, session, 
 
 
 FUTURE = HOUR + timedelta(hours=4)
+NEXT = HOUR + timedelta(hours=3)  # the top of the coming hour
 
 
 @pytest.mark.parametrize(
@@ -230,6 +242,12 @@ FUTURE = HOUR + timedelta(hours=4)
         (
             "device",
             _thing(GOOD, _stream("air_temperature", "degC", 3, FUTURE)),
+            "application/json",
+            422,
+        ),
+        (
+            "device-2-min-early",
+            _thing(GOOD, _stream("air_temperature", "degC", 3, NEXT)),
             "application/json",
             422,
         ),
@@ -267,6 +285,7 @@ FUTURE = HOUR + timedelta(hours=4)
         "unknown-unit",
         "unknown-variable",
         "future",
+        "hour-not-yet-ended",
         "soil-without-depth",
         "not-on-the-hour",
         "out-of-range",
@@ -277,9 +296,12 @@ FUTURE = HOUR + timedelta(hours=4)
     ],
 )
 def test_refused_pushes_store_nothing(
-    http, session, farm, owner, device, token, body, content_type, status
+    http, session, farm, owner, device, token, body, content_type, status, monkeypatch
 ) -> None:
     raw = {"device": device[1], "none": None, "forged": "fc_pat_" + "A" * 43}.get(token)
+    if token == "device-2-min-early":  # received at 23:58 for a reading of 00:00
+        raw = device[1]
+        monkeypatch.setattr(routes, "_now", lambda: NEXT - timedelta(minutes=2))
     if token == "agent":
         repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "owner", "t")
         _grant, raw = share.create_token(
@@ -304,6 +326,7 @@ def test_refused_pushes_store_nothing(
         assert refused.headers["WWW-Authenticate"].startswith("Bearer")
     assert _observations(session) == []
     assert session.scalar(select(func.count()).select_from(WeatherReceipt)) == 0
+    assert session.scalar(select(func.count()).select_from(AccessLog)) == 0
 
 
 def test_a_device_token_only_pushes(session, device) -> None:
@@ -323,3 +346,19 @@ def test_each_device_is_rate_limited_on_its_own(
     assert statuses == [201, 201, 429]
     assert int(refused.headers["Retry-After"]) >= 1
     assert _push(http, other, _thing(GOOD)).status_code == 201
+
+
+def test_forged_tokens_are_limited_per_address_before_any_lookup(http, monkeypatch) -> None:
+    monkeypatch.setattr(routes, "RATE_PER_ADDRESS", 2)
+    looked_up = []
+    monkeypatch.setattr(
+        routes,
+        "authenticate_device",
+        lambda *a: looked_up.append(1) or (_ for _ in ()).throw(TokenRejected()),
+    )
+    forged = "fc_pat_" + "B" * 43
+
+    statuses = [_push(http, forged, _thing(GOOD)).status_code for _ in range(3)]
+
+    assert statuses == [401, 401, 429]
+    assert len(looked_up) == 2

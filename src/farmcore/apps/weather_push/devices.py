@@ -27,6 +27,7 @@ from farmcore.core.access import (
     OWNER,
     TOKEN_MAX_LEN,
     TOKEN_PREFIXES,
+    WEATHER_PUSH,
     TokenRejected,
     is_farm_owner,
     issue_token,
@@ -38,7 +39,7 @@ from farmcore.core.models.weather import WeatherStation
 from farmcore.core.weather import store
 from farmcore.core.weather.contract import Station
 
-SCOPE = "weather:push"
+SCOPE = WEATHER_PUSH
 PURPOSE = "on-farm sensor readings"
 VALID_DAYS = 366  # assumed: a device token is renewed yearly, like any credential
 NAME_MAX_LEN = 100  # assumed

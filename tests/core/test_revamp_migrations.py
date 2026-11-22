@@ -1012,3 +1012,51 @@ def test_weather_revisions_backfill_era5t_and_per_farm_grid_stations_then_round_
         command.upgrade(cfg, "head")
     finally:
         engine.dispose()
+
+
+def test_soil_moisture_variable_downgrade_refuses_while_values_hold_it_then_round_trips(
+    scratch_db_url,
+):
+    """core_0021: the soil moisture row; a downgrade refuses (counts) while an observation holds
+    it, deletes nothing to get past that, and round-trips once it holds none."""
+    soil = "volume_fraction_of_condensed_water_in_soil"
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "head")
+    engine = create_engine(scratch_db_url)
+    one = lambda db, sql, **p: db.execute(text(sql), p).scalar_one()  # noqa: E731
+    try:
+        with engine.begin() as db:
+            receipt = one(
+                db,
+                "INSERT INTO weather_receipt (provider, dataset, farm_id, fetched_at) "
+                "VALUES ('weather-push', 'sensorthings-json', :farm, '2026-11-22T10:00Z') "
+                "RETURNING id",
+                farm=farm(db, "A"),
+            )
+            station = one(
+                db,
+                "INSERT INTO weather_station (provider, provider_station_id, name, geom) "
+                "VALUES ('weather-push', 'device1@0.3m', 'x', 'SRID=4326;POINT(-0.25 45)') "
+                "RETURNING id",
+            )
+            db.execute(
+                text(
+                    "INSERT INTO weather_observation (station_id, receipt_id, period_start, "
+                    "period_end, variable, unit, value) VALUES (:s, :r, '2026-11-22T09:00Z', "
+                    "'2026-11-22T09:00Z', :v, '%', 31.5)"
+                ),
+                {"s": station, "r": receipt, "v": soil},
+            )
+        with pytest.raises(MigrationRefused, match="1 in weather_observation"):
+            command.downgrade(cfg, "core_0020")
+        with engine.begin() as db:
+            assert one(db, "SELECT count(*) FROM weather_observation WHERE variable = :v", v=soil)
+            db.execute(text("DELETE FROM weather_observation WHERE variable = :v"), {"v": soil})
+        command.downgrade(cfg, "core_0020")
+        with engine.begin() as db:
+            assert not one(db, "SELECT count(*) FROM weather_variable WHERE name = :v", v=soil)
+        command.upgrade(cfg, "head")
+        with engine.begin() as db:
+            assert one(db, "SELECT unit FROM weather_variable WHERE name = :v", v=soil) == "%"
+    finally:
+        engine.dispose()
