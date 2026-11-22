@@ -198,6 +198,7 @@ def store(
         fetched=fetched,
         secret_fields=[f.name for f in live.auth_schema() if f.secret],
         farm_id=asset.farm_id,
+        tier=live.capabilities().tier,
     )
     if observations:
         weather_station = upsert_station(session, connector.EXT_SOURCE, station)

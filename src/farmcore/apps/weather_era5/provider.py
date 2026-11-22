@@ -62,6 +62,7 @@ from farmcore.core.weather.contract import (
     Point,
     Request,
     Station,
+    Tier,
     TimeRange,
 )
 from farmcore.core.weather.variables import BY_LEGACY
@@ -364,6 +365,7 @@ class Era5:
             variables=frozenset(BY_LEGACY[n].name for n in ("rr1_mm", "t_c", "rh_pct", "ff_kmh")),
             backfill=bool(self._key),  # without a key the job does nothing: not offered
             live_only=True,
+            tier=Tier.MODEL,
         )
 
     def licence(self, fetched_at: datetime | None = None) -> Licence:

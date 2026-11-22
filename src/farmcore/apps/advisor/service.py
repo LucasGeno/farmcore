@@ -3,10 +3,12 @@
 Every read goes through a `ScopedRepository` (the job passes `repo_for_job`, routes `get_repo`)
 and is bounded by the clock `now`:
 
-- weather: `stations.service.load_hourly(repo, station, 1 Mar local of now's year,
-  now + forecast_span(config))` (73 h with the defaults: the window's last horizon hour reads the
-  rain of the hours after it), loaded once per farm; the hours after now feed only the engine's
-  window search;
+- weather: the farm's merged hourly series (`core.weather.merge.farm_hourly`, every source the
+  farm holds, best tier first) from 1 Mar local of now's year to now + forecast_span(config)
+  (73 h with the defaults: the window's last horizon hour reads the rain of the hours after it),
+  loaded once per farm; the hours after now feed only the engine's window search. Hours filled
+  from a source other than the best one are flagged `weather_gap_filled` and listed in the
+  input snapshot (`weather_gap_filled`, `weather_sources`); a single source adds neither;
 - sprays: done spray logs on the parcel with `ts_start <= now`; each quantity's product gives the
   engine its type and targets;
 - previous advice: the latest advice for the parcel evaluated before now. A re-evaluation at the
@@ -43,16 +45,20 @@ from farmcore.apps.operations.models import CropProtectionItem
 from farmcore.apps.stations import service as stations
 from farmcore.core import assessments
 from farmcore.core.access import ScopeDenied, ScopedRepository
+from farmcore.core.farm_location import farm_location
 from farmcore.core.model_spec import validation_json
 from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.canonical import Asset, Farm, Log, LogParcel, LogSource
 from farmcore.core.models.catalog import CatalogItem, TypedQuantity
 from farmcore.core.models.weather import WeatherReceipt
+from farmcore.core.weather import merge
+from farmcore.core.weather.contract import Point
 
 SCOPE = "advice:read"
 LOGS_SCOPE = "logs:read"
 NO_ADVICE = "none"
 SPRAY_WITHOUT_PRODUCT = "spray_without_product"
+WEATHER_GAP_FILLED = "weather_gap_filled"
 NO_STATION = "Assessment unavailable: no weather station attached to this farm"
 CARD_PATH = "/advisor/parcels/{id}"
 SEASON_START = (3, 1)  # (month, day): weather history from 1 Mar of the year
@@ -137,12 +143,15 @@ def series_start(now: datetime, tz: str) -> datetime:
     return datetime(now.astimezone(zone).year, month, day, tzinfo=zone)
 
 
-def load_series(
-    repo: ScopedRepository, station_id: int, now: datetime, tz: str, config: AdvisorConfig
-) -> list[HourlyObs]:
-    until = now + forecast_span(config)
-    rows = stations.load_hourly(repo, station_id, series_start(now, tz), until)
-    return [HourlyObs(**row) for row in rows]
+def load_weather(
+    repo: ScopedRepository, now: datetime, tz: str, config: AdvisorConfig
+) -> merge.Merged:
+    """The farm's merged hourly weather the engine reads (`Merged.series()`), ranked from the
+    farm's pin."""
+    farm = repo.get(Farm, repo.farm_id, scope=SCOPE)
+    pin = farm_location(farm)
+    point = Point(pin["latitude"], pin["longitude"]) if pin else None
+    return merge.farm_hourly(repo, series_start(now, tz), now + forecast_span(config), point)
 
 
 def load_sprays(repo: ScopedRepository, parcel_id: int, now: datetime) -> tuple[list[Spray], int]:
@@ -472,6 +481,7 @@ def advice_row(
     ignored_sprays: int = 0,
     effective=None,
     input_snapshot: dict | None = None,
+    weather_gap_filled: Sequence[dict[str, Any]] = (),
 ) -> Advice:
     """The advice row (crop protection's public representation) linked to its new envelope
     (`advisor.assessment.KIND`), which keeps the evidence: status, parameter version (or the
@@ -479,7 +489,11 @@ def advice_row(
     `ignored_sprays` > 0 (done spray logs without a known product) adds `spray_without_product`
     to the flags."""
     window = advice.next_window
-    flags = set(advice.flags) | ({SPRAY_WITHOUT_PRODUCT} if ignored_sprays else set())
+    flags = (
+        set(advice.flags)
+        | ({SPRAY_WITHOUT_PRODUCT} if ignored_sprays else set())
+        | ({WEATHER_GAP_FILLED} if weather_gap_filled else set())
+    )
     version = (
         effective.identity()
         if effective
@@ -533,6 +547,8 @@ def advice_row(
             "passes": advice.passes,
             "treatments": advice.treatments,
             "model_validation": envelope.config_version.get("model_validation"),
+            # Which source filled the hours the best source lacked (absent: one source).
+            **({"weather_gap_filled": list(weather_gap_filled)} if weather_gap_filled else {}),
         },
         assessment=envelope,
     )
@@ -598,6 +614,7 @@ def advice_json(row: Advice) -> dict[str, Any]:
         "mm_since_spray": props.get("mm_since_spray"),
         "incubation_pct": props.get("incubation_pct"),
         "flags": props.get("flags", []),
+        "weather_gap_filled": props.get("weather_gap_filled", []),
         "products": row.products,
         "passes": props.get("passes", 0),
         "treatments": props.get("treatments", 0),
@@ -650,10 +667,12 @@ def runs_to_forecast_edge(end: datetime | None, evaluated_at: datetime, horizon_
 EVIDENCE_VERSION = 2
 
 
-def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
+def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored, weather=None):
     """The exact hourly series the engine read, plus the spray evidence and crop season, with
     unknown receipt semantics stated explicitly. Station rows are not copied: `hourly_inputs` is
-    what was evaluated, and rows written before this shape also carry `observations`."""
+    what was evaluated, and rows written before this shape also carry `observations`. When
+    `weather` (the merged series) came from more than one source, its ranked sources and the
+    hours each lower one filled are added; a single source adds nothing."""
     logs = repo.list(
         Log,
         Log.type == "spray",
@@ -740,6 +759,14 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored):
         "ignored_sprays": ignored,
         # The parcel's season on the local evaluation day, copied with its revision.
         "crop_season": season_evidence(repo, parcel_id, now.astimezone(ZoneInfo(tz)).date()),
+        **(
+            {
+                "weather_sources": list(merge.sources_of(weather)),
+                "weather_gap_filled": weather.gap_filled(),
+            }
+            if weather is not None and len(weather.sources) > 1
+            else {}
+        ),
     }
 
 
@@ -769,8 +796,7 @@ def current_availability(repo, now, tz):
     from farmcore.apps.review.service import resolve
 
     config = resolve(repo, now, tz).config
-    station = stations.station_for_farm(repo)
-    series = load_series(repo, station.id, now, tz, config)
+    series = load_weather(repo, now, tz, config).series()
     assessment = evaluate(series, [], config, now)
     if assessment.assessment_status == "evaluable":
         return "evaluable", None

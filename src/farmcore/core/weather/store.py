@@ -4,7 +4,9 @@
   `unknown` with redistribution blocked, whatever the provider claims; so does a stated
   `unknown`, `NOASSERTION` or `none` in any case. A request naming a secret credential field,
   or a URL with user credentials, is refused. The same payload from the same provider, dataset
-  and farm returns the receipt already held (the first receipt is the evidence).
+  and farm returns the receipt already held (the first receipt is the evidence). The provider's
+  declared merge `tier` is kept in the receipt's request metadata (`request["tier"]`), so the
+  merge layer reads which tier filled an hour from the evidence itself.
 - `upsert_station`: one `weather_station` per provider station ID; its owner is never cleared
   implicitly.
 - `store_observations` / `store_forecast`: decimal values in their CF variable's stored unit only
@@ -39,6 +41,7 @@ from farmcore.core.weather.contract import (
     Licence,
     ObservationValue,
     Station,
+    Tier,
     WeatherProvider,
 )
 from farmcore.core.weather.variables import VARIABLES
@@ -73,6 +76,7 @@ def record_receipt(
     fetched: Fetched,
     secret_fields: Iterable[str] = (),
     farm_id: int | None = None,
+    tier: Tier | None = None,
 ) -> WeatherReceipt:
     _check_keyless(fetched, secret_fields)
     payload_hash = sha256(fetched.payload).hexdigest()
@@ -97,6 +101,7 @@ def record_receipt(
             "url": fetched.request.url,
             "params": fetched.request.params,
             "endpoint_kind": fetched.request.endpoint_kind,
+            **({"tier": Tier(tier).value} if tier is not None else {}),
             # Receipt metadata retains the provider's wording without a schema migration.
             **(
                 {"derived_attribution": licence.derived_attribution}
@@ -225,6 +230,7 @@ def receive(
         fetched=fetched,
         secret_fields=[f.name for f in provider.auth_schema() if f.secret],
         farm_id=farm_id,
+        tier=provider.capabilities().tier,
     )
     if observations:
         store_observations(

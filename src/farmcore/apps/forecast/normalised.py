@@ -28,7 +28,7 @@ from farmcore.apps.forecast import provider, sources
 from farmcore.apps.forecast.models import ForecastRun
 from farmcore.apps.forecast.models import ForecastValue as StoredValue
 from farmcore.core.models.weather import WeatherReceipt
-from farmcore.core.weather.contract import Fetched, Licence, Request
+from farmcore.core.weather.contract import Fetched, Licence, Request, Tier
 from farmcore.core.weather.store import record_receipt, store_forecast
 
 PROVIDER, AUTH, LIVE_LICENCE = provider.PROVIDER, provider.AUTH, provider.LICENCE
@@ -80,6 +80,7 @@ def mirror_run(session: Session, run: ForecastRun) -> WeatherReceipt:
         fetched=fetched,
         secret_fields=[f.name for f in AUTH if f.secret],
         farm_id=run.farm_id,
+        tier=Tier.MODEL,  # every mirrored run is a model forecast, whatever its file source
     )
     store_forecast(session, receipt, fetched.values)
     return receipt

@@ -43,6 +43,12 @@ class _Synthetic:
     def auth_schema(self):
         return ()
 
+    def capabilities(self):
+        from farmcore.core.weather.contract import Capabilities, Tier
+
+        # The farm's own station asset: merged at the on-farm tier.
+        return Capabilities(True, False, frozenset(), tier=Tier.ON_FARM)
+
 
 def observe(session, station, rows) -> None:
     """Store `rows` ((ts, station variable, value), the variables of `connector.VARIABLES`) for

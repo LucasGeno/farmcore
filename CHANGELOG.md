@@ -4,6 +4,13 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- The advisor reads one merged hourly weather series per farm (`core/weather/merge.py`): on-farm
+  sensors first, then agricultural networks, national services and models, each provider
+  declaring its tier on `Capabilities.tier` (stored on its receipts). An hour filled from a
+  source other than the best one flags the advice `weather_gap_filled` and names the source in
+  the input snapshot and on the card. With a single source nothing changes. App authors: declare
+  `tier` on your provider's `Capabilities`; an undeclared provider ranks after every tier.
+
 - The 3-10, Goidanich and Gubler–Thomas rules are ModelSpec modules in
   `apps/advisor/engine/mildew/` that own their parameters and sources; `AdvisorConfig` reads its
   defaults from them. No threshold, output or config digest changes. `GOIDANICH_TABLE` and

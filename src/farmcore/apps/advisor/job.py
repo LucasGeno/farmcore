@@ -1,7 +1,7 @@
 """`advisor.evaluate`: evaluate every parcel of every farm at the clock `now`.
 
-Per farm: the weather series once (`service.load_series`), then per parcel its done sprays, one
-`engine.evaluate`, one `advice` row (evaluated_at = now) and an `advice.evaluated` event on the
+Per farm: the merged weather series once (`service.load_weather`), then per parcel its done sprays,
+one `engine.evaluate`, one `advice` row (evaluated_at = now) and an `advice.evaluated` event on the
 parcel. When the decision differs from the parcel's previous advice (`service.previous_decisions`;
 missing = `none`) it also posts `advice.changed` (payload: parcel alias and name, old, new,
 headline, card path). So a first evaluation that yields `none` posts no change. A done spray log
@@ -93,7 +93,8 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
 
     effective = resolve(repo, now, tz, seed=True)
     config = effective.config
-    series = service.load_series(repo, station.id, now, tz, config)
+    weather = service.load_weather(repo, now, tz, config)
+    series = weather.series()
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
@@ -129,8 +130,9 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
             ignored_sprays=ignored,
             effective=effective,
             input_snapshot=service.input_snapshot(
-                repo, station, parcel.id, series, config, now, tz, ignored
+                repo, station, parcel.id, series, config, now, tz, ignored, weather
             ),
+            weather_gap_filled=weather.gap_filled(),
         )
         session.add(row)
         session.flush()

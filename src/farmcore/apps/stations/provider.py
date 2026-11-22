@@ -37,6 +37,7 @@ from farmcore.core.weather.contract import (
     Point,
     Request,
     Station,
+    Tier,
     TimeRange,
 )
 from farmcore.core.weather.store import receive
@@ -118,6 +119,7 @@ class MeteoFranceReplay:
             forecast=False,
             variables=frozenset(BY_LEGACY[name].name for name in connector.VARIABLES),
             countries=frozenset({"FR"}),
+            tier=Tier.NATIONAL,
         )
 
     def licence(self) -> Licence:

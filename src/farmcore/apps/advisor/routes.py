@@ -51,6 +51,7 @@ FLAG_LABELS = {
     REPLAY_FLAG: "Replay: observed weather used as forecast",
     "data_gap": "Data gap: missing station hours in the lookback",
     "spray_without_product": "Spray without a known product ignored: it gives no cover",
+    "weather_gap_filled": "Gap-filled weather: some hours came from another source",
 }
 RULE_LABELS = {
     "season_gate": "Season gate",
@@ -653,6 +654,18 @@ def card(parcel_id: int, request: Request, repo: Repo, season: str | None = None
     )
 
 
+def _flag_label(flag: str, advice: dict[str, Any]) -> str:
+    """The flag in words; a gap-fill names each source and the variables it filled."""
+    text = FLAG_LABELS.get(flag, flag)
+    if flag != "weather_gap_filled" or not advice.get("weather_gap_filled"):
+        return text
+    filled: dict[str, list[str]] = {}
+    for fill in advice["weather_gap_filled"]:
+        source = f"{fill['source']} ({fill['tier'] or 'undeclared tier'})"
+        filled.setdefault(source, []).append(fill["variable"])
+    return f"{text}: " + "; ".join(f"{s}: {', '.join(v)}" for s, v in filled.items())
+
+
 def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, Any]:
     """One detailed stored presentation for canonical advice and parcel Protection."""
     tz = request.app.state.settings.display_tz
@@ -667,7 +680,7 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
             advice["id"] is not None, advice["decision"], advice.get("assessment_status")
         ),
         "reasons": [_reason_view(r, tz) for r in reasons],
-        "flags": [(f, FLAG_LABELS.get(f, f)) for f in flags],
+        "flags": [(f, _flag_label(f, advice)) for f in flags],
         # The flag code stays debug-only; farmers get the same fact in plain words.
         "replay": REPLAY_FLAG in advice["flags"],
         "tankmix": _tankmix_outcome(reasons),

@@ -87,6 +87,13 @@ database, a small core and installable apps, in the style of Odoo.
   live-only provider (`Capabilities.live_only`) only in live clock mode; a provider that is not
   configured or fails is noted. The choice and its reasons live in
   `farm.props["weather_sources"]`; in Expert view the owner overrides them on the location step.
+  The advisor reads one merged hourly series per farm (`core/weather/merge.py`; every parcel of
+  the farm reads it): each provider declares its tier (`Capabilities.tier`: on-farm sensor >
+  agricultural network > national service > model, kept on each receipt), every station the farm
+  holds observations of is ranked by tier, then distance from the pin, and each hour's value
+  comes from the best source holding it. Hours another source filled are flagged
+  (`weather_gap_filled`) in the advice, its input snapshot and the card. The stored automatic
+  pick and a receipt's `endpoint_kind` never rank anything.
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
 

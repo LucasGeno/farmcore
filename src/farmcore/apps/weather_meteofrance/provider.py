@@ -51,6 +51,7 @@ from farmcore.core.weather.contract import (
     Point,
     Request,
     Station,
+    Tier,
     TimeRange,
 )
 from farmcore.core.weather.variables import BY_LEGACY
@@ -362,6 +363,7 @@ class MeteoFranceLive:
             ),
             countries=frozenset({"FR"}),
             live_only=True,
+            tier=Tier.NATIONAL,
         )
 
     def licence(self) -> Licence:

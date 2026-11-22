@@ -237,6 +237,7 @@ def store(
         fetched=fetched,
         secret_fields=[f.name for f in era5.auth_schema() if f.secret],
         farm_id=farm_id,
+        tier=era5.capabilities().tier,
     )
     if fetched.values:
         grid = upsert_station(session, provider.PROVIDER, station)
