@@ -102,7 +102,7 @@ def test_assistant_never_says_nothing_to_spray_without_a_complete_assessment(
 
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
-    props = {"headline": "No action: no infection risk"}
+    props = {"headline": "No action: no infection event detected"}
     if state == "limited":
         complete_station(session, parcel.farm_id, NOW)
         props = {
@@ -138,7 +138,7 @@ def test_assistant_never_says_nothing_to_spray_without_a_complete_assessment(
         assert body["facts"]["unavailable"].startswith("Assessment unavailable")
 
 
-REASSURANCE = ("Nothing to spray today", "no infection risk right now", "No spray needed")
+REASSURANCE = ("Nothing to spray today", "no infection event detected", "No spray needed")
 
 
 @pytest.mark.parametrize(

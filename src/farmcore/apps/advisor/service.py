@@ -450,7 +450,7 @@ def headline(
     gate = advice.reason("season_gate")
     if gate is not None and gate.verdict == "season not started":
         return "No action: season not started"
-    return "No action: no infection risk"
+    return "No action: no infection event detected"
 
 
 def incubation_pct(advice: EngineAdvice) -> float | None:

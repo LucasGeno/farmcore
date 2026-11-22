@@ -77,7 +77,7 @@ def priority(
         risk.get("verdict") == "risk" and bool(active) and cover.get("verdict") != ("protected")
     )
     if not uncovered:
-        return Priority(1, "A pass is due; no uncovered infection risk is active.")
+        return Priority(1, "A pass is due; no uncovered infection event is detected.")
     hours = max(0, int((evaluated_at - min(active)).total_seconds() // 3600))
     incubation = by_rule.get("downy_incubation", {})
     pct = _num((incubation.get("inputs") or {}).get("pct"))

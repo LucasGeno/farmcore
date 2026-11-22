@@ -41,7 +41,7 @@
             <span class="block text-[13px] leading-snug text-muted">
               {%- if r.decision == "protected" -%}until {{ r.protected_until_text }}{% if r.mm_since_spray is not none %} · {{ "%.1f"|format(r.mm_since_spray) }} mm rain since spray{% endif %}
               {%- elif r.decision in ("spray", "wait") -%}{{ r.products|join(" + ") if r.products else r.reason }}
-              {%- elif r.has_advice -%}{{ r.reason or "No infection risk right now" }}
+              {%- elif r.has_advice -%}{{ r.reason or "No infection event detected" }}
               {%- else -%}Comes with the next weather update{% endif -%}
             </span>
             {% if r.decision in ("spray", "wait") and r.window_start %}<span data-next-window class="block text-[13px] font-semibold">Next window {{ r.window_start|local }}</span>{% endif %}

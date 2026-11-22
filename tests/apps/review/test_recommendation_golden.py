@@ -106,7 +106,7 @@ def test_golden_question_about_a_limited_assessment_is_explicit_and_still_review
         assert body["facts"]["reviewed"] is True
         assert "Assessment limited" in body["text"]
         assert "Required inputs missing" in body["text"]
-        assert "no infection risk" not in body["text"].lower()
+        assert "no infection event detected" not in body["text"].lower()
 
 
 def test_golden_question_crosses_no_farm_boundary(committed_session_factory, settings):

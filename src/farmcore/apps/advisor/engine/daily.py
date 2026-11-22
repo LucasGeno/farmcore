@@ -354,7 +354,7 @@ def evaluate_daily(
     recent = [e for e in scan.events if e > lookback_start]
     downy_sprays = [sp.ts for sp in done if any("downy" in p.targets for p in sp.products)]
     active = [e for e in recent if not any(ts >= e for ts in downy_sprays)]
-    verdict = "risk" if active else ("covered" if recent else "no risk")
+    verdict = "risk" if active else ("covered" if recent else "no infection event detected")
     note = DAILY_LABEL
     if active:
         note = f"infection event in lookback, not covered; {note}"

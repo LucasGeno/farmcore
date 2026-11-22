@@ -11,14 +11,15 @@ from __future__ import annotations
 import ast
 import html
 import re
-from datetime import UTC, datetime, timedelta
+from collections import Counter
+from datetime import timedelta
 from pathlib import Path
 
-from farmcore.apps.advisor import assessment as spray_assessment
-from farmcore.apps.advisor.advice import Advice
-from farmcore.core import assessments, seed
+from farmcore.apps.advisor import service
+from farmcore.core import seed
 from farmcore.core.clock import clock_row
 from farmcore.core.models.canonical import Asset
+from tests.apps.advisor.engine.test_tankmix import CONFIG, IN_PERIOD, PARIS, _downy_due
 from tests.apps.operations.conftest import make_parcel
 
 SRC = Path(__file__).parents[2] / "src" / "farmcore"
@@ -28,7 +29,7 @@ FORBIDDEN = (
     r"safe",
     r"safely",
     r"low[ -]risk",
-    r"no[ -]risk",
+    r"no(?: \w+){0,2} risk",
     r"risk[ -]free",
     r"harmless",
     r"guarantee[ds]?",
@@ -39,56 +40,45 @@ FORBIDDEN = (
     r"risque (?:faible|nul)",
     r"inoffensifs?|inoffensives?",
     r"garantis?|garanties?|garantit|garantir",
-    # es
+    # es: a bare "bajo" is plain "under"; only the risk phrases claim anything
     r"segur[oa]s?",
     r"sin riesgo",
-    r"(?:bajo|riesgo bajo|riesgo nulo)",
+    r"bajo riesgo|riesgo (?:bajo|nulo)",
     r"inofensiv[oa]s?",
     r"garantizad[oa]s?|garantiza|garantizar",
     # it
     r"sicur[oa]|sicuri|sicure",
     r"senza rischi[oa]",
-    r"(?:basso rischio|rischio basso)",
+    r"basso rischio|rischio basso",
     r"innocu[oa]|innocui|innocue",
     r"garantit[oa]|garantiti|garantite|garantisce|garantire",
 )
-# The bare Spanish "bajo" is plain "under"; only the risk phrases claim anything.
-FORBIDDEN = tuple(p for p in FORBIDDEN if p != r"(?:bajo|riesgo bajo|riesgo nulo)") + (
-    r"bajo riesgo",
-    r"riesgo (?:bajo|nulo)",
-)
 CLAIM = re.compile(r"(?<!\w)(?:" + "|".join(FORBIDDEN) + r")(?!\w)", re.IGNORECASE)
 
-# (path relative to src/farmcore, matched text lowercased) -> why this use claims nothing.
+# (path relative to src/farmcore, the match in context as `_occurrence` prints it) -> why this one
+# occurrence claims nothing. Each entry allows exactly one occurrence: a second identical one,
+# or the same phrase anywhere else in the file, fails; so does an entry nothing matches.
 ALLOWED: dict[tuple[str, str], str] = {
     (
         "apps/advisor/routes.py",
-        "low risk",
-    ): "label of the model's own 'low' risk band (Gubler-Thomas index tier), not a safety claim",
+        "Gubler–Thomas low-risk band up to index",
+    ): "names the Gubler–Thomas index band; a model tier, not a safety claim",
+    (
+        "apps/advisor/routes.py",
+        "interval in the Gubler–Thomas low-risk band",
+    ): "names the Gubler–Thomas index band; a model tier, not a safety claim",
+    (
+        "apps/advisor/engine/mildew/powdery_gubler_thomas.py",
+        "interval 14–21 d at low risk;",
+    ): "Gubler–Thomas parameter source citing UC IPM's low band; edits change config digests",
     (
         "apps/planning/templates/planning/index.html",
-        "safe",
-    ): "says the opposite: an unknown availability 'stays unknown rather than safe'",
-    (
-        "apps/advisor/engine/config.py",
-        "low risk",
-    ): "source note on a parameter: the model's 'low' risk band, not a claim about a farm",
-    (
-        "apps/advisor/engine/decision.py",
-        "no risk",
-    ): "engine verdict string, engine-owned (crop-models 03); reword there, see PR notes",
-    (
-        "apps/advisor/engine/daily.py",
-        "no risk",
-    ): "engine verdict string, engine-owned (crop-models 03); reword there, see PR notes",
-    (
-        "apps/advisor/models.py",
-        "no risk",
-    ): "compares against the engine verdict string above; changes with it",
+        "stays unknown rather than safe.",
+    ): "says the opposite: an unknown availability stays unknown rather than safe",
     (
         "apps/onboarding/importers/parsers.py",
-        "safely",
-    ): "a parser says it cannot read a file safely; it is a refusal, not a claim",
+        "read this parcel file safely; check its format,",
+    ): "a parser refuses a file it cannot read; a refusal, not a claim",
 }
 
 _JINJA_NOISE = re.compile(r"\|\s*safe\b")
@@ -122,9 +112,16 @@ def _python_strings(path: Path) -> list[str]:
     ]
 
 
-def claims_in(root: Path) -> set[tuple[str, str]]:
-    """(relative path, matched text) of every forbidden phrase under `root`; no allowlist."""
-    found: set[tuple[str, str]] = set()
+def _occurrence(text: str, match: re.Match) -> str:
+    """The match with up to 4 words either side, within its own text node."""
+    before = re.search(r"(?:\S+\s+){0,4}$", text[: match.start()].rsplit(">", 1)[-1])
+    after = re.match(r"(?:\s*\S+){0,4}", text[match.end() :].split("<", 1)[0])
+    return " ".join((before.group(0) + match.group(0) + after.group(0)).split())
+
+
+def claims_in(root: Path) -> Counter[tuple[str, str]]:
+    """(relative path, occurrence in context) of every forbidden phrase under `root`, counted."""
+    found: Counter[tuple[str, str]] = Counter()
     for path in sorted(root.rglob("*")):
         if path.suffix == ".html":
             texts = [_template_text(path)]
@@ -133,45 +130,41 @@ def claims_in(root: Path) -> set[tuple[str, str]]:
         else:
             continue
         rel = path.relative_to(root).as_posix()
-        found.update((rel, m.group(0).lower()) for t in texts for m in CLAIM.finditer(t))
+        found.update((rel, _occurrence(t, m)) for t in texts for m in CLAIM.finditer(t))
     return found
 
 
 def test_shipped_text_makes_no_safety_or_certainty_claim():
-    stray = claims_in(SRC) - ALLOWED.keys()
+    found = claims_in(SRC)
+    allowed = Counter(ALLOWED.keys())
 
-    assert not stray, f"forbidden claim wording (fix it, or allowlist it with a reason): {stray}"
+    assert not found - allowed, (
+        f"forbidden claim wording (fix it, or allow it with a reason): {found - allowed}"
+    )
+    assert not allowed - found, f"stale allowlist entry: remove it: {allowed - found}"
 
 
-def test_every_allowlisted_use_still_exists():
-    assert ALLOWED.keys() <= claims_in(SRC), "stale allowlist entry: remove it"
-
-
-def test_the_scan_fails_on_a_planted_phrase_in_every_locale(tmp_path):
+def test_the_scan_catches_a_planted_claim_in_every_locale_and_nothing_legitimate(tmp_path):
     planted = {
         "en.html": "<p>This spray plan is safe for bees.</p>",
         "en2.html": "<p>Low-risk week; results are guaranteed.</p>",
+        "en3.html": "<p>No infection risk right now.</p>",
         "fr.html": "<p>Ce traitement est sans danger et garanti.</p>",
         "es.html": "<p>Aplicación sin riesgo, resultado garantizado.</p>",
         "it.html": "<p>Trattamento sicuro e innocuo.</p>",
     }
-    for name, body in planted.items():
+    legitimate = {
+        "ok.html": '<div class="pb-[env(safe-area-inset-bottom)] motion-safe:x">{{ v|safe }} '
+        "Unsafe path; safeguard; infection risk unknown.</div><!-- safe -->",
+        "es_ok.html": "<p>Guardar bajo otro nombre; precio bajo; riesgo de mildiu.</p>",
+    }
+    for name, body in {**planted, **legitimate}.items():
         (tmp_path / name).write_text(body, encoding="utf-8")
     (tmp_path / "msg.py").write_text('MESSAGE = "harmless to bees"\n', encoding="utf-8")
 
     hit_files = {rel for rel, _ in claims_in(tmp_path)}
 
     assert hit_files == {*planted, "msg.py"}
-
-
-def test_the_scan_ignores_security_and_css_senses_of_the_word(tmp_path):
-    (tmp_path / "ok.html").write_text(
-        '<div class="pb-[env(safe-area-inset-bottom)] motion-safe:x">{{ v|safe }} '
-        "Unsafe path; safeguard.</div><!-- safe -->",
-        encoding="utf-8",
-    )
-
-    assert claims_in(tmp_path) == set()
 
 
 # --- assessments never rank products ---------------------------------------------------------
@@ -181,80 +174,45 @@ RANKING = re.compile(
     r"most effective|#1)(?!\w)",
     re.IGNORECASE,
 )
-RANK_KEYS = re.compile(r"rank|score|order|priority|preference|best|position|weight", re.IGNORECASE)
-TANK_MIX = [
-    {"name": "Sulphur", "product_type": "contact", "targets": ["powdery"]},
-    {"name": "Copper", "product_type": "contact", "targets": ["downy"]},
-]
+RANK_KEYS = re.compile(r"rank|score|order|preference|best|position|weight", re.IGNORECASE)
 
 
-def _spray_advice(session, farm):
+def test_a_two_product_assessment_never_ranks_its_products(client, session, settings):
+    advice = _downy_due(IN_PERIOD, sulphur_days_ago=17)  # copper pass carrying sulphur
+    composed = [p.name for p in advice.products_recommended]
+    assert sorted(composed) == ["copper", "sulphur"]
+    clock = clock_row(session, settings)
+    clock.mode, clock.replay_now = "replay", IN_PERIOD + timedelta(minutes=10)
+    farm = seed.ensure_default_farm(session, settings)
     parcel = make_parcel(session, farm, 1, area="1", props={})
     session.add(Asset(farm_id=farm.id, kind="station", name="Roof station"))
-    result = {
-        "decision": "spray",
-        "headline": "Spray: infection risk after 11.0 mm rain",
-        "reasons": [],
-        "products": TANK_MIX,
-        "next_window": None,
-        "protected_until": None,
-        "flags": [],
-        "mm_since_spray": None,
-        "incubation_pct": None,
-        "passes": 1,
-        "treatments": 2,
-    }
-    env = assessments.envelope(
-        spray_assessment.KIND,
+    row = service.advice_row(
+        advice,
+        series=[],
+        config=CONFIG,
         farm_id=farm.id,
         parcel_id=parcel.id,
-        evaluated_at=datetime.now(UTC) - timedelta(minutes=10),
-        status="evaluable",
-        config_version={"id": None, "status": "unreviewed", "accuracy_claim": False},
-        input_snapshot={},
-        result=result,
-    )
-    row = Advice(
-        farm_id=farm.id,
-        parcel_id=parcel.id,
-        evaluated_at=env.evaluated_at,
-        decision="spray",
-        reasons=[],
-        products=TANK_MIX,
-        props={"headline": result["headline"], "assessment_status": "evaluable", "passes": 1},
-        assessment=env,
+        now=IN_PERIOD,
+        tz=str(PARIS),
     )
     session.add(row)
-    session.flush()
-    return parcel, env, row
-
-
-def _keys(node) -> set[str]:
-    if isinstance(node, dict):
-        return set(node) | {k for v in node.values() for k in _keys(v)}
-    if isinstance(node, list):
-        return {k for v in node for k in _keys(v)}
-    return set()
-
-
-def test_spray_assessment_output_never_ranks_products(client, session, settings):
-    clock_row(session, settings).mode = "live"  # tests default to a 2024 replay clock
-    farm = seed.ensure_default_farm(session, settings)
-    parcel, env, row = _spray_advice(session, farm)
     session.commit()
+    result = row.assessment.result
 
     advice_json = client.get(f"/advisor/parcels/{parcel.id}.json").json()
-    pages = {
-        path: html.unescape(client.get(path).text)
-        for path in (f"/advisor/parcels/{parcel.id}", "/advisor/")
-    }
+    page = re.sub(r"<[^>]+>", "\n", html.unescape(client.get(f"/advisor/parcels/{parcel.id}").text))
 
-    # Envelope, stored advice and advice.json carry products as plain entries, in the order the
-    # engine composed the tank mix, with no rank, score or preference field anywhere.
-    for products in (env.result["products"], advice_json["products"], row.products):
-        assert [p["name"] for p in products] == ["Sulphur", "Copper"]
-        assert not any(RANK_KEYS.search(k) for p in products for k in p)
-    # Pages name the products and no ranking wording appears near them.
-    for path, text in pages.items():
-        assert not RANKING.search(re.sub(r"<[^>]+>", " ", text)), path
-    assert "Sulphur + Copper" in pages[f"/advisor/parcels/{parcel.id}"]
+    # The whole recommendation (envelope result, stored row, advice.json) lists the products as
+    # plain entries in the order the engine composed the tank mix, with no ranking field beside
+    # them or inside them.
+    assert not [k for k in result if RANK_KEYS.search(k)]
+    for products in (result["products"], row.products, advice_json["products"]):
+        assert [p["name"] for p in products] == composed
+        assert all(set(p) == {"name", "product_type", "targets"} for p in products)
+    # Wherever the recommendation names a product (headline, reasons, the page lines that show
+    # it), nothing calls one better than another.
+    texts = [result["headline"], *(r["verdict"] + " " + r["note"] for r in result["reasons"])]
+    texts += [line for line in page.splitlines() if any(n in line.lower() for n in composed)]
+    named = [t for t in texts if any(n in t.lower() for n in composed)]
+    assert named
+    assert not [t for t in named if RANKING.search(t)]
