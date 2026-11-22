@@ -271,7 +271,8 @@ def test_active_parameters_are_explained_and_used_without_claiming_missing_agron
     plan = client.get("/forecast/plan", params=params)
     assert plan.status_code == 200
     assert "08:00–20:00" in plan.text
-    assert "no weather station attached" in plan.text
+    # No station, but the imported forecast is merged weather: the gap named is the observations.
+    assert "missing hourly observations" in plan.text
     assert "No treatment clearance" in plan.text
 
 

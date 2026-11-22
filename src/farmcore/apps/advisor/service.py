@@ -55,7 +55,7 @@ from farmcore.core.model_spec import validation_json
 from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.canonical import Asset, Farm, Log, LogParcel, LogSource, Parcel
 from farmcore.core.models.catalog import CatalogItem, TypedQuantity
-from farmcore.core.models.weather import WeatherReceipt
+from farmcore.core.models.weather import WeatherReceipt, WeatherStation
 from farmcore.core.weather import merge
 from farmcore.core.weather.contract import Point
 
@@ -166,6 +166,29 @@ def load_weather(
 ) -> merge.Merged:
     """The farm's merged hourly weather ranked from the farm pin (farm-level checks)."""
     return load_held(repo, now, tz, config).at(farm_point(repo))
+
+
+def station_identities(repo: ScopedRepository, station: Asset | None) -> frozenset[str]:
+    """The merge identities of the station asset's own weather station(s)."""
+    if station is None:
+        return frozenset()
+    rows = repo.execute(
+        select(
+            WeatherStation.wigos_id, WeatherStation.provider, WeatherStation.provider_station_id
+        ).where(WeatherStation.id.in_(stations.weather_stations_of(station.id))),
+        scope="stations:read",
+        resource="weather_station",
+    )
+    return frozenset(merge.identity(*row) for row in rows)
+
+
+def records_sources(weather: merge.Merged, own: frozenset[str]) -> bool:
+    """Whether an assessment saves its weather sources per hour: always, except the
+    compatibility path where the only source is the station asset's own station (`own`), which
+    the snapshot's `station` already names (so replay evidence is unchanged)."""
+    if not weather.sources:
+        return False
+    return len(weather.sources) > 1 or weather.sources[0].identity not in own
 
 
 def parcel_points(repo: ScopedRepository) -> dict[int, Point | None]:
@@ -704,11 +727,12 @@ EVIDENCE_VERSION = 2
 def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored, weather=None):
     """The exact hourly series the engine read, plus the spray evidence and crop season, with
     unknown receipt semantics stated explicitly. Station rows are not copied: `hourly_inputs` is
-    what was evaluated, and rows written before this shape also carry `observations`. When
-    `weather` (the merged series) came from more than one source, its ranked sources, each
-    hourly row's source per variable (`filled_by`: index into `weather_sources`) and the hours
-    each lower one filled are added; a single source adds nothing. `station` None: the farm has
-    no station asset (its weather came from providers only)."""
+    what was evaluated, and rows written before this shape also carry `observations`. With
+    `weather` (the merged series; the caller passes it when `records_sources`), its ranked
+    sources, each hourly row's source per variable (`filled_by`: index into `weather_sources`)
+    and the hours each lower one filled are added. Without it (compatibility: the sole source is
+    the station asset's own station, which `station` already names) the shape is unchanged.
+    `station` None: the farm has no station asset (its weather came from providers only)."""
     logs = repo.list(
         Log,
         Log.type == "spray",
@@ -765,7 +789,7 @@ def input_snapshot(repo, station, parcel_id, series, config, now, tz, ignored, w
             if col.name != "geom"
         }
 
-    multi = weather is not None and len(weather.sources) > 1
+    multi = weather is not None and bool(weather.sources)
     return {
         "evaluation_at": now.isoformat(),
         "display_tz": tz,

@@ -305,7 +305,6 @@ def test_the_advisor_reads_and_flags_gap_filled_and_forecast_hours_per_hour(
         station=Station("CELL", "Grid cell", 44.9, -0.2),
         farm_id=parcel.farm_id,
     )
-    rain = BY_LEGACY["rr1_mm"].name
     ahead = now + timedelta(hours=1)  # no observation: the forecast fills it
 
     def forecast(fetched_at, payload, values):
@@ -316,13 +315,22 @@ def test_the_advisor_reads_and_flags_gap_filled_and_forecast_hours_per_hour(
                 Request("forecast"),
                 fetched_at,
                 payload,
-                [ForecastValue("m", None, ts, rain, "mm", Decimal(v)) for ts, v in values],
+                [
+                    ForecastValue("m", None, ts, BY_LEGACY[n].name, BY_LEGACY[n].unit, Decimal(v))
+                    for ts, n, v in values
+                ],
             ),
             farm_id=parcel.farm_id,
         )
 
-    forecast(now - timedelta(hours=1), b"f", [(gap, "9.9"), (ahead, "0.6"), (later, "7.0")])
-    forecast(now + timedelta(hours=1), b"later", [(ahead, "5.0")])  # not out yet at now
+    # At `later` rain is observed: the forecast fills only its temperature.
+    forecast(
+        now - timedelta(hours=1),
+        b"f",
+        [(gap, "rr1_mm", "9.9"), (ahead, "rr1_mm", "0.6"), (later, "rr1_mm", "7.0")]
+        + [(later, "t_c", "20.0")],
+    )
+    forecast(now + timedelta(hours=1), b"later", [(ahead, "rr1_mm", "5.0")])  # not out yet
 
     evaluate(JobContext(session, now, settings, (parcel.farm_id,)))
 
@@ -345,6 +353,12 @@ def test_the_advisor_reads_and_flags_gap_filled_and_forecast_hours_per_hour(
             "variable": "rr1_mm",
             "hours": [[ahead.isoformat(), ahead.isoformat()]],
         },
+        {
+            "source": "forecaster:forecast",
+            "tier": "model",
+            "variable": "t_c",
+            "hours": [[later.isoformat(), later.isoformat()]],
+        },
     ]
     assert snapshot["weather_gap_filled"] == filled
     assert [(s["source"], s["tier"]) for s in snapshot["weather_sources"][1:]] == [
@@ -356,13 +370,15 @@ def test_the_advisor_reads_and_flags_gap_filled_and_forecast_hours_per_hour(
     own = {"rr1_mm": 0, "t_c": 0, "rh_pct": 0, "ff_kmh": 0}
     rows = snapshot["hourly_inputs"]
     assert rows[0]["filled_by"] == own
-    assert [(r["ts"], r["rr1_mm"], r["filled_by"]) for r in rows if r["filled_by"] != own] == [
-        (gap.isoformat(), 0.4, {**own, "rr1_mm": 1}),
-        (ahead.isoformat(), 0.6, {"rr1_mm": 2}),
-        (later.isoformat(), 0.1, {"rr1_mm": 1}),
+    assert [
+        (r["ts"], r["rr1_mm"], r["t_c"], r["filled_by"]) for r in rows if r["filled_by"] != own
+    ] == [
+        (gap.isoformat(), 0.4, 15.0, {**own, "rr1_mm": 1}),
+        (ahead.isoformat(), 0.6, None, {"rr1_mm": 2}),
+        (later.isoformat(), 0.1, 20.0, {"rr1_mm": 1, "t_c": 2}),
     ]
     parcel_json = client.get(f"/advisor/parcels/{parcel.id}.json").json()
-    assert parcel_json["weather_filled"][-2:] == filled  # after the on-farm station's runs
+    assert parcel_json["weather_filled"][-3:] == filled  # after the on-farm station's runs
     page = client.get(f"/advisor/parcels/{parcel.id}").text
     assert 'data-flag="weather_gap_filled"' in page
     assert "reanalysis:CELL" in page
@@ -403,14 +419,25 @@ def test_each_parcel_reads_its_nearest_station_without_a_station_asset(session, 
 
     evaluate(JobContext(session, now, settings, (farm.id,)))
 
-    rain = {}
+    rain, sources = {}, {}
     for alias in ("P1", "P5", "P6"):
         row = session.scalars(
             select(Advice).where(Advice.parcel_id == ids[alias]).order_by(Advice.id.desc())
         ).first()
-        rows = saved_evidence(session, farm, row)["input_snapshot"]["hourly_inputs"]
-        rain[alias] = rows[-1]["rr1_mm"]
+        snapshot = saved_evidence(session, farm, row)["input_snapshot"]
+        rain[alias] = snapshot["hourly_inputs"][-1]["rr1_mm"]
+        sources[alias] = (
+            snapshot["weather_sources"],
+            snapshot["hourly_inputs"][-1]["filled_by"],
+            row.props["weather_filled"][0]["source"],
+        )
     assert rain == {"P1": 1.0, "P5": 2.0, "P6": 2.0}
+    # One source, no station asset: the source is still saved per hour and in the advice.
+    assert sources["P1"] == (
+        [{"source": "network:EAST", "tier": "network"}],
+        {"rr1_mm": 0},
+        "network:EAST",
+    )
 
 
 def _fetched_at(now: datetime, rain: str, payload: bytes) -> Fetched:

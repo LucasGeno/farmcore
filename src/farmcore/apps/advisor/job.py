@@ -97,6 +97,7 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
         logger.info("%s: farm %s has no weather by now, skipped", JOB_NAME, repo.farm_id)
         return 0
     points = service.parcel_points(repo)
+    own = service.station_identities(repo, station)
     parcels = sorted(
         repo.list(Parcel, scope=PARCEL_SCOPE), key=lambda p: (alias_number(p.alias), p.alias)
     )
@@ -105,6 +106,7 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
     for parcel in parcels:
         weather = held.at(points.get(parcel.id))
         series = weather.series()
+        record = service.records_sources(weather, own)
         sprays, ignored = service.load_sprays(repo, parcel.id, now)
         advice = engine_evaluate(series, sprays, config, now)
         if effective.status in ("rejected", "unsure"):
@@ -134,10 +136,18 @@ def evaluate_farm(repo: ScopedRepository, now: datetime, tz: str) -> int:
             ignored_sprays=ignored,
             effective=effective,
             input_snapshot=service.input_snapshot(
-                repo, station, parcel.id, series, config, now, tz, ignored, weather
+                repo,
+                station,
+                parcel.id,
+                series,
+                config,
+                now,
+                tz,
+                ignored,
+                weather if record else None,
             ),
             weather_gap_filled=weather.gap_filled(),
-            weather_filled=weather.filled() if len(weather.sources) > 1 else (),
+            weather_filled=weather.filled() if record else (),
         )
         session.add(row)
         session.flush()

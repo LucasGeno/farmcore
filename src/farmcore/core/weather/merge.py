@@ -22,8 +22,9 @@ takes the value of the best-ranked source holding it; `MergedHour.filled_by` and
   its own tier), so an hour is labelled with the tier of the value that filled it. A source with
   no declared tier ranks after every declared one.
 - **Forecast** (model tier, last): the farm's latest forecast receipt fetched by the read time
-  (`as_of`) fills the hours after `as_of` that no observation holds at all; it never replaces
-  an observed value, never fills a past hour, and adds nothing to an hour it lacks.
+  (`as_of`) fills, in the hours after `as_of`, each variable no observation holds that hour; it
+  never replaces an observed value, never fills a past hour, and adds nothing to an hour it
+  lacks.
 - **No invented hours**: an hour appears only when a source holds a value for it; a variable no
   source holds that hour stays None (never 0, never interpolated).
 - **Deterministic**: the result depends on the sources, never on the order they are given in.
@@ -163,7 +164,7 @@ def merge(
     sources: Iterable[Source], forecast: Source | None = None, after: datetime | None = None
 ) -> Merged:
     """Merge sources, one per station identity and tier (a repeated one raises `ValueError`).
-    `forecast` fills only the hours after `after` that no source holds."""
+    `forecast` fills, after `after`, only the variables no source holds that hour."""
     ranked = sorted(sources, key=rank_key)
     keys = [s.key for s in ranked]
     if len(set(keys)) != len(keys):
@@ -184,19 +185,26 @@ def merge(
         if filled_by:
             hours.append(MergedHour(ts, values, filled_by, tiers))
     if forecast is not None and after is not None:
-        observed = {h.ts for h in hours}
+        observed = {h.ts: i for i, h in enumerate(hours)}
         for ts in sorted(forecast.hours):
-            row = {n: v for n, v in forecast.hours[ts].items() if n in FIELDS and v is not None}
-            if ts <= after or ts in observed or not row:
+            held = hours[observed[ts]] if ts in observed else None
+            row = {
+                n: v
+                for n, v in forecast.hours[ts].items()
+                if n in FIELDS and v is not None and (held is None or held.values[n] is None)
+            }
+            if ts <= after or not row:
                 continue
-            hours.append(
-                MergedHour(
-                    ts,
-                    {n: row.get(n) for n in FIELDS},
-                    dict.fromkeys(row, forecast.identity),
-                    dict.fromkeys(row, forecast.tier),
-                )
+            merged = MergedHour(
+                ts,
+                {**(held.values if held else dict.fromkeys(FIELDS)), **row},
+                {**(held.filled_by if held else {}), **dict.fromkeys(row, forecast.identity)},
+                {**(held.tiers if held else {}), **dict.fromkeys(row, forecast.tier)},
             )
+            if held is None:
+                hours.append(merged)
+            else:
+                hours[observed[ts]] = merged
             used.add(forecast.key)
         hours.sort(key=lambda h: h.ts)
         ranked.append(forecast)
