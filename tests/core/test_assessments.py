@@ -17,6 +17,7 @@ from sqlalchemy import (
     column,
     create_engine,
     exists,
+    func,
     literal_column,
     select,
     text,
@@ -200,8 +201,9 @@ def test_each_assessment_kind_is_read_only_with_its_own_scope(session, kind_scop
     assert reads(owner, "advice:read") == {spray.id}
     assert reads(owner, FROST.read_scope) == {frost.id}
     # A caller-built statement could not be held to one kind: refused wherever it names the
-    # table (labelled, joined, a scalar or WHERE subquery, an EXISTS, a union, a VALUES payload)
-    # and as text, top-level or embedded.
+    # table (labelled, joined, a scalar or WHERE subquery, an EXISTS, a union, a VALUES payload,
+    # inside a nested statement's join or ordering) and as text, top-level, embedded or attached
+    # as a prefix, suffix or hint.
     frost_rows = select(Assessment.id).where(Assessment.kind == FROST.key)
     embedded = "(SELECT result FROM assessment LIMIT 1)"
     for stmt, resource in (
@@ -223,19 +225,36 @@ def test_each_assessment_kind_is_read_only_with_its_own_scope(session, kind_scop
         ),
         (select(Advice.id, text(embedded)), "advice"),
         (select(Advice.id, literal_column(embedded)), "advice"),
+        (union(select(Advice.id), select(Advice.id).join(Advice.assessment)), "advice"),
+        (select(Advice.id).where(exists(select(Advice.id).join(Advice.assessment))), "advice"),
+        (select(Advice.id).order_by(Assessment.id), "advice"),
+        (select(Advice.id).suffix_with("UNION SELECT id FROM assessment"), "advice"),
+        (select(Advice.id).with_statement_hint("UNION SELECT id FROM assessment"), "advice"),
     ):
         with pytest.raises(ScopeDenied):
             owner.execute(stmt, scope="advice:read", resource=resource)
-    # Nor can list()'s own predicates ask about another kind's envelopes.
+    # Nor can list() or get() reach another kind's envelopes through their own arguments: a
+    # predicate, an implicit cross-join (an alias, another table, a CTE column), the ordering or
+    # the limit.
     other = aliased(Assessment)
-    for where, order_by in (
-        (exists().where(other.kind == FROST.key), None),
-        (Assessment.id.in_(select(other.id).where(other.kind == FROST.key)), None),
-        (True, select(other.id).where(other.kind == FROST.key).limit(1).scalar_subquery()),
-        (text("kind = 'frost.hours'"), None),
+    frost_ids = select(other.id).where(other.kind == FROST.key)
+    frost_count = select(func.count()).select_from(other).where(other.kind == FROST.key)
+    for read in (
+        lambda: owner.list(
+            Assessment, exists().where(other.kind == FROST.key), scope="advice:read"
+        ),
+        lambda: owner.list(Assessment, Assessment.id.in_(frost_ids), scope="advice:read"),
+        lambda: owner.list(Assessment, scope="advice:read", order_by=frost_ids.scalar_subquery()),
+        lambda: owner.list(Assessment, text("kind = 'frost.hours'"), scope="advice:read"),
+        lambda: owner.list(Assessment, other.kind == FROST.key, scope="advice:read"),
+        lambda: owner.list(Advice, Assessment.kind == FROST.key, scope="advice:read"),
+        lambda: owner.list(Assessment, scope="advice:read", order_by=other.id),
+        lambda: owner.list(Assessment, frost_ids.cte().c.id.is_not(None), scope="advice:read"),
+        lambda: owner.list(Assessment, scope="advice:read", limit=frost_count.scalar_subquery()),
+        lambda: owner.get(Advice, Assessment.id, scope="advice:read"),
     ):
         with pytest.raises(ScopeDenied):
-            owner.list(Assessment, where, scope="advice:read", order_by=order_by)
+            read()
 
 
 def test_saved_assessment_evidence_cannot_be_rewritten(session):

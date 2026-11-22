@@ -210,6 +210,24 @@ def test_grants_and_tokens_read_only_redistributable_weather(
         lambda repo: repo.list(
             WeatherStation, exists().where(WeatherObservation.value > 30), scope="stations:read"
         ),
+        lambda repo: repo.execute(
+            select(WeatherStation.id).prefix_with("(SELECT count(*) FROM weather_observation),"),
+            scope="stations:read",
+            resource="weather_station",
+        ),
+        lambda repo: repo.list(
+            WeatherStation,
+            select(WeatherObservation.id).where(WeatherObservation.value > 30).subquery().c.id > 0,
+            scope="stations:read",
+        ),
+        lambda repo: repo.list(
+            WeatherStation, scope="stations:read", order_by=WeatherObservation.value
+        ),
+        lambda repo: repo.list(
+            WeatherStation,
+            scope="stations:read",
+            limit=literal_column("(SELECT count(*) FROM weather_observation)"),
+        ),
         lambda repo: repo.list(Observation, scope="stations:read"),
     ],
     ids=[
@@ -222,6 +240,10 @@ def test_grants_and_tokens_read_only_redistributable_weather(
         "values-payload",
         "embedded-text",
         "list-predicate",
+        "statement-prefix",
+        "list-cross-join",
+        "list-ordering",
+        "list-limit",
         "legacy-rows",
     ],
 )

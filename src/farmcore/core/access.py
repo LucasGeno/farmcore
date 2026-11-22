@@ -44,7 +44,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnClause, TextClause
 from sqlalchemy.sql.expression import TableClause
 from sqlalchemy.sql.selectable import TextualSelect, Values
-from sqlalchemy.sql.util import find_tables
 
 from farmcore.core import ext_ids
 from farmcore.core.identity import token_hash
@@ -370,8 +369,10 @@ class ScopedRepository:
                 *(order_by if isinstance(order_by, (list, tuple)) else (order_by,))
             )
         if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise ScopeDenied("list() takes a plain int limit.")
             stmt = stmt.limit(limit)
-        self._refuse_predicates(stmt)
+        self._refuse_predicates(stmt, model)
         self._authorise(scope, model.__table__.name)
         return list(self.session.scalars(stmt))
 
@@ -380,7 +381,7 @@ class ScopedRepository:
         if len(pk) != 1:
             raise TypeError(f"{model.__name__} has a composite key; use list()")
         stmt = self._scoped(model, scope).where(pk[0] == id)
-        self._refuse_predicates(stmt)
+        self._refuse_predicates(stmt, model)
         self._authorise(scope, model.__table__.name)
         return self.session.scalar(stmt)
 
@@ -419,15 +420,26 @@ class ScopedRepository:
         if resource in _LICENCE_GATED or referenced_tables(stmt) & _LICENCE_GATED:
             raise ScopeDenied("Weather values are shared only through the licence gate.")
 
-    def _refuse_predicates(self, stmt: Select[Any]) -> None:
-        """`list`/`get` hold the caller's WHERE and ORDER BY to `execute`'s rules: no opaque
-        SQL, no assessment table (another kind's envelopes, read in a subquery or an EXISTS),
-        and for grant views no weather value table outside the licence gate. The repository's
-        own filters name neither."""
+    def _refuse_predicates(self, stmt: Select[Any], model: type[Base]) -> None:
+        """`list`/`get` read one table: a caller's argument naming another table, an alias, a
+        CTE or a subquery column would join it in implicitly, unscoped. Their WHERE and ORDER BY
+        are held to `execute`'s rules: no opaque SQL, no assessment table (another kind's
+        envelopes, read in a subquery or an EXISTS), and for grant views no weather value table
+        outside the licence gate. The repository's own filters name neither."""
+        froms = stmt.get_final_froms()
+        if not (
+            len(froms) == 1
+            and isinstance(froms[0], TableClause)
+            and froms[0].name == model.__table__.name
+        ):
+            raise ScopeDenied(
+                f"list() and get() read {model.__table__.name} alone; join in execute()."
+            )
+        own = model.__table__.name
         parts = [p for p in (stmt.whereclause, stmt._order_by_clause) if p is not None]
         for part in parts:
             _refuse_opaque(part)
-            tables = referenced_tables(part)
+            tables = referenced_tables(part, own=own)
             if "assessment" in tables:
                 raise ScopeDenied(
                     "Assessments are read through list() or get(), one kind per scope."
@@ -494,38 +506,56 @@ class ScopedRepository:
         self.session.flush()
 
 
-def referenced_tables(stmt: Any) -> set[str]:
-    """Every table `stmt` names: its FROMs (a joined eager load included) and any table in its
-    columns, WHERE, subqueries, EXISTS or union members."""
-    froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
-    names = {t.name for f in froms for t in find_tables(f)}
+def referenced_tables(stmt: Any, own: str | None = None) -> set[str]:
+    """Every table `stmt` names: the FROMs of it and of every statement nested in it (ORM joins
+    included), and the table behind every column (an alias, a CTE, a subquery). A column of
+    `own` (the table `list`/`get` read) is not a reference; a statement reading it is."""
+    return {e.name for e in _elements(stmt, own) if isinstance(e, TableClause)}
+
+
+def _elements(stmt: Any, own: str | None = None) -> Iterator[Any]:
+    """Every node of `stmt`, with what `get_children()` skips: each nested statement's final
+    FROMs (ORM joins, a join's ON tables) and each column's table."""
+    seen: dict[int, Any] = {}  # keeps each node alive, so an id is never reused
     stack = [stmt]
     while stack:
         element = stack.pop()
-        if isinstance(element, TableClause):
-            names.add(element.name)
+        if id(element) in seen:
+            continue
+        seen[id(element)] = element
+        yield element
         stack.extend(element.get_children())
-    return names
+        if hasattr(element, "get_final_froms"):
+            stack.extend(element.get_final_froms())
+        table = getattr(element, "table", None) if isinstance(element, ColumnClause) else None
+        if table is not None and not (isinstance(table, TableClause) and table.name == own):
+            stack.append(table)
 
 
 _HARMLESS_LITERAL = re.compile(r"\*|\d+")  # count(*), EXISTS(SELECT *), select(1)
 
 
+_ATTACHED_TEXT = ("_prefixes", "_suffixes", "_statement_hints", "_hints")
+
+
 def _refuse_opaque(stmt: Any) -> None:
-    """Text, a literal column or a VALUES payload (anywhere in `stmt`) can name tables where no
-    check reads them: refused. `*` and a bare integer are the literal columns allowed."""
-    stack = [stmt]
-    while stack:
-        element = stack.pop()
-        if isinstance(element, (TextClause, TextualSelect, Values)) or (
-            isinstance(element, ColumnClause)
-            and element.is_literal
-            and not _HARMLESS_LITERAL.fullmatch(element.name)
+    """Text, a literal column, a VALUES payload or a prefix, suffix or hint (anywhere in
+    `stmt`) can name tables where no check reads them: refused. `*` and a bare integer are
+    the literal columns allowed."""
+    for element in _elements(stmt):
+        if (
+            isinstance(element, (TextClause, TextualSelect, Values))
+            or (
+                isinstance(element, ColumnClause)
+                and element.is_literal
+                and not _HARMLESS_LITERAL.fullmatch(element.name)
+            )
+            or any(getattr(element, attr, None) for attr in _ATTACHED_TEXT)
         ):
             raise ScopeDenied(
-                "Read through SQL expressions, not text or VALUES, so their tables are checked."
+                "Read through SQL expressions, not text, VALUES or hints, so their tables are "
+                "checked."
             )
-        stack.extend(element.get_children())
 
 
 def ensure_owner_grant(session: Session, farm: Farm) -> DataGrant:
