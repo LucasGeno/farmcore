@@ -187,9 +187,23 @@ def models_of(kind: AssessmentKind) -> tuple[ModelSpec, ...]:
 def collect_model_specs(manifests) -> dict[str, tuple[ModelSpec, ...]]:
     """Assessment kind key -> the specs of its models, for every kind the manifests declare.
 
-    Runs at load: a kind with no model, a path that is not a `ModelSpec`, or two different specs
-    under one model key raise `ModelSpecInvalid`. Cached per manifest
-    tuple, since every badge on a page asks."""
+    Runs at load: a kind with no model, a path that is not a `ModelSpec` (also in
+    `Manifest.model_specs`), or two different specs under one model key raise
+    `ModelSpecInvalid`. Cached per manifest tuple, since every badge on a page asks."""
+    return dict(_collected(manifests)[0])
+
+
+def all_model_specs(manifests) -> tuple[ModelSpec, ...]:
+    """Every loaded model once: the models behind each assessment kind, then those an app only
+    shows beside its results (`Manifest.model_specs`, never stamped on a stored result). The
+    About pages list these."""
+    by_kind, shown = _collected(manifests)
+    specs = {s.key: s for _, group in by_kind for s in group}
+    specs.update((s.key, s) for s in shown)
+    return tuple(specs.values())
+
+
+def _collected(manifests) -> tuple[tuple, tuple[ModelSpec, ...]]:
     manifests = tuple(manifests)
     key = tuple(map(id, manifests))
     hit = _CACHE.get(key)
@@ -198,22 +212,33 @@ def collect_model_specs(manifests) -> dict[str, tuple[ModelSpec, ...]]:
         hit = _CACHE[key] = (manifests, _collect(manifests))
         if len(_CACHE) > 64:
             _CACHE.pop(next(iter(_CACHE)))
-    return dict(hit[1])
+    return hit[1]
 
 
 _CACHE: dict[tuple[int, ...], tuple[tuple, tuple]] = {}
 
 
-def _collect(manifests: tuple) -> tuple[tuple[str, tuple[ModelSpec, ...]], ...]:
+def _collect(manifests: tuple) -> tuple[tuple, tuple[ModelSpec, ...]]:
     by_kind: dict[str, tuple[ModelSpec, ...]] = {}
+    shown: list[ModelSpec] = []
     seen: dict[str, ModelSpec] = {}
+
+    def admit(spec: ModelSpec) -> None:
+        if seen.setdefault(spec.key, spec) is not spec:
+            raise ModelSpecInvalid(f"model {spec.key!r} is declared twice")
+
     for m in manifests:
         for kind in m.assessment_kinds:
             by_kind[kind.key] = models_of(kind)
             for spec in by_kind[kind.key]:
-                if seen.setdefault(spec.key, spec) is not spec:
-                    raise ModelSpecInvalid(f"model {spec.key!r} is declared twice")
-    return tuple(by_kind.items())
+                admit(spec)
+        for path in m.model_specs:
+            spec = import_string(path)
+            if not isinstance(spec, ModelSpec):
+                raise ModelSpecInvalid(f"app {m.name!r}: {path!r} is not a ModelSpec")
+            admit(spec)
+            shown.append(spec)
+    return tuple(by_kind.items()), tuple(shown)
 
 
 @dataclass(frozen=True)
@@ -283,8 +308,4 @@ def validation_words(validation: dict[str, Any] | None, lang: str = "en") -> str
 
 
 def find_spec(manifests, key: str) -> ModelSpec | None:
-    for specs in collect_model_specs(manifests).values():
-        for spec in specs:
-            if spec.key == key:
-                return spec
-    return None
+    return next((s for s in all_model_specs(manifests) if s.key == key), None)

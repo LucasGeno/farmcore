@@ -18,6 +18,7 @@ implementation, not ground truth: where it and the paper differ, FarmCore follow
 from __future__ import annotations
 
 import csv
+import html
 import json
 import math
 from dataclasses import replace
@@ -326,36 +327,46 @@ def test_the_parcel_card_shows_the_rossi_infections_beside_an_unchanged_decision
     obs = [HourlyObs(START + i * HOUR, rain(i), 20.0, 85.0) for i in range(385)]
     now = obs[-1].ts
     farm = ensure_default_farm(session, settings)
-    station = Asset(farm_id=farm.id, kind="station", name="Synthetic season", props={})
-    session.add(station)
+    # Mixed sources: one on-farm station measures temperature and humidity, another the rain.
+    air = Asset(farm_id=farm.id, kind="station", name="Air sensor", props={})
+    gauge = Asset(farm_id=farm.id, kind="station", name="Rain gauge", props={})
+    session.add_all([air, gauge])
     session.flush()
-    observe(
-        session,
-        station,
-        [(o.ts, v, getattr(o, v)) for o in obs for v in ("rr1_mm", "t_c", "rh_pct")],
-    )
+    observe(session, air, [(o.ts, v, getattr(o, v)) for o in obs for v in ("t_c", "rh_pct")])
+    observe(session, gauge, [(o.ts, "rr1_mm", o.rr1_mm) for o in obs])
     parcel = make_parcel(session, farm, 305, area="1.0", props={})
-    session.add(
+    early = START + 100 * HOUR  # after two wet events, before the storm: no infection yet
+    session.add_all(
         Advice(
             farm_id=farm.id,
             parcel_id=parcel.id,
-            evaluated_at=now,
+            evaluated_at=at,
             decision="wait",
             props={"headline": "Stored advice", "assessment_status": "evaluable"},
             reasons=[],
         )
+        for at in (early, now)
     )
     set_replay(session, now, settings)
     session.commit()
 
-    page = client.get(f"/advisor/parcels/{parcel.id}", params={"farm": farm.id})
+    def rossi_section() -> tuple[str, str]:
+        page = client.get(f"/advisor/parcels/{parcel.id}", params={"farm": farm.id})
+        assert page.status_code == 200
+        start = page.text.index('id="rossi"')
+        return page.text, page.text[start : page.text.index("</section>", start)]
 
-    assert page.status_code == 200
-    body = page.text
-    section = body[body.index('id="rossi"') : body.index("</section>", body.index('id="rossi"'))]
+    body, section = rossi_section()
     assert 'data-model="advisor.downy_rossi"' in body
     assert 'data-validation="unvalidated"' in section
     assert "still uses the 3-10 rule" in section
+    # The badge links to the model's About page, generated from its registered spec; the
+    # stored spray decision's models do not include it.
+    assert 'href="/models/advisor.downy_rossi"' in section
+    about = html.unescape(client.get("/models/advisor.downy_rossi").text)
+    assert "Rossi et al. 2008" in about and "Unvalidated" in about
+    assert 'data-model-spec="advisor.downy_rossi"' in client.get("/models").text
+    assert "advisor.downy_rossi" not in client.get("/models?kind=advisor.spray").text
     expected = [c.infection.isoformat() for c in rossi.run(obs, START, now).infections]
     assert expected == [datetime(2025, 1, 8, 6, tzinfo=UTC).isoformat()] * 2  # one hour, two
     grouped = section[section.index(f'data-infection="{expected[0]}"') :]
@@ -365,5 +376,19 @@ def test_the_parcel_card_shows_the_rossi_infections_beside_an_unchanged_decision
     assert [c.split('"')[1] for c in cohorts] == ["04 Jan 2025 14:00", "05 Jan 2025 00:00"]
     for block, germinated in zip(cohorts, ("06 Jan 2025 22:00", "07 Jan 2025 08:00"), strict=True):
         assert f"Oospores germinated</span> {germinated}" in block
-        assert "Sporangia died" in block and "(on-farm)" in block  # each step's source, tier
+        assert "Sporangia died" in block
+        # Each input names its own station and tier.
+        assert (
+            f"temperature, humidity: synthetic:station-{air.id} (on-farm); "
+            f"rain: synthetic:station-{gauge.id} (on-farm)"
+        ) in block
     assert 'data-decision="wait"' in body
+
+    # The hour before 1 January 00:00 local has no weather: no infection computed, but the
+    # card must not claim there was none.
+    set_replay(session, early, settings)
+    session.commit()
+    _, section = rossi_section()
+    assert "data-rossi-limited" in section
+    assert "No primary infection" not in section
+    assert "Primary infections unknown" in section

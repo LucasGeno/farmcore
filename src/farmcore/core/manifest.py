@@ -513,6 +513,9 @@ class Manifest:
     record_types: tuple[RecordType, ...] = ()  # facts the Record sheet can capture
     draft_kinds: tuple[DraftKind, ...] = ()  # validator + review fragment per draft kind
     assessment_kinds: tuple[AssessmentKind, ...] = ()  # typed results kept in the envelope
+    # "module:SPEC" paths of models the app shows beside its results without storing them (a
+    # comparison model): listed on the About pages, never stamped on a stored result.
+    model_specs: tuple[str, ...] = ()
     attention: str = ""  # provider "module:func" returning at most N home-strip items
     # Weather providers (core.weather): "module:factory", factory(settings) -> WeatherProvider.
     weather_providers: tuple[str, ...] = ()
@@ -574,6 +577,8 @@ class Manifest:
                     f"app {self.name!r}: durable job {job.name!r} must be named '{self.name}.<job>'"
                 )
         _check_provider(self.settings, f"app {self.name!r} settings")
+        for path in self.model_specs:
+            _check_provider(path, f"app {self.name!r} model spec")
         for dependency, specifier in self.requires:
             if dependency not in self.depends:
                 raise ValueError(

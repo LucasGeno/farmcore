@@ -67,7 +67,7 @@
 {% call card("mt-4", {"id": "rossi", "data-model": rossi.spec.key, "aria-labelledby": "rossi-title"}) %}
   <div class="flex flex-wrap items-center justify-between gap-2">
     {{ h2("rossi-title", "Downy primary infections (Rossi 2008 model)") }}
-    <span data-validation="{{ rossi.spec.validation.level }}" title="Model validation: {{ rossi.spec.validation.label }}" class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-line px-2 py-0.5 text-xs font-semibold text-muted">{{ icon("info", "h-3.5 w-3.5") }}{{ rossi.spec.validation.label }}</span>
+    <a href="/models/{{ rossi.spec.key }}" data-validation="{{ rossi.spec.validation.level }}" title="Model validation: {{ rossi.spec.validation.label }}. About this model" class="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-line px-2 py-0.5 text-xs font-semibold text-muted">{{ icon("info", "h-3.5 w-3.5") }}{{ rossi.spec.validation.label }}</a>
   </div>
   <p class="mt-2 text-[13px] text-muted">Shown for comparison. The spray decision above still uses the 3-10 rule.</p>
   <p class="mt-2 text-[15px]" data-rossi-season>{{ rossi.season }} · hydro-thermal time {{ rossi.ht }}</p>
@@ -88,6 +88,8 @@
       </details></li>
     {% endfor %}
   </ul>
+  {% elif rossi.limited %}
+  <p class="mt-2 text-[15px]" id="rossi-infections" data-rossi-unknown>Primary infections unknown: the model found none in the hours with weather, but a missing hour can hide one ({{ rossi.cohorts }} oospore cohort{{ "" if rossi.cohorts == 1 else "s" }}).</p>
   {% else %}
   <p class="mt-2 text-[15px]" id="rossi-infections">No primary infection this season so far ({{ rossi.cohorts }} oospore cohort{{ "" if rossi.cohorts == 1 else "s" }}).</p>
   {% endif %}
