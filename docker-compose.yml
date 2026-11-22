@@ -55,6 +55,9 @@ x-farmcore: &farmcore
     OPEN_METEO_BASE_URL: ${OPEN_METEO_BASE_URL:-}
     OPEN_METEO_SINGLE_RUNS_BASE_URL: ${OPEN_METEO_SINGLE_RUNS_BASE_URL:-}
     OPEN_METEO_API_KEY: ${OPEN_METEO_API_KEY:-}
+    # Optional Varda Global FieldID lookups (docs/self-hosting.md); empty keeps them off.
+    VARDA_CLIENT_ID: ${VARDA_CLIENT_ID:-}
+    VARDA_CLIENT_SECRET: ${VARDA_CLIENT_SECRET:-}
   volumes:
     # This installation's Whisper model cache (voice notes): downloads once, about 460 MB.
     - whisper-cache:/home/farmcore/.cache/huggingface

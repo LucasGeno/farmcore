@@ -97,6 +97,8 @@ def settings(_test_database: URL) -> Settings:
         vertex_access_token=None,
         meteofrance_client_id=None,
         meteofrance_client_secret=None,
+        varda_client_id=None,
+        varda_client_secret=None,
         admin_token=SecretStr("test-installation-operator-token-00000000"),
         extractor="fake",
         vertex_project="example-project",

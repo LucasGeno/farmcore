@@ -50,6 +50,9 @@ database, a small core and installable apps, in the style of Odoo.
 - **Provenance.** `ext_id(source, key)` makes re-imports idempotent; `log_source` lets one spray
   carry several sources (voice + machine file). An incoming spray merges with a log of the same
   farm whose parcels overlap and whose start is within 12 h, keeping the more precise values.
+  `ext_id` also holds portable parcel aliases: IGN RPG ids and, when an owner keeps one, a Varda
+  Global FieldID (`varda-gfid`, looked up on request with optional credentials in live mode only;
+  ids only, `fields/field_id.py`), which the register JSON and NGSI-LD export carry.
 - **Clock and jobs.** A `Clock` with live and replay modes. The station feed, the advisor and
   the advice push are jobs declared by manifests; ISOXML files are imported by upload or CLI
   through the same `ext_id` / `log_source` pipeline. In replay, a step advances the clock and runs

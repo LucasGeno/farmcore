@@ -14,7 +14,14 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    SecretStr,
+    ValidationInfo,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -24,6 +31,8 @@ DEFAULT_OPEN_METEO_SINGLE_RUNS_BASE_URL = "https://single-runs-api.open-meteo.co
 DEFAULT_METEOFRANCE_API_BASE_URL = "https://public-api.meteofrance.fr/public"
 DEFAULT_METEOFRANCE_TOKEN_URL = "https://portail-api.meteofrance.fr/token"
 DEFAULT_CDSAPI_URL = "https://cds.climate.copernicus.eu/api"
+DEFAULT_VARDA_API_BASE_URL = "https://api.varda.ag/fid/v1"
+DEFAULT_VARDA_TOKEN_URL = "https://auth.varda.ag/oauth/token"
 
 
 def _check_http_url(v: str) -> str:
@@ -113,6 +122,13 @@ class Settings(BaseSettings):
     # No key: the backfill stays off.
     cdsapi_url: str = DEFAULT_CDSAPI_URL
     cdsapi_key: SecretStr | None = None
+    # Varda Global FieldID (`fields`: an owner looks up a parcel's GFID): the OAuth client
+    # credentials from account.varda.ag, exchanged for a bearer token; never logged, stored or
+    # rendered. No client: no lookup action and no call. Lookups are read-only and keep ids only.
+    varda_api_base_url: str = DEFAULT_VARDA_API_BASE_URL
+    varda_token_url: str = DEFAULT_VARDA_TOKEN_URL
+    varda_client_id: SecretStr | None = None
+    varda_client_secret: SecretStr | None = None
     # Optional address search on the location step: a Nominatim or Photon base URL. Empty (the
     # default) keeps the geocoder off; map, browser location and coordinates still work.
     geocoder_base_url: str = ""
@@ -244,6 +260,26 @@ class Settings(BaseSettings):
                 if urlsplit(url).scheme != "https":
                     raise ValueError("METEOFRANCE_CLIENT_SECRET requires https Météo-France URLs")
         return self
+
+    @field_validator("varda_api_base_url", "varda_token_url")
+    @classmethod
+    def _varda_documented_hosts(cls, v: str, info: ValidationInfo) -> str:
+        # The client secret goes to the token URL and parcel outlines to the API: only Varda's
+        # documented https hosts and paths, never another host, port, IP or path (no SSRF).
+        default = (
+            DEFAULT_VARDA_API_BASE_URL
+            if info.field_name == "varda_api_base_url"
+            else DEFAULT_VARDA_TOKEN_URL
+        )
+        _check_http_url(v)
+        url, want = urlsplit(v), urlsplit(default)
+        if (url.scheme, url.netloc.lower(), url.path.rstrip("/")) != (
+            want.scheme,
+            want.netloc,
+            want.path,
+        ):
+            raise ValueError(f"must be {default}")
+        return v
 
     @model_validator(mode="after")
     def _cdsapi_key_requires_https(self) -> Settings:

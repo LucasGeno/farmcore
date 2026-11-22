@@ -32,8 +32,9 @@ with blank product fields, so a spray is never silently dropped.
   portable `ext_id` rows naming it as `source:key` (e.g. `ign-rpg-2024:<id_parcel>`), sorted, so a
   row can be matched in another tool next to `iacs_parcel_id`. In the demo, that register
   column carries the open RPG polygon id as a stand-in for the IACS reference, not a true
-  IACS/LPIS id. A Varda Global FieldID would be one more alias, source `varda` (`VARDA_SOURCE`),
-  when one is recorded: nothing calls Varda or makes such an id up. Synthetic DG AGRI aliases
+  IACS/LPIS id. A Varda Global FieldID an owner kept (`fields.field_id`) is one more alias,
+  source `varda-gfid` (`VARDA_SOURCE`), with its BoundaryID as `varda-gfid-boundary`; the
+  register never calls Varda or makes such an id up. Synthetic DG AGRI aliases
   are omitted when `props.id_label` is set, as for the NGSI-LD IACS entry. The CSV never carries
   aliases (`to_csv` writes the EU columns only).
 - season export (D4, `since` / `before` / `parcel_id`): the rows of sprays with
@@ -57,6 +58,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
+from farmcore.apps.fields.field_id import GFID_SOURCE
 from farmcore.apps.operations import bbch as bbch_config
 from farmcore.apps.operations import checks as label_checks
 from farmcore.apps.operations import spray_items, spray_weather
@@ -91,7 +93,7 @@ CHECKS = "checks"
 CSV_FIELDS: tuple[str, ...] = (*FIELDS, CHECKS)
 SAVED_WEATHER = "saved_weather"  # owner opt-in only, after `checks`
 PARCEL_ALIASES = "parcel_aliases"  # JSON exports only (`aliases=True`), last
-VARDA_SOURCE = "varda"  # the slot for a Varda Global FieldID alias, when one is recorded
+VARDA_SOURCE = GFID_SOURCE  # a Varda Global FieldID alias, when an owner kept one
 
 
 def alias_key(alias: str) -> tuple[int, int, str]:

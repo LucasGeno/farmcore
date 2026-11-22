@@ -1,0 +1,43 @@
+{% extends "core/base.html" %}
+{#- A Global FieldID lookup's answer (`field_id.lookup_page`): the kept match, or the candidates
+    with Varda's overlap figures for the owner to choose from. Ids only; no Varda geometry. -#}
+{% block title %}Global FieldID · {{ parcel.alias }} · farmcore{% endblock %}
+{% block content %}
+{%- macro figure(value) %}{{ "%.2f"|format(value) if value is not none else "—" }}{% endmacro -%}
+<a href="{{ parcel_url }}" class="inline-flex min-h-[44px] items-center font-semibold text-brand-700">Back to {{ parcel.alias }}</a>
+<h1 class="mt-3 break-words text-2xl font-semibold">Global FieldID · {{ parcel.alias }} · {{ parcel.name }}</h1>
+{% if result.kept %}
+<p role="status" class="mt-4 break-words">Kept: Global FieldID {{ result.kept.field_id }} (IoU {{ figure(result.kept.iou) }}). Varda treats an IoU of {{ threshold }} or more as the same field.</p>
+{% elif result.candidates %}
+<p class="mt-4 break-words text-muted">No field overlaps this parcel closely enough to keep on its own (Varda treats an IoU of {{ threshold }} or more as the same field). Keep one only if it is the same field; otherwise leave the parcel without one.</p>
+<table data-field-candidates class="mt-4 min-w-full border-collapse text-xs sm:text-sm">
+  <thead><tr>
+    <th class="px-2 py-2 font-medium">Global FieldID</th>
+    <th class="px-2 py-2 font-medium">Overlap (IoU)</th>
+    <th class="px-2 py-2 font-medium">This parcel inside the field</th>
+    <th class="px-2 py-2 font-medium">The field inside this parcel</th>
+    <th class="px-2 py-2 font-medium"><span class="sr-only">Keep</span></th>
+  </tr></thead>
+  <tbody>
+  {% for c in result.candidates %}
+  <tr>
+    <td class="px-2 py-2">{{ c.field_id }}</td>
+    <td class="px-2 py-2">IoU {{ figure(c.iou) }}</td>
+    <td class="px-2 py-2">{{ figure(c.input_intersection) }}</td>
+    <td class="px-2 py-2">{{ figure(c.output_intersection) }}</td>
+    <td class="px-2 py-2">
+      <form method="post" action="{{ keep_url }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="field_id" value="{{ c.field_id }}">
+        <button type="submit" class="min-h-[44px] rounded-lg border border-line px-3 text-sm font-semibold">Keep {{ c.field_id }}</button>
+      </form>
+    </td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="mt-4 break-words text-muted">Global FieldID has no field at this parcel's outline. Nothing was kept.</p>
+{% endif %}
+<p class="mt-4 text-sm text-muted">FarmCore keeps the Global FieldID and its boundary id only, never Varda's field outlines.</p>
+{% endblock %}
