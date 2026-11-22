@@ -219,7 +219,9 @@ def today_fragment(request: Request, repo: Repo, compact: bool = False) -> HTMLR
         )
     card = None
     if station is not None:
-        rows = service.load_hourly(repo, station.id, now - RAIN_WINDOW, now + REPLAY_HORIZON)
+        rows = service.load_hourly(
+            repo, station.id, now - RAIN_WINDOW, now + REPLAY_HORIZON, as_of=now
+        )
         card = weather_card(rows, now, tz)
     return render(
         request,

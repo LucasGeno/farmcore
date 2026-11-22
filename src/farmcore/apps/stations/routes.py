@@ -39,7 +39,7 @@ def _span(delta: timedelta) -> str:
 
 def _newest_at_or_before(repo: ScopedRepository, station: Asset, now: datetime) -> datetime | None:
     """The newest stored reading hour of `station` at or before `now`, or None."""
-    return service.latest_reading(repo, station.id, now)
+    return service.latest_reading(repo, station.id, now, as_of=now)
 
 
 def _health(repo: ScopedRepository, station: Asset, now: datetime) -> dict[str, Any]:
@@ -115,7 +115,9 @@ def station_page(station_id: int, request: Request, repo: Repo) -> HTMLResponse:
             archive=station.props["archive"],
             archive_url=station.props.get("archive_page"),
         )
-    rows = service.load_hourly(repo, station.id, now - CHART_PAST - HOUR, now + REPLAY_HORIZON)
+    rows = service.load_hourly(
+        repo, station.id, now - CHART_PAST - HOUR, now + REPLAY_HORIZON, as_of=now
+    )
     replay = isinstance(clock, ReplayClock)
     return render(
         request,

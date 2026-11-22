@@ -17,6 +17,8 @@ object with a unique `name` and six methods:
 A fetch returns `Fetched`: the keyless request, the wall time the response arrived, the raw payload
 (hashed into the receipt, never stored) and decimal values already in each CF variable's stored
 unit (`variables.VARIABLES`). Converting units is the provider's job; the store refuses any other.
+An observation the provider may still revise (ERA5T before the final ERA5) says `provisional`:
+the store keeps it beside the final value that comes later, never overwritten.
 """
 
 from __future__ import annotations
@@ -124,6 +126,7 @@ class ObservationValue:
     period_start: datetime
     period_end: datetime
     qc_flag: str = "unchecked"
+    provisional: bool = False  # the provider may still revise it (a later final value)
 
 
 @dataclass(frozen=True)

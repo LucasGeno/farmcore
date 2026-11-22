@@ -55,6 +55,7 @@ from farmcore.core.models.weather import WeatherObservation
 from farmcore.core.representations import Representation, Version, negotiate, stamp
 from farmcore.core.routes_clock import require_admin
 from farmcore.core.weather import attribution
+from farmcore.core.weather.store import held
 from farmcore.db import get_session
 from farmcore.web import app_is_on, context_url, is_admin, is_expert, operator_authenticated, render
 
@@ -559,11 +560,13 @@ def _banner(grant: DataGrant, tz: str) -> dict[str, Any]:
 
 
 def _observations(repo: ScopedRepository, now: datetime, limit: int) -> list[dict[str, Any]]:
-    """The farm's latest station observations up to `now` (`stations:read`): on a grant, only
+    """The farm's latest station observations up to `now` (`stations:read`), as known at `now`
+    (a provisional value gives way to its final one, `weather.store.held`): on a grant, only
     those whose licence allows redistribution (the repository's licence gate)."""
-    rows = repo.list(
-        WeatherObservation,
+    rows = held(
+        repo,
         WeatherObservation.period_end <= now,
+        as_of=now,
         scope=STATIONS_SCOPE,
         order_by=(WeatherObservation.period_end.desc(), WeatherObservation.variable),
         limit=limit,

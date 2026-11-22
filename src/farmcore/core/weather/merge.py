@@ -31,12 +31,13 @@ takes the value of the best-ranked source holding it; `MergedHour.filled_by` and
 - **As of**: values are bounded by the caller's `[start, end]` on their period end (the value
   horizon, like `stations.service.load_hourly`), and separately by receipt: only receipts
   fetched by `as_of` are read, so a later backfill or late ingest is not seen by a replay of an
-  earlier time.
+  earlier time. A provisional value (ERA5T) gives way to the final one for the same station,
+  variable and period once a receipt fetched by `as_of` holds it (`store.held`), so the
+  current read takes the final value and a replay of an earlier time the provisional one.
 
-Known limits (follow-ups, need a schema decision): a station's (variable, period) holds one
-value, its first receipt's (`store`), so a newer release of the same hour (ERA5 replacing
-ERA5T) is not stored; and observations are visible only through the receipts of the farm that
-stored them first, so two farms cannot share a public station yet.
+Known limit: observations are visible only through the receipts of the farm that stored them;
+a conflicting write by a second farm to a shared station raises (`store`). ERA5 grid points
+are per farm, so two farms in one cell never conflict.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from farmcore.core.models.weather import (
 from farmcore.core.weather.contract import Point, Tier
 from farmcore.core.weather.hourly import HourlyObs
 from farmcore.core.weather.selection import great_circle_m
+from farmcore.core.weather.store import held
 from farmcore.core.weather.variables import BY_LEGACY, VARIABLES
 
 SCOPE = "stations:read"
@@ -260,22 +262,16 @@ class Held:
         )
 
 
-def _receipts_by(repo: ScopedRepository, as_of: datetime):
-    return select(WeatherReceipt.id).where(
-        WeatherReceipt.farm_id == repo.farm_id, WeatherReceipt.fetched_at <= as_of
-    )
-
-
 def load(repo: ScopedRepository, start: datetime, end: datetime, as_of: datetime) -> Held:
     """The farm's values with `start <= ts <= end` (`ts`: a value's period end, or a
     forecast's valid time) from the receipts it fetched by `as_of`."""
     names = [BY_LEGACY[f].name for f in FIELDS]
-    obs = repo.list(
-        WeatherObservation,
+    obs = held(
+        repo,
         WeatherObservation.period_end >= start,
         WeatherObservation.period_end <= end,
         WeatherObservation.variable.in_(names),
-        WeatherObservation.receipt_id.in_(_receipts_by(repo, as_of)),
+        as_of=as_of,
         scope=SCOPE,
         order_by=(
             WeatherObservation.station_id,

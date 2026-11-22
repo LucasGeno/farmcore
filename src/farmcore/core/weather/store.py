@@ -12,22 +12,32 @@
   physical station, one row: `wigos_id` is unique), left as that provider stored it.
 - `store_observations` / `store_forecast`: decimal values in their CF variable's stored unit only
   (a float, a non-finite value, an unknown variable or another unit raises `WeatherValueError`
-  before anything is written). An observation already held for the same station, variable and
-  period keeps its value and receipt.
+  before anything is written). An observation already held for the same station, variable,
+  period and `provisional` keeps its value and receipt. A final value is stored beside a
+  provisional one (append only), with a `revision_note` naming the value it replaces. A value
+  whose key another farm's receipt already holds (a shared station) raises
+  `WeatherValueError`: never silently dropped.
+- `held`: the observations a farm reads as known at a time: only from its receipts fetched by
+  then, a provisional value hidden once a final one for the same station, variable and period
+  is among them. Current reads and as-of replay are the same read.
 - `receive`: a provider's `Fetched` through all of the above.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from datetime import datetime
+from decimal import Decimal
 from hashlib import sha256
+from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import and_, exists, select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from farmcore.core import units
+from farmcore.core.access import ScopedRepository
 from farmcore.core.models.weather import (
     UNKNOWN_LICENCE,
     UNKNOWN_LICENCES,
@@ -194,10 +204,107 @@ def store_observations(
             "period_start": v.period_start,
             "period_end": v.period_end,
             "qc_flag": v.qc_flag,
+            "provisional": v.provisional,
+            "revision_note": None,
         }
         for v in values
     ]
+    if rows:
+        # One writer per station at a time: two farms' writes to a shared station cannot both
+        # pass the check and then lose the insert's conflict silently. The lock is held to the
+        # end of the transaction, so the next writer's check sees what this one stored.
+        session.execute(
+            select(WeatherStation.id).where(WeatherStation.id == station.id).with_for_update()
+        )
+        _check_held(session, receipt, station, rows)
     _insert(session, WeatherObservation, rows)
+
+
+def _key(row: Any) -> tuple:
+    return (row["variable"], row["period_start"], row["period_end"], row["provisional"])
+
+
+def _number(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _check_held(
+    session: Session, receipt: WeatherReceipt, station: WeatherStation, rows: list[dict]
+) -> None:
+    """Refuse a value another farm's receipt holds under the same key; note on each final value
+    the provisional one of this farm it replaces."""
+    held = {
+        _key(r._mapping): r
+        for r in session.execute(
+            select(
+                WeatherObservation.variable,
+                WeatherObservation.period_start,
+                WeatherObservation.period_end,
+                WeatherObservation.provisional,
+                WeatherObservation.value,
+                WeatherReceipt.farm_id,
+            )
+            .join(WeatherReceipt, WeatherReceipt.id == WeatherObservation.receipt_id)
+            .where(
+                WeatherObservation.station_id == station.id,
+                WeatherObservation.variable.in_({r["variable"] for r in rows}),
+                WeatherObservation.period_end >= min(r["period_end"] for r in rows),
+                WeatherObservation.period_end <= max(r["period_end"] for r in rows),
+            )
+        )
+    }
+    others = [r for r in rows if _key(r) in held and held[_key(r)].farm_id != receipt.farm_id]
+    if others:
+        raise WeatherValueError(
+            f"station {station.provider_station_id}: {len(others)} value(s) already held "
+            "through another farm's receipt"
+        )
+    for row in rows:
+        if row["provisional"]:
+            continue
+        replaced = held.get((*_key(row)[:3], True))
+        if replaced is None or replaced.farm_id != receipt.farm_id:
+            continue
+        old, new = _number(replaced.value), _number(row["value"])
+        row["revision_note"] = (
+            f"final confirms provisional {old}"
+            if replaced.value == row["value"]
+            else f"final replaces provisional {old} → {new}"
+        )
+
+
+def held(
+    repo: ScopedRepository,
+    *where: Any,
+    as_of: datetime | None = None,
+    scope: str = "stations:read",
+    order_by: Any = None,
+    limit: int | None = None,
+) -> list[WeatherObservation]:
+    """The farm's observations matching `where` as known at `as_of` (None: all it holds): from
+    its receipts fetched by then, a provisional value left out where one of them holds a final
+    value for the same station, variable and period."""
+    known = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == repo.farm_id)
+    if as_of is not None:
+        known = known.where(WeatherReceipt.fetched_at <= as_of)
+    final = aliased(WeatherObservation)
+    replaced = exists().where(
+        final.station_id == WeatherObservation.station_id,
+        final.variable == WeatherObservation.variable,
+        final.period_start == WeatherObservation.period_start,
+        final.period_end == WeatherObservation.period_end,
+        final.provisional.is_(False),
+        final.receipt_id.in_(known),
+    )
+    return repo.list(
+        WeatherObservation,
+        *where,
+        WeatherObservation.receipt_id.in_(known),
+        ~and_(WeatherObservation.provisional, replaced),
+        scope=scope,
+        order_by=order_by,
+        limit=limit,
+    )
 
 
 def store_forecast(

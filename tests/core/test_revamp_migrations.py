@@ -14,6 +14,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DataError, IntegrityError
 
 from farmcore.core.commands.migrate import alembic_config
+from farmcore.core.migration_refusal import MigrationRefused
 
 
 @pytest.fixture
@@ -875,5 +876,139 @@ def test_irrigations_confirmed_before_entered_quantities_are_backfilled_once(scr
         command.upgrade(cfg, "head")
         with engine.connect() as db:
             assert typed(db) == backfilled
+    finally:
+        engine.dispose()
+
+
+def test_weather_revisions_backfill_era5t_and_per_farm_grid_stations_then_round_trip(
+    scratch_db_url,
+):
+    """core_0020: ERA5 values whose month ended under 3 months before their fetch become
+    provisional (others and other providers stay final); a public ERA5 grid station's values
+    move to a station of the farm whose receipt holds them. Downgrade refuses while a final
+    value sits beside a provisional one, then round-trips."""
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "core_0019")
+    engine = create_engine(scratch_db_url)
+    one = lambda db, sql, **p: db.execute(text(sql), p).scalar_one()  # noqa: E731
+    try:
+        with engine.begin() as db:
+            a = farm(db, "A")
+            era5 = one(
+                db,
+                "INSERT INTO weather_receipt (provider, dataset, farm_id, fetched_at) "
+                "VALUES ('copernicus-era5', 'era5', :farm, '2026-11-22T10:00Z') RETURNING id",
+                farm=a,
+            )
+            mf = one(
+                db,
+                "INSERT INTO weather_receipt (provider, dataset, farm_id, fetched_at) "
+                "VALUES ('meteofrance', 'mf', :farm, '2026-11-22T10:00Z') RETURNING id",
+                farm=a,
+            )
+            grid, national = (
+                one(
+                    db,
+                    "INSERT INTO weather_station (provider, provider_station_id, name, geom) "
+                    "VALUES (:p, :sid, 'x', 'SRID=4326;POINT(-0.25 45)') RETURNING id",
+                    p=p,
+                    sid=sid,
+                )
+                for p, sid in (("copernicus-era5", "45.00,-0.25"), ("meteofrance", "33394002"))
+            )
+            for station, receipt, at in (
+                (grid, era5, "2026-08-01T00:00Z"),  # first provisional hour (Nov - 3 months)
+                (grid, era5, "2026-07-31T23:00Z"),  # final
+                (national, mf, "2026-08-10T12:00Z"),  # another provider: final
+            ):
+                db.execute(
+                    text(
+                        "INSERT INTO weather_observation (station_id, receipt_id, period_start, "
+                        "period_end, variable, unit, value) SELECT :s, :r, :at, :at, name, unit, "
+                        "15 FROM weather_variable WHERE name = 'air_temperature'"
+                    ),
+                    {"s": station, "r": receipt, "at": at},
+                )
+        command.upgrade(cfg, "head")
+        with engine.begin() as db:
+            rows = db.execute(
+                text(
+                    "SELECT s.provider_station_id, s.owner_farm_id, o.period_end, o.provisional "
+                    "FROM weather_observation o JOIN weather_station s ON s.id = o.station_id "
+                    "ORDER BY s.provider, o.period_end"
+                )
+            ).all()
+            assert [(sid, owner, end.isoformat(), p) for sid, owner, end, p in rows] == [
+                (f"farm{a}:45.00,-0.25", a, "2026-07-31T23:00:00+00:00", False),
+                (f"farm{a}:45.00,-0.25", a, "2026-08-01T00:00:00+00:00", True),
+                ("33394002", None, "2026-08-10T12:00:00+00:00", False),
+            ]
+            assert one(db, "SELECT count(*) FROM weather_station WHERE id = :g", g=grid) == 0
+            final = one(
+                db,
+                "INSERT INTO weather_observation (station_id, receipt_id, period_start, "
+                "period_end, variable, unit, value, revision_note) SELECT station_id, "
+                "receipt_id, period_start, period_end, variable, unit, 14, 'final' "
+                "FROM weather_observation WHERE provisional RETURNING id",
+            )
+        with pytest.raises(MigrationRefused, match="final value stored beside"):
+            command.downgrade(cfg, "core_0019")
+        with engine.begin() as db:
+            db.execute(text("DELETE FROM weather_observation WHERE id = :f"), {"f": final})
+            b = farm(db, "B")
+            # The same hour of the cell also held by the public grid point (a value no farm's
+            # receipt holds), then by farm B's own grid point: each one is refused.
+            public = one(
+                db,
+                "INSERT INTO weather_station (provider, provider_station_id, name, geom) "
+                "VALUES ('copernicus-era5', '45.00,-0.25', 'g', 'SRID=4326;POINT(-0.25 45)') "
+                "RETURNING id",
+            )
+            private_b = one(
+                db,
+                "INSERT INTO weather_station (provider, provider_station_id, name, geom, "
+                "owner_farm_id) VALUES ('copernicus-era5', :sid, 'g', "
+                "'SRID=4326;POINT(-0.25 45)', :b) RETURNING id",
+                sid=f"farm{b}:45.00,-0.25",
+                b=b,
+            )
+            nobody = one(
+                db,
+                "INSERT INTO weather_receipt (provider, dataset, fetched_at) "
+                "VALUES ('copernicus-era5', 'era5', '2026-11-22T10:00Z') RETURNING id",
+            )
+        for station in (public, private_b):
+            with engine.begin() as db:
+                db.execute(
+                    text(
+                        "INSERT INTO weather_observation (station_id, receipt_id, period_start, "
+                        "period_end, variable, unit, value) SELECT :s, :r, period_start, "
+                        "period_end, variable, unit, 15 FROM weather_observation "
+                        "WHERE period_end = '2026-07-31T23:00Z'"
+                    ),
+                    {"s": station, "r": nobody},
+                )
+            with pytest.raises(MigrationRefused, match="1 hour.* more than one of its stations"):
+                command.downgrade(cfg, "core_0019")
+            with engine.begin() as db:
+                db.execute(
+                    text("DELETE FROM weather_observation WHERE station_id = :s"), {"s": station}
+                )
+        with engine.begin() as db:
+            db.execute(
+                text("DELETE FROM weather_station WHERE id IN (:p, :q)"),
+                {"p": public, "q": private_b},
+            )
+        command.downgrade(cfg, "core_0019")
+        with engine.begin() as db:
+            stations = db.execute(
+                text(
+                    "SELECT s.provider_station_id, s.owner_farm_id, count(*) FROM "
+                    "weather_observation o JOIN weather_station s ON s.id = o.station_id "
+                    "GROUP BY 1, 2 ORDER BY 1"
+                )
+            ).all()
+            assert stations == [("33394002", None, 1), ("45.00,-0.25", None, 2)]
+        command.upgrade(cfg, "head")
     finally:
         engine.dispose()

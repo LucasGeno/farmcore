@@ -63,9 +63,12 @@ def test_a_live_tick_backfills_two_days_as_flagged_model_data_under_a_grid_point
         ("lwe_thickness_of_precipitation_amount", Decimal("0.5")),
     }
     assert session.scalar(select(func.count(WeatherObservation.id))) == 48 * 4
-    # Flagged as model data: its own station (a grid point) and receipt kind; CC BY, shareable.
+    # Flagged as model data: the farm's own station (a grid point) and receipt kind; CC BY.
     station = session.scalars(select(WeatherStation)).one()
-    assert (station.provider, station.provider_station_id) == ("copernicus-era5", "45.00,-0.25")
+    assert (station.provider, station.provider_station_id) == (
+        "copernicus-era5",
+        f"farm{farm.id}:45.00,-0.25",
+    )
     receipt = session.scalars(select(WeatherReceipt)).one()
     assert receipt.request["endpoint_kind"] == "model-reanalysis"
     assert (receipt.licence, receipt.redistribution, receipt.farm_id) == (
@@ -135,7 +138,7 @@ def test_a_throttled_order_waits_its_retry_after_then_succeeds(cds) -> None:
     end = datetime(2026, 1, 3, 23, tzinfo=UTC)
 
     fetched = _provider().fetch_observations(
-        ingest.grid_station(Point(PIN["latitude"], PIN["longitude"])),
+        ingest.grid_station(Point(PIN["latitude"], PIN["longitude"]), 1),
         TimeRange(end - timedelta(hours=24), end),
     )
 
@@ -170,6 +173,6 @@ def test_an_order_never_ready_ends_out_of_time_for_the_contract_call(cds) -> Non
 
     with pytest.raises(PortalError, match="out of time"):
         _provider(timeout=0.2).fetch_observations(
-            ingest.grid_station(Point(PIN["latitude"], PIN["longitude"])),
+            ingest.grid_station(Point(PIN["latitude"], PIN["longitude"]), 1),
             TimeRange(end - timedelta(hours=24), end),
         )

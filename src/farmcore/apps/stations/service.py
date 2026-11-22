@@ -13,6 +13,7 @@ from farmcore.apps.stations.connector import VARIABLES
 from farmcore.core.access import ScopedRepository
 from farmcore.core.models.canonical import Asset, ExtId
 from farmcore.core.models.weather import WeatherObservation, WeatherReceipt, WeatherStation
+from farmcore.core.weather.store import held
 from farmcore.core.weather.variables import VARIABLES as CF
 
 SCOPE = "stations:read"
@@ -39,15 +40,20 @@ def weather_stations_of(asset_id: int) -> Any:
 
 
 def latest_reading(
-    repo: ScopedRepository, asset_id: int, until: datetime | None = None
+    repo: ScopedRepository,
+    asset_id: int,
+    until: datetime | None = None,
+    as_of: datetime | None = None,
 ) -> datetime | None:
     """The newest reading hour the farm holds for the asset (at or before `until` if given):
-    the end of its latest normalised observation period."""
+    the end of its latest normalised observation period, from receipts fetched by `as_of`
+    (None: every receipt). A provisional value's hour is a reading hour like its final one's."""
+    known = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == repo.farm_id)
+    if as_of is not None:
+        known = known.where(WeatherReceipt.fetched_at <= as_of)
     stmt = select(func.max(WeatherObservation.period_end)).where(
         WeatherObservation.station_id.in_(weather_stations_of(asset_id)),
-        WeatherObservation.receipt_id.in_(
-            select(WeatherReceipt.id).where(WeatherReceipt.farm_id == repo.farm_id)
-        ),
+        WeatherObservation.receipt_id.in_(known),
     )
     if until is not None:
         stmt = stmt.where(WeatherObservation.period_end <= until)
@@ -55,7 +61,11 @@ def latest_reading(
 
 
 def load_hourly(
-    repo: ScopedRepository, asset_id: int, start: datetime, end: datetime
+    repo: ScopedRepository,
+    asset_id: int,
+    start: datetime,
+    end: datetime,
+    as_of: datetime | None = None,
 ) -> list[dict[str, Any]]:
     """Hourly rows with `start <= ts <= end`, oldest first:
     `{ts, rr1_mm, t_c, rh_pct, ff_kmh}`, a variable missing that hour is None (never 0).
@@ -64,12 +74,15 @@ def load_hourly(
 
     Reads the normalised observations of the asset's provider station (the weather station
     whose provider and station ID are one of the asset's external keys), keyed by the end of
-    each value's period, through the farm's receipts."""
-    obs = repo.list(
-        WeatherObservation,
+    each value's period, through the farm's receipts fetched by `as_of` (None: every receipt), a
+    provisional value left out once a final one is held (`weather.store.held`, the merge
+    layer's rule)."""
+    obs = held(
+        repo,
         WeatherObservation.station_id.in_(weather_stations_of(asset_id)),
         WeatherObservation.period_end >= start,
         WeatherObservation.period_end <= end,
+        as_of=as_of,
         scope=SCOPE,
         order_by=(WeatherObservation.period_end, WeatherObservation.variable),
     )
