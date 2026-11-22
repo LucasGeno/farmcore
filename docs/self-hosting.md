@@ -1,6 +1,7 @@
 # Self-hosting
 
-`docker-compose.yml` is one installation: six services, one image, one Compose project.
+`docker-compose.yml` is one installation: six services (seven with the optional Open-Meteo
+server), one FarmCore image, one Compose project.
 
 | Service | What |
 |---|---|
@@ -10,6 +11,11 @@
 | `worker` | All live background work (forecast fetch, station ingest, advice, push, draft expiry); also waits for `migrate`; idle in replay |
 | `bot` | Telegram long-polling bot; only with `--profile telegram`; also waits for `migrate` |
 | `backup` | Daily `farmcore backup`: one encrypted bundle into the `backups` volume, kept 7 days |
+| `openmeteo` | Upstream Open-Meteo server (its own image); only with `--profile openmeteo`; see section 6 |
+
+The FarmCore image is built from `src` and the open demo data in `sample-data` only.
+`tools/oracles/` (copyleft reference implementations that contributors run out of process to
+generate test fixtures) is never packaged into the image or run by an installation.
 
 Each installation runs its own PostgreSQL server, and FarmCore expects that: servers shared
 with other software or other installations are not supported for now. The server has two
@@ -370,6 +376,30 @@ in live clock mode only. It avoids Open-Meteo's non-commercial historical API.
   Climate Change Service (C3S) Climate Data Store (CDS). DOI: 10.24381/1cf1ad76 (Accessed on
   <date>)".
 
+### Passing the Météo-France and ERA5 credentials to Compose
+
+The stock `docker-compose.yml` passes only the variables it names to its containers, and it
+does not name `METEOFRANCE_*` or `CDSAPI_*` yet: set in `.env` alone, they never reach the
+app or the worker, and both jobs do nothing. Until the compose file names them, add an override
+next to it (it holds no secret values, only references to the env file):
+
+```yaml
+# docker-compose.override.yml
+services:
+  app:
+    environment: &weather-credentials
+      METEOFRANCE_CLIENT_ID: ${METEOFRANCE_CLIENT_ID:-}
+      METEOFRANCE_CLIENT_SECRET: ${METEOFRANCE_CLIENT_SECRET:-}
+      CDSAPI_KEY: ${CDSAPI_KEY:-}
+  worker:
+    environment: *weather-credentials
+```
+
+Compose reads `docker-compose.override.yml` by itself only when no `-f` is given; with the
+Vertex file, list it too (`-f docker-compose.yml -f docker-compose.vertex.yml -f
+docker-compose.override.yml`). Add `METEOFRANCE_API_BASE_URL`, `METEOFRANCE_TOKEN_URL` or
+`CDSAPI_URL` the same way only if you change them from their defaults.
+
 ## Backups and restore
 
 A backup is one file, a **bundle**: a `pg_dump` of the installation database (custom format,
@@ -626,6 +656,20 @@ this release. A failed migration (or one stopped with `SIGTERM`, `SIGHUP` or Ctr
 cancelled on the server and rolled back as a whole; the installation stays `failed` until a
 migrate or upgrade succeeds. A stopped `migrate` or `upgrade` says what the stop left before
 it exits; a second stop signal does not cut it short.
+
+**Data-changing migrations.** Some revisions move rows, not only the schema. `core_0018`
+moves spray products and doses onto the catalog tables (`catalog_item` with its
+crop-protection extensions, `typed_quantity`) and freezes the legacy `product` and
+`quantity` tables; `core_0019` then drops those two tables and keeps the id maps that
+published ids are read through ([API compatibility](api-compatibility.md)). Before it writes
+anything, `core_0018` checks every legacy row it would move. If any would not pass the new
+checks (among them a blank or over-long product name, an unknown product type, target or measure, a NaN or
+infinite dose, a blank unit, a malformed farm product shortlist, a record other than a spray
+holding more than one amount), it refuses with all of them at once, by id and count, never a
+row value: `core_0018 refused, nothing was changed: …`. `farmcore upgrade` and
+`farmcore migrate` print that message in full; the schema stays where it was, so this is the
+"nothing was applied" case below. Fix the named rows, back up, and run the upgrade again.
+`upgrade --check` compares schema revisions only; it does not run this check.
 
 Without `farmcore upgrade` (say, a scripted deploy), take a bundle first
 (`docker compose -p farm-a --env-file farm-a.env run --rm --no-deps -e BACKUP_ONCE=1 backup`)

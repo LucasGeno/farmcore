@@ -66,8 +66,11 @@ Import is atomic: one bad feature or conflicting existing alias rejects the whol
 Repeating the same file skips unchanged parcels. Existing parcels are never overwritten;
 changes to an existing alias require a separately reviewed correction path. Do not rename
 aliases to evade a conflict: that would create additional parcels. Numeric IDs and GeoJSON
-feature IDs do not select a farm; only `--farm-id` does. This is an operator-local command,
-not an owner web-upload feature.
+feature IDs do not select a farm; only `--farm-id` does. This is an operator-local command.
+Owners also have their own routes, each ending in a draft the owner reviews and confirms:
+**Import parcels** (`/onboarding/import`, a parcel file up to 5 MB), the public CAP registry
+map (`/onboarding/registry`), and an agent with a `drafts:propose` token
+(`propose_parcels`). For a pilot handoff, prepare parcels with the command above.
 
 ## Handoff check
 
@@ -75,6 +78,11 @@ not an owner web-upload feature.
 2. Sign in as the grower, then open `/fields/?view=list&farm=1` and the map. Check the agreed
    names, areas and shapes. Empty weather/advice is expected until the pilot's data sources and
    crop/model context are configured and reviewed; importing a polygon does not validate advice.
+   Every assessment carries its model validation level, linked to `/models`. All current
+   crop-protection models are `unvalidated` (replayed on two seasons of one farm, not yet
+   checked against observed disease records or other regions); say so to the grower. Advice
+   reports what it observed ("No infection event detected"), never that a parcel is safe or
+   risk-free, and never ranks products.
 3. With a disposable second farm on a test installation, verify the grower cannot select it.
    Never use another grower's actual records as a test fixture.
 4. Create pilot B with its own project/env/hostname/port. Compare health installation IDs: they

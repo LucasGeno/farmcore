@@ -2,8 +2,9 @@
 
 Some FarmCore responses are read by other systems: a co-op's adviser, a FIWARE broker, an agent.
 Their shape is a contract. When the data under one moves (spray products and doses moved from
-`product`/`quantity` to the neutral catalog and its extensions in migration `core_0018`), the
-published keys and ids keep their meaning. A change that would alter them ships as a new version
+`product`/`quantity` to the neutral catalog and its extensions in migration `core_0018`;
+`core_0019` then dropped the two legacy tables and kept the id maps), the published keys and
+ids keep their meaning. A change that would alter them ships as a new version
 beside the old one, and the old one is deprecated with a date before it is removed.
 
 ## How a client picks a version
@@ -36,17 +37,27 @@ registers it.
   `<product>` is `ci<catalog item id>`, a namespace no v1 id uses. Description, quantity and
   every other property are the same as v1. These ids are not stable across a rollback: if an
   operator downgrades below `core_0018` and upgrades again, the moved rows get new catalog ids
-  (v1's legacy ids stay the same).
+  (v1's legacy ids stay the same). A downgrade below `core_0019` rebuilds the legacy tables
+  from the maps under their legacy ids first.
 
 ### `advice` (shared advice)
 
 `/share/as/{grant}/advice.json` (grantee).
 
 - **v1** (default, current): the shape of 2026-11-19: one current row per parcel, the
-  whitelisted keys only, `attribution`, `assessment_status`, `config_version` and
-  `current_inputs_status`. `products` lists crop protection's generic recommendations
-  (`name`, `product_type`, `targets`), never a farm's product rows or ids, so the catalog move
-  does not change it.
+  whitelisted keys only (`id`, `parcel_id`, `evaluated_at`, `decision`, `headline`,
+  `reasons`, `next_window`, `protected_until`, `mm_since_spray`, `incubation_pct`, `flags`,
+  `products`, `passes`, `treatments`, `model_validation`), `attribution`,
+  `assessment_status`, `config_version` (`id`, `hash`, `scope`, `status`, `review` when
+  reviewed, and `accuracy_claim: false`) and `current_inputs_status`. `products` lists crop
+  protection's generic recommendations (`name`, `product_type`, `targets`) in engine order,
+  never ranked and never a farm's product rows or ids, so the catalog move does not change it.
+- `model_validation` (`{level, models}`) was added to v1 the day it was registered, an additive
+  key: the validation level stamped when the advice was computed (see "Added keys" below).
+- `headline` and the reasons' `verdict` are text for people. Advice computed since 2026-11-22
+  words a downy result with no infection event as `No action: no infection event detected` and
+  `no infection event detected` (before: `No action: no infection risk` and `no risk`); stored
+  rows keep the words they were saved with. Read `decision`, not the wording.
 
 ## Inputs
 
@@ -59,6 +70,11 @@ registers it.
   send v2. The agent tools carry no HTTP headers per call, so the MCP `propose_record` result
   says it instead: `facts.input_deprecated` (`since`, `note`, `link`) and a note in its text.
 
+### Parcel and crop proposals (`drafts:propose`)
+
+The agent tools `propose_parcels` (inline GeoJSON) and `propose_crop_assignments` create
+drafts that only the farmer confirms. They have one input version and are not versioned yet.
+
 ## Stored evidence
 
 Assessment evidence (`/advisor/parcels/{id}/assessments/{assessment}.json`) is returned as it
@@ -66,6 +82,16 @@ was saved and never rewritten. Since `core_0018` its `input_snapshot` carries
 `evidence_version: 2` and each dose as `{typed_quantity, catalog_item, crop_protection_item,
 advisor_product}`; a snapshot saved before has no `evidence_version` and holds
 `{quantity, product}`.
+
+## Added keys
+
+Every surface that shows an assessment also carries its `model_validation` (`{level,
+models}`): the advisor card `.json`, history and review assessment JSON, `advisor/layer.geojson`,
+`fields/parcels.geojson` and the grantee `advice.json`. It is the level stamped when the result
+was computed, never upgraded later; rows stored before it read `unvalidated`. `/models?kind=`
+and `/models/{key}` describe each model from its spec to any signed-in user, a grant recipient
+included. It was added without a new version; a client that rejects unknown keys needs to accept
+it.
 
 ## Unchanged and not versioned
 
