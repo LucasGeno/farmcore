@@ -1,7 +1,6 @@
 """ISO 11783-10 TaskData (ISOXML) reader and import into operation logs.
 
-Parsed with stdlib `xml.etree.ElementTree` (isoxml-py would pull numpy, shapely and xsdata for
-the ~80 lines we need). Read: completed tasks `TSK` (`G="4"`), their partfield `PFD` designator,
+Parsed with `defusedxml`. Read: completed tasks `TSK` (`G="4"`), their partfield `PFD` designator,
 `TIM` start/stop and `PDV` setpoints in the treatment zones. Doses: DDI `0006` mass per area
 (mg/m² ÷ 100 = kg/ha), DDI `0001` volume per area (mm³/m² ÷ 100 = l/ha). Other DDIs and binary
 `TLG` logs are ignored and listed in the task's `notes`.
@@ -20,6 +19,9 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
+
+from defusedxml.common import DefusedXmlException
+from defusedxml.ElementTree import fromstring
 
 from farmcore.apps.operations import spray_items, spray_weather
 from farmcore.apps.operations.spray_items import SprayItem
@@ -191,7 +193,9 @@ def parse(data: bytes, *, tz: str = "Europe/Paris") -> list[TaskRecord]:
     """The completed tasks of a TaskData file (bare XML or zip), in file order. Times without an
     offset are local to `tz`. Raises `IsoxmlError` with a plain message."""
     try:
-        root = ET.fromstring(_xml_bytes(data))
+        root = fromstring(_xml_bytes(data), forbid_dtd=True)
+    except DefusedXmlException:
+        raise IsoxmlError("the XML file must not contain document type declarations") from None
     except ET.ParseError as exc:
         raise IsoxmlError(f"the file is not valid XML ({exc})") from None
     if root.tag != ROOT_TAG:
