@@ -205,9 +205,47 @@ farm.example.org {
 }
 ```
 
-To let a farmer's own agent connect (Sharing, "Connect your agent"), route `/mcp` to the MCP
-process (`farmcore mcp --http`, `MCP_HTTP_ENABLED=true`, port 8001) before the catch-all, and
-list the public host name in `MCP_HTTP_ALLOWED_HOSTS`:
+To let a farmer's own agent connect (Sharing, "Connect your agent"), run the MCP process
+(`farmcore mcp --http`) and route `/mcp` to it. The stock `docker-compose.yml` does not run it
+and passes the web app only `MCP_HTTP_ENABLED`, `MCP_HTTP_HOST` and `MCP_HTTP_PORT`, so add a
+service in an override next to it (one `docker-compose.override.yml`, shared with the
+weather credentials below if you use them):
+
+```yaml
+# docker-compose.override.yml
+services:
+  app:
+    environment: &mcp-settings
+      MCP_HTTP_ENABLED: "true"
+      MCP_HTTP_ALLOWED_HOSTS: '["farm.example.org"]'
+      MCP_HTTP_PUBLIC_URL: https://farm.example.org/mcp
+      MCP_HTTP_FORWARDED_ALLOW_IPS: ${MCP_HTTP_FORWARDED_ALLOW_IPS:-}
+  mcp:
+    extends:                     # same image, runtime-role DATABASE_URL and settings
+      file: docker-compose.yml
+      service: worker
+    command: ["farmcore", "mcp", "--http"]
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      <<: *mcp-settings
+      MCP_HTTP_HOST: 0.0.0.0       # inside the container; published on loopback only
+    ports:
+      - "127.0.0.1:${MCP_PUBLISH_PORT:-8001}:8001"
+```
+
+Then `docker compose up -d`. `farmcore mcp --http` refuses to start unless `MCP_HTTP_ENABLED`
+is true, and listens on loopback unless `MCP_HTTP_HOST` says otherwise; on `0.0.0.0` it logs a
+warning, since it must sit behind the TLS proxy. `MCP_HTTP_ALLOWED_HOSTS` is the public host
+name agents use (empty: loopback names only), and `MCP_HTTP_PUBLIC_URL` the public `/mcp` URL.
+With several installations on one host, give each its own `MCP_PUBLISH_PORT`, not one another
+installation's `FARMCORE_PORT`. The per-address limit counts by the connection's address unless
+`MCP_HTTP_FORWARDED_ALLOW_IPS` names the proxy's address as the container sees it (another
+container's, or the Docker network gateway for a proxy on the host). Route `/mcp` before the
+catch-all:
 
 ```caddyfile
 farm.example.org {
@@ -265,16 +303,26 @@ Commercial use, or more calls, needs one of two lawful routes:
    hostname for `OPEN_METEO_SINGLE_RUNS_BASE_URL` from your Open-Meteo customer dashboard. The
    key is sent as the `apikey` query parameter only to a `customer-` host and is never logged,
    stored in a receipt or shown in the UI. A key requires `https` base URLs; startup refuses a
-   key combined with `http`. Rotate it in `.env` and restart; no FarmCore data changes.
+   key combined with `http`. Set the key and both URLs in `.env` together, then run
+`docker compose up -d` so Compose recreates `app` and `worker` with them (`restart` keeps the
+old environment, and so the old endpoint). Rotate the key the same way; no FarmCore data
+changes.
 2. **Self-hosted server.** The optional compose profile runs the upstream Open-Meteo image as a
-   separate container, with a data volume:
+   separate container, with a data volume. Set both URLs in `.env` first, then start the
+   profile; the same `up -d` recreates `app` and `worker` with the new URLs (until then they
+   still call the public API):
 
    ```sh
-   docker compose --profile openmeteo up -d
    # .env
    OPEN_METEO_BASE_URL=http://openmeteo:8080
    OPEN_METEO_SINGLE_RUNS_BASE_URL=http://openmeteo:8080
    ```
+
+   ```sh
+   docker compose --profile openmeteo up -d
+   ```
+
+   Pass `--profile openmeteo` on every later `up` too, or the `openmeteo` service is left out.
 
    The upstream server is licensed **AGPL-3.0**. FarmCore only names its published container
    image (pinned default `ghcr.io/open-meteo/open-meteo:1.8.0`, override with
@@ -381,7 +429,9 @@ in live clock mode only. It avoids Open-Meteo's non-commercial historical API.
 The stock `docker-compose.yml` passes only the variables it names to its containers, and it
 does not name `METEOFRANCE_*` or `CDSAPI_*` yet: set in `.env` alone, they never reach the
 app or the worker, and both jobs do nothing. Until the compose file names them, add an override
-next to it (it holds no secret values, only references to the env file):
+next to it (it holds no secret values, only references to the env file). If you also run the
+MCP service (section 3), it is one file: put these three lines under the existing `app`
+`environment` and add the `worker` entry, rather than repeating `app:`.
 
 ```yaml
 # docker-compose.override.yml

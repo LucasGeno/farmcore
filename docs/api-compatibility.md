@@ -52,7 +52,7 @@ registers it.
   reviewed, and `accuracy_claim: false`) and `current_inputs_status`. `products` lists crop
   protection's generic recommendations (`name`, `product_type`, `targets`) in engine order,
   never ranked and never a farm's product rows or ids, so the catalog move does not change it.
-- `model_validation` (`{level, models}`) was added to v1 the day it was registered, an additive
+- `model_validation` (`{level, label, models, about}`) was added to v1 the day it was registered, an additive
   key: the validation level stamped when the advice was computed (see "Added keys" below).
 - `headline` and the reasons' `verdict` are text for people. Advice computed since 2026-11-22
   words a downy result with no infection event as `No action: no infection event detected` and
@@ -85,9 +85,11 @@ advisor_product}`; a snapshot saved before has no `evidence_version` and holds
 
 ## Added keys
 
-Every surface that shows an assessment also carries its `model_validation` (`{level,
-models}`): the advisor card `.json`, history and review assessment JSON, `advisor/layer.geojson`,
-`fields/parcels.geojson` and the grantee `advice.json`. It is the level stamped when the result
+Every surface that shows an assessment also carries its `model_validation`: `level` (the
+validation level key, such as `unvalidated`), `label` (its words), `models` (the model keys)
+and `about` (`/models?kind=<kind>`). It appears on the advisor card `.json`, history and
+review assessment JSON, `advisor/layer.geojson`, `fields/parcels.geojson` and the grantee
+`advice.json`. It is the level stamped when the result
 was computed, never upgraded later; rows stored before it read `unvalidated`. `/models?kind=`
 and `/models/{key}` describe each model from its spec to any signed-in user, a grant recipient
 included. It was added without a new version; a client that rejects unknown keys needs to accept
