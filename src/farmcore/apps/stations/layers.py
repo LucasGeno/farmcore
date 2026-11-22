@@ -49,14 +49,14 @@ def weather_layer(request: Request, repo: Repo) -> JSONResponse:
     station = service.station_for_farm(repo)
     if station is None:
         return _geojson([])
-    at = service.latest_reading(repo, station.id, now)
+    at = service.latest_reading(repo, station.id, now, as_of=now)
     if at is None:
         return _geojson([])
     zone = ZoneInfo(settings.display_tz)
-    row = service.load_hourly(repo, station.id, at, at)[0]
+    row = service.load_hourly(repo, station.id, at, at, as_of=now)[0]
     window = [
         r
-        for r in service.load_hourly(repo, station.id, now - RAIN_WINDOW, now)
+        for r in service.load_hourly(repo, station.id, now - RAIN_WINDOW, now, as_of=now)
         if r["ts"] > now - RAIN_WINDOW
     ]
     rain = [r["rr1_mm"] for r in window if r["rr1_mm"] is not None]

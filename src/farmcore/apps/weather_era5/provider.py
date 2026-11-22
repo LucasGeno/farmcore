@@ -19,7 +19,10 @@ Sources (ECMWF and Copernicus, read 2026-11-19):
   pvlib's client for this dataset documents). ERA5 is updated daily about 5 days behind real
   time (ERA5T), but this copy ends later: the newest day it serves is the `date` maximum of
   its public constraints (`POST /processes/<dataset>/constraints`), 11 days behind on
-  2026-11-19. ERA5T is overwritten by the final ERA5 about two months later. ECMWF calls this
+  2026-11-19. ERA5T is overwritten by the final ERA5 about two months later (ERA5
+  documentation: final ERA5 has differed from ERA5T, e.g. 2021-09-01 to 2021-12-13 and
+  2024-07-01 to 2024-11-17). The CSV carries no `expver`, so a value is provisional by date
+  (`provisional_from`). ECMWF calls this
   entry experimental and not recommended for operational systems (forum.ecmwf.int t/11919).
   https://cds.climate.copernicus.eu/datasets/reanalysis-era5-single-levels-timeseries
 - Values: `t2m` and `d2m` in K, `u10` and `v10` in m/s (instantaneous at the valid time), `tp` in
@@ -101,6 +104,18 @@ POLL_SECONDS = 10.0
 KELVIN = Decimal("273.15")
 MS_TO_KMH = Decimal("3.6")
 HOUR = timedelta(hours=1)
+# Assumed: the CDS replaces ERA5T with the final ERA5 about two months after the month; one more
+# month of margin before a value counts as final.
+FINAL_AFTER_MONTHS = 3
+
+
+def provisional_from(fetched_at: datetime) -> datetime:
+    """The first valid time still provisional (ERA5T) in a response fetched at `fetched_at`: a
+    value is final once its month ended `FINAL_AFTER_MONTHS` or more months before the fetch,
+    so this is the start of the month `FINAL_AFTER_MONTHS` before the fetch's month (UTC)."""
+    at = fetched_at.astimezone(UTC)
+    months = at.year * 12 + at.month - 1 - FINAL_AFTER_MONTHS
+    return datetime(months // 12, months % 12 + 1, 1, tzinfo=UTC)
 
 
 class PortalError(RuntimeError):
@@ -135,7 +150,9 @@ def relative_humidity(air: Decimal, dew: Decimal) -> Decimal:
     return Decimal(round(min(ratio, 1.0) * 100, 1)).quantize(Decimal("0.1"))
 
 
-def _value(name: str, value: Decimal, end: datetime, span: timedelta = timedelta(0)):
+def _value(
+    name: str, value: Decimal, end: datetime, provisional: bool, span: timedelta = timedelta(0)
+):
     variable = BY_LEGACY[name]
     return ObservationValue(
         variable=variable.name,
@@ -144,6 +161,7 @@ def _value(name: str, value: Decimal, end: datetime, span: timedelta = timedelta
         period_start=end - span,
         period_end=end,
         qc_flag="unchecked",
+        provisional=provisional,
     )
 
 
@@ -163,11 +181,15 @@ def _rows(payload: bytes) -> list[str]:
         raise PortalError("results: unreadable zip") from None
 
 
-def era5_values(payload: bytes, range: TimeRange) -> list[ObservationValue]:
+def era5_values(
+    payload: bytes, range: TimeRange, *, fetched_at: datetime
+) -> list[ObservationValue]:
     """A response's values, converted to the stored units, for valid times in
     `(start, end]`. Temperature, humidity and wind are instantaneous (period start = end);
-    precipitation covers the hour ending at the valid time."""
+    precipitation covers the hour ending at the valid time. A valid time from
+    `provisional_from(fetched_at)` on is provisional (ERA5T)."""
     values = []
+    newest_final = provisional_from(fetched_at)
     rows = (r for text in _rows(payload) for r in csv.DictReader(io.StringIO(text)))
     for row in rows:
         row = {k.strip().lower(): (v or "").strip() for k, v in row.items() if k}
@@ -180,16 +202,17 @@ def era5_values(payload: bytes, range: TimeRange) -> list[ObservationValue]:
         air, dew = _decimal(row.get("t2m")), _decimal(row.get("d2m"))
         u, v = _decimal(row.get("u10")), _decimal(row.get("v10"))
         rain = _decimal(row.get("tp"))
+        provisional = end >= newest_final
         if air is not None:
-            values.append(_value("t_c", air - KELVIN, end))
+            values.append(_value("t_c", air - KELVIN, end, provisional))
         if air is not None and dew is not None:
-            values.append(_value("rh_pct", relative_humidity(air, dew), end))
+            values.append(_value("rh_pct", relative_humidity(air, dew), end, provisional))
         if u is not None and v is not None:
             speed = Decimal(str(math.hypot(float(u), float(v)))) * MS_TO_KMH
-            values.append(_value("ff_kmh", speed.quantize(Decimal("0.01")), end))
+            values.append(_value("ff_kmh", speed.quantize(Decimal("0.01")), end, provisional))
         if rain is not None:
             # Assumed: ERA5's tiny negative accumulations (numerical noise) are no rain.
-            values.append(_value("rr1_mm", max(rain * 1000, Decimal(0)), end, HOUR))
+            values.append(_value("rr1_mm", max(rain * 1000, Decimal(0)), end, provisional, HOUR))
     return values
 
 
@@ -323,11 +346,12 @@ class Era5:
             if cds.expired():
                 return None  # done upstream, out of time here: collected by the next run
             raise
+        fetched_at = datetime.now(UTC)
         return Fetched(
             request=self._request(station, range),
-            fetched_at=datetime.now(UTC),
+            fetched_at=fetched_at,
             payload=response.content,
-            values=era5_values(response.content, range),
+            values=era5_values(response.content, range, fetched_at=fetched_at),
         )
 
     def last_day(self) -> date:

@@ -5,22 +5,23 @@ farm that has a location (`forecast_location`, the farm pin), once a day, and `f
 runs `backfill_farm`:
 
 1. read which hours the farm's ERA5 grid point already holds this season (no transaction stays
-   open during the requests);
+   open during the requests): an hour with a final value for every variable, or a provisional
+   (ERA5T) one still too recent to be final (`provider.provisional_from`). Once old enough, a
+   provisional hour is ordered again, and its final value stored beside it (`store`);
 2. `plan` the whole days it lacks, from 1 January to the newest day the dataset serves (its
    public constraints), in windows of
    at most `MAX_DAYS`. A CDS order can queue for a long time, so a run orders one window and
    waits for it only until its deadline: an order still queued is kept in the farm's
    `era5_backfill` health and collected, not ordered again, on the next run. Windows are
    independent: a failed one never holds back the next;
-3. only if the attempt is current: store each response under the grid-point station
-   (`copernicus-era5`, a model, not a station: its receipt says `model-reanalysis`) and the
+3. only if the attempt is current: store each response under the farm's own grid-point station
+   (`copernicus-era5`, `farm{id}:{lat},{lon}`, owned by the farm: private; a model, not a
+   station: its receipt says `model-reanalysis`) and the
    health `{last_attempt, error, pending}`: each failed step and its HTTP status (never the
    key) and the order still waiting, if any.
 
-Known limits: the grid point and its (station, variable, period) key are shared by every farm
-within the same 0.25 degree cell, so a second farm sees the first farm's hours as held and its
-receipts are not its own (per-farm merging is the merge layer's). ERA5T hours, the newest days,
-are overwritten upstream by the final ERA5 about two months later; the first receipt is kept.
+Two farms in one 0.25 degree cell each have their own grid-point station, so each holds and
+orders its own hours.
 """
 
 from __future__ import annotations
@@ -30,7 +31,7 @@ import math
 from collections.abc import Collection
 from datetime import UTC, date, datetime, timedelta
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from farmcore.apps.stations import service
@@ -80,14 +81,15 @@ def season_start(now: datetime) -> datetime:
     return datetime(now.year, 1, 1, tzinfo=UTC)
 
 
-def grid_station(point: Point) -> Station:
-    """The ERA5 grid point nearest `point`, as the station its hours are stored under."""
+def grid_station(point: Point, farm_id: int) -> Station:
+    """The ERA5 grid point nearest `point`, as the farm's own station its hours are stored
+    under (private to the farm: two farms in one cell never share one)."""
     # Half up (not Python's banker's rounding); a pin on a cell edge may still be put in the
     # neighbour by the CDS, whose row carries the real point.
     latitude = round(math.floor(point.latitude / GRID + 0.5) * GRID, 2)
     longitude = round(math.floor(point.longitude / GRID + 0.5) * GRID, 2)
     return Station(
-        provider_station_id=f"{latitude:.2f},{longitude:.2f}",
+        provider_station_id=f"farm{farm_id}:{latitude:.2f},{longitude:.2f}",
         name=f"ERA5 grid point {latitude:.2f}, {longitude:.2f} (model reanalysis)",
         latitude=latitude,
         longitude=longitude,
@@ -128,8 +130,16 @@ def ingest(ctx: JobContext) -> None:
     tasks.enqueue_due(ctx.session, JOB_NAME, INTERVAL, farm_ids)
 
 
-def _held(session: Session, farm_id: int, station: Station, since: datetime) -> set[datetime]:
+def _held(
+    session: Session, farm_id: int, station: Station, since: datetime, now: datetime
+) -> set[datetime]:
     repo = repo_for_job(session, farm_id, JOB_NAME)
+    # A provisional value still too recent to be final counts as held: ordering it again would
+    # bring the same ERA5T.
+    settled = or_(
+        WeatherObservation.provisional.is_(False),
+        WeatherObservation.period_end >= provider.provisional_from(now),
+    )
     held = repo.execute(
         select(WeatherObservation.period_end)
         .join(WeatherStation, WeatherStation.id == WeatherObservation.station_id)
@@ -141,7 +151,7 @@ def _held(session: Session, farm_id: int, station: Station, since: datetime) -> 
         .group_by(WeatherObservation.period_end)
         # An hour is held only with every variable (a member missing from a response must not
         # leave its variable unfilled for good).
-        .having(func.count(WeatherObservation.variable.distinct()) == len(STORED)),
+        .having(func.count(WeatherObservation.variable.distinct()).filter(settled) == len(STORED)),
         scope=service.SCOPE,
         resource="weather_observation",
     ).scalars()
@@ -170,9 +180,9 @@ def backfill_farm(ctx: tasks.TaskContext) -> None:
         point = farm_location(session.get(Farm, ctx.farm_id))
         if point is None:
             return
-        station = grid_station(Point(point["latitude"], point["longitude"]))
+        station = grid_station(Point(point["latitude"], point["longitude"]), ctx.farm_id)
         start = season_start(now)
-        held = _held(session, ctx.farm_id, station, start - HOUR)
+        held = _held(session, ctx.farm_id, station, start - HOUR, now)
         state = (session.get(Farm, ctx.farm_id).props or {}).get(HEALTH)
     era5 = provider.provider(ctx.settings, timeout=ctx.attempt.remaining() * FETCH_SHARE)
     responses: list[Fetched] = []
@@ -228,8 +238,8 @@ def backfill_farm(ctx: tasks.TaskContext) -> None:
 def store(
     session: Session, farm_id: int, era5: provider.Era5, station: Station, fetched: Fetched
 ) -> None:
-    """One response: its receipt (this provider, the farm) and observations under the grid
-    point."""
+    """One response: its receipt (this provider, the farm) and observations under the farm's
+    grid point."""
     receipt = record_receipt(
         session,
         provider=era5.name,
@@ -240,5 +250,5 @@ def store(
         tier=era5.capabilities().tier,
     )
     if fetched.values:
-        grid = upsert_station(session, provider.PROVIDER, station)
+        grid = upsert_station(session, provider.PROVIDER, station, owner_farm_id=farm_id)
         store_observations(session, receipt, grid, list(fetched.values))

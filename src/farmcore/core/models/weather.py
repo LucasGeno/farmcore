@@ -17,6 +17,9 @@ these tables sit beside them until the consumers move (expand, migrate, contract
   A forecast's `run` is null when the provider does not say when the model was issued; member 0
   is the deterministic (or control) forecast. Both carry the period a value covers
   (`variables.Variable.cell_method` says how); a forecast's period may be unknown (null).
+- An observation may be `provisional` (ERA5T): a final value for the same station, variable and
+  period is stored beside it (core_0020), never over it, with a `revision_note` saying what it
+  replaced. Readers prefer the final value (`weather.store.held`).
 """
 
 from __future__ import annotations
@@ -129,6 +132,7 @@ class WeatherObservation(Base):
             "variable",
             "period_start",
             "period_end",
+            "provisional",
             name="uq_weather_observation_station_period",
         ),
     )
@@ -144,6 +148,8 @@ class WeatherObservation(Base):
     variable: Mapped[str] = mapped_column(Text)
     unit: Mapped[str] = mapped_column(Text)
     value: Mapped[Decimal] = mapped_column(Numeric)
+    provisional: Mapped[bool] = mapped_column(Boolean, server_default=false())
+    revision_note: Mapped[str | None] = mapped_column(Text)
 
 
 class WeatherForecast(Base):
