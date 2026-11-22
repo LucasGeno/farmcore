@@ -700,6 +700,36 @@ def _current_context(request: Request, repo: Repo, parcel: Parcel) -> dict[str, 
     return {"parcel": advice["parcel"], "advice": view, "rossi": rossi, "now": now, "debug": debug}
 
 
+ROSSI_STAGES = {
+    "start": "Wet event starts the cohort",
+    "germinated": "Oospores germinated",
+    "released": "Zoospores released",
+    "dispersed": "Zoospores dispersed by rain",
+    "zoospores_dead": "Zoospores died",
+    "infection": "Infection",
+    "symptoms_from": "Symptoms expected from",
+    "symptoms_to": "Symptoms expected by",
+}
+
+
+def _rossi_step(step, local) -> dict[str, Any]:
+    """One trace step for the card: when, the hour's inputs, their sources and the wetness."""
+    values = [
+        f"{step.t_c:.1f}{NBSP}°C" if step.t_c is not None else "T —",
+        f"RH {step.rh_pct:.0f}{NBSP}%" if step.rh_pct is not None else "RH —",
+        f"{step.rr1_mm:.1f}{NBSP}mm rain" if step.rr1_mm is not None else "rain —",
+        f"wetness {step.wetness}",
+    ]
+    sources = sorted(set(step.sources.values()))
+    return {
+        "label": ROSSI_STAGES.get(step.stage, step.stage),
+        "at": local(step.ts),
+        "values": " · ".join(values),
+        "sources": ", ".join(sources) or "source not recorded",
+        "missing_before": step.missing_before,
+    }
+
+
 ROSSI_SEASON = {
     "not started": "Primary inoculum season not started yet",
     "open": "Primary inoculum season open",
@@ -731,6 +761,7 @@ def _rossi_view(repo: Repo, parcel: Parcel, now: datetime, tz: str) -> dict[str,
             "raw": hour.isoformat(),
             "cohorts": len(cs),
             "symptoms": f"{local(cs[0].symptoms_from)} to {local(cs[0].symptoms_to)}",
+            "trace": [_rossi_step(s, local) for s in cs[0].trace],
         }
         for hour, cs in sorted(by_hour.items(), reverse=True)
     ]

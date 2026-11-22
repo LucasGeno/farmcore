@@ -74,7 +74,8 @@ def test_reproduces_the_viticolr_oracle_where_both_read_the_same_wetness():
     each at the stage's own hour). Infections: viticolR ignores the season's leaf-wetness column
     and derives wetness itself, so its wet periods, and with them its release and zoospore-death
     hours, differ. Where both release and disperse in the same hour, infection is the same hour
-    and the symptoms window within 1 h; the rest is listed, so any drift fails."""
+    and the symptoms window within 1 h; the rest is listed, so any drift fails, and each
+    difference is traced to the reading that causes it (below)."""
     obs, wet = _season()
     fixture, oracle = _stages()
     days = fixture["outputs"]["end_of_day"]
@@ -127,6 +128,29 @@ def test_reproduces_the_viticolr_oracle_where_both_read_the_same_wetness():
         "06-20 23",
         "06-25 23",
     ]
+
+    # Where the differences come from (paper reading first, one oracle choice switched at a
+    # time; FarmCore ships only the paper's reading). viticolR reads wetness as litter moisture
+    # M for release: the 5 later FarmCore-only infections go (their zoospores are released in
+    # moist dry-leaf hours and die before rain). It also counts release over all hours since
+    # germination (a cumulative M count and mean temperature) instead of per wet period: the
+    # 17 May infection goes. And M for infection: its 17 Apr and 2 May infections appear.
+    def infections(reading: rossi.Reading) -> set[datetime]:
+        return {
+            c.infection
+            for c in rossi.run(obs, START, END, measured=wet, reading=reading).infections
+        }
+
+    litter = rossi.Reading(release_wetness="litter")
+    assert infections(litter) == shared | {datetime(2025, 5, 17, 0, tzinfo=UTC)}
+    cumulative = replace(litter, release_window="cumulative")
+    assert infections(cumulative) == shared
+    viticolr = replace(cumulative, infection_wetness="litter")
+    emulated = rossi.run(obs, START, END, measured=wet, reading=viticolr)
+    assert {c.infection for c in emulated.infections} == theirs.keys()
+    for c in emulated.cohorts:  # every stage up to infection, every cohort: the same hour
+        o = by_geo[c.germinated]
+        assert (c.released, c.dispersed, c.infection) == (o["ZRE_ind"], o["ZDI_ind"], o["ZIN_ind"])
 
 
 def _scenario(t_c: float, storm_hours: int) -> tuple[list[HourlyObs], datetime]:
@@ -182,10 +206,15 @@ def test_more_wetness_or_warmth_never_makes_infection_less_likely(t_c, storm):
     shorter, longer = _first(t_c, storm), _first(t_c, storm + 1)
     if shorter.infection is not None:  # wetness: one more wet hour keeps the infection hour
         assert longer.infection == shorter.infection
-    warmer = _first(t_c + 0.5, 24)
-    cooler = _first(t_c, 24)
-    assert cooler.infection is not None and warmer.infection is not None
-    assert warmer.symptoms_from - warmer.infection <= cooler.symptoms_from - cooler.infection
+    # Warmth, near the threshold too: with the same storm, a warmer cohort that the cooler one
+    # infects in time also infects, releases and infects no later after germinating, and its
+    # incubation is no longer.
+    cooler, warmer = shorter, _first(t_c + 0.5, storm)
+    if cooler.infection is not None:
+        assert warmer.infection is not None
+        assert warmer.released - warmer.germinated <= cooler.released - cooler.germinated
+        assert warmer.infection - warmer.germinated <= cooler.infection - cooler.germinated
+        assert warmer.symptoms_from - warmer.infection <= cooler.symptoms_from - cooler.infection
     # A germinated cohort's wet period at -1 °C releases no zoospores (assumed: no release
     # at or below 0 °C; the printed rule would release at once).
     rows, event = _scenario(20.0, 0)
@@ -227,6 +256,31 @@ def test_missing_weather_makes_a_limited_run_and_the_future_is_never_read():
     now = datetime(2025, 5, 20, tzinfo=UTC)
     flooded = [replace(o, rr1_mm=5.0, rh_pct=99.0) if o.ts > now else o for o in obs]
     assert rossi.run(flooded, START, now) == rossi.run([o for o in obs if o.ts <= now], START, now)
+
+    # A missing input pauses every stage: with humidity missing at the hour this cohort would
+    # infect (sensor wetness kept), it infects one hour later and the trace says why. Each step
+    # carries its inputs' sources and the wetness origin, in a partial run too.
+    _, wet = _season()
+    hole = datetime(2025, 5, 17, 0, tzinfo=UTC)
+    cohort_start = datetime(2025, 4, 21, 18, tzinfo=UTC)
+    sources = {o.ts: {"t_c": "st-1 (on-farm)", "rh_pct": "st-1 (on-farm)"} for o in obs}
+    holed = rossi.run(
+        [replace(o, rh_pct=None) if o.ts == hole else o for o in obs],
+        START,
+        END,
+        measured=wet,
+        sources=sources,
+    )
+    whole = rossi.run(obs, START, END, measured=wet)
+    before = next(c for c in whole.cohorts if c.start == cohort_start)
+    after = next(c for c in holed.cohorts if c.start == cohort_start)
+    assert before.infection == hole and after.infection == hole + HOUR
+    assert not holed.complete and holed.missing_hours == 1
+    step = next(s for s in after.trace if s.stage == "infection")
+    assert (step.ts, step.missing_before, step.wetness) == (hole + HOUR, 1, "measured")
+    assert step.sources == {"t_c": "st-1 (on-farm)", "rh_pct": "st-1 (on-farm)"}
+    assert [s.stage for s in after.trace][:4] == ["start", "germinated", "released", "dispersed"]
+    assert holed.sources == ("st-1 (on-farm)",)
 
     with pytest.raises(ValueError, match="timezone-aware"):
         rossi.run(obs, datetime(2025, 1, 1), END)
@@ -271,4 +325,5 @@ def test_the_parcel_card_shows_the_rossi_infections_beside_an_unchanged_decision
     expected = [c.infection.isoformat() for c in rossi.run(obs, START, now).infections]
     assert expected  # the season has infections by 1 June
     assert [f'data-infection="{h}"' in section for h in expected] == [True] * len(expected)
+    assert "data-rossi-trace" in section and "(on-farm)" in section  # each step's source, tier
     assert 'data-decision="wait"' in body

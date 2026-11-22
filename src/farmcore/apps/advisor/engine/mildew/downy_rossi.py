@@ -10,6 +10,8 @@ drive the spray decision until a season's comparison says it should (crop-models
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from farmcore.apps.advisor.engine.mildew import (
     DOWNY,
     HOST,
@@ -19,7 +21,7 @@ from farmcore.apps.advisor.engine.mildew import (
     hourly,
     param,
 )
-from farmcore.core.model_spec import Method, ModelSpec, Stages, Validation
+from farmcore.core.model_spec import Method, ModelInput, ModelSpec, Parameter, Stages, Validation
 
 PAPER = (
     "Rossi et al. 2008, A mechanistic model simulating primary infections of downy mildew in "
@@ -28,78 +30,88 @@ PAPER = (
 BUCK = "Buck 1981, J. Appl. Meteorol. 20:1527-1532 (saturation vapour pressure over water)"
 
 
+PAGES = "pp. 482-485"  # section 2, the model's equations
+
+
 def _paper(step: str) -> str:
     return f"{PAPER}, {step}"
 
 
+def cited(name: str, value, step: str, unit: str = "", eq: str = "") -> Parameter:
+    """A parameter from the paper, with its page range and equation when numbered."""
+    return replace(param(name, value, _paper(step), unit), page=f"{PAGES}{', ' + eq if eq else ''}")
+
+
 PARAMETERS = (
-    param(
+    cited(
         "season_start",
         "01-01",
-        _paper("all oospores morphologically mature on 1 January (MMO = 1); northern hemisphere"),
+        "all oospores morphologically mature on 1 January (MMO = 1); northern hemisphere",
         "MM-DD",
     ),
-    param(
+    cited(
         "ht_poly",
         (1330.1, -116.19, 2.6256),
-        _paper("hydro-thermal time HT = Σ M / (a + bT + cT²) per hour, 0 at T ≤ 0 °C"),
+        "hydro-thermal time HT = Σ M / (a + bT + cT²) per hour, 0 at T ≤ 0 °C",
         "h",
+        eq="Eq. 3",
     ),
-    param(
+    cited(
         "moist_vpd_max_hpa",
         4.5,
-        _paper("moist hour M = 1 when rain > 0 mm or VPD ≤ 4.5 hPa (VPD after Buck 1981)"),
+        "moist hour M = 1 when rain > 0 mm or VPD ≤ 4.5 hPa (VPD after Buck 1981)",
         "hPa",
+        eq="Eq. 3",
     ),
     param("vapour_pressure", (6.1121, 17.502, 240.97), BUCK + "; e = a·exp(bT / (c + T))", "hPa"),
-    param(
+    cited(
         "dor_gompertz",
         (15.891, 0.653),
-        _paper("dormancy breaking DOR = exp(-a·exp(-b·(HT + 1))), Eq. 3"),
+        "dormancy breaking DOR = exp(-a·exp(-b·(HT + 1)))",
+        eq="Eq. 2",
     ),
-    param(
+    cited(
         "pis_ht",
         (1.3, 8.6),
-        _paper("primary inoculum season from HT 1.3 to 8.6 (3 % and 97 % of the dose)"),
+        "primary inoculum season from HT 1.3 to 8.6 (3 % and 97 % of the dose)",
     ),
-    param(
+    cited(
         "event_rain_min_mm",
         0.2,
-        _paper("a wet event, and an oospore cohort, starts with ≥ 0.2 mm rain in its first hour"),
+        "a wet event, and an oospore cohort, starts with ≥ 0.2 mm rain in its first hour",
         "mm",
     ),
-    param(
+    cited(
         "sporangia_poly",
         (5.67, -0.47, 0.01),
-        _paper("sporangia survive SUS = Σ 1 / (24·(a + bX + cX²)), X = T·(1 - RH/100), to 1"),
+        "sporangia survive SUS = Σ 1 / (24·(a + bX + cX²)), X = T·(1 - RH/100), to 1",
         "d",
     ),
-    param(
+    cited(
         "release_exp",
         (-1.022, 19.634),
-        _paper(
-            "zoospores released when the wet hours WD ≥ exp((a + b) / TWD), the grouping as "
-            "printed; TWD the mean T of the wet period"
-        ),
+        "zoospores released when the wet hours WD ≥ exp((a + b) / TWD), the grouping as "
+        "printed; TWD the mean T of the wet period",
         "h",
     ),
-    param(
+    cited(
         "dispersal_rain_min_mm",
         0.2,
-        _paper("zoospores dispersed by any rain ≥ 0.2 mm while they survive"),
+        "zoospores dispersed by any rain ≥ 0.2 mm while they survive",
         "mm",
     ),
-    param(
+    cited(
         "infection_degree_hours",
         60.0,
-        _paper("infection when WD·TWD ≥ 60 °C·h after dispersal (Blaeser & Weltzien 1979)"),
+        "infection when WD·TWD ≥ 60 °C·h after dispersal (Blaeser & Weltzien 1979)",
         "°C·h",
     ),
-    param(
+    cited(
         "incubation_poly",
         ((45.1, -3.45, 0.073), (59.9, -4.55, 0.095)),
-        _paper("incubation INC = Σ 1 / (24·(a + bT + cT²)) to 1, lower and upper bound "),
+        "incubation INC = Σ 1 / (24·(a + bT + cT²)) to 1, lower and upper bound",
         "d",
+        eq="Eqs. 8-9",
     ),
     param(
         "wet_minutes_min",
@@ -143,7 +155,8 @@ SPEC = ModelSpec(
         hourly("air temperature", "°C"),
         hourly("relative humidity", "%"),
         hourly("rain", "mm"),
-        hourly("leaf wetness", "min", "estimated"),
+        ModelInput("leaf wetness, sensor (wins when present)", "min", "hourly", "measured"),
+        ModelInput("leaf wetness from relative humidity (no sensor)", "min", "hourly", "estimated"),
     ),
     parameters=PARAMETERS,
     validation=VALIDATION,

@@ -171,13 +171,22 @@ def load_weather(
 
 def rossi_run(repo: ScopedRepository, parcel_id: int, now: datetime, tz: str) -> rossi.RossiRun:
     """The Rossi 2008 model for the parcel as of `now`: the merged observed series ranked from the
-    parcel's centroid, from the model's season start (1 January local) to now. Shown beside the
+    parcel's centroid, from the model's season start (1 January local) to now, each input's
+    source and tier carried into every event's trace. Shown beside the
     3-10 rule; it never feeds the decision. Weather the grant cannot read raises `ScopeDenied`."""
     month, day = (int(part) for part in ROSSI["season_start"].value.split("-"))
     start = datetime(now.astimezone(ZoneInfo(tz)).year, month, day, tzinfo=ZoneInfo(tz))
     point = parcel_points(repo).get(parcel_id)
-    series = merge.load(repo, start, now, now).at(point).series()
-    return rossi.run(series, start, now)
+    merged = merge.load(repo, start, now, now).at(point)
+    sources = {
+        hour.ts: {
+            name: f"{hour.filled_by[name]} ({hour.tiers.get(name) or 'undeclared tier'})"
+            for name in rossi.FIELDS
+            if name in hour.filled_by
+        }
+        for hour in merged.hours
+    }
+    return rossi.run(merged.series(), start, now, sources=sources)
 
 
 def station_identities(

@@ -75,7 +75,12 @@
   {% if rossi.infections %}
   <ul id="rossi-infections" class="mt-2 divide-y divide-line text-[15px]">
     {% for i in rossi.infections %}
-    <li class="py-2" data-infection="{{ i.raw }}"><span class="font-semibold">Infection {{ i.at }}</span>{% if i.cohorts > 1 %} <span class="text-[13px] text-muted">· {{ i.cohorts }} oospore cohorts</span>{% endif %}<br><span class="text-[13px] text-muted">Symptoms expected {{ i.symptoms }}</span></li>
+    <li class="py-2" data-infection="{{ i.raw }}"><span class="font-semibold">Infection {{ i.at }}</span>{% if i.cohorts > 1 %} <span class="text-[13px] text-muted">· {{ i.cohorts }} oospore cohorts</span>{% endif %}<br><span class="text-[13px] text-muted">Symptoms expected {{ i.symptoms }}</span>
+      <details class="mt-1 text-[13px]" data-rossi-trace><summary class="cursor-pointer text-muted">How the model got there</summary>
+        <ol class="mt-1 space-y-1">
+          {% for s in i.trace %}<li data-step="{{ s.label }}"><span class="font-semibold">{{ s.label }}</span> {{ s.at }} · {{ s.values }} · <span data-sources>{{ s.sources }}</span>{% if s.missing_before %} · <span class="text-wait">{{ s.missing_before }} missing hour{{ "" if s.missing_before == 1 else "s" }} skipped before this step</span>{% endif %}</li>{% endfor %}
+        </ol>
+      </details></li>
     {% endfor %}
   </ul>
   {% else %}
