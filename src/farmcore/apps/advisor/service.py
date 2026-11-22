@@ -41,8 +41,9 @@ from farmcore.apps.advisor.advice import Advice
 from farmcore.apps.advisor.assessment import KIND as SPRAY_KIND
 from farmcore.apps.advisor.catalog import AdvisorProduct
 from farmcore.apps.advisor.engine import Advice as EngineAdvice
-from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, Spray
+from farmcore.apps.advisor.engine import AdvisorConfig, HourlyObs, ProductRef, Spray, rossi
 from farmcore.apps.advisor.engine.config import DEFAULT_REGION
+from farmcore.apps.advisor.engine.mildew.downy_rossi import P as ROSSI
 from farmcore.apps.advisor.engine.types import floor_hour
 from farmcore.apps.advisor.engine.window import forecast_span
 from farmcore.apps.fields.seasons import season_evidence
@@ -166,6 +167,26 @@ def load_weather(
 ) -> merge.Merged:
     """The farm's merged hourly weather ranked from the farm pin (farm-level checks)."""
     return load_held(repo, now, tz, config).at(farm_point(repo))
+
+
+def rossi_run(repo: ScopedRepository, parcel_id: int, now: datetime, tz: str) -> rossi.RossiRun:
+    """The Rossi 2008 model for the parcel as of `now`: the merged observed series ranked from the
+    parcel's centroid, from the model's season start (1 January local) to now, each input's
+    source and tier carried into every event's trace. Shown beside the
+    3-10 rule; it never feeds the decision. Weather the grant cannot read raises `ScopeDenied`."""
+    month, day = (int(part) for part in ROSSI["season_start"].value.split("-"))
+    start = datetime(now.astimezone(ZoneInfo(tz)).year, month, day, tzinfo=ZoneInfo(tz))
+    point = parcel_points(repo).get(parcel_id)
+    merged = merge.load(repo, start, now, now).at(point)
+    sources = {
+        hour.ts: {
+            name: f"{hour.filled_by[name]} ({hour.tiers.get(name) or 'undeclared tier'})"
+            for name in rossi.FIELDS
+            if name in hour.filled_by
+        }
+        for hour in merged.hours
+    }
+    return rossi.run(merged.series(), start, now, sources=sources)
 
 
 def station_identities(
