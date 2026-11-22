@@ -384,8 +384,12 @@ mildew models (3-10, Goidanich, Gubler–Thomas) are ModelSpec modules in
 from them; the spray decision's parameters are the engine rules' own `THRESHOLDS`. The Rossi 2008
 downy mildew primary infection model (`engine/rossi.py`, spec `engine/mildew/downy_rossi.py`) runs on
 the parcel card from the merged series since 1 January, beside the 3-10 rule; it is in no assessment
-kind and never feeds the decision. Each event carries a trace (stage, inputs, each input's merged
-source and tier, measured or estimated wetness); missing hours pause every stage.
+kind and never feeds the decision. It is registered as a shown model (`Manifest.model_specs`:
+checked at load like a kind's models, listed on the About pages, never stamped on a result), and its
+badge links to its About page. Each event carries a trace (stage, inputs, each input's merged
+source and tier, labelled by input, measured or estimated wetness); missing hours pause every stage.
+With missing hours and no infection computed, the card says infections are unknown rather than
+none.
 
 ### Module lifecycle
 

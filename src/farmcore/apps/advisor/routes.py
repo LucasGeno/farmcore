@@ -713,20 +713,32 @@ ROSSI_STAGES = {
 }
 
 
+ROSSI_INPUTS = {"t_c": "temperature", "rh_pct": "humidity", "rr1_mm": "rain"}
+
+
+def _rossi_sources(sources: dict[str, str]) -> str:
+    """Which source supplied each input: "temperature, humidity: A (on-farm); rain: B (...)"."""
+    by_source: dict[str, list[str]] = {}
+    order = list(ROSSI_INPUTS)
+    for name in sorted(sources, key=lambda n: order.index(n) if n in order else len(order)):
+        by_source.setdefault(sources[name], []).append(ROSSI_INPUTS.get(name, name))
+    return "; ".join(f"{', '.join(inputs)}: {source}" for source, inputs in by_source.items())
+
+
 def _rossi_step(step, local) -> dict[str, Any]:
-    """One trace step for the card: when, the hour's inputs, their sources and the wetness."""
+    """One trace step for the card: when, the hour's inputs, each input's source and the
+    wetness."""
     values = [
         f"{step.t_c:.1f}{NBSP}°C" if step.t_c is not None else "T —",
         f"RH {step.rh_pct:.0f}{NBSP}%" if step.rh_pct is not None else "RH —",
         f"{step.rr1_mm:.1f}{NBSP}mm rain" if step.rr1_mm is not None else "rain —",
         f"wetness {step.wetness}",
     ]
-    sources = sorted(set(step.sources.values()))
     return {
         "label": ROSSI_STAGES.get(step.stage, step.stage),
         "at": local(step.ts),
         "values": " · ".join(values),
-        "sources": ", ".join(sources) or "source not recorded",
+        "sources": _rossi_sources(step.sources) or "source not recorded",
         "missing_before": step.missing_before,
     }
 

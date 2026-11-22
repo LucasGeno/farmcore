@@ -93,5 +93,7 @@ MANIFEST = Manifest(
     ),
     tools=TOOLS,
     assessment_kinds=(KIND,),
+    # Shown beside the 3-10 rule for comparison; the stored spray decision does not use it.
+    model_specs=("farmcore.apps.advisor.engine.mildew.downy_rossi:SPEC",),
     maturity="alpha",
 )

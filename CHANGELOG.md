@@ -4,6 +4,13 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- The Rossi 2008 model is now on the About pages (`/models/advisor.downy_rossi`), linked from its
+  badge on the parcel card; it still never feeds the stored spray decision. With missing weather
+  hours and no infection computed, the card says primary infections are unknown instead of "none
+  so far". Each trace step names the source and tier of temperature, humidity and rain
+  separately. App authors: `Manifest.model_specs` lists models an app shows without storing
+  their result; they are checked at load like an assessment kind's models.
+
 - The parcel card shows the Rossi et al. 2008 downy mildew primary infection model beside the
   3-10 rule: infection hours and the expected symptoms window, the primary inoculum season and
   its validation level (unvalidated). It runs on the merged observed series since 1 January;

@@ -114,10 +114,14 @@ def test_a_model_missing_a_declaration_fails_with_a_clear_error(change, says):
 
 
 @pytest.mark.parametrize(
-    ("kinds", "says"),
+    ("kinds", "shown", "says"),
     [
-        ((replace(FROST_KIND, models=()),), "declares no model"),
-        ((replace(FROST_KIND, models=("farmcore.core.model_spec:Method",)),), "not a ModelSpec"),
+        ((replace(FROST_KIND, models=()),), (), "declares no model"),
+        (
+            (replace(FROST_KIND, models=("farmcore.core.model_spec:Method",)),),
+            (),
+            "not a ModelSpec",
+        ),
         (
             (
                 FROST_KIND,
@@ -125,15 +129,19 @@ def test_a_model_missing_a_declaration_fails_with_a_clear_error(change, says):
                     "frost.days", 1, "pydantic:BaseModel", models=(f"{__name__}:OTHER_FROST",)
                 ),
             ),
+            (),
             "'frost.hours' is declared twice",
         ),
+        # A model the app only shows (Manifest.model_specs) is checked the same way.
+        ((FROST_KIND,), ("farmcore.core.model_spec:Method",), "not a ModelSpec"),
+        ((FROST_KIND,), (f"{__name__}:OTHER_FROST",), "'frost.hours' is declared twice"),
     ],
 )
-def test_an_assessment_kind_without_valid_models_fails_at_load(kinds, says):  # F4
-    app = Manifest(name="frost", version="0.1.0", assessment_kinds=kinds)
+def test_an_assessment_kind_without_valid_models_fails_at_load(kinds, shown, says):  # F4
+    app = Manifest(name="frost", version="0.1.0", assessment_kinds=kinds, model_specs=shown)
     with pytest.raises(ModelSpecInvalid, match=says):
         resolve_order([CORE, app])
-    assert resolve_order([CORE, replace(app, assessment_kinds=(FROST_KIND,))])
+    assert resolve_order([CORE, replace(app, assessment_kinds=(FROST_KIND,), model_specs=())])
 
 
 def test_every_engine_threshold_is_declared_in_a_crop_protection_spec():  # F8
