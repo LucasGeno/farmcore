@@ -58,6 +58,30 @@ def _season() -> tuple[list[HourlyObs], dict[datetime, float]]:
     return obs, {_utc(r["time_utc"]): float(r["leaf_wet_min"]) for r in rows}
 
 
+STAGES = (
+    "start",
+    "germinated",
+    "sporangia_dead",
+    "released",
+    "zoospores_dead",
+    "dispersed",
+    "infection",
+    "symptoms_from",
+    "symptoms_to",
+)
+
+
+def _assert_trace_agrees(c: rossi.Cohort, missing: frozenset[datetime] = frozenset()) -> None:
+    """Every stage field has its step at the same hour and no step lacks its field; steps run
+    in time order; each counts the missing hours skipped since the step before."""
+    assert {s.stage: s.ts for s in c.trace} == {f: getattr(c, f) for f in STAGES if getattr(c, f)}
+    assert len({s.stage for s in c.trace}) == len(c.trace)
+    times = [s.ts for s in c.trace]
+    assert times == sorted(times)
+    for prev, step in zip(c.trace, c.trace[1:], strict=False):
+        assert step.missing_before == sum(prev.ts < m < step.ts for m in missing)
+
+
 def _stages() -> tuple[dict, dict[int, dict[str, datetime | None]]]:
     fixture = json.loads((ORACLES / "viticolr" / "season-2025.json").read_text())
     by_cohort: dict[int, dict[str, datetime | None]] = {}
@@ -93,6 +117,9 @@ def test_reproduces_the_viticolr_oracle_where_both_read_the_same_wetness():
     assert stranded
     for c in stranded:
         assert c.zoospores_dead == next(ts for ts in dry if ts > c.released)
+    for c in run.cohorts:  # the trace and the stage fields agree, in every branch
+        _assert_trace_agrees(c)
+    assert all(c.sporangia_dead for c in run.cohorts)
     by_geo = {s["GEO_h"]: s for s in oracle.values() if s["GEO_h"]}
     assert len(run.cohorts) == 28  # the wet events inside the primary inoculum season
     for c in run.cohorts:
@@ -281,6 +308,8 @@ def test_missing_weather_makes_a_limited_run_and_the_future_is_never_read():
     assert step.sources == {"t_c": "st-1 (on-farm)", "rh_pct": "st-1 (on-farm)"}
     assert [s.stage for s in after.trace][:4] == ["start", "germinated", "released", "dispersed"]
     assert holed.sources == ("st-1 (on-farm)",)
+    for c in holed.cohorts:
+        _assert_trace_agrees(c, frozenset({hole}))
 
     with pytest.raises(ValueError, match="timezone-aware"):
         rossi.run(obs, datetime(2025, 1, 1), END)
@@ -289,8 +318,13 @@ def test_missing_weather_makes_a_limited_run_and_the_future_is_never_read():
 def test_the_parcel_card_shows_the_rossi_infections_beside_an_unchanged_decision(
     client, session, settings
 ):
-    now = datetime(2025, 6, 1, tzinfo=UTC)
-    obs = [o for o in _season()[0] if o.ts <= now]
+    # 20 °C, 85 % RH: two wet events (hours 85 and 95) whose cohorts germinate apart and
+    # infect in the same hour after the storm at hours 170-179; a third cohort only germinates.
+    def rain(i: int) -> float:
+        return 1.0 if i in (85, 95) else 0.5 if 170 <= i <= 179 else 0.0
+
+    obs = [HourlyObs(START + i * HOUR, rain(i), 20.0, 85.0) for i in range(385)]
+    now = obs[-1].ts
     farm = ensure_default_farm(session, settings)
     station = Asset(farm_id=farm.id, kind="station", name="Synthetic season", props={})
     session.add(station)
@@ -323,7 +357,13 @@ def test_the_parcel_card_shows_the_rossi_infections_beside_an_unchanged_decision
     assert 'data-validation="unvalidated"' in section
     assert "still uses the 3-10 rule" in section
     expected = [c.infection.isoformat() for c in rossi.run(obs, START, now).infections]
-    assert expected  # the season has infections by 1 June
-    assert [f'data-infection="{h}"' in section for h in expected] == [True] * len(expected)
-    assert "data-rossi-trace" in section and "(on-farm)" in section  # each step's source, tier
+    assert expected == [datetime(2025, 1, 8, 6, tzinfo=UTC).isoformat()] * 2  # one hour, two
+    grouped = section[section.index(f'data-infection="{expected[0]}"') :]
+    assert "2 oospore cohorts" in grouped
+    # Each cohort's own path is shown, with its own wet event, germination and sources.
+    cohorts = grouped.split("data-rossi-cohort=")[1:]
+    assert [c.split('"')[1] for c in cohorts] == ["04 Jan 2025 14:00", "05 Jan 2025 00:00"]
+    for block, germinated in zip(cohorts, ("06 Jan 2025 22:00", "07 Jan 2025 08:00"), strict=True):
+        assert f"Oospores germinated</span> {germinated}" in block
+        assert "Sporangia died" in block and "(on-farm)" in block  # each step's source, tier
     assert 'data-decision="wait"' in body

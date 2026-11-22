@@ -706,6 +706,7 @@ ROSSI_STAGES = {
     "released": "Zoospores released",
     "dispersed": "Zoospores dispersed by rain",
     "zoospores_dead": "Zoospores died",
+    "sporangia_dead": "Sporangia died",
     "infection": "Infection",
     "symptoms_from": "Symptoms expected from",
     "symptoms_to": "Symptoms expected by",
@@ -761,7 +762,12 @@ def _rossi_view(repo: Repo, parcel: Parcel, now: datetime, tz: str) -> dict[str,
             "raw": hour.isoformat(),
             "cohorts": len(cs),
             "symptoms": f"{local(cs[0].symptoms_from)} to {local(cs[0].symptoms_to)}",
-            "trace": [_rossi_step(s, local) for s in cs[0].trace],
+            # Every cohort's own path and sources: they share the infection hour, not the
+            # hours (or sources) that led there.
+            "traces": [
+                {"start": local(c.start), "steps": [_rossi_step(s, local) for s in c.trace]}
+                for c in cs
+            ],
         }
         for hour, cs in sorted(by_hour.items(), reverse=True)
     ]

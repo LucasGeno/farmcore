@@ -183,18 +183,26 @@ def _grid(
 
 
 class _Tracer:
+    """The stages a cohort reaches, as hour indexes; `steps` orders them in time (stage order
+    within an hour) and counts the missing hours skipped since the step before."""
+
     def __init__(self, hours: list[_Hour]) -> None:
         self.hours = hours
-        self.steps: list[Step] = []
-        self.last = -1
+        self.reached: list[tuple[str, int]] = []
 
     def step(self, stage: str, h: int) -> datetime:
-        x = self.hours[h]
-        lo = self.last + 1 if self.last >= 0 else h
-        paused = sum(1 for i in range(lo, h) if self.hours[i].missing)
-        self.steps.append(Step(stage, x.ts, x.t, x.rh, x.rain, x.wetness, x.sources, paused))
-        self.last = max(self.last, h)
-        return x.ts
+        self.reached.append((stage, h))
+        return self.hours[h].ts
+
+    def steps(self) -> tuple[Step, ...]:
+        out, prev = [], None
+        for stage, h in sorted(self.reached, key=lambda r: r[1]):
+            x = self.hours[h]
+            lo = h if prev is None else prev + 1
+            paused = sum(1 for i in range(lo, h) if self.hours[i].missing)
+            out.append(Step(stage, x.ts, x.t, x.rh, x.rain, x.wetness, x.sources, paused))
+            prev = h
+        return tuple(out)
 
 
 def _cohort(hours: list[_Hour], e: int, reading: Reading) -> Cohort:
@@ -203,7 +211,11 @@ def _cohort(hours: list[_Hour], e: int, reading: Reading) -> Cohort:
     out: dict = {"start": tr.step("start", e)}
 
     def done() -> Cohort:
-        return Cohort(**out, trace=tuple(tr.steps))
+        if death < n:  # the sporangia die on their own clock, whatever the zoospores did
+            out["sporangia_dead"] = tr.step("sporangia_dead", death)
+        return Cohort(**out, trace=tr.steps())
+
+    death = n
 
     def wet_for(x: _Hour, kind: str) -> bool:
         return x.moist if kind == "litter" else x.wet
@@ -218,7 +230,7 @@ def _cohort(hours: list[_Hour], e: int, reading: Reading) -> Cohort:
         return done()
     out["germinated"] = tr.step("germinated", phi)
 
-    sus, death = 0.0, n
+    sus = 0.0
     poly = P["sporangia_poly"].value
     for h in range(phi, n):
         x = hours[h]
@@ -254,8 +266,6 @@ def _cohort(hours: list[_Hour], e: int, reading: Reading) -> Cohort:
             rho = h
             break
     if rho is None:
-        if death < n:
-            out["sporangia_dead"] = tr.step("sporangia_dead", death)
         return done()
     out["released"] = tr.step("released", rho)
 
@@ -272,7 +282,7 @@ def _cohort(hours: list[_Hour], e: int, reading: Reading) -> Cohort:
             delta = h
             break
     if delta is None:
-        return _with_sporangia(out, tr, death, n, done)
+        return done()
     out["dispersed"] = tr.step("dispersed", delta)
 
     needed = P["infection_degree_hours"].value
@@ -289,7 +299,7 @@ def _cohort(hours: list[_Hour], e: int, reading: Reading) -> Cohort:
             iota = h
             break
     if iota is None:
-        return _with_sporangia(out, tr, death, n, done)
+        return done()
     out["infection"] = tr.step("infection", iota)
 
     lower, upper = P["incubation_poly"].value
@@ -305,13 +315,6 @@ def _cohort(hours: list[_Hour], e: int, reading: Reading) -> Cohort:
         if inc_hi >= 1:
             out["symptoms_to"] = tr.step("symptoms_to", h)
             break
-    return _with_sporangia(out, tr, death, n, done)
-
-
-def _with_sporangia(out: dict, tr: _Tracer, death: int, n: int, done) -> Cohort:
-    """The sporangia's death hour, after the zoospore stages (they die on their own clock)."""
-    if death < n:
-        out["sporangia_dead"] = tr.hours[death].ts
     return done()
 
 
