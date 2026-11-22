@@ -221,6 +221,9 @@ def test_grants_and_tokens_read_only_redistributable_weather(
             scope="stations:read",
         ),
         lambda repo: repo.list(
+            WeatherStation, WeatherReceipt.redistribution.is_(False), scope="stations:read"
+        ),
+        lambda repo: repo.list(
             WeatherStation, scope="stations:read", order_by=WeatherObservation.value
         ),
         lambda repo: repo.list(
@@ -242,6 +245,7 @@ def test_grants_and_tokens_read_only_redistributable_weather(
         "list-predicate",
         "statement-prefix",
         "list-cross-join",
+        "list-receipt-cross-join",
         "list-ordering",
         "list-limit",
         "legacy-rows",
