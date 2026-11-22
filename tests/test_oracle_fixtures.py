@@ -6,8 +6,14 @@ import the harness, and every fixture must say where its numbers came from.
 """
 
 import ast
+import hashlib
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src" / "farmcore"
@@ -43,6 +49,54 @@ def test_the_package_imports_nothing_from_the_oracle_harness():
     assert not leaks, f"src/farmcore must not use the copyleft oracle harness: {leaks}"
 
 
+# Imports every farmcore module with the repository root importable, recording any attempt to
+# import the top-level `tools` package, however the name was built. Then plants a constructed
+# import as the control.
+RUNTIME_PROBE = """
+import importlib, json, pkgutil, sys
+
+attempts = []
+
+class Watch:
+    def find_spec(self, name, path=None, target=None):
+        if name.split(".")[0] == "tools":
+            attempts.append(name)
+
+sys.meta_path.insert(0, Watch())
+import farmcore
+
+failed = []
+for info in pkgutil.walk_packages(farmcore.__path__, "farmcore.", onerror=failed.append):
+    try:
+        importlib.import_module(info.name)
+    except Exception as e:
+        failed.append(f"{info.name}: {e!r}")
+package = sorted(set(attempts))
+try:
+    importlib.import_module("to" + "ols" + ".oracles")
+except ImportError:
+    pass
+print(json.dumps({"failed": failed, "package": package, "control": sorted(set(attempts))}))
+"""
+
+
+@pytest.mark.slow  # imports all of src/farmcore in a fresh interpreter (several seconds)
+def test_importing_every_package_module_never_loads_the_oracle_harness():
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join([str(ROOT), str(ROOT / "src")])}
+    run = subprocess.run(
+        [sys.executable, "-c", RUNTIME_PROBE],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    result = json.loads(run.stdout.strip().splitlines()[-1])
+    assert result["control"], "the probe did not see a constructed import of tools.oracles"
+    assert not result["failed"], f"modules that could not be imported: {result['failed']}"
+    assert not result["package"], f"src/farmcore imports the oracle harness: {result['package']}"
+
+
 def test_every_oracle_fixture_records_its_generator_licence_parameters_and_inputs():
     fixtures = sorted(FIXTURES.rglob("*.json"))
     assert fixtures, "no oracle fixtures found"
@@ -54,3 +108,6 @@ def test_every_oracle_fixture_records_its_generator_licence_parameters_and_input
             assert generator.get(key), f"{where}: generator.{key} is missing"
         for key in ("parameters", "inputs", "outputs"):
             assert fixture.get(key), f"{where}: {key} is missing"
+        if shared := fixture["inputs"].get("file"):
+            digest = hashlib.sha256((FIXTURES / shared).read_bytes()).hexdigest()
+            assert digest == fixture["inputs"]["sha256"], f"{where}: {shared} has changed"
