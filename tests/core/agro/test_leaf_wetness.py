@@ -3,6 +3,7 @@ humidity against a labelled threshold. An estimate is never reported as measured
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -47,8 +48,15 @@ def test_threshold_is_a_labelled_parameter_and_bad_inputs_are_refused() -> None:
     assert [h.wet_minutes for h in leaf_wetness(_hours(95, 97), threshold=strict)] == [0, 60]
     assert leaf_wetness(_hours(97), threshold=strict)[0].basis is strict
 
-    with pytest.raises(ValueError, match="threshold"):
-        leaf_wetness(_hours(95), threshold=Parameter("x", 90.0, "%", status="unsourced"))
+    for bad in [
+        Parameter("x", 90.0, "%", status="unsourced"),
+        Parameter("x", math.nan, "%", source="assumption: test", status="assumed"),
+        Parameter("x", 110.0, "%", source="assumption: test", status="assumed"),
+        Parameter("x", 90.0, "%", source="", status="sourced"),  # sourced with no citation
+        Parameter("x", 90.0, "%", source="from a paper", status="assumed"),  # no label
+    ]:
+        with pytest.raises(ValueError, match="threshold"):
+            leaf_wetness(_hours(100), threshold=bad)
     with pytest.raises(ValueError, match="minutes"):
         leaf_wetness(_hours(None), measured={T0: 61})
     with pytest.raises(ValueError, match="not in the series"):

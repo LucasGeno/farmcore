@@ -1,7 +1,7 @@
 """Degree-days (Zalom et al. 1983): single and double sine and triangle, horizontal and vertical
-cutoffs. The golden numbers are degday 0.4.0's, run out of process (tools/oracles); degday has no
-vertical cutoff, so those cases are derived from its horizontal outputs by removing the time the
-day spends above the upper threshold, which is closed-form for a sine or a straight line."""
+cutoffs. The golden numbers are degday 0.4.0's, run out of process (tools/oracles). degday has no
+vertical cutoff, so vertical has no oracle: its test is an analytical cross-check (the horizontal
+oracle minus the closed-form time above the upper threshold), plus one worked example by hand."""
 
 from __future__ import annotations
 
@@ -54,7 +54,9 @@ def _fraction_above(tmin: float, tmax: float, upper: float, shape: str) -> float
 
 
 @pytest.mark.parametrize("method", ["sng_sine", "dbl_sine", "sng_tri", "dbl_tri"])
-def test_vertical_cutoff_drops_the_time_above_the_upper_threshold(method: str) -> None:
+def test_vertical_cutoff_cross_checks_against_the_horizontal_oracle(method: str) -> None:
+    """Not oracle parity: the expected values are this test's own closed form applied to the
+    horizontal oracle. The fixed worked example below is the independent number."""
     fx = _load(f"{method}-horizontal")
     i, lo, up = fx["inputs"], fx["parameters"]["thresh_low"], fx["parameters"]["thresh_up"]
     shape = method.split("_")[1]
@@ -86,6 +88,11 @@ def test_vertical_cutoff_drops_the_time_above_the_upper_threshold(method: str) -
     if method.startswith("sng"):  # a double day falls to the next minimum (10) afterwards
         assert got[5] == 0  # entirely above the upper threshold: no development at all
     assert got[0] == 0  # entirely below the lower threshold
+    # Worked by hand: a straight line 0 -> 30 degC spends a third of the half-day between 10 and
+    # 20, averaging 5 above the lower threshold there, and the rest outside: 5 / 3 degree-days.
+    line = {"lower": 10, "upper": 20, "method": "sng_tri"}
+    assert degree_days(0, 30, cutoff="vertical", **line) == pytest.approx(5 / 3)
+    assert degree_days(0, 30, cutoff="horizontal", **line) == pytest.approx(5 / 3 + 10 / 3)
 
 
 temps = st.floats(min_value=-30, max_value=50, allow_nan=False)
@@ -117,6 +124,8 @@ def test_degree_days_refuse_inverted_or_unknown_inputs() -> None:
         degree_days(20, 10, lower=10)
     with pytest.raises(ValueError, match="upper"):
         degree_days(5, 20, lower=10, upper=10)
+    with pytest.raises(ValueError, match="upper"):
+        degree_days(5, 20, lower=10, upper=float("inf"))
     with pytest.raises(ValueError, match="method"):
         degree_days(5, 20, lower=10, method="avg")
     with pytest.raises(ValueError, match="cutoff"):

@@ -10,11 +10,13 @@ hour whose relative humidity is at or above a threshold counts as 60 wet minutes
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import NamedTuple
 
+from farmcore.core.agro._provenance import provenance_problem
 from farmcore.core.model_spec import Parameter
 from farmcore.core.weather.hourly import aware_utc
 
@@ -54,8 +56,15 @@ def leaf_wetness(
     """Wetness of each `(ts, relative humidity %)` hour; `measured` maps an hour to a sensor's
     wet minutes (0-60) and wins over humidity. A measured hour not in `hours` is an error,
     so a timezone slip cannot silently fall back to estimates."""
-    if threshold.status not in ("sourced", "assumed") or threshold.unit != "%":
-        raise ValueError("threshold must be a sourced or assumed Parameter in %")
+    if threshold.unit != "%":
+        raise ValueError(f"threshold must be in %, got {threshold.unit!r}")
+    if problem := provenance_problem(threshold.source, threshold.status):
+        raise ValueError(f"threshold {threshold.name!r}: {problem}")
+    value = threshold.value
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError(f"threshold must be a finite number of %, got {value!r}")
+    if not 0 <= value <= 100:
+        raise ValueError(f"threshold must be 0-100 %, got {value!r}")
     sensor: dict[datetime, float] = {}
     for ts, minutes in (measured or {}).items():
         if not 0 <= minutes <= 60:

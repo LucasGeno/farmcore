@@ -5,9 +5,10 @@ BBCH Monograph, Julius Kühn-Institut, doi:10.5073/20180906-074619). An entry is
 stage on a date. Windows are phases with a first day each, each running until the next starts;
 their dates are an assumption or a regional calendar, so they carry a `source`.
 
-On a day, the latest entry on or before it holds, unless a window phase started after that
-entry and is a later stage: stages only move forward, so a calendar never undoes an observed
-stage, and an observation wins a tie on the same day. The result says where it came from.
+Each day an entry or phase starts, the latest entry by then holds, unless a window phase started
+after that entry and is a later stage (an observation wins a tie on the same day). The stage on a
+day is the highest of those up to it: stages only move forward, so neither a calendar nor a
+later, lower entry undoes a stage already reached. The result says where it came from.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
+
+from farmcore.core.agro._provenance import ASSUMPTION, provenance_problem
 
 
 def _check(bbch: int) -> None:
@@ -34,11 +37,12 @@ class StageEntry:
 @dataclass(frozen=True, slots=True)
 class StageWindows:
     phases: tuple[tuple[date, int], ...]  # (first day, BBCH), ascending in both
-    source: str
+    source: str  # a regional calendar's citation, or an 'assumption: ...' label
 
     def __post_init__(self) -> None:
-        if not self.source:
-            raise ValueError("stage windows need a source (or an 'assumption: ...' label)")
+        status = "assumed" if self.source.strip().lower().startswith(ASSUMPTION) else "sourced"
+        if problem := provenance_problem(self.source, status):
+            raise ValueError(f"stage windows source {self.source!r}: {problem}")
         for _, bbch in self.phases:
             _check(bbch)
         for (d0, b0), (d1, b1) in zip(self.phases, self.phases[1:], strict=False):
@@ -59,14 +63,22 @@ def stage_on(
 ) -> Stage | None:
     """The BBCH stage on `day`, or None when nothing is known by then."""
     known = [e for e in entries if e.on <= day]
+    phases = [p for p in windows.phases if p[0] <= day] if windows else []
+    best = None
+    for d in sorted({e.on for e in known} | {start for start, _ in phases}):
+        held = _held(d, known, phases, windows)
+        if best is None or held.bbch > best.bbch:  # the first day a stage is reached keeps it
+            best = held
+    return best
+
+
+def _held(
+    day: date, entries: list[StageEntry], phases: list[tuple[date, int]], windows: StageWindows
+) -> Stage:
+    """The stage a day's own evidence gives, before the never-backwards rule."""
+    known = [e for e in entries if e.on <= day]
     entry = max(known, key=lambda e: (e.on, e.bbch)) if known else None
-    phase = None
-    for start, bbch in windows.phases if windows else ():
-        if start > day:
-            break
-        phase = (start, bbch)
+    phase = max((p for p in phases if p[0] <= day), default=None)
     if phase and (entry is None or (phase[0] > entry.on and phase[1] > entry.bbch)):
         return Stage(phase[1], "window", phase[0], windows.source)
-    if entry is None:
-        return None
     return Stage(entry.bbch, "entry", entry.on, "")

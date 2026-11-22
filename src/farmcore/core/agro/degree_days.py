@@ -51,6 +51,8 @@ def degree_days(
             raise ValueError(f"{name} must be a finite temperature, got {value!r}")
     if tmin > tmax:
         raise ValueError(f"tmin {tmin} is above tmax {tmax}")
+    if upper is not None and not math.isfinite(upper):
+        raise ValueError(f"upper threshold must be finite or None, got {upper!r}")
     if upper is not None and not upper > lower:
         raise ValueError(f"upper threshold {upper} must be above the lower threshold {lower}")
 

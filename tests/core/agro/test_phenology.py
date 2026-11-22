@@ -40,13 +40,29 @@ def test_a_later_lower_window_does_not_undo_an_observed_stage() -> None:
     same_day = stage_on(date(2025, 4, 15), [StageEntry(date(2025, 4, 15), 12)], WINDOWS)
     assert (same_day.bbch, same_day.origin) == (12, "entry")  # an observation wins a tie
 
+    # Neither a later, lower entry nor an entry below the window already in force goes back.
+    lower_entry = [StageEntry(date(2025, 4, 10), 61), StageEntry(date(2025, 4, 20), 13)]
+    under_window = [StageEntry(date(2025, 4, 16), 12)]
+    for day, entries, want in [
+        (date(2025, 4, 19), lower_entry, (61, "entry", date(2025, 4, 10))),
+        (date(2025, 4, 20), lower_entry, (61, "entry", date(2025, 4, 10))),
+        (date(2025, 4, 15), under_window, (13, "window", date(2025, 4, 15))),
+        (date(2025, 4, 16), under_window, (13, "window", date(2025, 4, 15))),
+    ]:
+        got = stage_on(day, entries, WINDOWS)
+        assert (got.bbch, got.origin, got.since) == want, day
+
 
 def test_invalid_stages_and_windows_are_refused() -> None:
     with pytest.raises(ValueError, match="0-99"):
         StageEntry(date(2025, 4, 1), 100)
     with pytest.raises(ValueError, match="ascending"):
-        StageWindows(((date(2025, 5, 1), 61), (date(2025, 4, 1), 9)), source="x")
+        StageWindows(((date(2025, 5, 1), 61), (date(2025, 4, 1), 9)), source=WINDOWS.source)
     with pytest.raises(ValueError, match="ascending"):  # stages never go backwards
-        StageWindows(((date(2025, 4, 1), 61), (date(2025, 5, 1), 9)), source="x")
-    with pytest.raises(ValueError, match="source"):
-        StageWindows(((date(2025, 4, 1), 9),), source="")
+        StageWindows(((date(2025, 4, 1), 61), (date(2025, 5, 1), 9)), source=WINDOWS.source)
+    # A source is a citation (year, DOI or link) or a labelled assumption, never an opaque word.
+    sourced = StageWindows(((date(2025, 4, 1), 9),), source="IFV Bordeaux phase calendar, 2024")
+    assert stage_on(date(2025, 4, 2), windows=sourced).source == sourced.source
+    for opaque in ["", "x", "assumption:", "regional calendar"]:
+        with pytest.raises(ValueError, match="source"):
+            StageWindows(((date(2025, 4, 1), 9),), source=opaque)
