@@ -24,7 +24,7 @@ from decimal import Decimal
 
 from hypothesis import given
 from hypothesis import strategies as st
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from farmcore.core.access import ScopedRepository, ensure_owner_grant
 from farmcore.core.models.weather import WeatherObservation
@@ -274,7 +274,7 @@ def test_the_advisor_reads_and_flags_gap_filled_and_forecast_hours_per_hour(
     gap, later = now - timedelta(hours=5), now + timedelta(hours=2)
     ids = seed_farm(session, settings)
     parcel = session.get(Parcel, ids["P1"])
-    complete_station(session, parcel.farm_id, now)
+    station = complete_station(session, parcel.farm_id, now)
     session.execute(
         delete(WeatherObservation).where(
             WeatherObservation.period_end == gap,
@@ -382,6 +382,48 @@ def test_the_advisor_reads_and_flags_gap_filled_and_forecast_hours_per_hour(
     page = client.get(f"/advisor/parcels/{parcel.id}").text
     assert 'data-flag="weather_gap_filled"' in page
     assert "reanalysis:CELL" in page
+
+    # The station asset's own station, given a WIGOS ID, gets a model value from another
+    # provider; where that is the only value, it is recorded with its source (only the asset's
+    # own provider and tier keep the snapshot's compatibility shape).
+    from farmcore.apps.advisor import service
+    from farmcore.core.models.canonical import Farm
+    from farmcore.core.models.weather import WeatherStation
+
+    session.execute(
+        update(WeatherStation).where(WeatherStation.provider == "synthetic").values(wigos_id=WIGOS)
+    )
+    alone = now + timedelta(days=30)
+    receive(
+        session,
+        Fake("grid-model", Tier.MODEL),
+        Fetched(
+            Request("hourly"),
+            alone,
+            b"gm",
+            [
+                ObservationValue(
+                    BY_LEGACY["rr1_mm"].name,
+                    "mm",
+                    Decimal("0.2"),
+                    alone - timedelta(hours=1),
+                    alone,
+                )
+            ],
+        ),
+        station=Station("GM", "Model at the station", 44.9, -0.2, wigos_id=WIGOS),
+        farm_id=parcel.farm_id,
+    )
+    farm = session.get(Farm, parcel.farm_id)
+    repo = ScopedRepository(session, farm.id, ensure_owner_grant(session, farm), "test", "merge")
+    own = service.station_identities(repo, station)
+
+    def only(at):
+        return merge.load(repo, at - timedelta(hours=1), at, alone).at(None)
+
+    assert [(s.identity, s.tier) for s in only(alone).sources] == [(WIGOS, Tier.MODEL)]
+    assert service.records_sources(only(alone), own) is True
+    assert service.records_sources(only(gap - timedelta(hours=2)), own) is False
 
 
 def test_each_parcel_reads_its_nearest_station_without_a_station_asset(session, settings):

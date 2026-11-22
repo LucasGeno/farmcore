@@ -55,7 +55,7 @@ from farmcore.core.model_spec import validation_json
 from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.canonical import Asset, Farm, Log, LogParcel, LogSource, Parcel
 from farmcore.core.models.catalog import CatalogItem, TypedQuantity
-from farmcore.core.models.weather import WeatherReceipt, WeatherStation
+from farmcore.core.models.weather import WeatherObservation, WeatherReceipt, WeatherStation
 from farmcore.core.weather import merge
 from farmcore.core.weather.contract import Point
 
@@ -168,27 +168,50 @@ def load_weather(
     return load_held(repo, now, tz, config).at(farm_point(repo))
 
 
-def station_identities(repo: ScopedRepository, station: Asset | None) -> frozenset[str]:
-    """The merge identities of the station asset's own weather station(s)."""
+def station_identities(
+    repo: ScopedRepository, station: Asset | None
+) -> frozenset[tuple[str, merge.Tier | None]]:
+    """The station asset's own sources: its weather station's merge identity with the tier of
+    the values that station's own provider stored (another provider's values for the same
+    WIGOS station are a different source)."""
     if station is None:
         return frozenset()
+    own = select(WeatherStation.id).where(
+        WeatherStation.id.in_(stations.weather_stations_of(station.id))
+    )
     rows = repo.execute(
         select(
-            WeatherStation.wigos_id, WeatherStation.provider, WeatherStation.provider_station_id
-        ).where(WeatherStation.id.in_(stations.weather_stations_of(station.id))),
+            WeatherStation.wigos_id,
+            WeatherStation.provider,
+            WeatherStation.provider_station_id,
+            WeatherReceipt.provider,
+            WeatherReceipt.request,
+        )
+        .distinct()
+        .join(WeatherObservation, WeatherObservation.station_id == WeatherStation.id)
+        .join(WeatherReceipt, WeatherReceipt.id == WeatherObservation.receipt_id)
+        .where(
+            WeatherStation.id.in_(own),
+            WeatherReceipt.farm_id == repo.farm_id,
+            WeatherReceipt.provider == WeatherStation.provider,
+        ),
         scope="stations:read",
         resource="weather_station",
     )
-    return frozenset(merge.identity(*row) for row in rows)
+    return frozenset(
+        (merge.identity(wigos, provider, sid), merge.receipt_tier(by, request))
+        for wigos, provider, sid, by, request in rows
+    )
 
 
-def records_sources(weather: merge.Merged, own: frozenset[str]) -> bool:
+def records_sources(weather: merge.Merged, own: frozenset[tuple[str, merge.Tier | None]]) -> bool:
     """Whether an assessment saves its weather sources per hour: always, except the
-    compatibility path where the only source is the station asset's own station (`own`), which
-    the snapshot's `station` already names (so replay evidence is unchanged)."""
+    compatibility path where the only source is the station asset's own station at its own
+    provider's tier (`own`), which the snapshot's `station` already names (so replay evidence
+    is unchanged)."""
     if not weather.sources:
         return False
-    return len(weather.sources) > 1 or weather.sources[0].identity not in own
+    return len(weather.sources) > 1 or weather.sources[0].key not in own
 
 
 def parcel_points(repo: ScopedRepository) -> dict[int, Point | None]:
