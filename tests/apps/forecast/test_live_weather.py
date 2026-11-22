@@ -103,6 +103,8 @@ def live_payload():
         "empty_values",
         "all_null_values",
         "excess_response_bytes",
+        "radiation_units",
+        "negative_radiation",
     ],
 )
 def test_invalid_provider_response_preserves_last_good_receipt(
@@ -170,6 +172,13 @@ def test_invalid_provider_response_preserves_last_good_receipt(
                 payload["hourly"][variable] = [None] * 4
     elif invalid == "excess_response_bytes":
         payload["unused_provider_metadata"] = "x" * 256_001
+    elif invalid in ("radiation_units", "negative_radiation"):
+        payload["hourly"]["shortwave_radiation"] = [0, 120, 340, -1]
+        payload["hourly_units"]["shortwave_radiation"] = (
+            "MJ/m²" if invalid == "radiation_units" else "W/m²"
+        )
+        if invalid == "radiation_units":
+            payload["hourly"]["shortwave_radiation"][3] = 410
     assert fetch_live_now(session_factory, settings).ok
     session.expire_all()
     held = session.scalars(select(ForecastRun).where(ForecastRun.farm_id == farm.id)).all()

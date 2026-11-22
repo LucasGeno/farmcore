@@ -32,6 +32,7 @@ dependencies = [
     "defusedxml==0.7.1",
     "shapely==2.2.0",
     "pyproj==3.8.0",
+    "pyet>=1.5,<2",
 ]
 
 [project.urls]
@@ -47,6 +48,7 @@ dev = [
     "jsonschema>=4.26.0",
     "pytest",
     "pytest-xdist>=3.8.0",
+    "refet>=0.5,<1",
     "ruff",
 ]
 
