@@ -70,17 +70,35 @@ mandatory: a fixture without generator, version, licence, parameters, inputs and
 ### viticolR (Rossi et al. 2008 downy mildew primary infection): not yet generated
 
 - Source: https://github.com/PaulMelloy/viticolR, `DESCRIPTION` version 0.0.4, licence
-  `GPL (>= 3)`; no tags or releases, so a run must pin a commit (latest seen:
-  `f32eb0abe02d49882eefe2c957e90776fac74b59`, 2026-06-18). Depends on `epiphytoolR` from the same
-  author on GitHub.
-- Obtainable; not generated in this change.
+  `GPL (>= 3)`. It has no tags or releases, so a run must pin a commit (latest seen:
+  `f32eb0abe02d49882eefe2c957e90776fac74b59`, 2026-06-18). It says it is "translated and
+  adapted" from the paper, so differences from Rossi 2008 must be checked case by case.
+- Dependency: `epiphytoolR` (same author, GitHub, `MIT + file LICENSE`, version 0.0.4, latest
+  commit seen `3cab18e878f819f882e25a2c5c51112910864967`). It imports `sf`, so the image also
+  needs GDAL, GEOS and PROJ.
+- Inputs: hourly weather (`temp`, `rh`, `rain`, `ws`, `wd`, station `lat`/`lon`) formatted by
+  `epiphytoolR::format_weather()`; `estimate_DM_PI(w, Start, End, SOD)`, read back with
+  `get_PI_dates()`.
+- **Finding: the season is southern-hemisphere by default.** `Start`/`End = "detect"` runs
+  1 July to 30 June. European runs must pass explicit `Start` and `End`.
+- Its bundled `nt_weather` data is Bureau of Meteorology observations with their own licence.
+  Fixtures should use crafted hourly inputs instead.
+- Obtainable. Not generated here: the hourly input design belongs with the Rossi model work.
 
-### plasmopy (Agroscope downy mildew infection models): not yet generated
+### plasmopy (Agroscope downy mildew infection model): not yet generated
 
-- Source: https://github.com/agroscope-ch/plasmopy, licence AGPL-3.0; no tags or releases, so a
-  run must pin a commit (latest seen: `2fea0cb3dfc9e5892f231328a03447ea381dd3f8`, 2026-08-27).
-- Obtainable; not generated in this change.
+- Source: https://github.com/agroscope-ch/plasmopy, licence AGPL-3.0, `pyproject.toml` version
+  1.0. It has no tags or releases, so a run must pin a commit (latest seen:
+  `2fea0cb3dfc9e5892f231328a03447ea381dd3f8`, 2026-08-27). Poetry and Hydra, run from
+  `config/main.yaml`.
+- **Finding: plasmopy is not a Rossi 2008 implementation.** It is "a Python version of the
+  predictive model in use at Agroscope" (VitiMeteo Plasmopara). Its primary infection finishes
+  on leaf wetness and degree-hour accumulation. Use it as a cross-check of event timing, not as
+  a golden oracle for Rossi outputs.
+- Obtainable. Not generated here.
 
-### NIBIO VIPS: not yet generated
+### NIBIO VIPS: not obtainable from this host
 
-- Not investigated in this change.
+- **Finding:** its source host `gitlab.nibio.no` timed out from the build host (2026-11-22). Only
+  `nibio-org/vips-observation-app` (a mobile app, no licence declared) is on GitHub. Neither the
+  licence nor a version of a grapevine downy mildew model could be confirmed, so no fixtures.
