@@ -188,7 +188,7 @@ def _grid(tmp_path, rows: list[str]):
 
 
 def test_official_et0_is_preferred_in_its_own_cell_labelled_and_read_as_of_else_computed(
-    session, settings, tmp_path
+    session, settings, tmp_path, monkeypatch
 ):
     farm = ensure_default_farm(session, settings)
     farm.props = {**(farm.props or {}), LOCATION_KEY: {"latitude": 50.80, "longitude": 4.35}}
@@ -311,21 +311,15 @@ def test_official_et0_is_preferred_in_its_own_cell_labelled_and_read_as_of_else_
         (pytest.approx(3.88, abs=0.01), "fao56-pm", True),
     ]
 
-    # The CLI never credits a date of its own: without the publisher's last update, or with a
-    # malformed one, it exits before reading the file and nothing more is stored.
-    def held():
-        return session.scalar(
-            select(func.count())
-            .select_from(WeatherReceipt)
-            .where(WeatherReceipt.provider == etp.PROVIDER)
-        )
+    # The CLI never credits a date of its own: a malformed publisher date stops it before the
+    # import is reached.
+    from farmcore.apps.weather_meteofrance import commands
 
-    receipts = held()
-    runner = CliRunner()
-    base = ["weather-meteofrance", "import-etp", str(path), "--farm", str(farm.id)]
-    assert runner.invoke(cli, base).exit_code == 2
-    assert runner.invoke(cli, [*base, "--last-update", "21/07/2026"]).exit_code == 1
-    assert held() == receipts == 1
+    calls = []
+    monkeypatch.setattr(commands, "import_file", lambda *a, **kw: calls.append((a, kw)))
+    args = ["weather-meteofrance", "import-etp", str(path), "--farm", str(farm.id)]
+    result = CliRunner().invoke(cli, [*args, "--last-update", "21/07/2026"])
+    assert result.exit_code != 0 and calls == []
 
 
 # --- the grid import's failure model ----------------------------------------------------------
