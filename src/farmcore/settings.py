@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -213,6 +213,10 @@ class Settings(BaseSettings):
     # listed here come first: JSON list of {"client_id", "client_name", "redirect_uris"}.
     mcp_oauth_enabled: bool = False
     mcp_oauth_clients: list[OAuthClient] = Field(default_factory=list)
+    # How long a client whose metadata URL fails for good (404, 410, a non-public address) keeps
+    # its connections, from the first such failure (assumed: a week to fix a broken deploy).
+    # Seconds or ISO 8601 (P7D). Timeouts and 5xx never count.
+    mcp_oauth_cimd_grace: timedelta = Field(timedelta(days=7), ge=timedelta(0))
 
     @field_validator("database_url", mode="before")
     @classmethod

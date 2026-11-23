@@ -40,7 +40,8 @@ Failure model (written before the code; one owning test each):
 - a connected agent outliving its client: once the client's document turns invalid or names
   another client, every connection of that client ends on every farm, and only that client's
   (CIMD §6.1) (turned-invalid test); a code approved before then, spent after, connects nothing
-  (race test).
+  (race test); a client whose document stays gone (404) past the grace loses its connections
+  the same way, a transient failure or a success in between never ends them (grace tests).
 Not committed: real-client runs (recorded by hand in the real-clients finding); TLS to a live
 host (smoke-tested by hand).
 """
@@ -457,7 +458,8 @@ def test_a_metadata_document_is_cached_only_when_valid_and_only_while_fresh(
 ) -> None:
     """CIMD §6.2: errors and invalid documents are never cached, Cache-Control is honoured
     within a minimum and a maximum (also when reading a row back); §6.1: a transient failure
-    keeps the last good document, a document that turns invalid is dropped; §10.1: never a
+    keeps the last good document, so does a permanent one (for the grace period, owned by the
+    stays-gone test), a document that turns invalid is dropped; §10.1: never a
     client ID on this server's own host."""
     calls: list[str] = []
     answers: list[object] = []
@@ -511,8 +513,7 @@ def test_a_metadata_document_is_cached_only_when_valid_and_only_while_fresh(
     assert look().client_name == "Claude"
     age(25 * 3600)
     answers += [fetch.FetchFailed("gone", transient=False)]
-    assert look() is None
-    assert session.scalar(select(func.count()).select_from(RegisteredClient)) == 0
+    assert look().client_name == "Claude"  # gone: the last good document, for the grace period
     assert len(calls) == 9
     issuer_host = urlsplit(settings.oauth_issuer).hostname
     for own in (f"https://{issuer_host}/c.json", f"https://{issuer_host}./c.json"):
@@ -836,3 +837,110 @@ def test_a_code_approved_before_the_document_turned_invalid_cannot_connect(
         .where(DataGrant.grantee != "owner", DataGrant.revoked_at.is_(None))
     )
     assert session.scalar(live) == 0
+
+
+# --- a client whose document stays gone -----------------------------------------------------
+
+
+def _document_answers(world: World, session, status: int) -> None:
+    """From now on CLIENT_URL answers `status` (200: its valid document), other URLs their own
+    document; its cache row is stale and the fetch's memory of a last failure has lapsed."""
+    world.answer = lambda request: (
+        httpx.Response(status)
+        if status != 200 and _asked_for(request) == CLIENT_URL
+        else httpx.Response(200, json=_document(client_id=_asked_for(request)))
+    )
+    world.now += fetch.FAILED_FOR + 1
+    session.execute(
+        update(RegisteredClient)
+        .where(RegisteredClient.client_id == CLIENT_URL)
+        .values(fresh_until=datetime.now(UTC) - timedelta(seconds=1))
+    )
+    session.commit()
+
+
+def _gone_for(session, elapsed: timedelta) -> None:
+    """The clock: CLIENT_URL's document has been gone `elapsed` longer than it has."""
+    session.execute(
+        update(RegisteredClient)
+        .where(RegisteredClient.client_id == CLIENT_URL)
+        .values(failing_since=RegisteredClient.failing_since - elapsed)
+    )
+    session.commit()
+
+
+def _refresh(agent, tokens: dict) -> httpx.Response:
+    return agent.post(
+        "/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": tokens["refresh_token"],
+            "client_id": CLIENT_URL,
+        },
+    )
+
+
+def test_a_client_whose_document_stays_gone_loses_its_connections_after_the_grace(
+    app, agent, world, session
+):
+    """A permanent failure (404) keeps the client working for the grace period (7 days by
+    default), measured from the first failure; past it, its next resolve ends every connection
+    of that client on every farm, and only that client's."""
+    world.dns["agent.example"] = [[PUBLIC_IP]]
+    _document_answers(world, session, 200)
+    second = Farm(name="Second farm")
+    session.add(second)
+    session.flush()
+    ensure_owner_grant(session, second)
+    owner_id = session.scalar(select(LocalIdentity.id).where(LocalIdentity.login == "oauth-owner"))
+    session.add(FarmMembership(identity_id=owner_id, farm_id=second.id, role="owner"))
+    session.commit()
+    tokens = _connect(app, agent)
+    _connect(app, agent, farm=second.id)
+    other = _connect(app, agent, client_id=OTHER_URL)
+
+    _document_answers(world, session, 404)
+    inside = _refresh(agent, tokens)
+    assert inside.status_code == 200, inside.text
+    _gone_for(session, timedelta(days=7) - timedelta(minutes=1))
+    world.now += fetch.FAILED_FOR + 1
+    still = _refresh(agent, inside.json())
+    assert still.status_code == 200, still.text
+    _gone_for(session, timedelta(minutes=2))
+    world.now += fetch.FAILED_FOR + 1
+    after = _refresh(agent, still.json())
+
+    assert after.status_code in (400, 401)
+    session.expire_all()
+    grants = session.scalars(select(DataGrant).where(DataGrant.grantee != "owner")).all()
+    assert {g.farm_id for g in grants if g.revoked_at is not None} == {app.state.farm_id, second.id}
+    assert [g.purpose for g in grants if g.revoked_at is None] == [
+        f"MCP agent over OAuth ({OTHER_URL})"
+    ]
+    assert authenticate_token(session, other["access_token"], audience=RESOURCE) is not None
+
+
+def test_a_transient_failure_or_a_success_in_between_never_ends_a_connection(
+    app, agent, world, session
+):
+    """Timeouts and 5xx never count toward the grace, even once it has run out; a successful
+    fetch resets it, so a later 404 starts a new one."""
+    world.dns["agent.example"] = [[PUBLIC_IP]]
+    _document_answers(world, session, 200)
+    tokens = _connect(app, agent)
+
+    for status, elapsed in ((404, timedelta(days=8)), (503, None), (200, None), (404, None)):
+        _document_answers(world, session, status)
+        refreshed = _refresh(agent, tokens)
+        assert refreshed.status_code == 200, (status, refreshed.text)
+        tokens = refreshed.json()
+        if elapsed is not None:
+            _gone_for(session, elapsed)
+
+    session.expire_all()
+    live = (
+        select(func.count())
+        .select_from(DataGrant)
+        .where(DataGrant.grantee != "owner", DataGrant.revoked_at.is_(None))
+    )
+    assert session.scalar(live) == 1
