@@ -220,6 +220,7 @@ services:
       MCP_HTTP_ALLOWED_HOSTS: '["farm.example.org"]'
       MCP_HTTP_PUBLIC_URL: https://farm.example.org/mcp
       MCP_HTTP_FORWARDED_ALLOW_IPS: ${MCP_HTTP_FORWARDED_ALLOW_IPS:-}
+      # MCP_OAUTH_ENABLED: "true"  # agent sign-in; see "Agents that sign in" below
   mcp:
     extends:                     # same image, runtime-role DATABASE_URL and settings
       file: docker-compose.yml
@@ -259,6 +260,17 @@ farm.example.org {
     }
 }
 ```
+
+**Agents that sign in.** With `MCP_OAUTH_ENABLED: "true"` in the shared settings above (app and
+`mcp` both need it), Claude Code and Codex connect without a token: the agent opens FarmCore,
+the owner signs in and approves what it may read, and the connection shows on Sharing as a
+grant the owner can end. The Connect page then shows the `claude mcp add` and `codex mcp add`
+commands. Startup refuses sign-in unless `PUBLIC_BASE_URL` (with no path) and
+`MCP_HTTP_PUBLIC_URL` are https (http only on loopback). Both CLIs identify themselves by a
+client metadata document at an https URL, which the app fetches, so it needs outbound https.
+If an agent's document later turns invalid or names another client, all its connections end at
+once. claude.ai connectors and ChatGPT run in the cloud: they can only reach an installation
+with a public https address.
 
 If the proxy runs in another container or host, set `FORWARDED_ALLOW_IPS` to its address so
 uvicorn trusts its `X-Forwarded-*` headers. Limit request body size and rate at the proxy.
@@ -376,9 +388,11 @@ The `weather_meteofrance` app fetches live hourly observations of a farm's Mét�
   the live hours, and its gap is ordered again on the next run. An hour the archive was already
   asked for is not ordered again, even if the archive lacked it. The station's
   `meteofrance_live` health holds the last errors (step and HTTP status) and `archived_through`.
+- **Radiation.** Where the station has a pyranometer, the hour's global radiation (DPObs
+  `ray_glo01`, DPClim `GLO`) is stored as W m⁻². Daily ET0 needs it (see "Daily ET0" below).
 - **Known limits.** The normalised station is shared by every farm holding the same station
-  number: a second farm with that station sees the first farm's hours as held (the replay has
-  the same limit; per-farm merging belongs to the merge layer). Hours first stored from DPObs
+  number. A second farm's write of an hour the first farm already holds is refused with an
+  error, never dropped silently; the replay has the same limit. Hours first stored from DPObs
   stay `unchecked`: the archive fills missing hours only and never upgrades a held hour's
   quality. Legacy `observation` rows take the last value written while the normalised schema
   keeps the first receipt, so the two can differ where live and replayed hours overlap.
@@ -408,14 +422,21 @@ in live clock mode only. It avoids Open-Meteo's non-commercial historical API.
 - **Model data.** Hours are stored under a `copernicus-era5` grid-point station, never a
   station asset, and their receipt says `endpoint_kind: model-reanalysis`. Temperature, wind
   and precipitation come from ERA5; humidity is derived from temperature and dew point
-  (Magnus formula, Alduchov and Eskridge 1996). The newest days are ERA5T and the final ERA5
-  overwrites them about two months later; the first receipt is kept.
+  (Magnus formula, Alduchov and Eskridge 1996).
+- **Provisional until final.** The newest days are ERA5T, which ECMWF replaces with final ERA5
+  about two months later. The CSV does not say which is which, so FarmCore marks a value
+  provisional unless its month ended at least three months before the fetch (an assumed
+  margin). Those hours are ordered again once old enough. The final value is stored beside the
+  provisional one, never over it, with a note such as `final replaces provisional 15 → 14.5`.
+  Current reads use the final value; a replay to an earlier time still reads ERA5T.
+- **One grid station per farm.** Each farm gets its own private grid station
+  (`farm<id>:<lat>,<lon>`), so two farms in one 0.25 degree cell each order and hold their own
+  hours.
 - **Known limits.** ECMWF calls this dataset (`reanalysis-era5-single-levels-timeseries`) an
   experimental catalogue entry, not recommended for operational systems
   ([announcement](https://forum.ecmwf.int/t/11919)); the dataset id is one constant, so a
-  switch to `reanalysis-era5-single-levels` is one change. The grid point is shared by every
-  farm in the same 0.25 degree cell, so a second farm sees the first farm's hours as held. The
-  response is a zip of CSVs (a plain CSV is read too) with the columns `valid_time, latitude,
+  switch to `reanalysis-era5-single-levels` is one change. Radiation is not ordered, so ERA5
+  alone cannot give a computed daily ET0. The response is a zip of CSVs (a plain CSV is read too) with the columns `valid_time, latitude,
   longitude` and the CDS short names `t2m`, `d2m`, `u10`, `v10`, `tp`, as another client of the
   same API documents; no recorded real file is in the tests.
 - **Licence.** CC BY 4.0. Every receipt carries the attribution the dataset asks for, built
@@ -454,6 +475,80 @@ Compose reads `docker-compose.override.yml` by itself only when no `-f` is given
 Vertex file, list it too (`-f docker-compose.yml -f docker-compose.vertex.yml -f
 docker-compose.override.yml`). Add `METEOFRANCE_API_BASE_URL`, `METEOFRANCE_TOKEN_URL` or
 `CDSAPI_URL` the same way only if you change them from their defaults.
+
+## On-farm sensors (optional)
+
+The `weather_push` app lets a farm's own weather station or soil moisture probe push its
+readings. They join the farm's hourly weather at the on-farm tier, ahead of every other source.
+
+Register each device on the host. The owner login must be a current owner of the farm:
+
+```sh
+docker compose exec app farmcore weather-push add-device \
+  --farm 1 --owner farmer --name "North block station" --lat 44.9 --lon -0.2
+```
+
+It prints the device's token once (`fc_pat_…`); store it on the device. The token lasts 366
+days by default (`--days`). It can only push: every read path refuses it. It shows on
+Sharing, where the owner revokes it.
+
+The device posts to `POST /weather_push/observations` through the TLS proxy, with
+`Authorization: Bearer <token>` and `Content-Type: application/json` (a SensorThings Thing
+with its Datastreams and Observations inline) or `text/csv`:
+
+```csv
+observed_property,unit,phenomenon_time,result,depth_m
+air_temperature,degC,2026-11-23T10:00:00Z,11.5,
+relative_humidity,%,2026-11-23T10:00:00Z,77,
+lwe_thickness_of_precipitation_amount,mm,2026-11-23T09:00:00Z/2026-11-23T10:00:00Z,0.4,
+volume_fraction_of_condensed_water_in_soil,m3 m-3,2026-11-23T10:00:00Z,0.27,0.3
+```
+
+- **Readings.** Each property is a CF standard name. Units are converted exactly (K to °C, m/s
+  to km/h, m³/m³ to %). Readings must be hourly and end on the hour: aggregate sub-hourly
+  readings on the device or gateway. Soil moisture needs `depth_m` and is kept under a probe
+  station per depth.
+- **Refusals.** A bad reading refuses the whole push and stores nothing: 401 for a missing,
+  wrong or revoked token; 413 over 256 KiB; 415 for another format; 422 for an unknown unit or
+  property, a reading that has not ended yet, a value out of range, a reading given twice, or
+  more than 5,000 readings.
+  429 with `Retry-After` above 60 pushes a minute per device or 120 a minute per address (both
+  assumed limits, counted per app process).
+- **Repeats.** The same push again stores nothing new. A reading already held keeps its first
+  value.
+- **Audit.** Each accepted push writes one access log row on the device's grant.
+
+## Daily ET0
+
+`farmcore et0 --farm ID --from YYYY-MM-DD --to YYYY-MM-DD [--elevation M] [--lat LAT --lon LON]`
+prints one JSON line per UTC day: `et0_mm`, `method`, `source`, `licence`, `attribution`,
+`forecast` and `missing`. It reads the farm pin unless a point is given. Nothing else reads
+ET0 yet.
+
+- **Official first.** If the farm holds Météo-France's daily ETP grid value for the cell that
+  contains the point, that value is used and labelled `official`.
+- **Else FAO-56.** Otherwise FarmCore computes FAO-56 Penman-Monteith from the farm's merged
+  hourly weather: temperature, humidity, wind and global radiation. A day after the read time
+  is flagged `forecast`.
+- **Unknown, never zero.** A day is unknown (`et0_mm: null`, with `missing`) when any input
+  lacks one of its 24 hours, or when the point or `--elevation` is unknown. Radiation comes
+  from Météo-France stations with a pyranometer and from the Open-Meteo forecast; ERA5 and
+  pushed sensors do not supply it.
+
+To load the official grid, download the year's `QUOT_ETPgrille` file from Météo-France's
+*Données ETP spatialisées quotidiennes* on data.gouv.fr (Licence Ouverte / Etalab 2.0), copy it
+into the app and import it with the publisher's last-update date (required, for the credit):
+
+```sh
+docker compose cp QUOT_ETPgrille_2026.csv.gz app:/tmp/etp.csv.gz
+docker compose exec app farmcore weather-meteofrance import-etp /tmp/etp.csv.gz \
+  --farm 1 --last-update 2026-11-22
+docker compose exec app rm /tmp/etp.csv.gz
+```
+
+It keeps only the cells that hold the farm pin and its parcels' centroids, and says how many
+points lie outside the file. Importing again keeps the values already held, so a revised day
+keeps its first value. There is no scheduled import yet.
 
 ## Global FieldID lookups (optional)
 
@@ -755,6 +850,10 @@ row value: `core_0018 refused, nothing was changed: …`. `farmcore upgrade` and
 `farmcore migrate` print that message in full; the schema stays where it was, so this is the
 "nothing was applied" case below. Fix the named rows, back up, and run the upgrade again.
 `upgrade --check` compares schema revisions only; it does not run this check.
+`core_0020` marks recent ERA5 values provisional by the date rule (see "ERA5 history through Copernicus") and
+moves each shared ERA5 grid station's values to a private station of the farm whose receipt
+holds them. It rewrites no value. `core_0021` and `core_0022` add the soil moisture, global
+radiation and ET0 weather variables.
 
 Without `farmcore upgrade` (say, a scripted deploy), take a bundle first
 (`docker compose -p farm-a --env-file farm-a.env run --rm --no-deps -e BACKUP_ONCE=1 backup`)
