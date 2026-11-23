@@ -28,13 +28,15 @@ Exact versions are pinned in `uv.lock`; each package keeps its own licence.
 | typer | MIT | Command line |
 | mcp (mcp-types, pyjwt, sse-starlette; pywin32 on Windows only), jsonschema | MIT; sse-starlette BSD-3-Clause; pywin32 PSF-2.0 | MCP server for local agents (`farmcore mcp`), tool argument checks |
 | pint (flexcache, flexparser, platformdirs) | BSD-3-Clause; platformdirs MIT | Unit registry with Decimal arithmetic |
+| pyet (pandas, numpy, xarray, pytz) | MIT; pandas and numpy BSD-3-Clause, xarray Apache-2.0, pytz MIT | FAO-56 Penman-Monteith reference evapotranspiration (`weather.et0`) |
 
 The LGPL libraries are used unmodified, as separately installed packages imported by FarmCore.
 Transitive dependencies are permissive (MIT, BSD, Apache-2.0, ISC, PSF, MPL-2.0 for `certifi`
 and `tqdm`). If you redistribute container images or wheels, review the licences of the
 binaries they contain; this file is not a binary licence-compliance audit.
 
-Development tools: pytest (MIT), ruff (MIT), uv (Apache-2.0 OR MIT), hatchling (MIT).
+Development tools: pytest (MIT), ruff (MIT), uv (Apache-2.0 OR MIT), hatchling (MIT), refet
+(Apache-2.0; the ET0 tests cross-check pyet against it).
 
 ## Bundled front-end assets
 
@@ -91,7 +93,9 @@ database server, not linked into FarmCore).
 - **Optional datasets you load yourself.** The `demo_es` app reads SIGPAC 2024 (FEGA/MAPA,
   CC BY 4.0; Junta de Castilla y León regional catalogue, IGCYL-NC) and InfoRiego (ITACyL)
   station files from `DATA_DIR`. They are not bundled; check their terms before using or
-  publishing them.
+  publishing them. `farmcore weather-meteofrance import-etp` reads Météo-France's *Données ETP
+  spatialisées quotidiennes* (data.gouv.fr, Licence Ouverte / Etalab 2.0); each stored value
+  credits Météo-France and the file's last update.
 - **Optional services.** Vertex AI (Google Cloud), Telegram and an optional address geocoder
   (Nominatim or Photon, configured by the installation owner), under your own accounts and
   their terms. The geocoder is off by default.
@@ -105,7 +109,8 @@ Pinned direct dependencies: [pyogrio 0.13.0](https://github.com/geopandas/pyogri
 (MIT), [defusedxml 0.7.1](https://github.com/tiran/defusedxml/blob/main/LICENSE)
 (PSF-2.0, copyright Christian Heimes), Shapely 2.2.0 (BSD-3-Clause), and pyproj 3.8.0
 (MIT, including PROJ). Installed distributions retain their licence files.
-GeoPandas and pandas are not runtime dependencies; pyogrio's raw WKB reader is used.
+GeoPandas is not a runtime dependency and the parcel import does not use pandas (pyet needs
+it); pyogrio's raw WKB reader is used.
 
 Pyogrio's bundled **libgdal shared object statically links GEOS 3.14.1
 (LGPL-2.1)**, as well as libkml, libxml2, curl and SQLite. Shapely also bundles

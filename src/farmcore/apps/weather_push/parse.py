@@ -193,7 +193,7 @@ def _readings(rows: list[tuple], now: datetime) -> list[Reading]:
 
 def _reading(where, name, symbol, time, result, depth, now: datetime) -> Reading:
     variable = VARIABLES.get(name) if isinstance(name, str) else None
-    if variable is None:
+    if variable is None or variable.name not in UNITS:
         raise Refused(f"{where}: {name!r} is not a variable FarmCore stores")
     conversion = UNITS[variable.name].get(symbol) if isinstance(symbol, str) else None
     if conversion is None:

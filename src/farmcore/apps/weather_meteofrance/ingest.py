@@ -189,7 +189,11 @@ def store(
     connector.upsert(
         session,
         asset.id,
-        [(v.period_end, VARIABLES[v.variable].legacy_name, float(v.value)) for v in observations],
+        [
+            (v.period_end, VARIABLES[v.variable].legacy_name, float(v.value))
+            for v in observations
+            if VARIABLES[v.variable].legacy_name  # radiation has no legacy variable
+        ],
     )
     receipt = record_receipt(
         session,

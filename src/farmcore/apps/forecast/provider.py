@@ -13,7 +13,10 @@
 The customer key is sent only to a customer endpoint and never reported: the `Request` carries
 the keyless URL and the endpoint kind. Values are decimals through their shortest float text, in
 each CF variable's stored unit; rain is the preceding hour's total and a gust its maximum
-(https://open-meteo.com/en/docs), the other variables are instantaneous. Data: CC BY 4.0.
+(https://open-meteo.com/en/docs), the other variables are instantaneous. The live forecast also
+asks `shortwave_radiation`, the global radiation averaged over the preceding hour (W/m², same
+page), an FAO-56 input of `weather.et0`; it has no legacy variable, so the legacy forecast
+tables never see it. Data: CC BY 4.0.
 """
 
 from __future__ import annotations
@@ -42,7 +45,7 @@ from farmcore.core.weather.contract import (
     Tier,
     TimeRange,
 )
-from farmcore.core.weather.variables import BY_LEGACY
+from farmcore.core.weather.variables import BY_LEGACY, SHORTWAVE, VARIABLES
 from farmcore.settings import Settings
 
 PROVIDER = "open-meteo"
@@ -52,6 +55,8 @@ AUTH = (AuthField("apikey", secret=True, description="Open-Meteo customer API ke
 LICENCE = Licence("CC-BY-4.0", "Weather data by Open-Meteo.com (CC BY 4.0)", True)
 PERIODS = {"rr1_mm": timedelta(hours=1), "fx_kmh": timedelta(hours=1)}
 MAX_BYTES = 256_000
+RADIATION = "shortwave_radiation"  # W/m², the mean over the preceding hour
+RADIATION_UNIT = "W/m²"
 
 
 def _finite(value) -> bool:
@@ -111,6 +116,42 @@ def validated_values(doc, now: datetime) -> list[tuple[datetime, str, float]]:
     return values
 
 
+def radiation_values(doc, model: str, run: datetime | None) -> list[ForecastValue]:
+    """The response's global radiation as CF forecast values over the preceding hour; none
+    when it was not served (missing, never zero). Raises on a wrong unit or shape, a negative
+    or non-finite value."""
+    hourly, units = doc["hourly"], doc["hourly_units"]
+    if RADIATION not in hourly:
+        return []
+    series = hourly[RADIATION]
+    if (
+        not isinstance(series, list)
+        or units.get(RADIATION) != RADIATION_UNIT
+        or len(series) != len(hourly["time"])
+    ):
+        raise ValueError("incompatible units or incomplete array")
+    values = []
+    for text, value in zip(hourly["time"], series, strict=True):
+        if value is None:
+            continue
+        if not _finite(value) or float(value) < 0:
+            raise ValueError("weather value outside unit bounds")
+        ts = sources._utc(text)
+        values.append(
+            ForecastValue(
+                model=model,
+                run=run,
+                valid_time=ts,
+                variable=SHORTWAVE,
+                unit=VARIABLES[SHORTWAVE].unit,
+                value=Decimal(repr(float(value))),
+                period_start=ts - timedelta(hours=1),
+                period_end=ts,
+            )
+        )
+    return values
+
+
 async def _fetch(url: str, timeout: float) -> bytes:
     # A read timeout alone permits an endless drip. This deadline cancels header
     # and body waits, then unwinds both contexts before the next farm can run.
@@ -151,7 +192,7 @@ def legacy_values(fetched: Fetched) -> list[tuple[datetime, str, float]]:
     return [
         (v.valid_time, by_cf[v.variable], float(v.value))
         for v in fetched.values
-        if isinstance(v, ForecastValue)
+        if isinstance(v, ForecastValue) and v.variable in by_cf
     ]
 
 
@@ -183,7 +224,7 @@ class OpenMeteo:
             {
                 "latitude": point.latitude,
                 "longitude": point.longitude,
-                "hourly": ",".join(sources.VARIABLES),
+                "hourly": ",".join((*sources.VARIABLES, RADIATION)),
                 "forecast_days": 6,
                 "timezone": "UTC",
                 "wind_speed_unit": "kmh",
@@ -195,7 +236,9 @@ class OpenMeteo:
         with asyncio.Runner(loop_factory=FetchLoop) as runner:
             payload = runner.run(_fetch(url, self.timeout))
         received = datetime.now(UTC)
-        values = validated_values(json.loads(payload), received)
+        doc = json.loads(payload)
+        values = validated_values(doc, received)
+        radiation = radiation_values(doc, LIVE_MODEL, None)
         return Fetched(
             request=Request(
                 dataset=LIVE_DATASET,
@@ -204,7 +247,7 @@ class OpenMeteo:
             ),
             fetched_at=received,
             payload=payload,
-            values=forecast_values(values, LIVE_MODEL, None),
+            values=forecast_values(values, LIVE_MODEL, None) + radiation,
         )
 
     def _single_run(self, point: Point, model: str, run: datetime) -> Fetched:
@@ -226,7 +269,8 @@ class OpenMeteo:
         return Capabilities(
             observations=False,
             forecast=True,
-            variables=frozenset(BY_LEGACY[v].name for v in sources.VARIABLES.values()),
+            variables=frozenset(BY_LEGACY[v].name for v in sources.VARIABLES.values())
+            | {SHORTWAVE},
             tier=Tier.MODEL,
         )
 

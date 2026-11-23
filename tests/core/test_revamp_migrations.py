@@ -1060,3 +1060,54 @@ def test_soil_moisture_variable_downgrade_refuses_while_values_hold_it_then_roun
             assert one(db, "SELECT unit FROM weather_variable WHERE name = :v", v=soil) == "%"
     finally:
         engine.dispose()
+
+
+def test_et0_input_variables_downgrade_refuses_while_values_hold_them_then_round_trips(
+    scratch_db_url,
+):
+    """core_0022: global radiation and ET0 rows; a downgrade refuses (counts) while a forecast
+    value holds one, deletes nothing to get past that, and round-trips once none is held."""
+    names = {
+        "surface_downwelling_shortwave_flux_in_air",
+        "water_potential_evapotranspiration_amount",
+    }
+    cfg = alembic_config(scratch_db_url)
+    command.upgrade(cfg, "head")
+    engine = create_engine(scratch_db_url)
+    one = lambda db, sql, **p: db.execute(text(sql), p).scalar_one()  # noqa: E731
+    rows = "SELECT name, unit FROM weather_variable WHERE name = ANY(:n) ORDER BY name"
+    try:
+        with engine.begin() as db:
+            receipt = one(
+                db,
+                "INSERT INTO weather_receipt (provider, dataset, farm_id, fetched_at) "
+                "VALUES ('open-meteo', 'open-meteo-live-receipt', :farm, '2026-11-23T10:00Z') "
+                "RETURNING id",
+                farm=farm(db, "A"),
+            )
+            db.execute(
+                text(
+                    "INSERT INTO weather_forecast (receipt_id, model, valid_time, variable, unit, "
+                    "value) VALUES (:r, 'best_match', '2026-11-23T12:00Z', "
+                    "'surface_downwelling_shortwave_flux_in_air', 'W m-2', 310)"
+                ),
+                {"r": receipt},
+            )
+        with pytest.raises(MigrationRefused, match="1 in weather_forecast"):
+            command.downgrade(cfg, "core_0021")
+        with engine.begin() as db:
+            assert one(
+                db, "SELECT count(*) FROM weather_forecast WHERE variable = ANY(:n)", n=list(names)
+            )
+            db.execute(text("DELETE FROM weather_forecast WHERE receipt_id = :r"), {"r": receipt})
+        command.downgrade(cfg, "core_0021")
+        with engine.begin() as db:
+            assert db.execute(text(rows), {"n": list(names)}).all() == []
+        command.upgrade(cfg, "head")
+        with engine.begin() as db:
+            assert db.execute(text(rows), {"n": list(names)}).all() == [
+                ("surface_downwelling_shortwave_flux_in_air", "W m-2"),
+                ("water_potential_evapotranspiration_amount", "kg m-2"),
+            ]
+    finally:
+        engine.dispose()

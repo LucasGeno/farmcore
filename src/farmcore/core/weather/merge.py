@@ -28,6 +28,9 @@ takes the value of the best-ranked source holding it; `MergedHour.filled_by` and
 - **No invented hours**: an hour appears only when a source holds a value for it; a variable no
   source holds that hour stays None (never 0, never interpolated).
 - **Deterministic**: the result depends on the sources, never on the order they are given in.
+- **Fields**: `FIELDS` (the `HourlyObs` values) unless the caller names others (`load(...,
+  fields=...)`): a variable without a legacy name (global radiation, for ET0) is merged under
+  its CF name, by the same rules. `MergedHour.obs()` needs the default fields.
 - **As of**: values are bounded by the caller's `[start, end]` on their period end (the value
   horizon, like `stations.service.load_hourly`), and separately by receipt: only receipts
   fetched by `as_of` are read, so a later backfill or late ingest is not seen by a replay of an
@@ -94,7 +97,7 @@ class Source:
 @dataclass(frozen=True)
 class MergedHour:
     ts: datetime
-    values: Mapping[str, float | None]  # every field of `FIELDS`
+    values: Mapping[str, float | None]  # every merged field (`FIELDS` by default)
     filled_by: Mapping[str, str]  # field -> the identity of the source of its value
     tiers: Mapping[str, Tier | None] = field(default_factory=dict)  # field -> that value's tier
 
@@ -106,6 +109,7 @@ class MergedHour:
 class Merged:
     hours: list[MergedHour]
     sources: tuple[Source, ...]  # ranked, best first (the forecast last); only those used
+    fields: tuple[str, ...] = FIELDS
 
     def series(self) -> list[HourlyObs]:
         return [h.obs() for h in self.hours]
@@ -124,7 +128,7 @@ class Merged:
         another source."""
         out = []
         for source in self.sources:
-            for name in FIELDS:
+            for name in self.fields:
                 runs: list[list[datetime]] = []
                 for hour in self.hours:
                     if (hour.filled_by.get(name), hour.tiers.get(name)) != source.key:
@@ -163,7 +167,10 @@ def rank_key(source: Source) -> tuple:
 
 
 def merge(
-    sources: Iterable[Source], forecast: Source | None = None, after: datetime | None = None
+    sources: Iterable[Source],
+    forecast: Source | None = None,
+    after: datetime | None = None,
+    fields: tuple[str, ...] = FIELDS,
 ) -> Merged:
     """Merge sources, one per station identity and tier (a repeated one raises `ValueError`).
     `forecast` fills, after `after`, only the variables no source holds that hour."""
@@ -174,10 +181,10 @@ def merge(
     hours = []
     used: set[tuple[str, Tier | None]] = set()
     for ts in sorted({ts for s in ranked for ts in s.hours}):
-        values: dict[str, float | None] = dict.fromkeys(FIELDS)
+        values: dict[str, float | None] = dict.fromkeys(fields)
         filled_by: dict[str, str] = {}
         tiers: dict[str, Tier | None] = {}
-        for name in FIELDS:
+        for name in fields:
             for source in ranked:
                 value = source.hours.get(ts, {}).get(name)
                 if value is not None:
@@ -193,13 +200,13 @@ def merge(
             row = {
                 n: v
                 for n, v in forecast.hours[ts].items()
-                if n in FIELDS and v is not None and (held is None or held.values[n] is None)
+                if n in fields and v is not None and (held is None or held.values[n] is None)
             }
             if ts <= after or not row:
                 continue
             merged = MergedHour(
                 ts,
-                {**(held.values if held else dict.fromkeys(FIELDS)), **row},
+                {**(held.values if held else dict.fromkeys(fields)), **row},
                 {**(held.filled_by if held else {}), **dict.fromkeys(row, forecast.identity)},
                 {**(held.tiers if held else {}), **dict.fromkeys(row, forecast.tier)},
             )
@@ -210,7 +217,17 @@ def merge(
             used.add(forecast.key)
         hours.sort(key=lambda h: h.ts)
         ranked.append(forecast)
-    return Merged(hours, tuple(s for s in ranked if s.key in used))
+    return Merged(hours, tuple(s for s in ranked if s.key in used), fields)
+
+
+def cf_name(field_name: str) -> str:
+    """The CF variable a merged field reads: its legacy name's, or the field is the CF name."""
+    return BY_LEGACY[field_name].name if field_name in BY_LEGACY else field_name
+
+
+def field_of(variable: str) -> str:
+    """The field a stored CF variable is merged under: its legacy name, else its CF name."""
+    return VARIABLES[variable].legacy_name or variable
 
 
 def identity(wigos_id: str | None, provider: str, provider_station_id: str) -> str:
@@ -239,6 +256,7 @@ class Held:
     stations: tuple[HeldStation, ...]
     forecast: Source | None
     as_of: datetime
+    fields: tuple[str, ...] = FIELDS
 
     def __bool__(self) -> bool:
         return bool(self.stations) or self.forecast is not None
@@ -259,13 +277,20 @@ class Held:
             ),
             self.forecast,
             self.as_of,
+            self.fields,
         )
 
 
-def load(repo: ScopedRepository, start: datetime, end: datetime, as_of: datetime) -> Held:
+def load(
+    repo: ScopedRepository,
+    start: datetime,
+    end: datetime,
+    as_of: datetime,
+    fields: tuple[str, ...] = FIELDS,
+) -> Held:
     """The farm's values with `start <= ts <= end` (`ts`: a value's period end, or a
     forecast's valid time) from the receipts it fetched by `as_of`."""
-    names = [BY_LEGACY[f].name for f in FIELDS]
+    names = [cf_name(f) for f in fields]
     obs = held(
         repo,
         WeatherObservation.period_end >= start,
@@ -317,15 +342,17 @@ def load(repo: ScopedRepository, start: datetime, end: datetime, as_of: datetime
             where.setdefault(key, row)
             hours.setdefault(key, {}).setdefault(tiers.get(o.receipt_id), {}).setdefault(
                 o.period_end, {}
-            )[VARIABLES[o.variable].legacy_name] = float(o.value)
+            )[field_of(o.variable)] = float(o.value)
         stations = tuple(
             HeldStation(key, where[key].latitude, where[key].longitude, hours[key])
             for key in sorted(hours)
         )
-    return Held(stations, _forecast(repo, end, as_of), as_of)
+    return Held(stations, _forecast(repo, end, as_of, names), as_of, fields)
 
 
-def _forecast(repo: ScopedRepository, end: datetime, as_of: datetime) -> Source | None:
+def _forecast(
+    repo: ScopedRepository, end: datetime, as_of: datetime, names: list[str]
+) -> Source | None:
     """The latest forecast receipt fetched by `as_of` (member 0), its hours in (as_of, end]."""
     latest = repo.execute(
         select(
@@ -353,7 +380,7 @@ def _forecast(repo: ScopedRepository, end: datetime, as_of: datetime) -> Source 
         WeatherForecast.member == 0,
         WeatherForecast.valid_time > as_of,
         WeatherForecast.valid_time <= end,
-        WeatherForecast.variable.in_([BY_LEGACY[f].name for f in FIELDS]),
+        WeatherForecast.variable.in_(names),
         scope=SCOPE,
         order_by=(
             WeatherForecast.valid_time,
@@ -362,9 +389,7 @@ def _forecast(repo: ScopedRepository, end: datetime, as_of: datetime) -> Source 
             WeatherForecast.id,
         ),
     ):
-        hours.setdefault(v.valid_time, {}).setdefault(
-            VARIABLES[v.variable].legacy_name, float(v.value)
-        )
+        hours.setdefault(v.valid_time, {}).setdefault(field_of(v.variable), float(v.value))
     if not hours:
         return None
     return Source(
