@@ -4,6 +4,11 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- Procrastinate 3.12.0 (was 3.10.0). Migration `core_0023` applies the library's own 3.11.0 and
+  3.12.0 queue migrations (vendored, checksummed) in the usual single migrate transaction; its
+  two `CONCURRENTLY` index steps run as plain index builds, which briefly lock the task queue
+  while the upgrade runs with the app, worker and bot stopped. Downgrade restores the 3.10.0
+  queue and refuses while a job uses the new `mutex` lock mode.
 - When a client's metadata document turns invalid or names another client, FarmCore now ends
   every connection of that client at once (grant and tokens revoked, an event on Sharing), not
   only its next refresh (CIMD §6.1). The Connect page no longer says agents that sign in are
