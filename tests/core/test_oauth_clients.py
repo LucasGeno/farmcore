@@ -37,9 +37,10 @@ Failure model (written before the code; one owning test each):
   error page that redirects nowhere (CIMD §6.1); a denial creates no code and no grant (journey).
 - a downgrade that would orphan connected agents: refused while `oauth_client` has rows
   (test_schema round trip).
-Not committed: real-client runs (later ticket); TLS to a live host (smoke-tested by hand);
-ending a connection whose client's document turned invalid (CIMD §6.1 SHOULD; its refresh is
-refused instead, as the client is unknown).
+- a connected agent outliving its client: once the client's document turns invalid or names
+  another client, every connection of that client ends (CIMD §6.1) (turned-invalid test).
+Not committed: real-client runs (recorded by hand in the real-clients finding); TLS to a live
+host (smoke-tested by hand).
 """
 
 from __future__ import annotations
@@ -70,6 +71,7 @@ from farmcore.core.models.identity import (
     FarmMembership,
     LocalIdentity,
     OAuthCode,
+    OAuthToken,
     RegisteredClient,
 )
 from farmcore.core.oauth import clients, fetch
@@ -705,3 +707,45 @@ def test_an_owner_sees_who_is_asking_and_a_denial_grants_nothing(app, agent, wor
     assert issued.status_code == 200, issued.text
     assert sorted(issued.json()["scope"].split()) == ["drafts:propose", "fields:read"]
     assert len(world.requests) == 1  # one fetch served the page, both answers and the token
+
+
+def test_a_client_whose_document_turns_invalid_loses_its_connections(app, agent, world, session):
+    """CIMD §6.1 SHOULD: when the document at a client ID URL no longer names that client, the
+    server ends the connections it holds for it, not only refuses its next refresh."""
+    with _signed_in(app) as owner:
+        approved = _answer(owner, app, "approve")
+    issued = agent.post(
+        "/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": approved["code"],
+            "redirect_uri": "http://127.0.0.1:53682/callback",
+            "client_id": CLIENT_URL,
+            "code_verifier": VERIFIER,
+        },
+    )
+    assert issued.status_code == 200, issued.text
+    world.dns["agent.example"] = [[PUBLIC_IP]]  # the same public host, now serving another ID
+    world.answer = lambda request: httpx.Response(
+        200, json=_document(client_id="https://elsewhere.example/client.json")
+    )
+    session.execute(  # the cached document is stale, so the next use fetches it again
+        update(RegisteredClient).values(fresh_until=datetime.now(UTC) - timedelta(seconds=1))
+    )
+    session.commit()
+
+    refreshed = agent.post(
+        "/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": issued.json()["refresh_token"],
+            "client_id": CLIENT_URL,
+        },
+    )
+
+    assert refreshed.status_code in (400, 401)
+    session.expire_all()
+    grant = session.scalar(select(DataGrant).where(DataGrant.grantee != "owner"))
+    assert grant.revoked_at is not None  # Sharing shows it ended, not merely unrefreshable
+    live = select(func.count()).select_from(OAuthToken).where(OAuthToken.revoked_at.is_(None))
+    assert session.scalar(live) == 0  # the access token dies now, not within the hour
