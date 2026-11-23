@@ -38,7 +38,9 @@ Failure model (written before the code; one owning test each):
 - a downgrade that would orphan connected agents: refused while `oauth_client` has rows
   (test_schema round trip).
 - a connected agent outliving its client: once the client's document turns invalid or names
-  another client, every connection of that client ends (CIMD §6.1) (turned-invalid test).
+  another client, every connection of that client ends on every farm, and only that client's
+  (CIMD §6.1) (turned-invalid test); a code approved before then, spent after, connects nothing
+  (race test).
 Not committed: real-client runs (recorded by hand in the real-clients finding); TLS to a live
 host (smoke-tested by hand).
 """
@@ -64,9 +66,9 @@ from cryptography.x509.oid import NameOID
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 
-from farmcore.core.access import ensure_owner_grant
+from farmcore.core.access import TokenRejected, authenticate_token, ensure_owner_grant
 from farmcore.core.identity import hash_password
-from farmcore.core.models.canonical import DataGrant, Farm
+from farmcore.core.models.canonical import DataGrant, Event, Farm
 from farmcore.core.models.identity import (
     FarmMembership,
     LocalIdentity,
@@ -74,7 +76,7 @@ from farmcore.core.models.identity import (
     OAuthToken,
     RegisteredClient,
 )
-from farmcore.core.oauth import clients, fetch
+from farmcore.core.oauth import clients, fetch, service
 from farmcore.main import create_app
 
 PASSWORD = "synthetic-oauth-owner-password"  # gauntlet:allow-secret synthetic credential
@@ -644,12 +646,12 @@ def _signed_in(app) -> TestClient:
     return browser
 
 
-def _answer(owner, app, decision: str) -> dict[str, str]:
+def _answer(owner, app, decision: str, farm: int | None = None, **over: str) -> dict[str, str]:
     answered = owner.post(
         "/oauth/authorize",
         data={
-            **_request(),
-            "farm": str(app.state.farm_id),
+            **_request(**over),
+            "farm": str(farm or app.state.farm_id),
             "name": "Claude on my laptop",
             "allow": ["fields:read", "drafts:propose"],
             "decision": decision,
@@ -709,11 +711,111 @@ def test_an_owner_sees_who_is_asking_and_a_denial_grants_nothing(app, agent, wor
     assert len(world.requests) == 1  # one fetch served the page, both answers and the token
 
 
+OTHER_URL = "https://agent.example/oauth/other.json"
+
+
+def _asked_for(request: httpx.Request) -> str:
+    """The client ID URL a fetch asked for (the fetch connects to the checked IP, by Host)."""
+    return f"https://{request.headers['host']}{request.url.path}"
+
+
+def _connect(app, agent, client_id: str = CLIENT_URL, farm: int | None = None) -> dict:
+    with _signed_in(app) as owner:
+        approved = _answer(owner, app, "approve", farm=farm, client_id=client_id)
+    issued = agent.post(
+        "/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "code": approved["code"],
+            "redirect_uri": "http://127.0.0.1:53682/callback",
+            "client_id": client_id,
+            "code_verifier": VERIFIER,
+        },
+    )
+    assert issued.status_code == 200, issued.text
+    return issued.json()
+
+
+def _turn_invalid(world: World, session) -> None:
+    """CLIENT_URL's host now serves a document naming another client; its cache row is stale."""
+    world.answer = lambda request: httpx.Response(
+        200,
+        json=_document(client_id="https://elsewhere.example/client.json")
+        if _asked_for(request) == CLIENT_URL
+        else _document(client_id=_asked_for(request)),
+    )
+    session.execute(
+        update(RegisteredClient)
+        .where(RegisteredClient.client_id == CLIENT_URL)
+        .values(fresh_until=datetime.now(UTC) - timedelta(seconds=1))
+    )
+    session.commit()
+
+
 def test_a_client_whose_document_turns_invalid_loses_its_connections(app, agent, world, session):
-    """CIMD §6.1 SHOULD: when the document at a client ID URL no longer names that client, the
-    server ends the connections it holds for it, not only refuses its next refresh."""
+    """CIMD §6.1 SHOULD: when the document at a client ID URL no longer names that client, every
+    connection of that client ends at once, on every farm, with an event on Sharing, and its
+    access token is refused; another client's connection is untouched."""
+    world.dns["agent.example"] = [[PUBLIC_IP]]
+    world.answer = lambda request: httpx.Response(
+        200, json=_document(client_id=_asked_for(request))
+    )
+    second = Farm(name="Second farm")
+    session.add(second)
+    session.flush()
+    ensure_owner_grant(session, second)
+    owner_id = session.scalar(select(LocalIdentity.id).where(LocalIdentity.login == "oauth-owner"))
+    session.add(FarmMembership(identity_id=owner_id, farm_id=second.id, role="owner"))
+    session.commit()
+    first = _connect(app, agent)
+    _connect(app, agent, farm=second.id)
+    other = _connect(app, agent, client_id=OTHER_URL)
+    _turn_invalid(world, session)
+
+    refreshed = agent.post(
+        "/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": first["refresh_token"],
+            "client_id": CLIENT_URL,
+        },
+    )
+
+    assert refreshed.status_code in (400, 401)
+    session.expire_all()
+    grants = session.scalars(select(DataGrant).where(DataGrant.grantee != "owner")).all()
+    ended = {g.farm_id for g in grants if g.revoked_at is not None}
+    assert ended == {app.state.farm_id, second.id}  # every farm this client reached
+    assert [g.purpose for g in grants if g.revoked_at is None] == [
+        f"MCP agent over OAuth ({OTHER_URL})"
+    ]
+    events = session.scalars(select(Event).where(Event.kind == "share.revoked")).all()
+    assert {e.farm_id for e in events} == {app.state.farm_id, second.id}
+    with pytest.raises(TokenRejected):  # dies now, not within the hour
+        authenticate_token(session, first["access_token"], audience=RESOURCE)
+    assert authenticate_token(session, other["access_token"], audience=RESOURCE) is not None
+
+
+def test_a_code_approved_before_the_document_turned_invalid_cannot_connect(
+    app, agent, world, session, monkeypatch
+):
+    """The race: the token endpoint resolves the client while it is still valid, another request
+    ends that client before the code is spent. The code must not open a connection afterwards."""
+    world.dns["agent.example"] = [[PUBLIC_IP]]
     with _signed_in(app) as owner:
         approved = _answer(owner, app, "approve")
+    spend = service.exchange_code
+
+    def invalidated_meanwhile(session_, raw, client_id):
+        _turn_invalid(world, session)
+        with app.state.session_factory() as other, other.begin():
+            assert (
+                clients.resolve(other, app.state.settings, app.state.oauth_fetch, CLIENT_URL)
+                is None
+            )
+        return spend(session_, raw, client_id)
+
+    monkeypatch.setattr(service, "exchange_code", invalidated_meanwhile)
     issued = agent.post(
         "/oauth/token",
         data={
@@ -724,28 +826,13 @@ def test_a_client_whose_document_turns_invalid_loses_its_connections(app, agent,
             "code_verifier": VERIFIER,
         },
     )
-    assert issued.status_code == 200, issued.text
-    world.dns["agent.example"] = [[PUBLIC_IP]]  # the same public host, now serving another ID
-    world.answer = lambda request: httpx.Response(
-        200, json=_document(client_id="https://elsewhere.example/client.json")
-    )
-    session.execute(  # the cached document is stale, so the next use fetches it again
-        update(RegisteredClient).values(fresh_until=datetime.now(UTC) - timedelta(seconds=1))
-    )
-    session.commit()
 
-    refreshed = agent.post(
-        "/oauth/token",
-        data={
-            "grant_type": "refresh_token",
-            "refresh_token": issued.json()["refresh_token"],
-            "client_id": CLIENT_URL,
-        },
-    )
-
-    assert refreshed.status_code in (400, 401)
+    assert issued.status_code == 400 and issued.json()["error"] == "invalid_grant"
     session.expire_all()
-    grant = session.scalar(select(DataGrant).where(DataGrant.grantee != "owner"))
-    assert grant.revoked_at is not None  # Sharing shows it ended, not merely unrefreshable
-    live = select(func.count()).select_from(OAuthToken).where(OAuthToken.revoked_at.is_(None))
-    assert session.scalar(live) == 0  # the access token dies now, not within the hour
+    assert session.scalar(select(func.count()).select_from(OAuthToken)) == 0
+    live = (
+        select(func.count())
+        .select_from(DataGrant)
+        .where(DataGrant.grantee != "owner", DataGrant.revoked_at.is_(None))
+    )
+    assert session.scalar(live) == 0

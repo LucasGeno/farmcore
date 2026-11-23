@@ -31,11 +31,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from farmcore.core.models.identity import AccessToken, RegisteredClient
+from farmcore.core.models.identity import AccessToken, OAuthCode, RegisteredClient
 from farmcore.core.oauth.fetch import Fetched, FetchFailed, peer_bucket, plain_host, url_problem
 from farmcore.settings import Settings
 
@@ -263,9 +263,20 @@ def _forget(session: Session, client_id: str) -> None:
 
 def _end_connections(session: Session, client_id: str) -> None:
     """CIMD §6.1: the document no longer vouches for this client, so its connections end now
-    (grant and tokens revoked, an event on Sharing) rather than at the next refresh."""
+    (grant and tokens revoked, an event on Sharing) rather than at the next refresh.
+
+    Its unspent codes expire first. A token request that resolved the client while it was still
+    valid spends its code with `UPDATE ... WHERE expires_at > now`: if that runs after this
+    commits, it finds no code; if it got there first, this UPDATE waits on its row lock until
+    the exchange commits, and the scan below (a later statement, read committed) then sees the
+    connection it created and ends it. Either way no connection outlives the client."""
     from farmcore.core.oauth.service import end_connection  # service imports this module
 
+    session.execute(
+        update(OAuthCode)
+        .where(OAuthCode.client_id == client_id, OAuthCode.used_at.is_(None))
+        .values(expires_at=func.now())
+    )
     grants = session.scalars(
         select(AccessToken.grant_id).where(
             AccessToken.kind == "oauth", AccessToken.client_id == client_id
