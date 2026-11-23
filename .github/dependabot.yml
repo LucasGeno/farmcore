@@ -12,3 +12,9 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # The project and uv.lock pin Python 3.12 (requires-python >=3.12,<3.13) and the image
+      # builds with UV_PYTHON_DOWNLOADS=never, so a 3.13+ base cannot build it. Patch releases
+      # of 3.12 still flow; move the base together with requires-python and the lock.
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
