@@ -41,7 +41,9 @@ Failure model (written before the code; one owning test each):
   another client, every connection of that client ends on every farm, and only that client's
   (CIMD §6.1) (turned-invalid test); a code approved before then, spent after, connects nothing
   (race test); a client whose document stays gone (404) past the grace loses its connections
-  the same way, a transient failure or a success in between never ends them (grace tests).
+  the same way, a transient failure or a success in between never ends them, an authorization
+  refused for that reason keeps them ended, an older 404 cannot end a client a newer fetch found
+  valid, and a zero grace ends them at the first failure (grace tests).
 Not committed: real-client runs (recorded by hand in the real-clients finding); TLS to a live
 host (smoke-tested by hand).
 """
@@ -79,6 +81,7 @@ from farmcore.core.models.identity import (
 )
 from farmcore.core.oauth import clients, fetch, service
 from farmcore.main import create_app
+from farmcore.settings import Settings
 
 PASSWORD = "synthetic-oauth-owner-password"  # gauntlet:allow-secret synthetic credential
 ISSUER = "https://testserver"
@@ -944,3 +947,88 @@ def test_a_transient_failure_or_a_success_in_between_never_ends_a_connection(
         .where(DataGrant.grantee != "owner", DataGrant.revoked_at.is_(None))
     )
     assert session.scalar(live) == 1
+
+
+def _live_grants(session) -> int:
+    session.expire_all()
+    return session.scalar(
+        select(func.count())
+        .select_from(DataGrant)
+        .where(DataGrant.grantee != "owner", DataGrant.revoked_at.is_(None))
+    )
+
+
+def _past_the_grace(app, agent, world, session) -> None:
+    """CLIENT_URL connected once; its document gone (404) for 8 days, its cache row stale."""
+    world.dns["agent.example"] = [[PUBLIC_IP]]
+    _document_answers(world, session, 200)
+    tokens = _connect(app, agent)
+    _document_answers(world, session, 404)
+    assert _refresh(agent, tokens).status_code == 200  # the first failure starts the clock
+    _gone_for(session, timedelta(days=8))
+    world.now += fetch.FAILED_FOR + 1
+
+
+def test_an_authorization_request_past_the_grace_still_ends_the_connections(
+    app, agent, world, session
+):
+    """The authorize page refuses the client it no longer trusts, and a refusal rolls its session
+    back: the connections it ended must stay ended."""
+    _past_the_grace(app, agent, world, session)
+
+    page = agent.get("/oauth/authorize", params=_request())
+
+    assert page.status_code == 400
+    assert _live_grants(session) == 0
+    assert session.scalar(select(func.count()).select_from(RegisteredClient)) == 0
+
+
+def test_an_older_permanent_failure_cannot_end_a_client_a_newer_fetch_found_valid(
+    app, agent, world, session
+):
+    """Two lookups of a client past its grace: the older one's 404 arrives after the newer one
+    fetched a valid document and reset the clock. The older one must not end anything."""
+    _past_the_grace(app, agent, world, session)
+    settings = app.state.settings
+
+    def valid(url: str) -> fetch.Fetched:
+        return fetch.Fetched(json.dumps(_document()).encode(), 600)
+
+    def gone_after_a_newer_success(url: str) -> fetch.Fetched:
+        with app.state.session_factory() as newer:
+            assert clients.resolve(newer, settings, valid, CLIENT_URL) is not None
+            newer.commit()
+        raise fetch.FetchFailed("HTTP 404", transient=False)
+
+    with app.state.session_factory() as older:
+        found = clients.resolve(older, settings, gone_after_a_newer_success, CLIENT_URL)
+        older.commit()
+
+    assert found is not None
+    assert _live_grants(session) == 1
+
+
+@pytest.mark.parametrize(
+    "value, grace",
+    [("604800", timedelta(days=7)), ("P7D", timedelta(days=7)), ("0", timedelta(0))],
+)
+def test_the_grace_reads_seconds_or_iso_8601_and_zero_ends_at_the_first_failure(
+    value, grace, settings, session, monkeypatch
+):
+    monkeypatch.setenv("MCP_OAUTH_CIMD_GRACE", value)
+    read = Settings(_env_file=None).mcp_oauth_cimd_grace
+    assert read == grace
+    configured = settings.model_copy(update={"mcp_oauth_cimd_grace": read})
+
+    def gone(url: str) -> fetch.Fetched:
+        raise fetch.FetchFailed("HTTP 404", transient=False)
+
+    good = fetch.Fetched(json.dumps(_document()).encode(), 600)
+    assert clients.resolve(session, configured, lambda url: good, CLIENT_URL) is not None
+    session.execute(
+        update(RegisteredClient).values(fresh_until=datetime.now(UTC) - timedelta(seconds=1))
+    )
+
+    found = clients.resolve(session, configured, gone, CLIENT_URL)
+
+    assert (found is None) == (grace == timedelta(0))

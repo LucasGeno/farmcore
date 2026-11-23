@@ -9,8 +9,10 @@ Dynamic Client Registration (RFC 7591, kept for clients without CIMD).
   is the URL it came from byte for byte (CIMD §4) and it asks for nothing a public client may
   not hold (§4.1), then cached (`oauth_client`, §6.2) between `CACHE_MIN` and `CACHE_MAX`. A
   failed or invalid fetch is never cached; a transient failure keeps the last good document,
-  an invalid one ends it and every connection of that client (§6.1). A permanent failure (404,
-  410, a non-public address) keeps it for `MCP_OAUTH_CIMD_GRACE` from the first such failure
+  an invalid one ends it and every connection of that client (§6.1). A permanent failure (any
+  `FetchFailed` not marked transient: 404, 410 and other 4xx but 408/429, a non-public address,
+  a redirect, a non-JSON, compressed or oversized answer) keeps it for `MCP_OAUTH_CIMD_GRACE`
+  from the first such failure
   (a client's deploy may be broken for a while), then ends it like an invalid one; a later
   successful fetch starts that clock again.
 - Open registration issues public clients only (`none`, no secret), never an https client ID
@@ -231,16 +233,7 @@ def resolve(
             return None
         if exc.transient:
             return _client(row)
-        if row.failing_since is None or now < row.failing_since + settings.mcp_oauth_cimd_grace:
-            session.execute(
-                update(RegisteredClient)
-                .where(RegisteredClient.id == row.id, RegisteredClient.failing_since.is_(None))
-                .values(failing_since=now)
-            )
-            return _client(row)
-        _forget(session, client_id)
-        _end_connections(session, client_id)
-        return None
+        return _gone(session, settings, client_id, now)
     except Unacceptable:
         _forget(session, client_id)
         _end_connections(session, client_id)
@@ -259,6 +252,30 @@ def resolve(
     if row is not None:
         session.expire(row)
     return found
+
+
+def _gone(session: Session, settings: Settings, client_id: str, now: datetime) -> Client | None:
+    """A permanent fetch failure: the last good document while the grace runs (from the first
+    such failure), then nothing and no connection. The row is locked and read again first, so a
+    newer lookup that found the document valid meanwhile (and reset the clock) wins over this
+    older failure; one that ended the client already leaves nothing to end."""
+    row = session.scalar(
+        select(RegisteredClient)
+        .where(RegisteredClient.client_id == client_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if row is None:
+        return None
+    if row.fresh_until is not None and now < row.fresh_until:
+        return _client(row)
+    if row.failing_since is None:
+        row.failing_since = now
+    if now < row.failing_since + settings.mcp_oauth_cimd_grace:
+        return _client(row)
+    _forget(session, client_id)
+    _end_connections(session, client_id)
+    return None
 
 
 def _own_host(settings: Settings, url: str) -> bool:

@@ -204,9 +204,15 @@ def _fetch(request: Request) -> Callable[[str], Fetched]:
 def _parse(request: Request, settings: Settings, params: Any) -> service.AuthorizationRequest:
     """`service.parse_request`, its client looked up (and its metadata fetched) in a session."""
     with session_scope(request.app.state.session_factory) as session:
-        return service.parse_request(
-            settings, params, partial(clients.resolve, session, settings, _fetch(request))
-        )
+        try:
+            return service.parse_request(
+                settings, params, partial(clients.resolve, session, settings, _fetch(request))
+            )
+        except service.Refused:
+            # What the lookup learnt stands (connections ended, a failure's start): only the
+            # request is refused.
+            session.commit()
+            raise
 
 
 def _issue(
