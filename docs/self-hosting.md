@@ -855,12 +855,16 @@ row value: `core_0018 refused, nothing was changed: …`. `farmcore upgrade` and
 `core_0020` marks recent ERA5 values provisional by the date rule (see "ERA5 history through Copernicus") and
 moves each shared ERA5 grid station's values to a private station of the farm whose receipt
 holds them. It rewrites no value. `core_0021` and `core_0022` add the soil moisture, global
-radiation and ET0 weather variables.
+radiation and ET0 weather variables. `core_0023` moves the background job queue from
+Procrastinate 3.10 to 3.12 by applying the library's own 3.11 and 3.12 queue migrations
+(vendored, checksummed). It drops queue functions that 3.10 code calls, so stop the app, worker and
+bot before it runs (step 2 above).
 
 Without `farmcore upgrade` (say, a scripted deploy), take a bundle first
 (`docker compose -p farm-a --env-file farm-a.env run --rm --no-deps -e BACKUP_ONCE=1 backup`)
 and run `up -d`: the `migrate` service checks compatibility and migrates once, but takes no
-backup.
+backup. Stop the app, worker and bot before `up -d` here too: old containers keep running
+while `migrate` does.
 
 ### Recovering from a failed upgrade
 

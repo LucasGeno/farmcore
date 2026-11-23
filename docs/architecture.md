@@ -276,7 +276,8 @@ one interval after a worker first sees it). Replay never enqueues: `step_to` and
 in-process and deterministic.
 
 The queue is [Procrastinate](https://procrastinate.readthedocs.io/) (MIT, tables in `public`,
-schema applied from a checksummed vendored copy by revision `core_0009`); only
+3.12; its 3.10 schema applied from a checksummed vendored copy by revision `core_0009`, then the
+library's own 3.11 and 3.12 migrations, vendored and checksummed, by `core_0023`); only
 `core/tasks.py` imports it. What may be written is decided by FarmCore's own fence, not by the
 library's job status: each run takes a new attempt in `task_attempt`, and the transaction that
 writes the result first checks, under row locks, that the attempt is still the current one for
