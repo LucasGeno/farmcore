@@ -221,16 +221,29 @@ def _no_fetch(url: str):
     raise AssertionError(f"an operator-listed client is never fetched: {url}")
 
 
-def test_a_request_naming_no_scope_does_not_ask_for_advice_read(oauth_settings, session):
-    # An owner must choose to let an agent read stored advice; the default never includes it.
+def test_the_401_and_a_request_naming_no_scope_ask_for_the_same_read_scopes(
+    oauth_settings, session_factory, session
+) -> None:
+    """MCP authorization spec, scope selection: the 401 names the scopes a client should ask for
+    (RFC 6750 §3 `scope`), so it asks for least privilege instead of every supported scope, and
+    an authorization request naming none gets the same set. An owner must choose to let an agent
+    read stored advice or propose drafts, so neither is in it."""
+    with TestClient(
+        mcp_http.create_app(session_factory, oauth_settings, registry.discover())
+    ) as mcp:
+        unauthorized = mcp.post("/mcp", json={})
     params = {k: v for k, v in _request().items() if k != "scope"}
 
     asked = oauth.parse_request(
         oauth_settings, params, partial(clients.resolve, session, oauth_settings, _no_fetch)
     )
 
-    assert "advice:read" not in asked.scopes
+    assert unauthorized.status_code == 401
+    named = re.search(r'(?:^|[ ,])scope="([^"]*)"', unauthorized.headers["www-authenticate"])
+    assert named is not None
+    assert set(named.group(1).split()) == set(asked.scopes)
     assert "fields:read" in asked.scopes
+    assert not {"advice:read", "drafts:propose"} & set(asked.scopes)
 
 
 def test_metadata_points_a_client_at_this_server_and_this_resource_only_when_on(
