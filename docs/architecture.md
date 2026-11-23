@@ -61,9 +61,11 @@ database, a small core and installable apps, in the style of Odoo.
 - **Access.** Farm data is read through `ScopedRepository(farm, grant)`: it checks the farm and
   consent scopes (`fields:read`, `logs:read`, `register:read`, …) and writes an `access_log` row
   for each read. Members are local accounts with owner or advisor roles on the farms they are
-  assigned to. A grant is bound to one recipient login, revocable, and never reads the audit
-  log; it reads its scopes only, and an agent token on a grant may also propose drafts
-  (`drafts:propose`) that the farmer confirms. The farmer sees reads under each grant on
+  assigned to. A sharing grant is bound to one recipient login. An agent's personal token, an
+  OAuth-approved agent and a sensor device each hold a grant of their own with no recipient
+  login; the token is the credential. Each of these grants is revocable, reads its scopes only and never
+  reads the audit log; an agent's grant may also propose drafts (`drafts:propose`) that the
+  farmer confirms, and a device's grant can only push readings (`weather:push`). The farmer sees reads under each grant on
   `/share/`. The installation operator (the `ADMIN_TOKEN` holder) is a separate break-glass
   identity. Roles and limits: [SECURITY.md](../SECURITY.md#access-model).
 - **Read-only tour.** `/tour` sets a browser cookie that refuses every non-GET request before
@@ -206,8 +208,8 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 - Live background work runs on one Postgres-backed queue (Procrastinate, with a plain
   `SKIP LOCKED` table as the documented exit); no broker, no in-process scheduler.
 - A plain `observation` table (a TimescaleDB hypertable has the same schema).
-- Local accounts only: members, recipients and the operator sign in to the installation
-  itself; no external identity provider.
+- No external identity provider: members and recipients are local accounts, and the operator
+  signs in with the installation's `ADMIN_TOKEN`.
 - Assistant context is one expiring draft plus a few recent turns, kept on that draft: no
   vector store, long-term memory or multi-step agent loop.
 
