@@ -389,7 +389,8 @@ The `weather_meteofrance` app fetches live hourly observations of a farm's Mét�
   asked for is not ordered again, even if the archive lacked it. The station's
   `meteofrance_live` health holds the last errors (step and HTTP status) and `archived_through`.
 - **Radiation.** Where the station has a pyranometer, the hour's global radiation (DPObs
-  `ray_glo01`, DPClim `GLO`) is stored as W m⁻². Daily ET0 needs it (see "Daily ET0" below).
+  `ray_glo01`, DPClim `GLO`) is stored as W m⁻². Computed FAO-56 ET0 needs it; an imported
+  official value does not (see "Daily ET0" below).
 - **Known limits.** The normalised station is shared by every farm holding the same station
   number. A second farm's write of an hour the first farm already holds is refused with an
   error, never dropped silently; the replay has the same limit. Hours first stored from DPObs
@@ -505,8 +506,9 @@ volume_fraction_of_condensed_water_in_soil,m3 m-3,2026-11-23T10:00:00Z,0.27,0.3
 ```
 
 - **Readings.** Each property is a CF standard name. Units are converted exactly (K to °C, m/s
-  to km/h, m³/m³ to %). Readings must be hourly and end on the hour: aggregate sub-hourly
-  readings on the device or gateway. Soil moisture needs `depth_m` and is kept under a probe
+  to km/h, m³/m³ to %). Every reading must end on the hour. An instant (temperature,
+  humidity, soil moisture) is a reading at the hour; wind (mean) and gust (maximum) cover at most one hour;
+  precipitation is a sum over exactly one hour. Soil moisture needs `depth_m` and is kept under a probe
   station per depth.
 - **Refusals.** A bad reading refuses the whole push and stores nothing: 401 for a missing,
   wrong or revoked token; 413 over 256 KiB; 415 for another format; 422 for an unknown unit or

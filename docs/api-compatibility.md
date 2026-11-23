@@ -59,7 +59,8 @@ registers it.
   `no infection event detected` (before: `No action: no infection risk` and `no risk`); stored
   rows keep the words they were saved with. Read `decision`, not the wording.
 - `flags` can hold `weather_gap_filled` (since 2026-11-22): some hours came from a lower-ranked
-  weather source. Shared advice carries the flag only, not the sources.
+  weather source. Shared advice omits the per-hour source map
+  (`weather_sources`, `filled_by`); its `attribution` list still credits the farm's weather sources.
 
 ## Inputs
 

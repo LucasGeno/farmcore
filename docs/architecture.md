@@ -60,10 +60,12 @@ database, a small core and installable apps, in the style of Odoo.
   runs in the web process: `farmcore worker` runs them ([durable live tasks](#durable-live-tasks)).
 - **Access.** Farm data is read through `ScopedRepository(farm, grant)`: it checks the farm and
   consent scopes (`fields:read`, `logs:read`, `register:read`, …) and writes an `access_log` row
-  for each read. Third-party grants are read-only, cannot read the audit log, and are revocable;
-  the farmer sees reads under each grant on `/share/`. There is one administrator per
-  installation (the `ADMIN_TOKEN` holder) and no per-user accounts: see
-  [SECURITY.md](../SECURITY.md) for what anonymous visitors can see.
+  for each read. Members are local accounts with owner or advisor roles on the farms they are
+  assigned to. A grant is bound to one recipient login, revocable, and never reads the audit
+  log; it reads its scopes only, and an agent token on a grant may also propose drafts
+  (`drafts:propose`) that the farmer confirms. The farmer sees reads under each grant on
+  `/share/`. The installation operator (the `ADMIN_TOKEN` holder) is a separate break-glass
+  identity. Roles and limits: [SECURITY.md](../SECURITY.md#access-model).
 - **Read-only tour.** `/tour` sets a browser cookie that refuses every non-GET request before
   routing, even with administrator credentials, for sharing a demo safely. Every page shows a
   tour banner; the only requests let through are the ones that leave the tour (`POST /tour/exit`
@@ -204,8 +206,8 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 - Live background work runs on one Postgres-backed queue (Procrastinate, with a plain
   `SKIP LOCKED` table as the documented exit); no broker, no in-process scheduler.
 - A plain `observation` table (a TimescaleDB hypertable has the same schema).
-- One administrator per installation: grants show the consent model but are not yet
-  authenticated multi-tenant access.
+- Local accounts only: members, recipients and the operator sign in to the installation
+  itself; no external identity provider.
 - Assistant context is one expiring draft plus a few recent turns, kept on that draft: no
   vector store, long-term memory or multi-step agent loop.
 
