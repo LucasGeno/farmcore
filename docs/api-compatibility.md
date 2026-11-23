@@ -58,6 +58,9 @@ registers it.
   words a downy result with no infection event as `No action: no infection event detected` and
   `no infection event detected` (before: `No action: no infection risk` and `no risk`); stored
   rows keep the words they were saved with. Read `decision`, not the wording.
+- `flags` can hold `weather_gap_filled` (since 2026-11-22): some hours came from a lower-ranked
+  weather source. Shared advice omits the per-hour source map
+  (`weather_sources`, `filled_by`); its `attribution` list still credits the farm's weather sources.
 
 ## Inputs
 
@@ -69,6 +72,12 @@ registers it.
   the map does not hold, or a dose naming both keys, is refused (never guessed). New clients
   send v2. The agent tools carry no HTTP headers per call, so the MCP `propose_record` result
   says it instead: `facts.input_deprecated` (`since`, `note`, `link`) and a note in its text.
+
+### Sensor readings (`weather:push`)
+
+`POST /weather_push/observations` takes SensorThings-shaped JSON or CSV from a device token
+([self-hosting](self-hosting.md#on-farm-sensors-optional)). It has one input version and is not
+versioned yet.
 
 ### Parcel and crop proposals (`drafts:propose`)
 
@@ -94,6 +103,13 @@ was computed, never upgraded later; rows stored before it read `unvalidated`. `/
 and `/models/{key}` describe each model from its spec to any signed-in user, a grant recipient
 included. It was added without a new version; a client that rejects unknown keys needs to accept
 it.
+
+The advisor card `.json` also carries `weather_filled` (per source and variable, the runs of
+hours it filled) and `weather_gap_filled` (the runs lower-ranked sources filled). Since
+2026-11-22 an assessment's `input_snapshot` can list `weather_sources` and each
+`hourly_inputs` row's `filled_by` (variable → index into `weather_sources`); snapshots saved
+before have neither.
+ERA5 sources are named `copernicus-era5:farm<id>:<lat>,<lon>` since `core_0020`.
 
 ## Unchanged and not versioned
 
