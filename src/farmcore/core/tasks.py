@@ -19,9 +19,9 @@ older attempt without listing them, whatever the library believes about its job.
 Library gaps closed here: enqueueing inside a caller's transaction uses a synchronous job manager
 on that transaction's own connection, in a savepoint (a duplicate aborts only the savepoint);
 the worker retries the tasks of workers whose heartbeat stopped (`retry_stalled`), failing a
-stalled task whose successor is already queued (upstream issue #1446) or that used up its
-attempts; there is no per-task timeout (#1281), so a task bounds its own I/O by its attempt's
-deadline and the fence rejects anything later.
+stalled task that used up its attempts (one whose successor is already queued, the library
+fails itself since 3.12, upstream issue #1446); there is no per-task timeout (#1281), so a task
+bounds its own I/O by its attempt's deadline and the fence rejects anything later.
 """
 
 from __future__ import annotations
@@ -340,8 +340,9 @@ def plan(
 
 async def retry_stalled(job_manager: JobManager, seconds_since_heartbeat: float) -> dict[int, str]:
     """Requeue the tasks of workers whose heartbeat is older than `seconds_since_heartbeat`.
-    A task that used up `MAX_ATTEMPTS`, or whose successor for the same farm is already queued
-    (the library's retry then violates the queueing lock: upstream #1446), is failed instead.
+    A task that used up `MAX_ATTEMPTS` is failed instead, and so is one whose successor for the
+    same farm is already queued: since Procrastinate 3.12 the library's retry fails it itself
+    rather than break the queueing lock (upstream #1446), so its status says which happened.
     Returns {job id: "retried" | "failed"}."""
     outcomes: dict[int, str] = {}
     for job in await job_manager.get_stalled_jobs(seconds_since_heartbeat=seconds_since_heartbeat):
@@ -349,12 +350,10 @@ async def retry_stalled(job_manager: JobManager, seconds_since_heartbeat: float)
         retry = job.attempts + 1 < MAX_ATTEMPTS
         try:
             if retry:
-                try:
-                    await job_manager.retry_job(job)
-                    outcomes[job.id] = "retried"
-                    continue
-                except queue_errors.UniqueViolation:
-                    pass
+                await job_manager.retry_job(job)
+                status = await job_manager.get_job_status_async(job.id)
+                outcomes[job.id] = "failed" if status == Status.FAILED else "retried"
+                continue
             await job_manager.finish_job(job, Status.FAILED, delete_job=False)
             outcomes[job.id] = "failed"
         except queue_errors.ConnectorException:
