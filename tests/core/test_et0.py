@@ -310,13 +310,22 @@ def test_official_et0_is_preferred_in_its_own_cell_labelled_and_read_as_of_else_
         (None, None, False),
         (pytest.approx(3.88, abs=0.01), "fao56-pm", True),
     ]
-    # The CLI never credits a date of its own: the publisher's last update is required.
+
+    # The CLI never credits a date of its own: without the publisher's last update, or with a
+    # malformed one, it exits before reading the file and nothing more is stored.
+    def held():
+        return session.scalar(
+            select(func.count())
+            .select_from(WeatherReceipt)
+            .where(WeatherReceipt.provider == etp.PROVIDER)
+        )
+
+    receipts = held()
     runner = CliRunner()
     base = ["weather-meteofrance", "import-etp", str(path), "--farm", str(farm.id)]
-    missing = runner.invoke(cli, base)
-    assert missing.exit_code == 2 and "--last-update" in missing.output
-    wrong = runner.invoke(cli, [*base, "--last-update", "21/07/2026"])
-    assert wrong.exit_code == 1 and "is not YYYY-MM-DD" in wrong.output
+    assert runner.invoke(cli, base).exit_code == 2
+    assert runner.invoke(cli, [*base, "--last-update", "21/07/2026"]).exit_code == 1
+    assert held() == receipts == 1
 
 
 # --- the grid import's failure model ----------------------------------------------------------
