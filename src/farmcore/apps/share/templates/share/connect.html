@@ -76,9 +76,18 @@
     <span role="status" data-copied class="ml-2 text-sm text-muted"></span>
   </div>
   {% endfor %}
-  <div class="mt-4 min-w-0">
-    <h3 class="font-semibold">claude.ai connectors and ChatGPT <span class="text-sm font-normal text-muted">· coming</span></h3>
-    <p class="mt-1 max-w-prose text-sm text-muted">These sign in with OAuth rather than a token. They arrive in a later release and need a public https address.</p>
+  <div class="mt-4 min-w-0" data-oauth="{{ 'on' if oauth_enabled else 'off' }}">
+    <h3 class="font-semibold">Agents that sign in: Claude Code, Codex</h3>
+    {% if oauth_enabled %}
+    <p class="mt-1 max-w-prose text-sm text-muted">These need no token. Add the address above to the agent; when it opens FarmCore, sign in and tick what it may see. The connection then shows on Sharing, where you can end it.</p>
+    <p class="mt-2 text-sm text-muted">Claude Code (then sign in with <code>claude mcp login farmcore</code>)</p>
+    <pre class="mt-1 overflow-x-auto rounded-lg bg-surface p-3 font-mono text-xs">claude mcp add --transport http farmcore {{ mcp_url }}</pre>
+    <p class="mt-2 text-sm text-muted">Codex (it opens the sign-in itself)</p>
+    <pre class="mt-1 overflow-x-auto rounded-lg bg-surface p-3 font-mono text-xs">codex mcp add farmcore --url {{ mcp_url }}</pre>
+    {% if local_only %}<p class="mt-2 max-w-prose text-sm text-muted">claude.ai connectors and ChatGPT run in the cloud, so they cannot reach this address. They need FarmCore on a public https address first.</p>{% endif %}
+    {% else %}
+    <p class="mt-1 max-w-prose text-sm text-muted">These sign in with OAuth instead of a token. Your operator switches sign-in on with <code>MCP_OAUTH_ENABLED=true</code>.</p>
+    {% endif %}
   </div>
 </section>
 </div>

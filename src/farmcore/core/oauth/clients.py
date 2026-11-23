@@ -9,7 +9,7 @@ Dynamic Client Registration (RFC 7591, kept for clients without CIMD).
   is the URL it came from byte for byte (CIMD §4) and it asks for nothing a public client may
   not hold (§4.1), then cached (`oauth_client`, §6.2) between `CACHE_MIN` and `CACHE_MAX`. A
   failed or invalid fetch is never cached; a transient failure keeps the last good document,
-  an invalid one ends it (§6.1).
+  an invalid one ends it and every connection of that client (§6.1).
 - Open registration issues public clients only (`none`, no secret), never an https client ID
   (CIMD §9.1), and is capped per address slot and while unused (RFC 7591 §3). A software
   statement is ignored (RFC 7591 §3.1.1), so nothing in one is trusted.
@@ -31,11 +31,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from farmcore.core.models.identity import AccessToken, RegisteredClient
+from farmcore.core.models.identity import AccessToken, OAuthCode, RegisteredClient
 from farmcore.core.oauth.fetch import Fetched, FetchFailed, peer_bucket, plain_host, url_problem
 from farmcore.settings import Settings
 
@@ -230,6 +230,7 @@ def resolve(
         return None
     except Unacceptable:
         _forget(session, client_id)
+        _end_connections(session, client_id)
         return None
     values = {
         "client_name": found.client_name,
@@ -258,6 +259,31 @@ def _own_host(settings: Settings, url: str) -> bool:
 
 def _forget(session: Session, client_id: str) -> None:
     session.execute(delete(RegisteredClient).where(RegisteredClient.client_id == client_id))
+
+
+def _end_connections(session: Session, client_id: str) -> None:
+    """CIMD §6.1: the document no longer vouches for this client, so its connections end now
+    (grant and tokens revoked, an event on Sharing) rather than at the next refresh.
+
+    Its unspent codes expire first. A token request that resolved the client while it was still
+    valid spends its code with `UPDATE ... WHERE expires_at > now`: if that runs after this
+    commits, it finds no code; if it got there first, this UPDATE waits on its row lock until
+    the exchange commits, and the scan below (a later statement, read committed) then sees the
+    connection it created and ends it. Either way no connection outlives the client."""
+    from farmcore.core.oauth.service import end_connection  # service imports this module
+
+    session.execute(
+        update(OAuthCode)
+        .where(OAuthCode.client_id == client_id, OAuthCode.used_at.is_(None))
+        .values(expires_at=func.now())
+    )
+    grants = session.scalars(
+        select(AccessToken.grant_id).where(
+            AccessToken.kind == "oauth", AccessToken.client_id == client_id
+        )
+    ).all()
+    for grant_id in grants:
+        end_connection(session, grant_id, "its client's metadata document is no longer valid")
 
 
 def _peer_slot(peer: str) -> int:
