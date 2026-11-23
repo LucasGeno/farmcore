@@ -105,7 +105,8 @@ def valid_state(state: str) -> bool:
     return len(state) <= STATE_MAX and VSCHAR.fullmatch(state) is not None
 
 
-# What a request naming no scope asks for. Never `advice:read`: an owner grants it explicitly.
+# What a request naming no scope asks for, and what the MCP 401 tells a client to ask for. Never
+# `advice:read` or `drafts:propose`: an owner grants those explicitly.
 DEFAULT_SCOPES = GRANT_READ_SCOPES - {"advice:read"}
 
 

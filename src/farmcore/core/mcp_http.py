@@ -18,7 +18,9 @@ MCP message is read:
 
 With OAuth on (`MCP_OAUTH_ENABLED`), `GET /.well-known/oauth-protected-resource<path>` serves
 this resource's metadata (RFC 9728 §3) and every 401 names it (§5.1), so a client finds the
-authorization server (`core/oauth`).
+authorization server (`core/oauth`). The 401 also names the scopes to ask for (RFC 6750 §3, the
+MCP spec's scope selection): the read set a request naming none gets, so a client asks for least
+privilege instead of every supported scope.
 
 Each tool list and call then re-authenticates the request's own token (`mcp.FarmTools`) and is
 audited as `token:<id>`. Nothing here logs a URL, a header or a body; uvicorn's access log is off
@@ -49,6 +51,7 @@ from starlette.types import Receive, Scope, Send
 from farmcore.core.access import TOKEN_SCOPES, TokenRejected, authenticate_token
 from farmcore.core.manifest import Manifest
 from farmcore.core.mcp import FarmTools, server
+from farmcore.core.oauth.service import DEFAULT_SCOPES
 from farmcore.db import session_scope
 from farmcore.settings import Settings
 
@@ -109,6 +112,7 @@ def _unauthorized(settings: Settings) -> Response:
     challenge = 'Bearer error="invalid_token"'
     if settings.mcp_oauth_enabled:
         challenge += f', resource_metadata="{resource_metadata_url(settings)}"'
+        challenge += f', scope="{" ".join(sorted(DEFAULT_SCOPES))}"'
     return _refusal(
         401, "A bearer token issued on Sharing is required.", **{"WWW-Authenticate": challenge}
     )

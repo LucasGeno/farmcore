@@ -4,6 +4,10 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- With `MCP_OAUTH_ENABLED`, the MCP 401 challenge now names `scope`: the read scopes an
+  authorization request naming none gets (never `advice:read` or `drafts:propose`). Clients
+  such as Claude Code and Codex then ask for least privilege instead of every supported scope.
+  Consent is unchanged.
 - Procrastinate 3.12.0 (was 3.10.0). Migration `core_0023` applies the library's own 3.11.0 and
   3.12.0 queue migrations (vendored, checksummed) in the usual single migrate transaction; its
   two `CONCURRENTLY` index steps run as plain index builds, which briefly lock the task queue
