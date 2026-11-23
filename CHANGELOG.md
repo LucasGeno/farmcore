@@ -8,6 +8,12 @@ Notable changes for operators and app authors. Newest first.
   authorization request naming none gets (never `advice:read` or `drafts:propose`). Clients
   such as Claude Code and Codex then ask for least privilege instead of every supported scope.
   Consent is unchanged.
+- A client whose metadata document stays gone (404, 410 and other 4xx but 408/429, a non-public
+  address, a redirect, a non-JSON, compressed or oversized answer) now loses its connections too,
+  once `MCP_OAUTH_CIMD_GRACE` (whole seconds or ISO 8601, default 7 days; 0: at once) has passed
+  since the first such failure; until then it keeps working on its last good document. A
+  successful fetch resets the clock; timeouts, 5xx, 408, 429 and network errors never count.
+  Migration `core_0024` adds `oauth_client.failing_since`.
 - Procrastinate 3.12.0 (was 3.10.0). Migration `core_0023` applies the library's own 3.11.0 and
   3.12.0 queue migrations (vendored, checksummed) in the usual single migrate transaction; its
   two `CONCURRENTLY` index steps run as plain index builds, which briefly lock the task queue
