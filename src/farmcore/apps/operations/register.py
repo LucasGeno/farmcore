@@ -70,6 +70,8 @@ from farmcore.core.models.catalog import LegacyQuantityMap, TypedQuantity
 SCOPE = "register:read"
 DEFAULT_EPPO = "VITVI"  # grapevine, Vitis vinifera (EPPO code)
 _NUMBERED_ALIAS = re.compile(r"^P(\d+)$")
+_FORMULA_STARTS = ("=", "+", "-", "@", "＝", "＋", "－", "＠")
+_DECIMAL_FIELDS = frozenset({"dose", "area_treated_ha"})
 
 FIELDS: tuple[str, ...] = (
     "product_name",
@@ -513,26 +515,33 @@ def register_rows(
     return rows
 
 
-def _csv_cell(value: Any) -> Any:
+def _csv_cell(value: Any, *, decimal: bool = False) -> Any:
     if value is True:
         return "yes"
     if value is False or value is None:
         return ""
+    if (
+        isinstance(value, str)
+        and not decimal
+        and (value.startswith(("\t", "\r", "\n")) or value.lstrip().startswith(_FORMULA_STARTS))
+    ):
+        return "'" + value
     return value
 
 
 def to_csv(rows: list[dict[str, Any]], *, weather: bool = False, tz: str) -> str:
     """CSV text with the `CSV_FIELDS` header; booleans as `yes` / blank, None as blank, the
     checks as one line of words (`checks.summary`); with `weather`, one more `saved_weather`
-    column, every snapshot in words (`spray_weather.summary`), blank when none."""
+    column, every snapshot in words (`spray_weather.summary`), blank when none.
+    Formula-like text is prefixed with an apostrophe for spreadsheet imports."""
     buf = io.StringIO()
-    writer = csv.writer(buf, lineterminator="\n")
+    writer = csv.writer(buf)
     writer.writerow((*CSV_FIELDS, SAVED_WEATHER) if weather else CSV_FIELDS)
     for row in rows:
-        cells = [_csv_cell(row[name]) for name in FIELDS]
-        cells.append(label_checks.summary(row.get(CHECKS) or []))
+        cells = [_csv_cell(row[name], decimal=name in _DECIMAL_FIELDS) for name in FIELDS]
+        cells.append(_csv_cell(label_checks.summary(row.get(CHECKS) or [])))
         if weather:
-            cells.append(spray_weather.summary(row.get(SAVED_WEATHER) or [], tz))
+            cells.append(_csv_cell(spray_weather.summary(row.get(SAVED_WEATHER) or [], tz)))
         writer.writerow(cells)
     return buf.getvalue()
 

@@ -178,6 +178,20 @@ def test_csv_has_the_stable_header_and_the_e_phy_number(session, demo):
     assert row.endswith(",")  # rows read without checks leave the cell blank
 
 
+def test_csv_preserves_parcel_aliases_as_spreadsheet_text():
+    aliases = ['North, "upper"', "  + North", "＠North", "\tNorth", "North\rUpper"]
+    rows = [{**dict.fromkeys(register.FIELDS, ""), "parcel_alias": alias} for alias in aliases]
+    exported = csv.DictReader(io.StringIO(register.to_csv(rows, tz="Europe/Paris")))
+
+    assert [row["parcel_alias"] for row in exported] == [
+        'North, "upper"',
+        "'  + North",
+        "'＠North",
+        "'\tNorth",
+        "North\rUpper",
+    ]
+
+
 def test_rows_with_checks_carry_the_spray_checks_and_the_csv_says_them_in_words(session, demo):
     products = ops_seed.ensure_products(session)
     log = _spray(session, demo, products)
