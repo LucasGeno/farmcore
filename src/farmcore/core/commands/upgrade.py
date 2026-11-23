@@ -1,6 +1,6 @@
 """`farmcore upgrade`: upgrade an installation with a way back.
 
-Run with the new release, as the database owner, while the app and bot are stopped:
+Run with the new release, as the database owner, while the app, worker and bot are stopped:
 
 1. Take the installation's migration lock, or exit at once if another upgrade or migrate holds
    it (nothing is done then).
@@ -140,8 +140,8 @@ def register(cli: typer.Typer) -> None:
     ) -> None:
         """Back up, then migrate this installation (DATABASE_URL, as the owner) to this release.
 
-        Stop the app and bot first. One upgrade at a time; a database from a newer release is
-        refused before anything is written."""
+        Stop the app, worker and bot first. One upgrade at a time; a database from a newer
+        release is refused before anything is written."""
         settings = get_settings()
         try:
             if check:

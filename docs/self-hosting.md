@@ -718,7 +718,8 @@ instead.
    release expects, and says `compatible` or `incompatible`. It changes nothing. An incompatible
    database (one a newer release migrated) is refused here, and again by the upgrade itself
    before anything is written.
-2. Stop the app and bot: an old app must not serve while its schema changes.
+2. Stop the app, worker and bot: old processes must not serve or run jobs while the schema
+   changes.
 3. `farmcore upgrade --backup-dir /backups` takes the installation's migration lock (a second
    upgrade exits at once with `another upgrade or migrate is running`; `migrate`, as run by
    `up`, waits for it and then finds nothing to do), checks compatibility, writes a bundle
