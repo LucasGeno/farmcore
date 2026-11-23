@@ -4,6 +4,12 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- When a client's metadata document turns invalid or names another client, FarmCore now ends
+  every connection of that client at once (grant and tokens revoked, an event on Sharing), not
+  only its next refresh (CIMD §6.1). The Connect page no longer says agents that sign in are
+  "coming": with `MCP_OAUTH_ENABLED` it shows the Claude Code and Codex commands, else how the
+  operator switches sign-in on. Checked with real Claude Code 2.1.330 and Codex 0.161.0 clients.
+
 - The Rossi 2008 model is now on the About pages (`/models/advisor.downy_rossi`), linked from its
   badge on the parcel card; it still never feeds the stored spray decision. With missing weather
   hours and no infection computed, the card says primary infections are unknown instead of "none

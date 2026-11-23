@@ -312,6 +312,7 @@ def _connect_page(
         "share/connect.html",
         mcp_url=url,
         mcp_enabled=settings.mcp_http_enabled,
+        oauth_enabled=settings.mcp_oauth_enabled,
         local_only=connect.is_loopback(url),
         probe=status,
         snippets=connect.snippets(url),

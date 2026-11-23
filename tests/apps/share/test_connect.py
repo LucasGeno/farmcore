@@ -111,7 +111,6 @@ def test_the_page_explains_local_versus_public_and_probes_only_in_expert_view(
     assert plain.status_code == 200 and not probed
     assert "tunnel" in plain.text.lower()  # loopback-only default: needs a tunnel or hosting
     assert 'data-snippet="desktop"' not in plain.text  # stdio is for the operator only
-    assert "coming" in plain.text.lower()  # OAuth clients are not offered yet
 
     owner_browser.cookies.set("expert", "1")
     expert = owner_browser.get(f"/share/connect?farm={demo.farm.id}")
