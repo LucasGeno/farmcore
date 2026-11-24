@@ -36,6 +36,8 @@ from farmcore.core.models.canonical import AccessLog, Asset, DataGrant, Farm, Pa
 from farmcore.core.models.identity import FarmMembership, LocalIdentity
 from farmcore.core.models.weather import WeatherReceipt
 from farmcore.core.tools import ToolContext
+from farmcore.core.weather import store
+from farmcore.core.weather.contract import Fetched, Licence, ObservationValue, Request, Station
 
 SQUARE = "SRID=4326;MULTIPOLYGON(((-0.16 44.89,-0.15 44.89,-0.15 44.90,-0.16 44.90,-0.16 44.89)))"
 PARIS = ZoneInfo("Europe/Paris")
@@ -190,16 +192,52 @@ def test_advice_on_weather_that_may_not_be_redistributed_is_withheld_with_a_reas
     assert "redistribut" in result.text
 
 
+def _withheld_value(session, farm) -> None:
+    """One weather value on the farm, through a receipt that bars redistribution."""
+    fetched = Fetched(
+        request=Request(dataset="hourly"),
+        fetched_at=datetime.now(UTC),
+        payload=b"withheld",
+        values=[],
+    )
+    receipt = store.record_receipt(
+        session,
+        provider="p",
+        licence=Licence("CC-BY-NC-4.0", "Synthetic NC network", False),
+        fetched=fetched,
+        farm_id=farm.id,
+    )
+    station = store.upsert_station(session, "p", Station("S1", "Station 1", 44.9, -0.15))
+    hour = datetime.now(UTC).replace(minute=0, second=0, microsecond=0)
+    store.store_observations(
+        session,
+        receipt,
+        station,
+        [ObservationValue("air_temperature", "degC", Decimal("12.5"), hour, hour)],
+    )
+    session.flush()
+
+
 @pytest.mark.parametrize(
-    ("kwargs", "reason"),
+    ("kwargs", "withheld", "reason"),
     [
-        ({"props": {"advisor_unavailable_reason": "Archive data only."}}, "Archive data only."),
-        ({"station": False}, "no weather station"),
+        (
+            {"props": {"advisor_unavailable_reason": "Archive data only."}},
+            False,
+            "Archive data only.",
+        ),
+        ({"station": False}, False, "no weather station"),
+        # Withheld weather reads as none (owner ruling 2026-11-22), not as a licence reason.
+        ({"station": False}, True, "no weather station"),
     ],
-    ids=["farm-level-reason", "no-station"],
+    ids=["farm-level-reason", "no-station", "no-station-only-withheld-weather"],
 )
-def test_the_farm_level_caveats_still_withhold_advice_from_a_token(session, kwargs, reason):
+def test_the_farm_level_caveats_still_withhold_advice_from_a_token(
+    session, kwargs, withheld, reason
+):
     farm, parcel = _farm(session, "A", **kwargs)
+    if withheld:
+        _withheld_value(session, farm)
     _advice(session, farm, parcel)
     _, raw = _token(session, farm, ["advice:read", "fields:read"])
 

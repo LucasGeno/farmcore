@@ -38,9 +38,9 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, and_, exists, or_, select
 from sqlalchemy.engine import Result
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnClause, TextClause
 from sqlalchemy.sql.expression import TableClause
 from sqlalchemy.sql.selectable import TextualSelect, Values
@@ -364,15 +364,16 @@ class ScopedRepository:
         limit: int | None = None,
     ) -> list[M]:
         stmt = self._scoped(model, scope).where(*where)
+        caller = select(model).where(*where)
         if order_by is not None:
-            stmt = stmt.order_by(
-                *(order_by if isinstance(order_by, (list, tuple)) else (order_by,))
-            )
+            order = order_by if isinstance(order_by, (list, tuple)) else (order_by,)
+            stmt = stmt.order_by(*order)
+            caller = caller.order_by(*order)
         if limit is not None:
             if isinstance(limit, bool) or not isinstance(limit, int):
                 raise ScopeDenied("list() takes a plain int limit.")
             stmt = stmt.limit(limit)
-        self._refuse_predicates(stmt, model)
+        self._refuse_predicates(caller, model)
         self._authorise(scope, model.__table__.name)
         return list(self.session.scalars(stmt))
 
@@ -381,7 +382,7 @@ class ScopedRepository:
         if len(pk) != 1:
             raise TypeError(f"{model.__name__} has a composite key; use list()")
         stmt = self._scoped(model, scope).where(pk[0] == id)
-        self._refuse_predicates(stmt, model)
+        self._refuse_predicates(select(model).where(pk[0] == id), model)
         self._authorise(scope, model.__table__.name)
         return self.session.scalar(stmt)
 
@@ -425,7 +426,9 @@ class ScopedRepository:
         CTE or a subquery column would join it in implicitly, unscoped. Their WHERE and ORDER BY
         are held to `execute`'s rules: no opaque SQL, no assessment table (another kind's
         envelopes, read in a subquery or an EXISTS), and for grant views no weather value table
-        outside the licence gate. The repository's own filters name neither."""
+        outside the licence gate. `stmt` holds the caller's arguments only: the repository's own
+        filters are not checked (a grant view's rule for superseded weather values reads
+        weather_observation, from the receipts the grant may read)."""
         froms = stmt.get_final_froms()
         if not (
             len(froms) == 1
@@ -473,6 +476,8 @@ class ScopedRepository:
             owned = select(parent.id).where(parent.farm_id == self.farm_id)
             if self.grant_view and parent is WeatherReceipt:
                 owned = owned.where(WeatherReceipt.redistribution)
+                if model is WeatherObservation:
+                    return stmt.where(fk.in_(owned), ~_superseded(owned))
             return stmt.where(fk.in_(owned))
         if model is LegacyQuantityMap:  # two hops: its typed quantity's log
             owned = (
@@ -504,6 +509,24 @@ class ScopedRepository:
             )
         )
         self.session.flush()
+
+
+def _superseded(receipts: Select[Any]) -> Any:
+    """A provisional observation whose final value (same station, variable and period) one of
+    `receipts` holds: `weather.store.held`'s rule, which a grant view applies only from the
+    receipts it may read, so a withheld final never hides a shared provisional value."""
+    final = aliased(WeatherObservation)
+    return and_(
+        WeatherObservation.provisional,
+        exists().where(
+            final.station_id == WeatherObservation.station_id,
+            final.variable == WeatherObservation.variable,
+            final.period_start == WeatherObservation.period_start,
+            final.period_end == WeatherObservation.period_end,
+            final.provisional.is_(False),
+            final.receipt_id.in_(receipts),
+        ),
+    )
 
 
 def referenced_tables(stmt: Any, own: str | None = None) -> set[str]:

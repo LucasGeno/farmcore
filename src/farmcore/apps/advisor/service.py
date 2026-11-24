@@ -122,7 +122,7 @@ def _grant_reason(repo: ScopedRepository) -> str | None:
     has_station = repo.session.scalar(
         select(Asset.id).where(Asset.farm_id == repo.farm_id, Asset.kind == "station").limit(1)
     )
-    if has_station is None and not merge.has_weather(repo.session, repo.farm_id):
+    if has_station is None and not merge.has_weather(repo.session, repo.farm_id, shared_only=True):
         return NO_STATION
     barred = repo.session.scalar(
         select(WeatherReceipt.id)

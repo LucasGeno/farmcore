@@ -283,10 +283,21 @@ def held(
 ) -> list[WeatherObservation]:
     """The farm's observations matching `where` as known at `as_of` (None: all it holds): from
     its receipts fetched by then, a provisional value left out where one of them holds a final
-    value for the same station, variable and period."""
+    value for the same station, variable and period. On a grant view the repository applies
+    that rule itself, from the receipts the grant may read (any fetch time, not only by
+    `as_of`): a withheld final value never hides a shared provisional one."""
     known = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == repo.farm_id)
     if as_of is not None:
         known = known.where(WeatherReceipt.fetched_at <= as_of)
+    if repo.grant_view:
+        return repo.list(
+            WeatherObservation,
+            *where,
+            WeatherObservation.receipt_id.in_(known),
+            scope=scope,
+            order_by=order_by,
+            limit=limit,
+        )
     final = aliased(WeatherObservation)
     replaced = exists().where(
         final.station_id == WeatherObservation.station_id,

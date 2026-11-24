@@ -298,6 +298,53 @@ def test_a_grant_view_cannot_tell_withheld_weather_from_none(
     assert seen() == nothing
 
 
+@pytest.mark.parametrize(
+    ("final", "shown"),
+    [(SOURCES[0][1], Decimal("12.25")), (SOURCES[1][1], OPEN)],
+    ids=["shared-final-replaces", "withheld-final-never-hides"],
+)
+def test_a_provisional_value_gives_way_on_a_grant_only_to_a_final_it_may_read(
+    final, shown, session, grantee_client, demo, station_grant
+) -> None:
+    """`store.held` on a grant view (the export): a withheld final value for the same station,
+    variable and period would otherwise hide the shared provisional one, a yes/no on withheld
+    weather."""
+    station = store.upsert_station(session, "open-station", Station("S0", "Station 0", 44.9, -0.15))
+    for licence, value, provisional in (
+        (SOURCES[0][1], OPEN, True),
+        (final, Decimal("12.25"), False),
+    ):
+        fetched = Fetched(
+            request=Request(dataset="hourly"),
+            fetched_at=NOW - timedelta(minutes=5),
+            payload=f"{licence.identifier}-{provisional}".encode(),
+            values=[],
+        )
+        receipt = store.record_receipt(
+            session,
+            provider=f"{licence.identifier}",
+            licence=licence,
+            fetched=fetched,
+            farm_id=demo.farm.id,
+        )
+        store.store_observations(
+            session,
+            receipt,
+            station,
+            [
+                ObservationValue(
+                    "air_temperature", "degC", value, HOUR, HOUR, provisional=provisional
+                )
+            ],
+        )
+    session.commit()
+
+    export = grantee_client.get(f"/share/as/{station_grant.id}/observations.json")
+
+    assert export.status_code == 200
+    assert [o["value"] for o in export.json()["observations"]] == [float(shown)]
+
+
 def test_weather_page_shows_each_source_attribution_endpoint_and_sharing(admin, weather) -> None:
     page = admin.get("/stations/").text
 
