@@ -411,10 +411,13 @@ def farm_hourly(
     return load(repo, start, end, as_of).at(point)
 
 
-def has_weather(session: Session, farm_id: int) -> bool:
+def has_weather(session: Session, farm_id: int, *, shared_only: bool = False) -> bool:
     """Whether the farm holds any weather value (observation or forecast) through its receipts:
-    receipt metadata only, never a value."""
+    receipt metadata only, never a value. `shared_only` (a grant view): through redistributable
+    receipts only, so withheld weather reads as none."""
     mine = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == farm_id)
+    if shared_only:
+        mine = mine.where(WeatherReceipt.redistribution.is_(True))
     return bool(
         session.scalar(
             select(

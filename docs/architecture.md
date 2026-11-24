@@ -60,10 +60,14 @@ database, a small core and installable apps, in the style of Odoo.
   runs in the web process: `farmcore worker` runs them ([durable live tasks](#durable-live-tasks)).
 - **Access.** Farm data is read through `ScopedRepository(farm, grant)`: it checks the farm and
   consent scopes (`fields:read`, `logs:read`, `register:read`, …) and writes an `access_log` row
-  for each read. Third-party grants are read-only, cannot read the audit log, and are revocable;
-  the farmer sees reads under each grant on `/share/`. There is one administrator per
-  installation (the `ADMIN_TOKEN` holder) and no per-user accounts: see
-  [SECURITY.md](../SECURITY.md) for what anonymous visitors can see.
+  for each read. Members are local accounts with owner or advisor roles on the farms they are
+  assigned to. A sharing grant is bound to one recipient login. An agent's personal token, an
+  OAuth-approved agent and a sensor device each hold a grant of their own with no recipient
+  login; the token is the credential. Each of these grants is revocable, reads its scopes only and never
+  reads the audit log; an agent's grant may also propose drafts (`drafts:propose`) that the
+  farmer confirms, and a device's grant can only push readings (`weather:push`). The farmer sees reads under each grant on
+  `/share/`. The installation operator (the `ADMIN_TOKEN` holder) is a separate break-glass
+  identity. Roles and limits: [SECURITY.md](../SECURITY.md#access-model).
 - **Read-only tour.** `/tour` sets a browser cookie that refuses every non-GET request before
   routing, even with administrator credentials, for sharing a demo safely. Every page shows a
   tour banner; the only requests let through are the ones that leave the tour (`POST /tour/exit`
@@ -79,7 +83,8 @@ database, a small core and installable apps, in the style of Odoo.
   attribution per receipt), which the station and forecast views and the advisor read. The
   replayed Météo-France station, live Météo-France observations (`weather_meteofrance`, DPObs
   and the DPClim archive, under the same station), ERA5 history through Copernicus
-  (`weather_era5`: a model's grid point, flagged `model-reanalysis`) and Open-Meteo are the
+  (`weather_era5`: a model's grid point, flagged `model-reanalysis`, one private grid station
+  per farm), Open-Meteo and readings pushed by on-farm sensors (`weather_push`) are the
   providers today; the legacy
   `observation` and `forecast_value` rows are still written beside them until the contract step.
   Saving the farm pin chooses its sources (`core/weather/selection.py`): the country's station
@@ -99,6 +104,20 @@ database, a small core and installable apps, in the style of Odoo.
   clock time are read. Each hour's source per variable is saved in the input snapshot; hours
   another source filled are flagged (`weather_gap_filled`) on the card. The stored automatic
   pick and a receipt's `endpoint_kind` never rank anything.
+  Values are append-only (`core/weather/store.py`). A value can be `provisional` (ERA5T): the
+  final value is stored beside it with a `revision_note`. The merge layer, station pages and the
+  share page read through `store.held`, which hides the provisional value once a final one is
+  visible as of the read time, so an earlier replay still reads what was known then. A write of a key another farm's receipt already holds is
+  refused, never dropped.
+  Daily reference evapotranspiration (`core/weather/et0.py`, `farmcore et0`) takes an official
+  value for the grid cell holding the point (Météo-France's daily ETP grid, imported with
+  `farmcore weather-meteofrance import-etp`), else FAO-56 Penman-Monteith (`pyet`) from the
+  merged hourly series. A day with any missing input hour is unknown, never zero.
+- **Agronomy helpers.** `core/agro` holds pure functions crop models share: degree-days
+  (Zalom et al. 1983 sine and triangle methods, horizontal and vertical cutoffs; callers pass
+  their thresholds), leaf wetness (sensor minutes, else an hour at RH ≥ 90 % counts as wet, an
+  `assumed` threshold, labelled estimated; a missing hour is missing, never dry) and BBCH
+  stages from dated entries or windows (never moving backwards).
 - **Migrations.** One linear Alembic chain; each revision is prefixed with its app
   (`<app>_<NNNN>_<slug>`).
 
@@ -110,10 +129,12 @@ database, a small core and installable apps, in the style of Odoo.
 | Today | Home page assembled from app widgets |
 | Map & parcels | Aerial map (MapLibre) with layers and panel sections contributed by apps |
 | Records | Spray logs, ISOXML import, Reg. (EU) 2023/564 register with record checks |
-| Crop protection | Downy/powdery mildew rules (3-10 rule, Goidanich incubation, Gubler–Thomas, wash-off, intervals): spray / wait / protected, with reasons |
+| Crop protection | Downy/powdery mildew rules (3-10 rule, Goidanich incubation, Gubler–Thomas, wash-off, intervals): spray / wait / protected, with reasons; the Rossi 2008 primary infection model shown beside the 3-10 rule |
 | Planned jobs | Persistent spray jobs from stored advice: parcels, product, duration, revisions and cancellation; never completed work or stock movement |
 | Weather | Météo-France station ingest, spray conditions, charts |
-| Météo-France live | Optional: live hourly observations of the farm's Météo-France station (DPObs, gaps from the DPClim archive) with the installation's portal credentials |
+| Météo-France live | Optional: live hourly observations of the farm's Météo-France station (DPObs, gaps from the DPClim archive) with the installation's portal credentials; imports the daily ETP grid |
+| ERA5 history | Optional: the season's missing hours for the farm's own ERA5 grid point, ERA5T kept provisional until final |
+| Sensor push | Optional: readings pushed by the farm's own station or soil probe, with a push-only device token |
 | Forecast | Saved forecast runs and live Open-Meteo receipts ranked into a spray plan |
 | Sharing | Grants, revoke, access log, NGSI-LD export, grantee view |
 | Season & impact | Model replay vs a spray calendar and the Agreste 2019 reference |
@@ -168,12 +189,16 @@ short-lived tokens bound to the MCP endpoint's URL, refreshed by rotation; the c
 grant on Sharing ([SECURITY.md](../SECURITY.md#oauth-for-mcp-lets-an-owner-approve-an-agent)).
 Agents register themselves: by an https `client_id` that is their metadata document's URL
 (fetched with SSRF fences, cached) or by Dynamic Client Registration (`core/oauth/clients.py`).
+Claude Code and Codex sign in with a metadata document. If an agent's document turns invalid or
+names another client, every connection of that agent ends at once (grant and tokens revoked);
+a document that cannot be fetched only drops the cached copy. claude.ai connectors and ChatGPT
+need the installation on a public https address.
 
 ## Stack
 
 Python 3.12, FastAPI, SQLAlchemy 2 + GeoAlchemy2, Alembic, Pydantic, Jinja + HTMX + Tailwind,
 MapLibre GL, PostgreSQL 17 + PostGIS, Procrastinate (live background work), python-telegram-bot,
-faster-whisper, Docker. Front-end libraries and fonts are bundled
+faster-whisper, pyet (FAO-56 ET0), Docker. Front-end libraries and fonts are bundled
 ([inventory](../src/farmcore/core/static/vendor/README.md)); map tiles come from IGN and
 OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
@@ -183,8 +208,8 @@ OpenStreetMap. Licences: [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 - Live background work runs on one Postgres-backed queue (Procrastinate, with a plain
   `SKIP LOCKED` table as the documented exit); no broker, no in-process scheduler.
 - A plain `observation` table (a TimescaleDB hypertable has the same schema).
-- One administrator per installation: grants show the consent model but are not yet
-  authenticated multi-tenant access.
+- No external identity provider: members and recipients are local accounts, and the operator
+  signs in with the installation's `ADMIN_TOKEN`.
 - Assistant context is one expiring draft plus a few recent turns, kept on that draft: no
   vector store, long-term memory or multi-step agent loop.
 
@@ -253,7 +278,8 @@ one interval after a worker first sees it). Replay never enqueues: `step_to` and
 in-process and deterministic.
 
 The queue is [Procrastinate](https://procrastinate.readthedocs.io/) (MIT, tables in `public`,
-schema applied from a checksummed vendored copy by revision `core_0009`); only
+3.12; its 3.10 schema applied from a checksummed vendored copy by revision `core_0009`, then the
+library's own 3.11 and 3.12 migrations, vendored and checksummed, by `core_0023`); only
 `core/tasks.py` imports it. What may be written is decided by FarmCore's own fence, not by the
 library's job status: each run takes a new attempt in `task_attempt`, and the transaction that
 writes the result first checks, under row locks, that the attempt is still the current one for
@@ -365,6 +391,22 @@ Crop protection saves kind `advisor.spray` (spray / wait / protected / none with
 products and windows). Its `advice` row stays the public representation every reader uses and
 points at its envelope (`advice.assessment_id`, same farm, parcel and time); advice saved before
 `core_0012` keeps its evidence in `advice.props` and has no envelope.
+
+Each kind declares its own read scope (`AssessmentKind.read_scope`), and core never names one.
+The registry refuses two loaded kinds that share a scope, and a kind whose scope already reads
+something else (a core scope such as `fields:read`, or any app's table scope): every new kind
+declares a new scope. Crop protection's `advisor.spray` with `advice:read` is the sole
+compatibility exception.
+That load-time check (`collect_assessment_kinds`) is the authoritative one; the scoped
+repository's registration refuses the same sharing again only as a backstop. The scoped
+repository reads an `assessment` row only with its kind's scope (`list`/`get` filter by kind; a
+caller-built statement or a `list`/`get` predicate naming the table anywhere, or carrying text,
+a literal column or a VALUES payload, is refused), so holding one kind's scope never reads another
+kind, and
+the owner's `*` grant also reads each kind through its own scope. Crop protection keeps
+`advice:read`, so every grant and token that holds it keeps exactly its access. A scope core does
+not know is owner-only: it is never in a grant preset, an agent token or an OAuth connection
+(`access.TOKEN_SCOPES`). Grant and token views read stored advice, never the envelope itself.
 
 Each kind names the models that compute it (`AssessmentKind.models`), each a `ModelSpec`
 (`core/model_spec.py`): method and citation, EPPO host and pest codes, BBCH window, inputs, every

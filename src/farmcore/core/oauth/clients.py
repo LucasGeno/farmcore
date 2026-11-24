@@ -9,7 +9,12 @@ Dynamic Client Registration (RFC 7591, kept for clients without CIMD).
   is the URL it came from byte for byte (CIMD §4) and it asks for nothing a public client may
   not hold (§4.1), then cached (`oauth_client`, §6.2) between `CACHE_MIN` and `CACHE_MAX`. A
   failed or invalid fetch is never cached; a transient failure keeps the last good document,
-  an invalid one ends it and every connection of that client (§6.1).
+  an invalid one ends it and every connection of that client (§6.1). A permanent failure (any
+  `FetchFailed` not marked transient: 404, 410 and other 4xx but 408/429, a non-public address,
+  a redirect, a non-JSON, compressed or oversized answer) keeps it for `MCP_OAUTH_CIMD_GRACE`
+  from the first such failure
+  (a client's deploy may be broken for a while), then ends it like an invalid one; a later
+  successful fetch starts that clock again.
 - Open registration issues public clients only (`none`, no secret), never an https client ID
   (CIMD §9.1), and is capped per address slot and while unused (RFC 7591 §3). A software
   statement is ignored (RFC 7591 §3.1.1), so nothing in one is trusted.
@@ -224,10 +229,11 @@ def resolve(
         fetched = fetch(client_id)
         found = from_document(client_id, fetched.body)
     except FetchFailed as exc:
-        if exc.transient and row is not None:
+        if row is None:
+            return None
+        if exc.transient:
             return _client(row)
-        _forget(session, client_id)
-        return None
+        return _gone(session, settings, client_id, now)
     except Unacceptable:
         _forget(session, client_id)
         _end_connections(session, client_id)
@@ -236,6 +242,7 @@ def resolve(
         "client_name": found.client_name,
         "redirect_uris": list(found.redirect_uris),
         "fresh_until": datetime.now(UTC) + _cache_for(fetched),
+        "failing_since": None,
     }
     session.execute(
         insert(RegisteredClient)
@@ -245,6 +252,30 @@ def resolve(
     if row is not None:
         session.expire(row)
     return found
+
+
+def _gone(session: Session, settings: Settings, client_id: str, now: datetime) -> Client | None:
+    """A permanent fetch failure: the last good document while the grace runs (from the first
+    such failure), then nothing and no connection. The row is locked and read again first, so a
+    newer lookup that found the document valid meanwhile (and reset the clock) wins over this
+    older failure; one that ended the client already leaves nothing to end."""
+    row = session.scalar(
+        select(RegisteredClient)
+        .where(RegisteredClient.client_id == client_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if row is None:
+        return None
+    if row.fresh_until is not None and now < row.fresh_until:
+        return _client(row)
+    if row.failing_since is None:
+        row.failing_since = now
+    if now < row.failing_since + settings.mcp_oauth_cimd_grace:
+        return _client(row)
+    _forget(session, client_id)
+    _end_connections(session, client_id)
+    return None
 
 
 def _own_host(settings: Settings, url: str) -> bool:
@@ -262,7 +293,8 @@ def _forget(session: Session, client_id: str) -> None:
 
 
 def _end_connections(session: Session, client_id: str) -> None:
-    """CIMD §6.1: the document no longer vouches for this client, so its connections end now
+    """CIMD §6.1: the document no longer vouches for this client (it is invalid, or gone past the
+    grace), so its connections end now
     (grant and tokens revoked, an event on Sharing) rather than at the next refresh.
 
     Its unspent codes expire first. A token request that resolved the client while it was still

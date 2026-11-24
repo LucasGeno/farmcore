@@ -156,8 +156,9 @@ class RegisteredClient(Base):
     """An OAuth client this server knows without the operator listing it (`core/oauth/clients`):
     one `dynamic`ally registered (RFC 7591, from the address slot `peer_slot`, never the
     address) or the last valid client ID metadata document fetched from the URL `client_id`
-    (`metadata`, trusted until `fresh_until`, then fetched again). Name and redirect URIs are
-    self-reported by the client."""
+    (`metadata`, trusted until `fresh_until`, then fetched again; `failing_since`: when its URL
+    first failed for good since the last valid fetch). Name and redirect URIs are self-reported
+    by the client."""
 
     __tablename__ = "oauth_client"
     __table_args__ = (
@@ -177,3 +178,4 @@ class RegisteredClient(Base):
     peer_slot: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     fresh_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failing_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

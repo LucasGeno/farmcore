@@ -47,8 +47,11 @@ FarmCore began at the EU Agri-Hackathon 2026.
 - **Crop protection advisor.** Downy mildew (3-10 rule, Goidanich incubation), powdery mildew
   (Gubler–Thomas), protection length, rain wash-off and spray windows: spray / wait / protected
   per parcel, each with its rule, thresholds and published source. Assumed values are labelled.
+  The Rossi 2008 downy mildew primary infection model is shown beside the 3-10 rule; it does
+  not change the decision.
 - **Map and parcels.** Aerial map (IGN orthophotos or OpenStreetMap) with layers contributed by
-  apps; a parcel workspace with advice, season history and activity.
+  apps; a parcel workspace with advice, season history and activity. A parcel can keep its
+  Varda Global FieldID as an alias (optional credentials).
 - **Spray log by voice or text.** Telegram or the web assistant: "Sprayed P5 and P6 with copper,
   2 kg" becomes a draft entry the farmer confirms. Speech is transcribed on the server
   (faster-whisper); an optional Gemini extractor fills the draft, with a local parser as
@@ -59,8 +62,10 @@ FarmCore began at the EU Agri-Hackathon 2026.
   that keeps the original evidence.
 - **Field observations and irrigation.** Confirmed observations and irrigation facts keep the
   entered amount, unit and gross/net basis when stated; they never consume spray stock.
-- **Live weather and forecast.** Live Météo-France station ingest, spray conditions per hour,
-  a five-day spray plan from archived forecast runs.
+- **Weather and forecast.** Météo-France stations, ERA5 history, Open-Meteo forecasts and the
+  farm's own sensors merge into one hourly series per parcel, best source first, with each
+  value's source kept. Daily ET0 (Météo-France's official grid, else FAO-56). Spray conditions
+  per hour and a five-day spray plan from archived forecast runs.
 - **Private member accounts.** Local accounts with scrypt password hashes, opaque server-side
   sessions, owner/advisor memberships, next-request revocation and CSRF protection; the
   installation operator remains a separate break-glass identity.
@@ -76,6 +81,8 @@ FarmCore began at the EU Agri-Hackathon 2026.
   work with the plan and records one confirmed operation atomically.
 - **Season & impact.** Replays a season against a calendar spray programme and the Agreste
   regional reference: treatments, copper, diesel and CO₂ avoided, with every assumption shown.
+- **Your own agent.** MCP over stdio or HTTP with scoped, revocable tokens. With sign-in on,
+  Claude Code and Codex connect by OAuth after the owner approves them.
 - **Modular.** Apps declare routes, jobs, scopes, map layers and Today widgets in a manifest;
   optional ones switch on and off at `/apps`.
 
@@ -127,6 +134,7 @@ and anonymous farm access is closed. Public demo access requires explicit farm d
 - [Architecture](docs/architecture.md): core, apps, data model, AI boundary
 - [Self-hosting](docs/self-hosting.md): configuration, reverse proxy, Telegram, Vertex AI, backups
 - [Private pilot onboarding](docs/pilot-onboarding.md): operator provisioning, parcels and handoff
+- [API compatibility](docs/api-compatibility.md): versioned JSON shapes and deprecations
 - [Contributing](CONTRIBUTING.md): development setup, tests, writing an app
 - [Security](SECURITY.md): access model and reporting vulnerabilities
 - [Third-party licences and data sources](THIRD_PARTY_NOTICES.md)

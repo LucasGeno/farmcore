@@ -269,7 +269,7 @@ def test_core_0023_downgrade_restores_the_3_10_queue_or_refuses_a_mutex_job(
 
 
 def test_single_migration_head_creates_every_core_table(session) -> None:
-    head = "core_0023"  # core_0022 -> core_0023
+    head = "core_0024"  # core_0023 -> core_0024
     assert ScriptDirectory.from_config(alembic_config()).get_heads() == [head]
     assert session.execute(text("SELECT version_num FROM alembic_version")).scalar() == head
     assert _tables(session) >= CANONICAL_TABLES | IDENTITY_TABLES

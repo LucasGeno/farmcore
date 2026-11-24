@@ -4,6 +4,16 @@ Notable changes for operators and app authors. Newest first.
 
 ## Unreleased
 
+- With `MCP_OAUTH_ENABLED`, the MCP 401 challenge now names `scope`: the read scopes an
+  authorization request naming none gets (never `advice:read` or `drafts:propose`). Clients
+  such as Claude Code and Codex then ask for least privilege instead of every supported scope.
+  Consent is unchanged.
+- A client whose metadata document stays gone (404, 410 and other 4xx but 408/429, a non-public
+  address, a redirect, a non-JSON, compressed or oversized answer) now loses its connections too,
+  once `MCP_OAUTH_CIMD_GRACE` (whole seconds or ISO 8601, default 7 days; 0: at once) has passed
+  since the first such failure; until then it keeps working on its last good document. A
+  successful fetch resets the clock; timeouts, 5xx, 408, 429 and network errors never count.
+  Migration `core_0024` adds `oauth_client.failing_since`.
 - Procrastinate 3.12.0 (was 3.10.0). Migration `core_0023` applies the library's own 3.11.0 and
   3.12.0 queue migrations (vendored, checksummed) in the usual single migrate transaction; its
   two `CONCURRENTLY` index steps run as plain index builds, which briefly lock the task queue
@@ -47,6 +57,19 @@ Notable changes for operators and app authors. Newest first.
   defaults from them. No threshold, output or config digest changes. `GOIDANICH_TABLE` and
   `GoidanichTable` are still importable from `engine.config`; `specs.DOIS` moved to
   `engine.mildew.DOIS`.
+- App authors: an `AssessmentKind` now declares its own new `read_scope` (required,
+  `<name>:read`): not a core scope, not any app's table scope, and not another kind's. Crop
+  protection's `advisor.spray` keeps `advice:read`, the one compatibility exception, so no grant
+  or token gains or loses access. The scoped repository reads an `assessment` row only with its
+  kind's scope, and refuses `execute()` statements, and `list()`/`get()` predicates or orderings,
+  that name the `assessment` table anywhere: read envelopes with `list()` or `get()`. It also
+  refuses opaque SQL anywhere in a statement or predicate (`text()`, `literal_column()`, a
+  `VALUES` payload), and, for a grant view, any statement or predicate naming a weather value
+  table, EXISTS included. A new kind's scope is never granted by default.
+- Grant views: withheld weather is indistinguishable from none. The grantee page and
+  `observations.json` no longer list each withheld source; `withheld` is now one generic
+  sentence shown whenever the grant reads weather, and the shared sources list every
+  redistributable receipt.
 - Migration `core_0019` drops the legacy `product` and `quantity` tables that `core_0018`
   froze; the maps and the tables' id sequences stay. Downgrading below it rebuilds both from the
   maps and the catalog rows under their legacy ids, with their sequences as they were, and then
