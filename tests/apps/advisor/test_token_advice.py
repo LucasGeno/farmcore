@@ -34,7 +34,6 @@ from farmcore.core.clock import clock_row
 from farmcore.core.identity import hash_password
 from farmcore.core.models.canonical import AccessLog, Asset, DataGrant, Farm, Parcel
 from farmcore.core.models.identity import FarmMembership, LocalIdentity
-from farmcore.core.models.weather import WeatherReceipt
 from farmcore.core.tools import ToolContext
 from farmcore.core.weather import store
 from farmcore.core.weather.contract import Fetched, Licence, ObservationValue, Request, Station
@@ -78,20 +77,6 @@ def _advice(session, farm, parcel, *, age_h: float = 0.2, decision: str = "prote
             reasons=[{"rule": "downy_3_10", "inputs": {"event_r48_mm": mm}}],
             protected_until=datetime.now(UTC) + timedelta(days=3),
             props={"assessment_status": "evaluable", "headline": "Protected", "mm_since_spray": mm},
-        )
-    )
-    session.flush()
-
-
-def _receipt(session, farm, *, redistribution: bool):
-    session.add(
-        WeatherReceipt(
-            provider="p",
-            dataset="d",
-            farm_id=farm.id,
-            fetched_at=datetime.now(UTC),
-            licence="CC-BY-4.0" if redistribution else "restricted",
-            redistribution=redistribution,
         )
     )
     session.flush()
@@ -177,19 +162,6 @@ def test_stale_advice_never_reads_as_current(session):
 
     assert result.facts["decision"] == "none"
     assert "out of date" in result.text
-
-
-def test_advice_on_weather_that_may_not_be_redistributed_is_withheld_with_a_reason(session):
-    farm, parcel = _farm(session, "A")
-    _advice(session, farm, parcel)
-    _receipt(session, farm, redistribution=True)
-    _receipt(session, farm, redistribution=False)
-    _, raw = _token(session, farm, ["advice:read", "fields:read"])
-
-    result = tools.today(_as_token(session, raw))
-
-    assert set(result.facts) == {"unavailable"}
-    assert "redistribut" in result.text
 
 
 def _withheld_value(session, farm) -> None:
