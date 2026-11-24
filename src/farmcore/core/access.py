@@ -363,7 +363,41 @@ class ScopedRepository:
         order_by: Any = None,
         limit: int | None = None,
     ) -> list[M]:
-        stmt = self._scoped(model, scope).where(*where)
+        return self._list(model, where, (), scope, order_by, limit)
+
+    def held_observations(
+        self,
+        *where: Any,
+        as_of: datetime | None = None,
+        scope: str = "stations:read",
+        order_by: Any = None,
+        limit: int | None = None,
+    ) -> list[WeatherObservation]:
+        """`weather.store.held`: the farm's observations matching `where` from the receipts
+        this view reads (a grant view: redistributable only) fetched by `as_of` (None: all),
+        a provisional value left out where one of those receipts holds its final value. So a
+        withheld final never hides a shared provisional value, and a final fetched after
+        `as_of` never hides the provisional value known then."""
+        known = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == self.farm_id)
+        if self.grant_view:
+            known = known.where(WeatherReceipt.redistribution)
+        if as_of is not None:
+            known = known.where(WeatherReceipt.fetched_at <= as_of)
+        own = (WeatherObservation.receipt_id.in_(known), ~_superseded(known))
+        return self._list(WeatherObservation, where, own, scope, order_by, limit)
+
+    def _list[M: Base](
+        self,
+        model: type[M],
+        where: tuple[Any, ...],
+        own: tuple[Any, ...],
+        scope: str,
+        order_by: Any,
+        limit: int | None,
+    ) -> list[M]:
+        """`list`, with `own`: the repository's filters, which `_refuse_predicates` (the
+        caller's arguments only) does not check."""
+        stmt = self._scoped(model, scope).where(*own, *where)
         caller = select(model).where(*where)
         if order_by is not None:
             order = order_by if isinstance(order_by, (list, tuple)) else (order_by,)
@@ -427,8 +461,8 @@ class ScopedRepository:
         are held to `execute`'s rules: no opaque SQL, no assessment table (another kind's
         envelopes, read in a subquery or an EXISTS), and for grant views no weather value table
         outside the licence gate. `stmt` holds the caller's arguments only: the repository's own
-        filters are not checked (a grant view's rule for superseded weather values reads
-        weather_observation, from the receipts the grant may read)."""
+        filters are not checked (`held_observations`' rule for superseded values reads
+        weather_observation, from the receipts the view may read)."""
         froms = stmt.get_final_froms()
         if not (
             len(froms) == 1
@@ -476,8 +510,6 @@ class ScopedRepository:
             owned = select(parent.id).where(parent.farm_id == self.farm_id)
             if self.grant_view and parent is WeatherReceipt:
                 owned = owned.where(WeatherReceipt.redistribution)
-                if model is WeatherObservation:
-                    return stmt.where(fk.in_(owned), ~_superseded(owned))
             return stmt.where(fk.in_(owned))
         if model is LegacyQuantityMap:  # two hops: its typed quantity's log
             owned = (
@@ -513,8 +545,7 @@ class ScopedRepository:
 
 def _superseded(receipts: Select[Any]) -> Any:
     """A provisional observation whose final value (same station, variable and period) one of
-    `receipts` holds: `weather.store.held`'s rule, which a grant view applies only from the
-    receipts it may read, so a withheld final never hides a shared provisional value."""
+    `receipts` holds (`ScopedRepository.held_observations`)."""
     final = aliased(WeatherObservation)
     return and_(
         WeatherObservation.provisional,

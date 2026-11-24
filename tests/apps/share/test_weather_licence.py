@@ -345,6 +345,47 @@ def test_a_provisional_value_gives_way_on_a_grant_only_to_a_final_it_may_read(
     assert [o["value"] for o in export.json()["observations"]] == [float(shown)]
 
 
+def test_a_grant_replays_weather_as_known_then_like_the_owner(
+    session, demo, owner_repo, station_grant
+) -> None:
+    """`store.held(as_of=)`: a final value fetched after the replay time does not hide the
+    provisional value known then, on a grant view as for the owner."""
+    station = store.upsert_station(session, "open-station", Station("S0", "Station 0", 44.9, -0.15))
+    final = Decimal("12.25")
+    for value, provisional, fetched_at in (
+        (OPEN, True, NOW - timedelta(days=2)),
+        (final, False, NOW),
+    ):
+        fetched = Fetched(
+            request=Request(dataset="hourly"),
+            fetched_at=fetched_at,
+            payload=f"replay-{provisional}".encode(),
+            values=[],
+        )
+        receipt = store.record_receipt(
+            session,
+            provider="open-station",
+            licence=SOURCES[0][1],
+            fetched=fetched,
+            farm_id=demo.farm.id,
+        )
+        store.store_observations(
+            session,
+            receipt,
+            station,
+            [
+                ObservationValue(
+                    "air_temperature", "degC", value, HOUR, HOUR, provisional=provisional
+                )
+            ],
+        )
+    session.commit()
+
+    for repo in (owner_repo, service.grant_repo(session, station_grant)):
+        assert [o.value for o in store.held(repo, as_of=NOW - timedelta(days=1))] == [OPEN]
+        assert [o.value for o in store.held(repo, as_of=NOW)] == [final]
+
+
 def test_weather_page_shows_each_source_attribution_endpoint_and_sharing(admin, weather) -> None:
     page = admin.get("/stations/").text
 
