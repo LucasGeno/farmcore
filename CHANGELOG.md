@@ -57,6 +57,19 @@ Notable changes for operators and app authors. Newest first.
   defaults from them. No threshold, output or config digest changes. `GOIDANICH_TABLE` and
   `GoidanichTable` are still importable from `engine.config`; `specs.DOIS` moved to
   `engine.mildew.DOIS`.
+- App authors: an `AssessmentKind` now declares its own new `read_scope` (required,
+  `<name>:read`): not a core scope, not any app's table scope, and not another kind's. Crop
+  protection's `advisor.spray` keeps `advice:read`, the one compatibility exception, so no grant
+  or token gains or loses access. The scoped repository reads an `assessment` row only with its
+  kind's scope, and refuses `execute()` statements, and `list()`/`get()` predicates or orderings,
+  that name the `assessment` table anywhere: read envelopes with `list()` or `get()`. It also
+  refuses opaque SQL anywhere in a statement or predicate (`text()`, `literal_column()`, a
+  `VALUES` payload), and, for a grant view, any statement or predicate naming a weather value
+  table, EXISTS included. A new kind's scope is never granted by default.
+- Grant views: withheld weather is indistinguishable from none. The grantee page and
+  `observations.json` no longer list each withheld source; `withheld` is now one generic
+  sentence shown whenever the grant reads weather, and the shared sources list every
+  redistributable receipt.
 - Migration `core_0019` drops the legacy `product` and `quantity` tables that `core_0018`
   froze; the maps and the tables' id sequences stay. Downgrading below it rebuilds both from the
   maps and the catalog rows under their legacy ids, with their sequences as they were, and then

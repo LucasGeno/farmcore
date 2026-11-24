@@ -76,9 +76,6 @@ SEASON_START = (3, 1)  # (month, day): weather history from 1 Mar of the year
 LIMITED = (
     "Assessment limited: current weather/configuration inputs are not authorized by this grant"
 )
-LICENCE_WITHHELD = (
-    "Assessment withheld: it relies on weather data whose licence does not allow redistribution"
-)
 STALE = "Advice is out of date: the advisor has not evaluated this farm recently"
 
 
@@ -108,9 +105,10 @@ def _farm_reason(repo: ScopedRepository) -> str | None:
 def _grant_reason(repo: ScopedRepository) -> str | None:
     """`unavailable_reason` for a grant or token view. Stored advice is read only when the grant
     itself holds `advice:read` (checked on the grant, never implied by `stations:read` or any
-    other scope), and never when the farm holds weather whose receipt bars redistribution: the
-    advice was derived from it. Both questions read receipt and station metadata, never a
-    value, so they run under `advice:read` alone."""
+    other scope). Whether the farm holds withheld weather never changes it: a grant view cannot
+    tell withheld data from none (decision 2026-11-22). Inputs stay redacted (`redact_inputs`)
+    and attribution names redistributable receipts only. The station question reads station
+    and shared receipt metadata, never a value, so it runs under `advice:read` alone."""
     try:
         repo.check(SCOPE, "advice")
     except ScopeDenied:
@@ -122,14 +120,9 @@ def _grant_reason(repo: ScopedRepository) -> str | None:
     has_station = repo.session.scalar(
         select(Asset.id).where(Asset.farm_id == repo.farm_id, Asset.kind == "station").limit(1)
     )
-    if has_station is None and not merge.has_weather(repo.session, repo.farm_id):
+    if has_station is None and not merge.has_weather(repo.session, repo.farm_id, shared_only=True):
         return NO_STATION
-    barred = repo.session.scalar(
-        select(WeatherReceipt.id)
-        .where(WeatherReceipt.farm_id == repo.farm_id, WeatherReceipt.redistribution.is_(False))
-        .limit(1)
-    )
-    return LICENCE_WITHHELD if barred is not None else None
+    return None
 
 
 def redact_inputs(repo: ScopedRepository, value: Any) -> Any:

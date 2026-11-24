@@ -942,15 +942,18 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
     session.add(row)
     session.commit()
     url = f"/share/as/{bound_grant.id}"
-    for state in ("allowed", "restricted", "stale", "farm-caveat"):
-        if state == "restricted":
-            receipt.redistribution = False
-        elif state == "stale":
-            receipt.redistribution = True
+    seen = {}
+    for state in ("allowed", "stale", "farm-caveat", "withheld", "absent"):
+        if state == "stale":
             row.evaluated_at = NOW - timedelta(hours=3)
         elif state == "farm-caveat":
             row.evaluated_at = NOW
             demo.farm.props = {"advisor_unavailable_reason": "Archive data only."}
+        elif state == "withheld":
+            demo.farm.props = {}
+            receipt.redistribution = False
+        elif state == "absent":
+            session.delete(receipt)
         session.commit()
         response = recipient_browser.get(url + "/advice.json")
         assert response.status_code == 200
@@ -968,6 +971,8 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
             value not in str(mcp.facts) + mcp.text + str(today.facts) + today.text
             for value in ("31.7", "77.7", "987.6")
         )
+        page = recipient_browser.get(url + "/").text
+        seen[state] = (shared, mcp.facts, mcp.text, today.facts, today.text, page)
         if state == "allowed":
             assert shared["decision"] == mcp.facts["decision"] == "protected"
             assert shared["reasons"][0]["inputs"] is None
@@ -984,17 +989,18 @@ def test_shared_advice_and_mcp_apply_the_same_weather_gate(
             )
             assert owner.facts["mm_since_spray"] == 987.6
             assert owner.facts["headline"] == "Protected: 987.6 mm rain since spray"
-        else:
-            reason = {
-                "restricted": "redistribution",
-                "stale": "out of date",
-                "farm-caveat": "Archive data only.",
-            }[state]
+        elif state in ("stale", "farm-caveat"):
+            reason = {"stale": "out of date", "farm-caveat": "Archive data only."}[state]
             assert shared["decision"] == "none"
             assert shared["incubation_pct"] is None
             assert shared["attribution"] == []
             assert reason in shared["headline"] and reason in mcp.text
-            assert reason in recipient_browser.get(url + "/").text
+            assert reason in page
         session.refresh(row)
         assert row.props["mm_since_spray"] == 987.6
         assert row.reasons[0]["inputs"]["rr1_mm"] == 987.6
+    # Withheld weather is indistinguishable from none (decision 2026-11-22): advice JSON,
+    # page and agent tools are the same as for a farm that never held that receipt.
+    assert seen["withheld"] == seen["absent"]
+    assert seen["withheld"][0]["decision"] == "protected"
+    assert seen["withheld"][0]["attribution"] == ["Fallback source credit"]

@@ -16,9 +16,9 @@ A repository is bound to one farm, one grant, an actor and a purpose. Each read:
    a grant or agent-token view (`grant_view`) reads only weather values and receipts whose
    receipt allows redistribution (the licence gate); a caller-built statement labelled as, or
    selecting FROM, a weather value table is refused, and so are the legacy `observation` rows,
-   which carry no licence. Receipt metadata of every source (never a value) is read through
-   `execute(..., resource="weather_receipt")` by `core/weather/attribution.sources` only, so a
-   grant can say what it withheld;
+   which carry no licence. A grant view never learns whether withheld weather exists: no
+   statement or predicate of its may name a weather value table at all, not even in an EXISTS,
+   and `core/weather/attribution` words what it withheld from the grant's scope alone;
 4. writes exactly one `access_log` row (actor, farm, grant, resource, scope, purpose).
 
 `execute(stmt, scope, resource)` runs a caller-built statement as-is (the caller scopes it); it is
@@ -31,19 +31,23 @@ access_log rows commit before the response is sent; a plain `Depends(get_repo)` 
 from __future__ import annotations
 
 import hmac
+import re
 import secrets
 from collections.abc import Collection, Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy import Select, or_, select
+from sqlalchemy import Select, and_, exists, or_, select
 from sqlalchemy.engine import Result
-from sqlalchemy.orm import Session
-from sqlalchemy.sql.util import find_tables
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnClause, TextClause
+from sqlalchemy.sql.expression import TableClause
+from sqlalchemy.sql.selectable import TextualSelect, Values
 
 from farmcore.core import ext_ids
 from farmcore.core.identity import token_hash
+from farmcore.core.models.assessment import Assessment
 from farmcore.core.models.base import Base
 from farmcore.core.models.canonical import (
     AccessLog,
@@ -136,9 +140,9 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "app_module": frozenset({"audit:read"}),
     "asset": frozenset({"stations:read"}),
     "catalog_item": _ANY,  # shared reference (a fertiliser's or a spray product's name)
-    # The assessment envelope (`core/assessments.py`). Crop protection is its only kind today;
-    # a per-kind read scope comes with the neutral core contract.
-    "assessment": frozenset({"advice:read"}),
+    # The assessment envelope (`core/assessments.py`): read by each loaded kind's own read
+    # scope (`register_assessment_kind`), which reads that kind's rows only. No kind, no reader.
+    "assessment": frozenset(),
     "clock_state": frozenset({"audit:read"}),
     "crop_season": frozenset({"fields:read"}),
     "data_grant": frozenset({"audit:read"}),
@@ -192,6 +196,30 @@ RESOURCE_SCOPES: dict[str, frozenset[str]] = {
     "weather_station": frozenset({"stations:read"}),
 }
 RESOURCE_OWNERS: dict[str, str] = dict.fromkeys(RESOURCE_SCOPES, "core")
+# Assessment kind key -> its read scope, as loaded apps declare them (`AssessmentKind.read_scope`).
+KIND_READ_SCOPES: dict[str, str] = {}
+
+
+def register_assessment_kind(key: str, read_scope: str) -> None:
+    """Let `read_scope` read the envelopes of kind `key`, and only those (registered at
+    discovery). A scope core does not know becomes known for the owner's reads only: it is never
+    in `GRANT_READ_SCOPES` or `TOKEN_SCOPES`, so no grant preset, agent token or OAuth connection
+    holds it by default. Idempotent; a kind or scope already registered differently is refused,
+    so one kind's scope never reads another kind."""
+    known = KIND_READ_SCOPES.get(key)
+    if known == read_scope:
+        return
+    if known is not None:
+        raise ValueError(f"assessment kind {key!r} is already read with {known!r}")
+    for other, scope in KIND_READ_SCOPES.items():
+        if scope == read_scope:
+            raise ValueError(f"assessment kinds {other!r} and {key!r} share {read_scope!r}")
+    KIND_READ_SCOPES[key] = read_scope
+    RESOURCE_SCOPES["assessment"] = RESOURCE_SCOPES["assessment"] | {read_scope}
+
+
+def _known(scope: str) -> bool:
+    return scope in SCOPES or scope in KIND_READ_SCOPES.values()
 
 
 def register_resource_scopes(
@@ -300,8 +328,9 @@ class ScopedRepository:
             )
         ):
             raise ScopeDenied("This resource is not available through ordinary grants.")
-        if scope not in SCOPES:
-            raise ValueError(f"unknown scope {scope!r}; known: {sorted(SCOPES)}")
+        if not _known(scope):
+            known = sorted(SCOPES | set(KIND_READ_SCOPES.values()))
+            raise ValueError(f"unknown scope {scope!r}; known: {known}")
         if resource is not None:
             allowed = RESOURCE_SCOPES.get(resource)
             if allowed is None:
@@ -334,13 +363,55 @@ class ScopedRepository:
         order_by: Any = None,
         limit: int | None = None,
     ) -> list[M]:
-        stmt = self._scoped(model).where(*where)
+        return self._list(model, where, (), scope, order_by, limit)
+
+    def held_observations(
+        self,
+        *where: Any,
+        as_of: datetime | None = None,
+        scope: str = "stations:read",
+        order_by: Any = None,
+        limit: int | None = None,
+    ) -> list[WeatherObservation]:
+        """`weather.store.held`: the farm's observations matching `where` from the receipts
+        this view reads (a grant view: redistributable only) fetched by `as_of` (None: all),
+        a provisional value left out where one of those receipts holds its final value. So a
+        withheld final never hides a shared provisional value, and a final fetched after
+        `as_of` never hides the provisional value known then. `as_of` is a timezone-aware
+        datetime: these filters are the repository's own and go unchecked, so a SQL expression
+        there could read around the licence gate."""
+        if as_of is not None and not (isinstance(as_of, datetime) and as_of.tzinfo is not None):
+            raise ScopeDenied("held_observations() takes a timezone-aware datetime as_of.")
+        known = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == self.farm_id)
+        if self.grant_view:
+            known = known.where(WeatherReceipt.redistribution)
+        if as_of is not None:
+            known = known.where(WeatherReceipt.fetched_at <= as_of)
+        own = (WeatherObservation.receipt_id.in_(known), ~_superseded(known))
+        return self._list(WeatherObservation, where, own, scope, order_by, limit)
+
+    def _list[M: Base](
+        self,
+        model: type[M],
+        where: tuple[Any, ...],
+        own: tuple[Any, ...],
+        scope: str,
+        order_by: Any,
+        limit: int | None,
+    ) -> list[M]:
+        """`list`, with `own`: the repository's filters, which `_refuse_predicates` (the
+        caller's arguments only) does not check."""
+        stmt = self._scoped(model, scope).where(*own, *where)
+        caller = select(model).where(*where)
         if order_by is not None:
-            stmt = stmt.order_by(
-                *(order_by if isinstance(order_by, (list, tuple)) else (order_by,))
-            )
+            order = order_by if isinstance(order_by, (list, tuple)) else (order_by,)
+            stmt = stmt.order_by(*order)
+            caller = caller.order_by(*order)
         if limit is not None:
+            if isinstance(limit, bool) or not isinstance(limit, int):
+                raise ScopeDenied("list() takes a plain int limit.")
             stmt = stmt.limit(limit)
+        self._refuse_predicates(caller, model)
         self._authorise(scope, model.__table__.name)
         return list(self.session.scalars(stmt))
 
@@ -348,13 +419,16 @@ class ScopedRepository:
         pk = model.__mapper__.primary_key
         if len(pk) != 1:
             raise TypeError(f"{model.__name__} has a composite key; use list()")
-        stmt = self._scoped(model).where(pk[0] == id)
+        stmt = self._scoped(model, scope).where(pk[0] == id)
+        self._refuse_predicates(select(model).where(pk[0] == id), model)
         self._authorise(scope, model.__table__.name)
         return self.session.scalar(stmt)
 
     def execute(self, stmt: Any, *, scope: str, resource: str) -> Result[Any]:
         """Run `stmt` unchanged (the caller filters it) after the scope check; logs `resource`."""
+        _refuse_opaque(stmt)
         self._refuse_ungated(stmt, resource)
+        self._refuse_envelope(stmt, resource)
         self._authorise(scope, resource)
         return self.session.execute(stmt)
 
@@ -362,23 +436,65 @@ class ScopedRepository:
         """`execute` without the access_log row: the scope and grant are still checked. Only for
         decorative reads of data the same viewer already reads through an audited path (the
         parcel silhouettes: the map's layer already logs the geometry read)."""
+        _refuse_opaque(stmt)
         self._refuse_ungated(stmt, resource)
+        self._refuse_envelope(stmt, resource)
         self.check(scope, resource)
         return self.session.execute(stmt)
 
+    @staticmethod
+    def _refuse_envelope(stmt: Any, resource: str) -> None:
+        """Assessment envelopes are read only through `list`/`get`, which keep a scope to its
+        own kind; a caller-built statement on the table, or naming it anywhere (a join, a
+        subquery, an EXISTS, a union), could not."""
+        if resource == "assessment" or "assessment" in referenced_tables(stmt):
+            raise ScopeDenied("Assessments are read through list() or get(), one kind per scope.")
+
     def _refuse_ungated(self, stmt: Any, resource: str) -> None:
         """A caller-built statement cannot be held to the licence gate: refused for grant views
-        when labelled as a weather value table or selecting FROM one (a join or a subquery
-        included; an EXISTS in its WHERE is not a FROM)."""
+        when labelled as a weather value table or naming one anywhere (a join, a subquery, an
+        EXISTS, a union). Withheld weather is indistinguishable from none: not even a yes/no."""
         if not self.grant_view:
             return
-        froms = stmt.get_final_froms() if hasattr(stmt, "get_final_froms") else []
-        tables = {t.name for f in froms for t in find_tables(f)}
-        if resource in _LICENCE_GATED or tables & _LICENCE_GATED:
+        if resource in _LICENCE_GATED or referenced_tables(stmt) & _LICENCE_GATED:
             raise ScopeDenied("Weather values are shared only through the licence gate.")
 
-    def _scoped[M: Base](self, model: type[M]) -> Select[tuple[M]]:
+    def _refuse_predicates(self, stmt: Select[Any], model: type[Base]) -> None:
+        """`list`/`get` read one table: a caller's argument naming another table, an alias, a
+        CTE or a subquery column would join it in implicitly, unscoped. Their WHERE and ORDER BY
+        are held to `execute`'s rules: no opaque SQL, no assessment table (another kind's
+        envelopes, read in a subquery or an EXISTS), and for grant views no weather value table
+        outside the licence gate. `stmt` holds the caller's arguments only: the repository's own
+        filters are not checked (`held_observations`' rule for superseded values reads
+        weather_observation, from the receipts the view may read)."""
+        froms = stmt.get_final_froms()
+        if not (
+            len(froms) == 1
+            and isinstance(froms[0], TableClause)
+            and froms[0].name == model.__table__.name
+        ):
+            raise ScopeDenied(
+                f"list() and get() read {model.__table__.name} alone; join in execute()."
+            )
+        own = model.__table__.name
+        parts = [p for p in (stmt.whereclause, stmt._order_by_clause) if p is not None]
+        for part in parts:
+            _refuse_opaque(part)
+            tables = referenced_tables(part, own=own)
+            if "assessment" in tables:
+                raise ScopeDenied(
+                    "Assessments are read through list() or get(), one kind per scope."
+                )
+            if self.grant_view and tables & _LICENCE_GATED:
+                raise ScopeDenied("Weather values are shared only through the licence gate.")
+
+    def _scoped[M: Base](self, model: type[M], scope: str) -> Select[tuple[M]]:
         stmt = select(model)
+        if model is Assessment:
+            # A scope reads only the kinds that declared it (`register_assessment_kind`); the
+            # owner's `*` grant reads each kind through that kind's own scope too.
+            kinds = [key for key, read in KIND_READ_SCOPES.items() if read == scope]
+            stmt = stmt.where(Assessment.kind.in_(kinds))
         if model is Event and self.private_member:
             stmt = stmt.where(
                 or_(
@@ -429,6 +545,75 @@ class ScopedRepository:
             )
         )
         self.session.flush()
+
+
+def _superseded(receipts: Select[Any]) -> Any:
+    """A provisional observation whose final value (same station, variable and period) one of
+    `receipts` holds (`ScopedRepository.held_observations`)."""
+    final = aliased(WeatherObservation)
+    return and_(
+        WeatherObservation.provisional,
+        exists().where(
+            final.station_id == WeatherObservation.station_id,
+            final.variable == WeatherObservation.variable,
+            final.period_start == WeatherObservation.period_start,
+            final.period_end == WeatherObservation.period_end,
+            final.provisional.is_(False),
+            final.receipt_id.in_(receipts),
+        ),
+    )
+
+
+def referenced_tables(stmt: Any, own: str | None = None) -> set[str]:
+    """Every table `stmt` names: the FROMs of it and of every statement nested in it (ORM joins
+    included), and the table behind every column (an alias, a CTE, a subquery). A column of
+    `own` (the table `list`/`get` read) is not a reference; a statement reading it is."""
+    return {e.name for e in _elements(stmt, own) if isinstance(e, TableClause)}
+
+
+def _elements(stmt: Any, own: str | None = None) -> Iterator[Any]:
+    """Every node of `stmt`, with what `get_children()` skips: each nested statement's final
+    FROMs (ORM joins, a join's ON tables) and each column's table."""
+    seen: dict[int, Any] = {}  # keeps each node alive, so an id is never reused
+    stack = [stmt]
+    while stack:
+        element = stack.pop()
+        if id(element) in seen:
+            continue
+        seen[id(element)] = element
+        yield element
+        stack.extend(element.get_children())
+        if hasattr(element, "get_final_froms"):
+            stack.extend(element.get_final_froms())
+        table = getattr(element, "table", None) if isinstance(element, ColumnClause) else None
+        if table is not None and not (isinstance(table, TableClause) and table.name == own):
+            stack.append(table)
+
+
+_HARMLESS_LITERAL = re.compile(r"\*|\d+")  # count(*), EXISTS(SELECT *), select(1)
+
+
+_ATTACHED_TEXT = ("_prefixes", "_suffixes", "_statement_hints", "_hints")
+
+
+def _refuse_opaque(stmt: Any) -> None:
+    """Text, a literal column, a VALUES payload or a prefix, suffix or hint (anywhere in
+    `stmt`) can name tables where no check reads them: refused. `*` and a bare integer are
+    the literal columns allowed."""
+    for element in _elements(stmt):
+        if (
+            isinstance(element, (TextClause, TextualSelect, Values))
+            or (
+                isinstance(element, ColumnClause)
+                and element.is_literal
+                and not _HARMLESS_LITERAL.fullmatch(element.name)
+            )
+            or any(getattr(element, attr, None) for attr in _ATTACHED_TEXT)
+        ):
+            raise ScopeDenied(
+                "Read through SQL expressions, not text, VALUES or hints, so their tables are "
+                "checked."
+            )
 
 
 def ensure_owner_grant(session: Session, farm: Farm) -> DataGrant:

@@ -32,9 +32,9 @@ from hashlib import sha256
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
-from sqlalchemy import and_, exists, select
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
 from farmcore.core import units
 from farmcore.core.access import ScopedRepository
@@ -283,28 +283,10 @@ def held(
 ) -> list[WeatherObservation]:
     """The farm's observations matching `where` as known at `as_of` (None: all it holds): from
     its receipts fetched by then, a provisional value left out where one of them holds a final
-    value for the same station, variable and period."""
-    known = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == repo.farm_id)
-    if as_of is not None:
-        known = known.where(WeatherReceipt.fetched_at <= as_of)
-    final = aliased(WeatherObservation)
-    replaced = exists().where(
-        final.station_id == WeatherObservation.station_id,
-        final.variable == WeatherObservation.variable,
-        final.period_start == WeatherObservation.period_start,
-        final.period_end == WeatherObservation.period_end,
-        final.provisional.is_(False),
-        final.receipt_id.in_(known),
-    )
-    return repo.list(
-        WeatherObservation,
-        *where,
-        WeatherObservation.receipt_id.in_(known),
-        ~and_(WeatherObservation.provisional, replaced),
-        scope=scope,
-        order_by=order_by,
-        limit=limit,
-    )
+    value for the same station, variable and period. The repository applies the rule
+    (`ScopedRepository.held_observations`), so a grant view reads it from the receipts it may
+    read only."""
+    return repo.held_observations(*where, as_of=as_of, scope=scope, order_by=order_by, limit=limit)
 
 
 def store_forecast(

@@ -7,7 +7,7 @@ collaborators are patched: the next real question must succeed with the same dat
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import Integer, cast, literal, select
 
 from farmcore.apps.advisor import tools as advisor_tools
 from farmcore.apps.advisor.advice import Advice
@@ -42,7 +42,7 @@ def observed(session, synthetic):
 def failing_extension(ctx):
     """A third-party tool with a database error, reached through its declared dotted path."""
     ctx.repo.execute(
-        text("SELECT CAST('invalid synthetic integer' AS integer)"),
+        select(cast(literal("invalid synthetic integer"), Integer)),
         scope="fields:read",
         resource="parcel",
     )
