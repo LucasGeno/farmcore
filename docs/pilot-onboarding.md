@@ -82,7 +82,8 @@ map (`/onboarding/registry`), and an agent with a `drafts:propose` token
    crop-protection models are `unvalidated` (replayed on two seasons of one farm, not yet
    checked against observed disease records or other regions); say so to the grower. Advice
    reports what it observed ("No infection event detected"), never that a parcel is safe or
-   risk-free, and never ranks products.
+   risk-free, and never ranks products. The card also shows the Rossi 2008 primary infection
+   model beside the 3-10 rule: it is `unvalidated` too and does not change the decision.
 3. With a disposable second farm on a test installation, verify the grower cannot select it.
    Never use another grower's actual records as a test fixture.
 4. Create pilot B with its own project/env/hostname/port. Compare health installation IDs: they
@@ -97,7 +98,8 @@ dedicated demonstration installation. Seeding alone does not enable anonymous ac
 mixing seed data with a grower's private pilot.
 
 Lucas still owns hosting/TLS, account provisioning/recovery, approved parcel preparation,
-source configuration, backups/restore checks and upgrades. Growers can sign in, inspect their
+source configuration (including any on-farm sensor's device token, see
+[self-hosting](self-hosting.md#on-farm-sensors-optional)), backups/restore checks and upgrades. Growers can sign in, inspect their
 assigned farms and use the capabilities permitted by their role. Browser parcel drawing,
 self-service signup and first-login setup are not shipped by this workflow.
 

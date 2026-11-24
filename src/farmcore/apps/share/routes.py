@@ -583,20 +583,13 @@ def _observations(repo: ScopedRepository, now: datetime, limit: int) -> list[dic
     ]
 
 
-def _weather_sources(repo: ScopedRepository) -> dict[str, list[dict[str, Any]]]:
-    """What the grant shares (with attribution) and what the licence gate withheld, and why."""
-    rows = attribution.sources(repo)
+def _weather_sources(repo: ScopedRepository) -> dict[str, Any]:
+    """What the grant shares (with attribution), and a generic note on what the licence gate
+    withholds: from the grant's scope, never from the farm's withheld data (which a grant view
+    cannot tell from none)."""
     return {
-        "sources": [s.as_json() for s in attribution.shared(rows)],
-        "withheld": [
-            {
-                "provider": s.provider,
-                "dataset": s.dataset,
-                "licence": s.licence,
-                "reason": s.withheld_reason,
-            }
-            for s in attribution.withheld(rows)
-        ],
+        "sources": [s.as_json() for s in attribution.shared(attribution.sources(repo))],
+        "withheld": attribution.withheld_note(repo),
     }
 
 
