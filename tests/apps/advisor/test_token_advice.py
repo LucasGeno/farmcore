@@ -4,7 +4,8 @@ else keeps "Assessment limited".
 Failure model (one owning test each):
 - advice:read implied by, or not needed from, another scope (the tool seam, a token without it);
 - stale advice read as current (a decision 3 h old comes back as a reason, not "spray");
-- advice that relied on weather whose licence bars redistribution reaches a token;
+- (a token's advice must not depend on whether the farm holds withheld weather: owned by
+  tests/apps/share/test_recipient_identity.py::test_shared_advice_and_mcp_apply_the_same_weather_gate)
 - a farm-level reason or a missing station is dropped for tokens;
 - raw weather in the answer (`mm_since_spray`), another farm's advice, an unaudited read;
 - the web assistant (owner repository) and MCP (token repository) tell different stories: both

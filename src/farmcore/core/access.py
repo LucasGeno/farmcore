@@ -377,7 +377,11 @@ class ScopedRepository:
         this view reads (a grant view: redistributable only) fetched by `as_of` (None: all),
         a provisional value left out where one of those receipts holds its final value. So a
         withheld final never hides a shared provisional value, and a final fetched after
-        `as_of` never hides the provisional value known then."""
+        `as_of` never hides the provisional value known then. `as_of` is a timezone-aware
+        datetime: these filters are the repository's own and go unchecked, so a SQL expression
+        there could read around the licence gate."""
+        if as_of is not None and not (isinstance(as_of, datetime) and as_of.tzinfo is not None):
+            raise ScopeDenied("held_observations() takes a timezone-aware datetime as_of.")
         known = select(WeatherReceipt.id).where(WeatherReceipt.farm_id == self.farm_id)
         if self.grant_view:
             known = known.where(WeatherReceipt.redistribution)

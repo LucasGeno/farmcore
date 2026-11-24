@@ -231,6 +231,9 @@ def test_grants_and_tokens_read_only_redistributable_weather(
             scope="stations:read",
             limit=literal_column("(SELECT count(*) FROM weather_observation)"),
         ),
+        lambda repo: store.held(
+            repo, as_of=select(func.max(WeatherObservation.period_end)).scalar_subquery()
+        ),
         lambda repo: repo.list(Observation, scope="stations:read"),
     ],
     ids=[
@@ -248,6 +251,7 @@ def test_grants_and_tokens_read_only_redistributable_weather(
         "list-receipt-cross-join",
         "list-ordering",
         "list-limit",
+        "held-as-of",
         "legacy-rows",
     ],
 )
