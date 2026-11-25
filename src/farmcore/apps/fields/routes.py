@@ -21,7 +21,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, field_validator
 from sqlalchemy import select
 
-from farmcore.apps.fields import field_id, seasons
+from farmcore.apps.fields import demo_soil, field_id, seasons
 from farmcore.apps.fields.service import (
     NOT_ADVISED_LABEL,
     parcels_feature_collection,
@@ -207,6 +207,7 @@ def _panel(request: Request, repo: Repo, parcel: Parcel | None, note: str | None
         "sections": panel_sections(request, "parcel", parcel.id),
         "close_url": resolved_url(request, "/fields/"),
         "note": note,
+        "topsoil": demo_soil.topsoil_for(repo, parcel, request.app.state.settings),
     }
 
 
