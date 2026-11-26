@@ -8,6 +8,7 @@ the slot lifecycle run in the browser and are not exercised by these tests."""
 from __future__ import annotations
 
 import html
+import json
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -16,9 +17,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from farmcore.apps.fields.manifest import MANIFEST as FIELDS
+from farmcore.apps.fields.seed import IGN_SOURCE
 from farmcore.core.access import FARM_COOKIE, ensure_owner_grant
 from farmcore.core.manifest import Manifest
-from farmcore.core.models.canonical import Farm
+from farmcore.core.models.canonical import ExtId, Farm, Parcel
 from farmcore.core.models.kernel import AppModule
 from farmcore.core.seed import ensure_default_farm
 from farmcore.main import create_app
@@ -133,6 +135,80 @@ def test_each_mount_gets_fresh_slot_ids(app_client, farms):
     first = [s["id"] for s in slots(app_client.get(f"/fields/panel/parcels/{mine.id}").text)]
     second = [s["id"] for s in slots(app_client.get(f"/fields/panel/parcels/{mine.id}").text)]
     assert not set(first) & set(second)
+
+
+@pytest.fixture
+def demo_topsoil(farms, session, settings, tmp_path, monkeypatch):
+    farm, _, parcel, _ = farms
+    monkeypatch.setattr(settings, "demo_mode", True)
+    monkeypatch.setattr(settings, "demo_farm_ids", [farm.id])
+    monkeypatch.setattr(settings, "data_dir", tmp_path)
+    parcel.alias = "P2"
+    parcel.iacs_id = "4878169"
+    identity = ExtId(
+        source=IGN_SOURCE, key=parcel.iacs_id, model=Parcel.__tablename__, res_id=parcel.id
+    )
+    session.add(identity)
+    session.commit()
+    snapshot = tmp_path / "soilgrids" / "demo_topsoil_ph.json"
+    snapshot.parent.mkdir()
+    snapshot.write_text(
+        json.dumps({"4878169": {"min_ph": 6.5, "max_ph": 6.8, "method": "polygon"}})
+    )
+    return snapshot, identity
+
+
+def test_demo_parcel_panel_shows_attributed_topsoil_estimate(
+    farms, demo_topsoil, settings, session_factory
+):
+    farm, _, parcel, _ = farms
+    with TestClient(
+        create_app(settings, manifests=[FIELDS], session_factory=session_factory)
+    ) as public_demo:
+        response = public_demo.get(f"/fields/panel/parcels/{parcel.id}?farm={farm.id}")
+
+    assert response.status_code == 200
+    assert "6.5–6.8" in response.text
+    assert "model cells that intersect" in response.text
+    assert "No app adds facts here yet." not in response.text
+    for label in ("ISRIC SoilGrids", "250 m", "0–5 cm", "Modelled", "SoilHive", "CC BY 4.0"):
+        assert label in response.text
+
+
+def test_demo_parcel_panel_labels_point_estimates(app_client, farms, demo_topsoil):
+    _, _, parcel, _ = farms
+    snapshot, _ = demo_topsoil
+    snapshot.write_text(json.dumps({"4878169": {"min_ph": 6.8, "max_ph": 6.8, "method": "point"}}))
+
+    response = app_client.get(f"/fields/panel/parcels/{parcel.id}")
+
+    assert response.status_code == 200
+    assert "representative point" in response.text
+
+
+@pytest.mark.parametrize(
+    "missing", ["demo mode", "farm designation", "verified identity", "snapshot"]
+)
+def test_parcel_panel_omits_unavailable_demo_soil(
+    app_client, farms, demo_topsoil, session, settings, monkeypatch, missing
+):
+    _, _, parcel, other = farms
+    snapshot, identity = demo_topsoil
+    match missing:
+        case "demo mode":
+            monkeypatch.setattr(settings, "demo_mode", False)
+        case "farm designation":
+            monkeypatch.setattr(settings, "demo_farm_ids", [other.farm_id])
+        case "verified identity":
+            identity.res_id = other.id
+            session.commit()
+        case "snapshot":
+            snapshot.unlink()
+
+    response = app_client.get(f"/fields/panel/parcels/{parcel.id}")
+
+    assert response.status_code == 200
+    assert "Demo soil context" not in response.text
 
 
 def test_alien_parcel_is_404_and_shows_nothing_of_it(app_client, farms):

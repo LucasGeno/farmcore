@@ -1,0 +1,12 @@
+{
+  "4125606": {"min_ph": 6.8, "max_ph": 6.9, "method": "polygon"},
+  "4878169": {"min_ph": 6.5, "max_ph": 6.8, "method": "polygon"},
+  "10504930": {"min_ph": 6.8, "max_ph": 6.8, "method": "polygon"},
+  "10504310": {"min_ph": 6.8, "max_ph": 6.8, "method": "point"},
+  "7667962": {"min_ph": 6.8, "max_ph": 6.9, "method": "polygon"},
+  "5393798": {"min_ph": 6.6, "max_ph": 6.9, "method": "polygon"},
+  "3814268": {"min_ph": 6.9, "max_ph": 6.9, "method": "polygon"},
+  "10518933": {"min_ph": 6.8, "max_ph": 6.8, "method": "point"},
+  "10508590": {"min_ph": 6.8, "max_ph": 6.9, "method": "polygon"},
+  "1912156": {"min_ph": 6.8, "max_ph": 6.9, "method": "polygon"}
+}

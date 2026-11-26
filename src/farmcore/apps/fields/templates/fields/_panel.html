@@ -5,12 +5,11 @@
 
     Context `panel` (routes._panel): kind ("farm" | "parcel"), parcel {id, alias, name, area_ha,
     variety, season (the crop season covering today, or None), has_seasons} or None, farm_name,
-    sections [{slot_id, label, url}] (URLs already farm-qualified), close_url (parcel only), note.
+    sections [{slot_id, label, url}] (URLs already farm-qualified), close_url (parcel only), note,
+    and optional topsoil context for a seeded demo parcel.
 
-    Fields shows only the parcel's own record (alias, name, area, variety). Every other fact
-    comes from the apps' own section endpoints in the shared fragment slot, so a failed section
-    says which one failed and offers its own Retry while the rest of the panel and the map stay
-    usable. -#}
+    Fields renders the parcel's own record and the offline demo estimate. Other facts come
+    from the apps' endpoints in shared fragment slots, which can fail and retry independently. -#}
 {%- from "core/_fragment.html" import fragment_slot -%}
 {%- from "core/_icons.html" import icon -%}
 <div data-panel-content data-panel-kind="{{ panel.kind }}"{% if panel.parcel %} data-parcel-id="{{ panel.parcel.id }}"{% endif %}>
@@ -59,8 +58,28 @@
     {%- for s in panel.sections %}
     {{ fragment_slot(s.slot_id, s.label, s.url) }}
     {%- else %}
+    {% if not panel.topsoil %}
     <p class="text-[14px] text-muted">No app adds facts here yet.</p>
+    {% endif %}
     {%- endfor %}
+    {% if panel.topsoil %}
+    {% set soil = panel.topsoil %}
+    <section class="rounded-xl border border-line bg-surface p-4">
+      <h3 class="font-semibold">Demo soil context</h3>
+      <p class="text-sm text-muted">
+        Modelled topsoil pH in water (0–5 cm) is
+        <strong>{{ "%.1f"|format(soil.min_ph) }}{% if soil.min_ph != soil.max_ph %}–{{ "%.1f"|format(soil.max_ph) }}{% endif %}</strong>.
+        {% if soil.method == "point" %}A representative point inside the parcel was used.
+        {% else %}The estimate uses model cells that intersect the demo outline.{% endif %}
+        Resolution is 250 m.
+      </p>
+      <p class="text-sm text-muted">
+        <a href="https://soilgrids.org/" class="font-semibold text-brand-700">ISRIC SoilGrids</a>
+        via SoilHive · <a href="https://creativecommons.org/licenses/by/4.0/" class="font-semibold text-brand-700">CC BY 4.0</a>
+        · snapshot <time datetime="2026-11-25">25 Nov 2026</time>
+      </p>
+    </section>
+    {% endif %}
   </div>
   </div>
 </div>
